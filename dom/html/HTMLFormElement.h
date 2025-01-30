@@ -57,7 +57,8 @@ class HTMLFormElement final : public nsGenericHTMLElement {
 
   /** Whether we already dispatched a DOMFormHasPassword event or not */
   bool mHasPendingPasswordEvent = false;
-  /** Whether we already dispatched a DOMFormHasPossibleUsername event or not */
+  /** Whether we already dispatched a DOMPossibleUsernameInputAdded event or not
+   */
   bool mHasPendingPossibleUsernameEvent = false;
 
   // nsIContent
@@ -480,6 +481,11 @@ class HTMLFormElement final : public nsGenericHTMLElement {
    * [IN]
    */
   nsresult GetActionURL(nsIURI** aActionURL, Element* aOriginatingElement);
+
+  // Get the target to submit to. This is either the submitter's |formtarget| or
+  // the form's |target| (Including <base>).
+  void GetSubmissionTarget(nsGenericHTMLElement* aSubmitter,
+                           nsAString& aTarget);
 
   // Returns a number for this form that is unique within its owner document.
   // This is used by nsContentUtils::GenerateStateKey to identify form controls

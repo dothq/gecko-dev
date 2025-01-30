@@ -34,9 +34,10 @@ from mozterm.widgets import Footer
 from ..backend import get_backend_class
 from ..base import MozbuildObject
 from ..compilation.warnings import WarningsCollector, WarningsDatabase
+from ..dirutils import mkdir
 from ..telemetry import get_cpu_brand
 from ..testing import install_test_files
-from ..util import FileAvoidWrite, mkdir, resolve_target_to_make
+from ..util import FileAvoidWrite, resolve_target_to_make
 from .clobber import Clobberer
 
 FINDER_SLOW_MESSAGE = """
@@ -98,11 +99,12 @@ class TierStatus(object):
     executes in the order it was defined, 1 at a time.
     """
 
-    def __init__(self, resources):
+    def __init__(self, resources, metrics):
         """Accepts a SystemResourceMonitor to record results against."""
         self.tiers = OrderedDict()
         self.tier_status = OrderedDict()
         self.resources = resources
+        self.metrics = metrics
 
     def set_tiers(self, tiers):
         """Record the set of known tiers."""
@@ -120,6 +122,10 @@ class TierStatus(object):
         t = self.tiers[tier]
         t["begin_time"] = time.monotonic()
         self.resources.begin_phase(tier)
+        metrics_tier_name = "tier_" + tier.replace("-", "_") + "_duration"
+        metrics_attribute = getattr(self.metrics.mozbuild, metrics_tier_name, None)
+        if metrics_attribute:
+            metrics_attribute.start()
 
     def finish_tier(self, tier):
         """Record that execution of a tier has finished."""
@@ -127,6 +133,10 @@ class TierStatus(object):
         t = self.tiers[tier]
         t["finish_time"] = time.monotonic()
         t["duration"] = self.resources.finish_phase(tier)
+        metrics_tier_name = "tier_" + tier.replace("-", "_") + "_duration"
+        metrics_attribute = getattr(self.metrics.mozbuild, metrics_tier_name, None)
+        if metrics_attribute:
+            metrics_attribute.stop()
 
 
 def record_cargo_timings(resource_monitor, timings_path):
@@ -177,7 +187,7 @@ def record_cargo_timings(resource_monitor, timings_path):
 class BuildMonitor(MozbuildObject):
     """Monitors the output of the build."""
 
-    def init(self, warnings_path, terminal):
+    def init(self, warnings_path, terminal, metrics):
         """Create a new monitor.
 
         warnings_path is a path of a warnings database to use.
@@ -189,7 +199,7 @@ class BuildMonitor(MozbuildObject):
         )
         self._resources_started = False
 
-        self.tiers = TierStatus(self.resources)
+        self.tiers = TierStatus(self.resources, metrics)
 
         self.warnings_database = WarningsDatabase()
         if os.path.exists(warnings_path):
@@ -262,6 +272,12 @@ class BuildMonitor(MozbuildObject):
 
             _, _, disambiguator = args.pop(0).partition("@")
             action = args.pop(0)
+            time = None
+            regexp = re.compile(r"\d{10}(\.\d{1,9})?$")
+            if regexp.match(action):
+                time = float(action)
+                action = args.pop(0)
+
             update_needed = True
 
             if action == "TIERS":
@@ -279,12 +295,12 @@ class BuildMonitor(MozbuildObject):
                 update_needed = False
             elif action.startswith("START_"):
                 self.resources.begin_marker(
-                    action[len("START_") :], " ".join(args), disambiguator
+                    action[len("START_") :], " ".join(args), disambiguator, time
                 )
                 update_needed = False
             elif action.startswith("END_"):
                 self.resources.end_marker(
-                    action[len("END_") :], " ".join(args), disambiguator
+                    action[len("END_") :], " ".join(args), disambiguator, time
                 )
                 update_needed = False
             elif action == "BUILD_VERBOSE":
@@ -678,14 +694,14 @@ class BuildOutputManager(OutputManager):
         if message:
             self.log(logging.INFO, "build_output", {"line": message}, "{line}")
         elif state_changed:
-            have_handler = hasattr(self, "handler")
+            have_handler = hasattr(self, "_handler")
             if have_handler:
-                self.handler.acquire()
+                self._handler.acquire()
             try:
                 self.refresh()
             finally:
                 if have_handler:
-                    self.handler.release()
+                    self._handler.release()
 
 
 class StaticAnalysisFooter(Footer):
@@ -740,14 +756,14 @@ class StaticAnalysisOutputManager(OutputManager):
         if relevant:
             self.log(logging.INFO, "build_output", {"line": line}, "{line}")
         else:
-            have_handler = hasattr(self, "handler")
+            have_handler = hasattr(self, "_handler")
             if have_handler:
-                self.handler.acquire()
+                self._handler.acquire()
             try:
                 self.refresh()
             finally:
                 if have_handler:
-                    self.handler.release()
+                    self._handler.release()
 
     def write(self, path, output_format):
         assert output_format in ("text", "json"), "Invalid output format {}".format(
@@ -1076,7 +1092,7 @@ class BuildDriver(MozbuildObject):
     ):
         warnings_path = self._get_state_filename("warnings.json")
         monitor = self._spawn(BuildMonitor)
-        monitor.init(warnings_path, self.log_manager.terminal)
+        monitor.init(warnings_path, self.log_manager.terminal, metrics)
         status = self._build(
             monitor,
             metrics,
@@ -1230,6 +1246,7 @@ class BuildDriver(MozbuildObject):
             mozbuild_metrics.sccache.set(using_sccache)
             mozbuild_metrics.icecream.set(get_substs_flag("CXX_IS_ICECREAM"))
             mozbuild_metrics.project.set(substs.get("MOZ_BUILD_APP", ""))
+            mozbuild_metrics.target.set(target)
 
             all_backends = config.substs.get("BUILD_BACKENDS", [None])
             active_backend = all_backends[0]

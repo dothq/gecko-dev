@@ -3,33 +3,35 @@
 {%- let canonical_type_name = type_|canonical_name %}
 
 {% if e.is_flat() %}
-sealed class {{ type_name }}(message: String): Exception(message){% if contains_object_references %}, Disposable {% endif %} {
-        // Each variant is a nested class
-        // Flat enums carries a string error message, so no special implementation is necessary.
+{%- call kt::docstring(e, 0) %}
+sealed class {{ type_name }}(message: String): kotlin.Exception(message){% if contains_object_references %}, Disposable {% endif %} {
         {% for variant in e.variants() -%}
+        {%- call kt::docstring(variant, 4) %}
         class {{ variant|error_variant_name }}(message: String) : {{ type_name }}(message)
         {% endfor %}
 
-    companion object ErrorHandler : CallStatusErrorHandler<{{ type_name }}> {
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<{{ type_name }}> {
         override fun lift(error_buf: RustBuffer.ByValue): {{ type_name }} = {{ ffi_converter_name }}.lift(error_buf)
     }
 }
 {%- else %}
-sealed class {{ type_name }}: Exception(){% if contains_object_references %}, Disposable {% endif %} {
-    // Each variant is a nested class
+{%- call kt::docstring(e, 0) %}
+sealed class {{ type_name }}: kotlin.Exception(){% if contains_object_references %}, Disposable {% endif %} {
     {% for variant in e.variants() -%}
+    {%- call kt::docstring(variant, 4) %}
     {%- let variant_name = variant|error_variant_name %}
     class {{ variant_name }}(
         {% for field in variant.fields() -%}
-        val {{ field.name()|var_name }}: {{ field|type_name(ci) }}{% if loop.last %}{% else %}, {% endif %}
+        {%- call kt::docstring(field, 8) %}
+        val {% call kt::field_name(field, loop.index) %}: {{ field|type_name(ci) }}{% if loop.last %}{% else %}, {% endif %}
         {% endfor -%}
     ) : {{ type_name }}() {
         override val message
-            get() = "{%- for field in variant.fields() %}{{ field.name()|var_name|unquote }}=${ {{field.name()|var_name }} }{% if !loop.last %}, {% endif %}{% endfor %}"
+            get() = "{%- for field in variant.fields() %}{% call kt::field_name_unquoted(field, loop.index) %}=${ {% call kt::field_name(field, loop.index) %} }{% if !loop.last %}, {% endif %}{% endfor %}"
     }
     {% endfor %}
 
-    companion object ErrorHandler : CallStatusErrorHandler<{{ type_name }}> {
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<{{ type_name }}> {
         override fun lift(error_buf: RustBuffer.ByValue): {{ type_name }} = {{ ffi_converter_name }}.lift(error_buf)
     }
 
@@ -52,6 +54,9 @@ sealed class {{ type_name }}: Exception(){% if contains_object_references %}, Di
 }
 {%- endif %}
 
+/**
+ * @suppress
+ */
 public object {{ e|ffi_converter_name }} : FfiConverterRustBuffer<{{ type_name }}> {
     override fun read(buf: ByteBuffer): {{ type_name }} {
         {% if e.is_flat() %}
@@ -76,17 +81,17 @@ public object {{ e|ffi_converter_name }} : FfiConverterRustBuffer<{{ type_name }
         {%- endif %}
     }
 
-    override fun allocationSize(value: {{ type_name }}): Int {
+    override fun allocationSize(value: {{ type_name }}): ULong {
         {%- if e.is_flat() %}
-        return 4
+        return 4UL
         {%- else %}
         return when(value) {
             {%- for variant in e.variants() %}
             is {{ type_name }}.{{ variant|error_variant_name }} -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
-                4
+                4UL
                 {%- for field in variant.fields() %}
-                + {{ field|allocation_size_fn }}(value.{{ field.name()|var_name }})
+                + {{ field|allocation_size_fn }}(value.{% call kt::field_name(field, loop.index) %})
                 {%- endfor %}
             )
             {%- endfor %}
@@ -100,7 +105,7 @@ public object {{ e|ffi_converter_name }} : FfiConverterRustBuffer<{{ type_name }
             is {{ type_name }}.{{ variant|error_variant_name }} -> {
                 buf.putInt({{ loop.index }})
                 {%- for field in variant.fields() %}
-                {{ field|write_fn }}(value.{{ field.name()|var_name }}, buf)
+                {{ field|write_fn }}(value.{% call kt::field_name(field, loop.index) %}, buf)
                 {%- endfor %}
                 Unit
             }

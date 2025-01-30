@@ -24,8 +24,12 @@ void JitRuntime::generateExceptionTailStub(MacroAssembler& masm,
 
   exceptionTailOffset_ = startTrampolineCode(masm);
 
+  uint32_t returnValueCheckOffset = 0;
   masm.bind(masm.failureLabel());
-  masm.handleFailureWithHandlerTail(profilerExitTail, bailoutTail);
+  masm.handleFailureWithHandlerTail(profilerExitTail, bailoutTail,
+                                    &returnValueCheckOffset);
+
+  exceptionTailReturnValueCheckOffset_ = returnValueCheckOffset;
 }
 
 void JitRuntime::generateProfilerExitFrameTailStub(MacroAssembler& masm,
@@ -96,18 +100,13 @@ void JitRuntime::generateProfilerExitFrameTailStub(MacroAssembler& masm,
   // |
   // ^--- IonICCall <---- Ion
   // |
-  // ^--- Arguments Rectifier
-  // |    ^
-  // |    |
-  // |    ^--- Ion
-  // |    |
-  // |    ^--- Baseline Stub <---- Baseline
-  // |    |
-  // |    ^--- Entry Frame (CppToJSJit or WasmToJSJit)
+  // ^--- Entry Frame (BaselineInterpreter) (unwrapped)
+  // |
+  // ^--- Arguments Rectifier (unwrapped)
+  // |
+  // ^--- Trampoline Native (unwrapped)
   // |
   // ^--- Entry Frame (CppToJSJit or WasmToJSJit)
-  // |
-  // ^--- Entry Frame (BaselineInterpreter)
   //
   // NOTE: Keep this in sync with JSJitProfilingFrameIterator::moveToNextFrame!
 
@@ -153,6 +152,7 @@ void JitRuntime::generateProfilerExitFrameTailStub(MacroAssembler& masm,
   Label handle_BaselineOrIonJS;
   Label handle_BaselineStub;
   Label handle_Rectifier;
+  Label handle_TrampolineNative;
   Label handle_BaselineInterpreterEntry;
   Label handle_IonICCall;
   Label handle_Entry;
@@ -176,6 +176,8 @@ void JitRuntime::generateProfilerExitFrameTailStub(MacroAssembler& masm,
                 &handle_BaselineOrIonJS);
   masm.branch32(Assembler::Equal, scratch, Imm32(FrameType::IonICCall),
                 &handle_IonICCall);
+  masm.branch32(Assembler::Equal, scratch, Imm32(FrameType::TrampolineNative),
+                &handle_TrampolineNative);
   masm.branch32(Assembler::Equal, scratch, Imm32(FrameType::WasmToJSJit),
                 &handle_Entry);
 
@@ -237,9 +239,21 @@ void JitRuntime::generateProfilerExitFrameTailStub(MacroAssembler& masm,
     // There can be multiple previous frame types so just "unwrap" the arguments
     // rectifier frame and try again.
     masm.loadPtr(Address(fpScratch, CallerFPOffset), fpScratch);
-    emitAssertPrevFrameType(fpScratch, scratch,
-                            {FrameType::IonJS, FrameType::BaselineStub,
-                             FrameType::CppToJSJit, FrameType::WasmToJSJit});
+    emitAssertPrevFrameType(
+        fpScratch, scratch,
+        {FrameType::IonJS, FrameType::BaselineStub, FrameType::TrampolineNative,
+         FrameType::CppToJSJit, FrameType::WasmToJSJit});
+    masm.jump(&again);
+  }
+
+  masm.bind(&handle_TrampolineNative);
+  {
+    // Unwrap this frame, similar to arguments rectifier frames.
+    masm.loadPtr(Address(fpScratch, CallerFPOffset), fpScratch);
+    emitAssertPrevFrameType(
+        fpScratch, scratch,
+        {FrameType::IonJS, FrameType::BaselineStub, FrameType::Rectifier,
+         FrameType::CppToJSJit, FrameType::WasmToJSJit});
     masm.jump(&again);
   }
 

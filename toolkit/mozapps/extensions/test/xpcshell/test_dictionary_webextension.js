@@ -10,7 +10,7 @@ XPCOMUtils.defineLazyServiceGetter(
   "mozISpellCheckingEngine"
 );
 
-add_task(async function setup() {
+add_setup(async function setup() {
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "61", "61");
 
   // Initialize the URLPreloader so that we can load the built-in
@@ -18,6 +18,12 @@ add_task(async function setup() {
   AddonTestUtils.initializeURLPreloader();
 
   await promiseStartupManager();
+  // Sanity check, builtin dictionaries should be registered.
+  Assert.deepEqual(
+    spellCheck.getDictionaryList(),
+    ["en-US"],
+    "Expect en-US builtin dictionary to be registered"
+  );
 
   // Starts collecting the Addon Manager Telemetry events.
   AddonTestUtils.hookAMTelemetryEvents();
@@ -191,24 +197,35 @@ add_task(
     let amUninstallEvents = amEvents
       .filter(evt => evt.method === "uninstall")
       .map(evt => {
-        const { object, value } = evt;
-        return { object, value };
+        const { object, value, extra } = evt;
+        return {
+          object,
+          value,
+          extra: { blocklist_state: extra.blocklist_state },
+        };
       });
+
+    const blocklist_state = `${Ci.nsIBlocklistService.STATE_NOT_BLOCKED}`;
 
     Assert.deepEqual(
       amUninstallEvents,
       [
-        { object: "dictionary", value: addon.id },
-        { object: "dictionary", value: addon2.id },
+        { object: "dictionary", value: addon.id, extra: { blocklist_state } },
+        { object: "dictionary", value: addon2.id, extra: { blocklist_state } },
       ],
       "Got the expected uninstall telemetry events"
     );
 
+    const baseGleanExtra = {
+      addon_type: "dictionary",
+      method: "uninstall",
+      blocklist_state,
+    };
     Assert.deepEqual(
       AddonTestUtils.getAMGleanEvents("manage", { method: "uninstall" }),
       [
-        { addon_type: "dictionary", addon_id: addon.id, method: "uninstall" },
-        { addon_type: "dictionary", addon_id: addon2.id, method: "uninstall" },
+        { ...baseGleanExtra, addon_id: addon.id },
+        { ...baseGleanExtra, addon_id: addon2.id },
       ],
       "Got the expected uninstall Glean events."
     );
@@ -218,6 +235,13 @@ add_task(
 const WORD = "Flehgragh";
 
 add_task(async function test_registration() {
+  // Sanity check, builtin dictionaries should be registered.
+  Assert.deepEqual(
+    spellCheck.getDictionaryList(),
+    ["en-US"],
+    "Expect en-US builtin dictionary to be registered"
+  );
+
   spellCheck.dictionaries = ["en-US"];
 
   ok(!spellCheck.check(WORD), "Word should not pass check before add-on loads");

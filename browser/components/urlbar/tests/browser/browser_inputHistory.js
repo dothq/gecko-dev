@@ -81,6 +81,7 @@ add_setup(async function () {
     set: [
       // We don't want autofill to influence this test.
       ["browser.urlbar.autoFill", false],
+      ["browser.urlbar.scotchBonnet.enableOverride", false],
     ],
   });
   registerCleanupFunction(async () => {
@@ -460,7 +461,7 @@ add_task(async function test_adaptive_mouse() {
 add_task(async function test_adaptive_searchmode() {
   info("Check adaptive history is not shown in search mode.");
 
-  let suggestionsEngine = await SearchTestUtils.promiseNewSearchEngine({
+  let suggestionsEngine = await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + "searchSuggestionEngine.xml",
   });
 

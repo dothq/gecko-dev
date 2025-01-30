@@ -98,9 +98,13 @@ struct gfxFontStyle {
   gfxFontStyle();
   gfxFontStyle(FontSlantStyle aStyle, FontWeight aWeight, FontStretch aStretch,
                gfxFloat aSize, const FontSizeAdjust& aSizeAdjust,
-               bool aSystemFont, bool aPrinterFont, bool aWeightSynthesis,
-               bool aStyleSynthesis, bool aSmallCapsSynthesis,
-               bool aPositionSynthesis, uint32_t aLanguageOverride);
+               bool aSystemFont, bool aPrinterFont,
+#ifdef XP_WIN
+               bool aAllowForceGDIClassic,
+#endif
+               bool aWeightSynthesis, bool aStyleSynthesis,
+               bool aSmallCapsSynthesis, bool aPositionSynthesis,
+               mozilla::StyleFontLanguageOverride aLanguageOverride);
   // Features are composed of (1) features from style rules (2) features
   // from feature settings rules and (3) family-specific features.  (1) and
   // (3) are guaranteed to be mutually exclusive
@@ -146,7 +150,7 @@ struct gfxFontStyle {
   // but the font in use does not explicitly support this; the author can
   // use font-language-override to request the Serbian option in the font
   // in order to get correct glyph shapes.)
-  uint32_t languageOverride;
+  mozilla::StyleFontLanguageOverride languageOverride;
 
   // The Font{Weight,Stretch,SlantStyle} fields are each a 16-bit type.
 
@@ -184,6 +188,10 @@ struct gfxFontStyle {
 
   // Say that this font is used for print or print preview.
   bool printerFont : 1;
+
+#ifdef XP_WIN
+  bool allowForceGDIClassic : 1;
+#endif
 
   // Used to imitate -webkit-font-smoothing: antialiased
   bool useGrayscaleAntialiasing : 1;
@@ -240,6 +248,9 @@ struct gfxFontStyle {
            (useSyntheticPosition == other.useSyntheticPosition) &&
            (systemFont == other.systemFont) &&
            (printerFont == other.printerFont) &&
+#ifdef XP_WIN
+           (allowForceGDIClassic == other.allowForceGDIClassic) &&
+#endif
            (useGrayscaleAntialiasing == other.useGrayscaleAntialiasing) &&
            (baselineOffset == other.baselineOffset) &&
            mozilla::NumbersAreBitwiseIdentical(sizeAdjust, other.sizeAdjust) &&
@@ -1527,9 +1538,7 @@ class gfxFont {
   // and therefore needs us to use a mask for text-shadow even when
   // we're not actually blurring.
   bool AlwaysNeedsMaskForShadow() const {
-    return mFontEntry->TryGetColorGlyphs() || mFontEntry->TryGetSVGData(this) ||
-           mFontEntry->HasFontTable(TRUETYPE_TAG('C', 'B', 'D', 'T')) ||
-           mFontEntry->HasFontTable(TRUETYPE_TAG('s', 'b', 'i', 'x'));
+    return mFontEntry->AlwaysNeedsMaskForShadow();
   }
 
   // whether a feature is supported by the font (limited to a small set

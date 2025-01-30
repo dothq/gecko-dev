@@ -293,7 +293,12 @@ nsUrlClassifierUtils::GetKeyForURI(nsIURI* uri, nsACString& _retval) {
     rv = innerURI->GetQuery(query);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    _retval.AppendPrintf("?%s", query.get());
+    // We have to canonicalize the query too based on
+    // https://developers.google.com/safe-browsing/v4/urls-hashing?hl=en#canonicalization
+    rv = CanonicalizeQuery(query, temp);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    _retval.Append(temp);
   }
 
   return NS_OK;
@@ -328,7 +333,7 @@ static const struct {
 NS_IMETHODIMP
 nsUrlClassifierUtils::ConvertThreatTypeToListNames(uint32_t aThreatType,
                                                    nsACString& aListNames) {
-  for (uint32_t i = 0; i < ArrayLength(THREAT_TYPE_CONV_TABLE); i++) {
+  for (uint32_t i = 0; i < std::size(THREAT_TYPE_CONV_TABLE); i++) {
     if (aThreatType == THREAT_TYPE_CONV_TABLE[i].mThreatType) {
       if (!aListNames.IsEmpty()) {
         aListNames.AppendLiteral(",");
@@ -343,7 +348,7 @@ nsUrlClassifierUtils::ConvertThreatTypeToListNames(uint32_t aThreatType,
 NS_IMETHODIMP
 nsUrlClassifierUtils::ConvertListNameToThreatType(const nsACString& aListName,
                                                   uint32_t* aThreatType) {
-  for (uint32_t i = 0; i < ArrayLength(THREAT_TYPE_CONV_TABLE); i++) {
+  for (uint32_t i = 0; i < std::size(THREAT_TYPE_CONV_TABLE); i++) {
     if (aListName.EqualsASCII(THREAT_TYPE_CONV_TABLE[i].mListName)) {
       *aThreatType = THREAT_TYPE_CONV_TABLE[i].mThreatType;
       return NS_OK;
@@ -913,6 +918,25 @@ nsresult nsUrlClassifierUtils::CanonicalizePath(const nsACString& path,
 
   SpecialEncode(decodedPath, true, _retval);
   // XXX: lowercase the path?
+
+  return NS_OK;
+}
+
+nsresult nsUrlClassifierUtils::CanonicalizeQuery(const nsACString& query,
+                                                 nsACString& _retval) {
+  _retval.Truncate();
+  _retval.Append('?');
+
+  // Unescape the query
+  nsAutoCString unescaped;
+  if (!NS_UnescapeURL(PromiseFlatCString(query).get(),
+                      PromiseFlatCString(query).Length(), 0, unescaped)) {
+    unescaped.Assign(query);
+  }
+
+  // slash folding does not apply to the query parameters, but we need to
+  // percent-escape all characters that are <= ASCII 32, >= 127, "#", or "%"
+  SpecialEncode(unescaped, false, _retval);
 
   return NS_OK;
 }

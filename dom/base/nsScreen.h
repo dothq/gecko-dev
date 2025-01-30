@@ -28,7 +28,7 @@ class nsScreen : public mozilla::DOMEventTargetHelper {
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsScreen,
                                            mozilla::DOMEventTargetHelper)
 
-  nsPIDOMWindowInner* GetParentObject() const { return GetOwner(); }
+  nsIGlobalObject* GetParentObject() const { return GetOwnerGlobal(); }
 
   nsPIDOMWindowOuter* GetOuter() const;
 
@@ -88,7 +88,7 @@ class nsScreen : public mozilla::DOMEventTargetHelper {
   nsDeviceContext* GetDeviceContext() const;
   mozilla::CSSIntRect GetRect();
   mozilla::CSSIntRect GetAvailRect();
-  mozilla::CSSIntRect GetWindowInnerRect();
+  mozilla::CSSIntRect GetTopWindowInnerRectForRFP();
 
  private:
   virtual ~nsScreen();

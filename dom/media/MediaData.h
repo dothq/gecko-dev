@@ -8,11 +8,14 @@
 
 #  include "AudioConfig.h"
 #  include "AudioSampleFormat.h"
+#  include "EncoderConfig.h"
 #  include "ImageTypes.h"
 #  include "MediaResult.h"
 #  include "SharedBuffer.h"
 #  include "TimeUnits.h"
 #  include "mozilla/CheckedInt.h"
+#  include "mozilla/DefineEnum.h"
+#  include "mozilla/EnumSet.h"
 #  include "mozilla/Maybe.h"
 #  include "mozilla/PodOperations.h"
 #  include "mozilla/RefPtr.h"
@@ -298,21 +301,8 @@ class MediaData {
  public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaData)
 
-  enum class Type : uint8_t { AUDIO_DATA = 0, VIDEO_DATA, RAW_DATA, NULL_DATA };
-  static const char* TypeToStr(Type aType) {
-    switch (aType) {
-      case Type::AUDIO_DATA:
-        return "AUDIO_DATA";
-      case Type::VIDEO_DATA:
-        return "VIDEO_DATA";
-      case Type::RAW_DATA:
-        return "RAW_DATA";
-      case Type::NULL_DATA:
-        return "NULL_DATA";
-      default:
-        MOZ_CRASH("bad value");
-    }
-  }
+  MOZ_DEFINE_ENUM_CLASS_WITH_BASE_AND_TOSTRING_AT_CLASS_SCOPE(
+      Type, uint8_t, (AUDIO_DATA, VIDEO_DATA, RAW_DATA, NULL_DATA));
 
   MediaData(Type aType, int64_t aOffset, const media::TimeUnit& aTimestamp,
             const media::TimeUnit& aDuration)
@@ -379,7 +369,7 @@ class NullData : public MediaData {
   static const Type sType = Type::NULL_DATA;
 };
 
-// Holds chunk a decoded audio frames.
+// Holds chunk a decoded interleaved audio frames.
 class AudioData : public MediaData {
  public:
   AudioData(int64_t aOffset, const media::TimeUnit& aTime,
@@ -388,6 +378,8 @@ class AudioData : public MediaData {
 
   static const Type sType = Type::AUDIO_DATA;
   static const char* sTypeName;
+
+  nsCString ToString() const;
 
   // Access the buffer as a Span.
   Span<AudioDataValue> Data() const;
@@ -578,13 +570,13 @@ class VideoData : public MediaData {
   media::TimeUnit mNextKeyFrameTime;
 };
 
-enum class CryptoScheme : uint8_t {
-  None,
-  Cenc,
-  Cbcs,
-};
+// See https://w3c.github.io/encrypted-media/#scheme-cenc
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE_AND_TOSTRING(CryptoScheme, uint8_t,
+                                             (None, Cenc, Cbcs, Cbcs_1_9));
+using CryptoSchemeSet = EnumSet<CryptoScheme, uint8_t>;
 
-const char* CryptoSchemeToString(const CryptoScheme& aScheme);
+nsCString CryptoSchemeSetToString(const CryptoSchemeSet& aSchemes);
+CryptoScheme StringToCryptoScheme(const nsAString& aString);
 
 class CryptoTrack {
  public:
@@ -720,6 +712,9 @@ class MediaRawData final : public MediaData {
   // If it's true, the `mCrypto` should be copied into the remote data as well.
   // Currently this is only used for the media engine DRM playback.
   bool mShouldCopyCryptoToRemoteRawData = false;
+
+  // Config used to encode this packet.
+  UniquePtr<const EncoderConfig> mConfig;
 
   // It's only used when the remote decoder reconstructs the media raw data.
   CryptoSample& GetWritableCrypto() { return mCryptoInternal; }

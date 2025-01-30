@@ -38,12 +38,16 @@ namespace dom {
 class CSSImportRule;
 class Element;
 class HTMLInputElement;
+class OwningTrustedHTMLOrNullIsEmptyString;
+class TrustedHTMLOrString;
+class TrustedHTMLOrNullIsEmptyString;
 
 class ShadowRoot final : public DocumentFragment, public DocumentOrShadowRoot {
   friend class DocumentOrShadowRoot;
 
   using Declarative = Element::ShadowRootDeclarative;
   using IsClonable = Element::ShadowRootClonable;
+  using IsSerializable = Element::ShadowRootSerializable;
 
  public:
   NS_IMPL_FROMNODE_HELPER(ShadowRoot, IsShadowRoot());
@@ -54,7 +58,7 @@ class ShadowRoot final : public DocumentFragment, public DocumentOrShadowRoot {
   ShadowRoot(Element* aElement, ShadowRootMode aMode,
              Element::DelegatesFocus aDelegatesFocus,
              SlotAssignmentMode aSlotAssignment, IsClonable aClonable,
-             Declarative aDeclarative,
+             IsSerializable aIsSerializable, Declarative aDeclarative,
              already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
   void AddSizeOfExcludingThis(nsWindowSizes&, size_t* aNodeSize) const final;
@@ -83,12 +87,13 @@ class ShadowRoot final : public DocumentFragment, public DocumentOrShadowRoot {
   SlotAssignmentMode SlotAssignment() const { return mSlotAssignment; }
   bool Clonable() const { return mIsClonable == IsClonable::Yes; }
   bool IsClosed() const { return mMode == ShadowRootMode::Closed; }
+  bool Serializable() const { return mIsSerializable == IsSerializable::Yes; }
 
   void RemoveSheetFromStyles(StyleSheet&);
   void RuleAdded(StyleSheet&, css::Rule&);
   void RuleRemoved(StyleSheet&, css::Rule&);
-  void RuleChanged(StyleSheet&, css::Rule*, StyleRuleChangeKind);
-  void ImportRuleLoaded(CSSImportRule&, StyleSheet&);
+  void RuleChanged(StyleSheet&, css::Rule*, const StyleRuleChange&);
+  void ImportRuleLoaded(StyleSheet&);
   void SheetCloned(StyleSheet&);
   void StyleSheetApplicableStateChanged(StyleSheet&);
 
@@ -245,7 +250,15 @@ class ShadowRoot final : public DocumentFragment, public DocumentOrShadowRoot {
   }
 
   MOZ_CAN_RUN_SCRIPT
-  void SetHTMLUnsafe(const nsAString& aHTML);
+  void SetHTMLUnsafe(const TrustedHTMLOrString& aHTML, ErrorResult& aError);
+
+  // @param aInnerHTML will always be of type `NullIsEmptyString`.
+  void GetInnerHTML(OwningTrustedHTMLOrNullIsEmptyString& aInnerHTML);
+
+  MOZ_CAN_RUN_SCRIPT void SetInnerHTML(
+      const TrustedHTMLOrNullIsEmptyString& aInnerHTML, ErrorResult& aError);
+
+  void GetHTML(const GetHTMLOptions& aOptions, nsAString& aResult);
 
  protected:
   // FIXME(emilio): This will need to become more fine-grained.
@@ -289,6 +302,9 @@ class ShadowRoot final : public DocumentFragment, public DocumentOrShadowRoot {
 
   // https://dom.spec.whatwg.org/#shadowroot-clonable
   const IsClonable mIsClonable;
+
+  // https://dom.spec.whatwg.org/#shadowroot-serializable
+  const IsSerializable mIsSerializable;
 
   nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 };

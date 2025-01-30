@@ -79,6 +79,10 @@ function forceGC() {
 }
 
 add_setup(async function () {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.scotchBonnet.enableOverride", false]],
+  });
+
   await initAccessibilityService();
 });
 
@@ -117,7 +121,7 @@ add_task(async function switchToTab() {
 });
 
 add_task(async function searchSuggestions() {
-  await SearchTestUtils.promiseNewSearchEngine({
+  await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + TEST_ENGINE_BASENAME,
     setAsDefault: true,
   });

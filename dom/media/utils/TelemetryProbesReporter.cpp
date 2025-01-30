@@ -7,11 +7,12 @@
 #include <cmath>
 
 #include "FrameStatistics.h"
+#include "MediaCodecsSupport.h"
 #include "VideoUtils.h"
 #include "mozilla/EMEUtils.h"
 #include "mozilla/Logging.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/glean/GleanMetrics.h"
 #include "nsThreadUtils.h"
 
@@ -21,33 +22,6 @@ LazyLogModule gTelemetryProbesReporterLog("TelemetryProbesReporter");
 #define LOG(msg, ...)                                   \
   MOZ_LOG(gTelemetryProbesReporterLog, LogLevel::Debug, \
           ("TelemetryProbesReporter=%p, " msg, this, ##__VA_ARGS__))
-
-static const char* ToVisibilityStr(
-    TelemetryProbesReporter::Visibility aVisibility) {
-  switch (aVisibility) {
-    case TelemetryProbesReporter::Visibility::eVisible:
-      return "visible";
-    case TelemetryProbesReporter::Visibility::eInvisible:
-      return "invisible";
-    case TelemetryProbesReporter::Visibility::eInitial:
-      return "initial";
-    default:
-      MOZ_ASSERT_UNREACHABLE("invalid visibility");
-      return "unknown";
-  }
-}
-static const char* ToAudibilityStr(
-    TelemetryProbesReporter::AudibleState aAudibleState) {
-  switch (aAudibleState) {
-    case TelemetryProbesReporter::AudibleState::eAudible:
-      return "audible";
-    case TelemetryProbesReporter::AudibleState::eNotAudible:
-      return "inaudible";
-    default:
-      MOZ_ASSERT_UNREACHABLE("invalid audibility");
-      return "unknown";
-  }
-}
 
 static const char* ToMutedStr(bool aMuted) {
   return aMuted ? "muted" : "unmuted";
@@ -156,7 +130,8 @@ void TelemetryProbesReporter::OnPause(Visibility aVisibility) {
 void TelemetryProbesReporter::OnVisibilityChanged(Visibility aVisibility) {
   AssertOnMainThreadAndNotShutdown();
   LOG("Corresponding media element visibility change=%s -> %s",
-      ToVisibilityStr(mMediaElementVisibility), ToVisibilityStr(aVisibility));
+      EnumValueToString(mMediaElementVisibility),
+      EnumValueToString(aVisibility));
   if (aVisibility == Visibility::eInvisible) {
     StartInvisibleVideoTimeAccumulator();
   } else {
@@ -171,7 +146,8 @@ void TelemetryProbesReporter::OnVisibilityChanged(Visibility aVisibility) {
 
 void TelemetryProbesReporter::OnAudibleChanged(AudibleState aAudibleState) {
   AssertOnMainThreadAndNotShutdown();
-  LOG("Audibility changed, now %s", ToAudibilityStr(aAudibleState));
+  LOG("Audibility changed, now %s",
+      dom::AudioChannelService::EnumValueToString(aAudibleState));
   if (aAudibleState == AudibleState::eNotAudible) {
     if (!mInaudibleAudioPlayTime.IsStarted()) {
       StartInaudibleAudioTimeAccumulator();
@@ -270,46 +246,31 @@ void TelemetryProbesReporter::OnMediaContentChanged(MediaContent aContent) {
   mMediaContent = aContent;
 }
 
-void TelemetryProbesReporter::OnDecodeSuspended() {
-  AssertOnMainThreadAndNotShutdown();
-  // Suspended time should only be counted after starting accumulating invisible
-  // time.
-  if (!mInvisibleVideoPlayTime.IsStarted()) {
-    return;
-  }
-  LOG("Start time accumulation for video decoding suspension");
-  mVideoDecodeSuspendedTime.Start();
-  mOwner->DispatchAsyncTestingEvent(u"mozvideodecodesuspendedstarted"_ns);
-}
-
-void TelemetryProbesReporter::OnDecodeResumed() {
-  AssertOnMainThreadAndNotShutdown();
-  if (!mVideoDecodeSuspendedTime.IsStarted()) {
-    return;
-  }
-  LOG("Pause time accumulation for video decoding suspension");
-  mVideoDecodeSuspendedTime.Pause();
-  mOwner->DispatchAsyncTestingEvent(u"mozvideodecodesuspendedpaused"_ns);
-}
-
 void TelemetryProbesReporter::OntFirstFrameLoaded(
-    const TimeDuration& aLoadedFirstFrameTime, bool aIsMSE,
-    bool aIsExternalEngineStateMachine) {
-  const MediaInfo& info = mOwner->GetMediaInfo();
-  MOZ_ASSERT(info.HasVideo());
+    const double aLoadedFirstFrameTime, const double aLoadedMetadataTime,
+    const double aTotalWaitingDataTime, const double aTotalBufferingTime,
+    const FirstFrameLoadedFlagSet aFlags, const MediaInfo& aInfo) {
+  MOZ_ASSERT(aInfo.HasVideo());
   nsCString resolution;
-  DetermineResolutionForTelemetry(info, resolution);
+  DetermineResolutionForTelemetry(aInfo, resolution);
+
+  const bool isMSE = aFlags.contains(FirstFrameLoadedFlag::IsMSE);
+  const bool isExternalEngineStateMachine =
+      aFlags.contains(FirstFrameLoadedFlag::IsExternalEngineStateMachine);
 
   glean::media_playback::FirstFrameLoadedExtra extraData;
-  extraData.firstFrameLoadedTime = Some(aLoadedFirstFrameTime.ToMilliseconds());
-  if (!aIsMSE && !aIsExternalEngineStateMachine) {
+  extraData.firstFrameLoadedTime = Some(aLoadedFirstFrameTime);
+  extraData.metadataLoadedTime = Some(aLoadedMetadataTime);
+  extraData.totalWaitingDataTime = Some(aTotalWaitingDataTime);
+  extraData.bufferingTime = Some(aTotalBufferingTime);
+  if (!isMSE && !isExternalEngineStateMachine) {
     extraData.playbackType = Some("Non-MSE playback"_ns);
-  } else if (aIsMSE && !aIsExternalEngineStateMachine) {
+  } else if (isMSE && !isExternalEngineStateMachine) {
     extraData.playbackType = !mOwner->IsEncrypted() ? Some("MSE playback"_ns)
                                                     : Some("EME playback"_ns);
-  } else if (!aIsMSE && aIsExternalEngineStateMachine) {
+  } else if (!isMSE && isExternalEngineStateMachine) {
     extraData.playbackType = Some("Non-MSE media-engine playback"_ns);
-  } else if (aIsMSE && aIsExternalEngineStateMachine) {
+  } else if (isMSE && isExternalEngineStateMachine) {
     extraData.playbackType = !mOwner->IsEncrypted()
                                  ? Some("MSE media-engine playback"_ns)
                                  : Some("EME media-engine playback"_ns);
@@ -317,25 +278,43 @@ void TelemetryProbesReporter::OntFirstFrameLoaded(
     extraData.playbackType = Some("ERROR TYPE"_ns);
     MOZ_ASSERT(false, "Unexpected playback type!");
   }
-  extraData.videoCodec = Some(info.mVideo.mMimeType);
+  extraData.videoCodec = Some(aInfo.mVideo.mMimeType);
   extraData.resolution = Some(resolution);
   if (const auto keySystem = mOwner->GetKeySystem()) {
     extraData.keySystem = Some(NS_ConvertUTF16toUTF8(*keySystem));
   }
+  if (aFlags.contains(FirstFrameLoadedFlag::IsHardwareDecoding)) {
+    extraData.isHardwareDecoding = Some(true);
+  }
+
+#ifdef MOZ_WIDGET_ANDROID
+  if (aFlags.contains(FirstFrameLoadedFlag::IsHLS)) {
+    extraData.hlsDecoder = Some(true);
+  }
+#endif
 
   if (MOZ_LOG_TEST(gTelemetryProbesReporterLog, LogLevel::Debug)) {
     nsPrintfCString logMessage{
-        "Media_Playabck First_Frame_Loaded event, time(ms)=%f, "
-        "playback-type=%s, videoCodec=%s, resolution=%s",
-        aLoadedFirstFrameTime.ToMilliseconds(), extraData.playbackType->get(),
-        extraData.videoCodec->get(), extraData.resolution->get()};
+        "Media_Playabck First_Frame_Loaded event, time(ms)=["
+        "full:%f, loading-meta:%f, waiting-data:%f, buffering:%f], "
+        "playback-type=%s, "
+        "videoCodec=%s, resolution=%s, hardware=%d",
+        aLoadedFirstFrameTime,
+        aLoadedMetadataTime,
+        aTotalWaitingDataTime,
+        aTotalBufferingTime,
+        extraData.playbackType->get(),
+        extraData.videoCodec->get(),
+        extraData.resolution->get(),
+        aFlags.contains(FirstFrameLoadedFlag::IsHardwareDecoding)};
     if (const auto keySystem = mOwner->GetKeySystem()) {
-      logMessage.Append(nsPrintfCString{
-          ", keySystem=%s", NS_ConvertUTF16toUTF8(*keySystem).get()});
+      logMessage.AppendPrintf(", keySystem=%s",
+                              NS_ConvertUTF16toUTF8(*keySystem).get());
     }
     LOG("%s", logMessage.get());
   }
   glean::media_playback::first_frame_loaded.Record(Some(extraData));
+  mOwner->DispatchAsyncTestingEvent(u"mozfirstframeloadedprobe"_ns);
 }
 
 void TelemetryProbesReporter::OnShutdown() {
@@ -361,7 +340,6 @@ void TelemetryProbesReporter::PauseInvisibleVideoTimeAccumulator() {
   if (!mInvisibleVideoPlayTime.IsStarted()) {
     return;
   }
-  OnDecodeResumed();
   LOG("Pause time accumulation for invisible video");
   mInvisibleVideoPlayTime.Pause();
   mOwner->DispatchAsyncTestingEvent(u"mozinvisibleplaytimepaused"_ns);
@@ -431,8 +409,6 @@ void TelemetryProbesReporter::ReportResultForVideo() {
 
   const double totalVideoPlayTimeS = mTotalVideoPlayTime.GetAndClearTotal();
   const double invisiblePlayTimeS = mInvisibleVideoPlayTime.GetAndClearTotal();
-  const double videoDecodeSuspendTimeS =
-      mVideoDecodeSuspendedTime.GetAndClearTotal();
   const double totalVideoHDRPlayTimeS =
       mTotalVideoHDRPlayTime.GetAndClearTotal();
 
@@ -465,6 +441,7 @@ void TelemetryProbesReporter::ReportResultForVideo() {
                           SECONDS_TO_MS(totalVideoPlayTimeS));
   }
 
+  // TODO: deprecate the old probes.
   // Report result for video using CDM
   auto keySystem = mOwner->GetKeySystem();
   if (keySystem) {
@@ -504,21 +481,16 @@ void TelemetryProbesReporter::ReportResultForVideo() {
   LOG("VIDEO_HIDDEN_PLAY_TIME_PERCENTAGE = %u, keys: '%s' and 'All'",
       hiddenPercentage, key.get());
 
-  const uint32_t videoDecodeSuspendPercentage =
-      lround(videoDecodeSuspendTimeS / totalVideoPlayTimeS * 100.0);
-  Telemetry::Accumulate(Telemetry::VIDEO_INFERRED_DECODE_SUSPEND_PERCENTAGE,
-                        key, videoDecodeSuspendPercentage);
-  Telemetry::Accumulate(Telemetry::VIDEO_INFERRED_DECODE_SUSPEND_PERCENTAGE,
-                        "All"_ns, videoDecodeSuspendPercentage);
-  LOG("VIDEO_INFERRED_DECODE_SUSPEND_PERCENTAGE = %u, keys: '%s' and 'All'",
-      videoDecodeSuspendPercentage, key.get());
-
   ReportResultForVideoFrameStatistics(totalVideoPlayTimeS, key);
 #ifdef MOZ_WMF_CDM
   if (mOwner->IsUsingWMFCDM()) {
     ReportResultForMFCDMPlaybackIfNeeded(totalVideoPlayTimeS, key);
   }
 #endif
+  if (keySystem) {
+    ReportPlaytimeForKeySystem(*keySystem, totalVideoPlayTimeS,
+                               info.mVideo.mMimeType, key);
+  }
 }
 
 #ifdef MOZ_WMF_CDM
@@ -546,23 +518,32 @@ void TelemetryProbesReporter::ReportResultForMFCDMPlaybackIfNeeded(
   if (MOZ_LOG_TEST(gTelemetryProbesReporterLog, LogLevel::Debug)) {
     nsPrintfCString logMessage{
         "MFCDM EME_Playback event, keySystem=%s, videoCodec=%s, resolution=%s, "
-        "playedTime=%s",
+        "playedTime=%lf",
         NS_ConvertUTF16toUTF8(*keySystem).get(),
         mOwner->GetMediaInfo().mVideo.mMimeType.get(), aResolution.get(),
-        std::to_string(aTotalPlayTimeS).c_str()};
+        aTotalPlayTimeS};
     if (renderedFrames) {
-      logMessage.Append(
-          nsPrintfCString{", renderedFrames=%" PRIu64, *renderedFrames});
+      logMessage.AppendPrintf(", renderedFrames=%" PRIu64, *renderedFrames);
     }
     if (droppedFrames) {
-      logMessage.Append(
-          nsPrintfCString{", droppedFrames=%" PRIu64, *droppedFrames});
+      logMessage.AppendPrintf(", droppedFrames=%" PRIu64, *droppedFrames);
     }
     LOG("%s", logMessage.get());
   }
   glean::mfcdm::eme_playback.Record(Some(extraData));
 }
 #endif
+
+void TelemetryProbesReporter::ReportPlaytimeForKeySystem(
+    const nsAString& aKeySystem, const double aTotalPlayTimeS,
+    const nsCString& aCodec, const nsCString& aResolution) {
+  glean::mediadrm::EmePlaybackExtra extra = {
+      .keySystem = Some(NS_ConvertUTF16toUTF8(aKeySystem)),
+      .playedTime = Some(aTotalPlayTimeS),
+      .resolution = Some(aResolution),
+      .videoCodec = Some(aCodec)};
+  glean::mediadrm::eme_playback.Record(Some(extra));
+}
 
 void TelemetryProbesReporter::ReportResultForAudio() {
   // Don't record telemetry for a media that didn't have a valid audio or video
@@ -639,42 +620,6 @@ void TelemetryProbesReporter::ReportResultForVideoFrameStatistics(
     return;
   }
 
-  FrameStatisticsData data = stats->GetFrameStatisticsData();
-  if (data.mInterKeyframeCount != 0) {
-    const uint32_t average_ms = uint32_t(
-        std::min<uint64_t>(lround(double(data.mInterKeyframeSum_us) /
-                                  double(data.mInterKeyframeCount) / 1000.0),
-                           UINT32_MAX));
-    Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_AVERAGE_MS, key,
-                          average_ms);
-    Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_AVERAGE_MS, "All"_ns,
-                          average_ms);
-    LOG("VIDEO_INTER_KEYFRAME_AVERAGE_MS = %u, keys: '%s' and 'All'",
-        average_ms, key.get());
-
-    const uint32_t max_ms = uint32_t(std::min<uint64_t>(
-        (data.mInterKeyFrameMax_us + 500) / 1000, UINT32_MAX));
-    Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_MAX_MS, key, max_ms);
-    Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_MAX_MS, "All"_ns,
-                          max_ms);
-    LOG("VIDEO_INTER_KEYFRAME_MAX_MS = %u, keys: '%s' and 'All'", max_ms,
-        key.get());
-  } else {
-    // Here, we have played *some* of the video, but didn't get more than 1
-    // keyframe. Report '0' if we have played for longer than the video-
-    // decode-suspend delay (showing recovery would be difficult).
-    const uint32_t suspendDelay_ms =
-        StaticPrefs::media_suspend_background_video_delay_ms();
-    if (uint32_t(aTotalPlayTimeS * 1000.0) > suspendDelay_ms) {
-      Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_MAX_MS, key, 0);
-      Telemetry::Accumulate(Telemetry::VIDEO_INTER_KEYFRAME_MAX_MS, "All"_ns,
-                            0);
-      LOG("VIDEO_INTER_KEYFRAME_MAX_MS = 0 (only 1 keyframe), keys: '%s' and "
-          "'All'",
-          key.get());
-    }
-  }
-
   const uint64_t parsedFrames = stats->GetParsedFrames();
   if (parsedFrames) {
     const uint64_t droppedFrames = stats->GetDroppedFrames();
@@ -730,10 +675,6 @@ double TelemetryProbesReporter::GetInvisibleVideoPlayTimeInSeconds() const {
   return mInvisibleVideoPlayTime.PeekTotal();
 }
 
-double TelemetryProbesReporter::GetVideoDecodeSuspendedTimeInSeconds() const {
-  return mVideoDecodeSuspendedTime.PeekTotal();
-}
-
 double TelemetryProbesReporter::GetTotalAudioPlayTimeInSeconds() const {
   return mTotalAudioPlayTime.PeekTotal();
 }
@@ -748,6 +689,33 @@ double TelemetryProbesReporter::GetMutedPlayTimeInSeconds() const {
 
 double TelemetryProbesReporter::GetAudiblePlayTimeInSeconds() const {
   return GetTotalAudioPlayTimeInSeconds() - GetInaudiblePlayTimeInSeconds();
+}
+
+/*  static */
+void TelemetryProbesReporter::ReportDeviceMediaCodecSupported(
+    const media::MediaCodecsSupported& aSupported) {
+  static bool sReported = false;
+  if (sReported) {
+    return;
+  }
+  MOZ_ASSERT(ContainHardwareCodecsSupported(aSupported));
+  sReported = true;
+
+  glean::media_playback::device_hardware_decoder_support.Get("h264"_ns).Set(
+      aSupported.contains(
+          mozilla::media::MediaCodecsSupport::H264HardwareDecode));
+  glean::media_playback::device_hardware_decoder_support.Get("vp8"_ns).Set(
+      aSupported.contains(
+          mozilla::media::MediaCodecsSupport::VP8HardwareDecode));
+  glean::media_playback::device_hardware_decoder_support.Get("vp9"_ns).Set(
+      aSupported.contains(
+          mozilla::media::MediaCodecsSupport::VP9HardwareDecode));
+  glean::media_playback::device_hardware_decoder_support.Get("av1"_ns).Set(
+      aSupported.contains(
+          mozilla::media::MediaCodecsSupport::AV1HardwareDecode));
+  glean::media_playback::device_hardware_decoder_support.Get("hevc"_ns).Set(
+      aSupported.contains(
+          mozilla::media::MediaCodecsSupport::HEVCHardwareDecode));
 }
 
 #undef LOG

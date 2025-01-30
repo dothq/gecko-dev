@@ -88,7 +88,7 @@ class FuzzyParser(BaseTryParser):
             },
         ],
         [
-            ["--disable-target-task-filter"],
+            ["--disable-target-task-filter", "--all-tasks"],
             {
                 "action": "store_true",
                 "default": False,
@@ -118,6 +118,7 @@ class FuzzyParser(BaseTryParser):
         "gecko-profile",
         "new-test-config",
         "path",
+        "test-tag",
         "pernosco",
         "rebuild",
         "routes",
@@ -137,11 +138,13 @@ def run(
     dry_run=False,
     message="{msg}",
     test_paths=None,
+    test_tag=None,
     exact=False,
     closed_tree=False,
     show_estimates=False,
     disable_target_task_filter=False,
     push_to_lando=False,
+    push_to_vcs=False,
     show_chunk_numbers=False,
     new_test_config=False,
 ):
@@ -187,8 +190,8 @@ def run(
         if not all_tasks:
             return 1
 
-    if test_paths:
-        all_tasks = filter_tasks_by_paths(all_tasks, test_paths)
+    if test_paths or test_tag:
+        all_tasks = filter_tasks_by_paths(all_tasks, test_paths, tag=test_tag)
         if not all_tasks:
             return 1
 
@@ -286,4 +289,5 @@ def run(
         dry_run=dry_run,
         closed_tree=closed_tree,
         push_to_lando=push_to_lando,
+        push_to_vcs=push_to_vcs,
     )

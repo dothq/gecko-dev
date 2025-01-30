@@ -338,17 +338,19 @@ mozilla::ipc::IPCResult MFMediaEngineParent::RecvInitMediaEngine(
     // TODO : really need this?
     Unused << mMediaEngine->SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC);
   }
+  RETURN_PARAM_IF_FAILED(
+      SetMediaInfo(aInfo.mediaInfo(), aInfo.encryptedCustomIdent()), IPC_OK());
   aResolver(mMediaEngineId);
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult MFMediaEngineParent::RecvNotifyMediaInfo(
-    const MediaInfoIPDL& aInfo) {
+HRESULT MFMediaEngineParent::SetMediaInfo(const MediaInfoIPDL& aInfo,
+                                          bool aIsEncrytpedCustomInit) {
   AssertOnManagerThread();
   MOZ_ASSERT(mIsCreatedMediaEngine, "Hasn't created media engine?");
   MOZ_ASSERT(!mMediaSource);
 
-  LOG("RecvNotifyMediaInfo");
+  LOG("SetMediaInfo");
 
   auto errorExit = MakeScopeExit([&] {
     MediaResult error(NS_ERROR_DOM_MEDIA_FATAL_ERR,
@@ -357,30 +359,29 @@ mozilla::ipc::IPCResult MFMediaEngineParent::RecvNotifyMediaInfo(
   });
 
   // Create media source and set it to the media engine.
-  NS_ENSURE_TRUE(
-      SUCCEEDED(MakeAndInitialize<MFMediaSource>(
-          &mMediaSource, aInfo.audioInfo(), aInfo.videoInfo(), mManagerThread)),
-      IPC_OK());
+  NS_ENSURE_TRUE(SUCCEEDED(MakeAndInitialize<MFMediaSource>(
+                     &mMediaSource, aInfo.audioInfo(), aInfo.videoInfo(),
+                     mManagerThread, aIsEncrytpedCustomInit)),
+                 IPC_OK());
 
   const bool isEncryted = mMediaSource->IsEncrypted();
   ENGINE_MARKER("MFMediaEngineParent,CreatedMediaSource");
   nsPrintfCString message(
       "Created the media source, audio=%s, video=%s, encrypted-audio=%s, "
-      "encrypted-video=%s, isEncrypted=%d",
+      "encrypted-video=%s, aIsEncrytpedCustomInit=%d, isEncrypted=%d",
       aInfo.audioInfo() ? aInfo.audioInfo()->mMimeType.BeginReading() : "none",
       aInfo.videoInfo() ? aInfo.videoInfo()->mMimeType.BeginReading() : "none",
       aInfo.audioInfo() && aInfo.audioInfo()->mCrypto.IsEncrypted() ? "yes"
                                                                     : "no",
       aInfo.videoInfo() && aInfo.videoInfo()->mCrypto.IsEncrypted() ? "yes"
                                                                     : "no",
-      isEncryted);
+      aIsEncrytpedCustomInit, isEncryted);
   LOG("%s", message.get());
 
   if (aInfo.videoInfo()) {
     ComPtr<IMFMediaEngineEx> mediaEngineEx;
-    RETURN_PARAM_IF_FAILED(mMediaEngine.As(&mediaEngineEx), IPC_OK());
-    RETURN_PARAM_IF_FAILED(mediaEngineEx->EnableWindowlessSwapchainMode(true),
-                           IPC_OK());
+    RETURN_IF_FAILED(mMediaEngine.As(&mediaEngineEx));
+    RETURN_IF_FAILED(mediaEngineEx->EnableWindowlessSwapchainMode(true));
     LOG("Enabled dcomp swap chain mode");
     ENGINE_MARKER("MFMediaEngineParent,EnabledSwapChain");
   }
@@ -392,7 +393,7 @@ mozilla::ipc::IPCResult MFMediaEngineParent::RecvNotifyMediaInfo(
 #ifdef MOZ_WMF_CDM
   if (isEncryted && !mContentProtectionManager) {
     // We will set the source later when the CDM proxy is ready.
-    return IPC_OK();
+    return S_OK;
   }
 
   if (isEncryted && mContentProtectionManager) {
@@ -403,7 +404,7 @@ mozilla::ipc::IPCResult MFMediaEngineParent::RecvNotifyMediaInfo(
 #endif
 
   SetMediaSourceOnEngine();
-  return IPC_OK();
+  return S_OK;
 }
 
 void MFMediaEngineParent::SetMediaSourceOnEngine() {

@@ -18,15 +18,15 @@ DEFINES["WEBRTC_MOZILLA_BUILD"] = True
 DEFINES["WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS"] = "0"
 DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 
@@ -37,7 +37,6 @@ UNIFIED_SOURCES += [
     "/third_party/libwebrtc/video/adaptation/encode_usage_resource.cc",
     "/third_party/libwebrtc/video/adaptation/overuse_frame_detector.cc",
     "/third_party/libwebrtc/video/adaptation/pixel_limit_resource.cc",
-    "/third_party/libwebrtc/video/adaptation/quality_rampup_experiment_helper.cc",
     "/third_party/libwebrtc/video/adaptation/quality_scaler_resource.cc",
     "/third_party/libwebrtc/video/adaptation/video_stream_encoder_resource.cc",
     "/third_party/libwebrtc/video/adaptation/video_stream_encoder_resource_manager.cc"

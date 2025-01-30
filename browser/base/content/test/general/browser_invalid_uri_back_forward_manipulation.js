@@ -13,6 +13,11 @@ add_task(async function checkBackFromInvalidURI() {
     "about:robots",
     true
   );
+  await ContentTask.spawn(gBrowser.selectedBrowser, {}, async function () {
+    // Mark the first entry as having been interacted with.
+    content.document.notifyUserGestureActivation();
+  });
+
   info("Loaded about:robots");
 
   gURLBar.value = "::2600";
@@ -33,7 +38,7 @@ add_task(async function checkBackFromInvalidURI() {
       false,
       // Be paranoid we *are* actually seeing this other page load, not some kind of race
       // for if/when we do start firing pageshow for the error page...
-      function (e) {
+      function () {
         return gBrowser.currentURI.spec == "about:robots";
       }
     );

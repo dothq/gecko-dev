@@ -8,6 +8,7 @@
 #include "nsDBusRemoteServer.h"
 
 #include "nsCOMPtr.h"
+#include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
 #include "mozilla/Base64.h"
 #include "mozilla/ScopeExit.h"
@@ -37,7 +38,7 @@ static const char* introspect_template =
 
 bool nsDBusRemoteServer::HandleOpenURL(const gchar* aInterfaceName,
                                        const gchar* aMethodName,
-                                       const gchar* aParam) {
+                                       Span<const gchar> aParam) {
   nsPrintfCString ourInterfaceName("org.mozilla.%s", mAppName.get());
 
   if ((strcmp("OpenURL", aMethodName) != 0) ||
@@ -46,11 +47,7 @@ bool nsDBusRemoteServer::HandleOpenURL(const gchar* aInterfaceName,
     return false;
   }
 
-  guint32 timestamp = gtk_get_current_event_time();
-  if (timestamp == GDK_CURRENT_TIME) {
-    timestamp = guint32(g_get_monotonic_time() / 1000);
-  }
-  HandleCommandLine(aParam, timestamp);
+  HandleCommandLine(aParam, gtk_get_current_event_time());
   return true;
 }
 
@@ -74,9 +71,15 @@ static void HandleMethodCall(GDBusConnection* aConnection, const gchar* aSender,
     return;
   }
 
-  gsize len;
-  const auto* commandLine = (const char*)g_variant_get_fixed_array(
-      g_variant_get_child_value(aParameters, 0), &len, sizeof(char));
+  gsize len = 0;
+  const char* commandLine = nullptr;
+
+  RefPtr<GVariant> variant =
+      dont_AddRef(g_variant_get_child_value(aParameters, 0));
+  if (variant) {
+    commandLine =
+        (const char*)g_variant_get_fixed_array(variant, &len, sizeof(char));
+  }
   if (!commandLine || !len) {
     g_warning(
         "nsDBusRemoteServer: HandleMethodCall: failed to get url string!");
@@ -88,7 +91,7 @@ static void HandleMethodCall(GDBusConnection* aConnection, const gchar* aSender,
   }
 
   int ret = static_cast<nsDBusRemoteServer*>(aUserData)->HandleOpenURL(
-      aInterfaceName, aMethodName, commandLine);
+      aInterfaceName, aMethodName, mozilla::Span(commandLine, len));
   if (!ret) {
     g_dbus_method_invocation_return_error(
         aInvocation, G_DBUS_ERROR, G_DBUS_ERROR_NOT_SUPPORTED,
@@ -188,13 +191,14 @@ nsresult nsDBusRemoteServer::Startup(const char* aAppName,
                                      const char* aProfileName) {
   MOZ_DIAGNOSTIC_ASSERT(!mDBusID);
 
-  // Don't even try to start without any application/profile name
-  if (!aAppName || aAppName[0] == '\0' || !aProfileName ||
-      aProfileName[0] == '\0')
-    return NS_ERROR_INVALID_ARG;
+  // Don't even try to start without any profile name
+  if (!aProfileName || aProfileName[0] == '\0') return NS_ERROR_INVALID_ARG;
 
-  mAppName = aAppName;
-  mozilla::XREAppData::SanitizeNameForDBus(mAppName);
+  // aAppName is remoting name which can be something like org.mozilla.appname
+  // or so.
+  // For DBus service we rather use general application DBus identifier
+  // which is shared by all DBus services.
+  gAppData->GetDBusAppName(mAppName);
 
   nsAutoCString profileName;
   MOZ_TRY(

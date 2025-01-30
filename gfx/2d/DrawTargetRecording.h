@@ -13,18 +13,18 @@
 namespace mozilla {
 namespace layers {
 class CanvasDrawEventRecorder;
+class RecordedTextureData;
 struct RemoteTextureOwnerId;
 }  // namespace layers
 
 namespace gfx {
 
-class DrawTargetRecording : public DrawTarget {
+class DrawTargetRecording final : public DrawTarget {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawTargetRecording, override)
   DrawTargetRecording(DrawEventRecorder* aRecorder, DrawTarget* aDT,
                       IntRect aRect, bool aHasData = false);
   DrawTargetRecording(layers::CanvasDrawEventRecorder* aRecorder,
-                      int64_t aTextureId,
                       const layers::RemoteTextureOwnerId& aTextureOwnerId,
                       DrawTarget* aDT, const IntSize& aSize);
 
@@ -38,7 +38,8 @@ class DrawTargetRecording : public DrawTarget {
   }
   virtual bool IsRecording() const override { return true; }
 
-  virtual void Link(const char* aDestination, const Rect& aRect) override;
+  virtual void Link(const char* aLocalDest, const char* aURI,
+                    const Rect& aRect) override;
   virtual void Destination(const char* aDestination,
                            const Point& aPoint) override;
 
@@ -68,6 +69,13 @@ class DrawTargetRecording : public DrawTarget {
    */
   virtual void DrawSurface(
       SourceSurface* aSurface, const Rect& aDest, const Rect& aSource,
+      const DrawSurfaceOptions& aSurfOptions = DrawSurfaceOptions(),
+      const DrawOptions& aOptions = DrawOptions()) override;
+
+  virtual void DrawSurfaceDescriptor(
+      const layers::SurfaceDescriptor& aDesc,
+      const RefPtr<layers::Image>& aImageOfSurfaceDescriptor, const Rect& aDest,
+      const Rect& aSource,
       const DrawSurfaceOptions& aSurfOptions = DrawSurfaceOptions(),
       const DrawOptions& aOptions = DrawOptions()) override;
 
@@ -213,6 +221,9 @@ class DrawTargetRecording : public DrawTarget {
    * be ignored.
    */
   virtual void PopClip() override;
+
+  /* Remove all applied clips. */
+  virtual bool RemoveAllClips() override;
 
   /**
    * Push a 'layer' to the DrawTarget, a layer is a temporary surface that all
@@ -365,9 +376,21 @@ class DrawTargetRecording : public DrawTarget {
     return mFinalDT->IsCurrentGroupOpaque();
   }
 
-  bool IsDirty() const { return mIsDirty; }
+  void SetOptimizeTransform(bool aOptimizeTransform) {
+    mOptimizeTransform = aOptimizeTransform;
+  }
 
-  void MarkClean() { mIsDirty = false; }
+ protected:
+  friend class layers::RecordedTextureData;
+
+  void AttachTextureData(layers::RecordedTextureData* aTextureData) {
+    mTextureData = aTextureData;
+  }
+  void DetachTextureData(layers::RecordedTextureData*) {
+    mTextureData = nullptr;
+  }
+
+  layers::RecordedTextureData* mTextureData = nullptr;
 
  private:
   /**
@@ -379,6 +402,35 @@ class DrawTargetRecording : public DrawTarget {
    */
   DrawTargetRecording(const DrawTargetRecording* aDT, IntRect aRect,
                       SurfaceFormat aFormat);
+
+  void RecordTransform(const Matrix& aTransform) const;
+
+  void FlushTransform() const {
+    if (mTransformDirty) {
+      if (!mRecordedTransform.ExactlyEquals(mTransform)) {
+        RecordTransform(mTransform);
+      }
+      mTransformDirty = false;
+    }
+  }
+
+  void RecordEvent(const RecordedEvent& aEvent) const {
+    FlushTransform();
+    mRecorder->RecordEvent(aEvent);
+  }
+
+  void RecordEventSelf(const RecordedEvent& aEvent) const {
+    FlushTransform();
+    mRecorder->RecordEvent(this, aEvent);
+  }
+
+  void RecordEventSkipFlushTransform(const RecordedEvent& aEvent) const {
+    mRecorder->RecordEvent(aEvent);
+  }
+
+  void RecordEventSelfSkipFlushTransform(const RecordedEvent& aEvent) const {
+    mRecorder->RecordEvent(this, aEvent);
+  }
 
   Path* GetPathForPathRecording(const Path* aPath) const;
   already_AddRefed<PathRecording> EnsurePathStored(const Path* aPath);
@@ -402,7 +454,10 @@ class DrawTargetRecording : public DrawTarget {
   };
   std::vector<PushedLayer> mPushedLayers;
 
-  bool mIsDirty = false;
+  bool mOptimizeTransform = false;
+
+  // Last transform that was used in the recording.
+  mutable Matrix mRecordedTransform;
 };
 
 }  // namespace gfx

@@ -51,6 +51,24 @@ bool EventQueue::PushEvent(AccEvent* aEvent) {
   return true;
 }
 
+bool EventQueue::PushNameOrDescriptionChangeToRelations(
+    LocalAccessible* aAccessible, RelationType aType) {
+  MOZ_ASSERT(aType == RelationType::LABEL_FOR ||
+             aType == RelationType::DESCRIPTION_FOR);
+
+  bool pushed = false;
+  uint32_t eventType = aType == RelationType::LABEL_FOR
+                           ? nsIAccessibleEvent::EVENT_NAME_CHANGE
+                           : nsIAccessibleEvent::EVENT_DESCRIPTION_CHANGE;
+  Relation rel = aAccessible->RelationByType(aType);
+  while (LocalAccessible* relTarget = rel.LocalNext()) {
+    RefPtr<AccEvent> nameChangeEvent = new AccEvent(eventType, relTarget);
+    pushed |= PushEvent(nameChangeEvent);
+  }
+
+  return pushed;
+}
+
 bool EventQueue::PushNameOrDescriptionChange(AccEvent* aOrigEvent) {
   // Fire name/description change event on parent or related LocalAccessible
   // being labelled/described given that this event hasn't been coalesced, the
@@ -58,14 +76,18 @@ bool EventQueue::PushNameOrDescriptionChange(AccEvent* aOrigEvent) {
   // subtree was changed.
   LocalAccessible* target = aOrigEvent->mAccessible;
   // If the text of a text leaf changed without replacing the leaf, the only
-  // event we get is text inserted on the container. In this case, we might
-  // need to fire a name change event on the target itself.
+  // event we get is text inserted on the container. Or, a reorder event may
+  // change the container's name. In this case, we might need to fire a name
+  // change event on the target itself.
   const bool maybeTargetNameChanged =
       (aOrigEvent->mEventType == nsIAccessibleEvent::EVENT_TEXT_REMOVED ||
-       aOrigEvent->mEventType == nsIAccessibleEvent::EVENT_TEXT_INSERTED) &&
+       aOrigEvent->mEventType == nsIAccessibleEvent::EVENT_TEXT_INSERTED ||
+       aOrigEvent->mEventType == nsIAccessibleEvent::EVENT_REORDER ||
+       aOrigEvent->mEventType == nsIAccessibleEvent::EVENT_INNER_REORDER) &&
       nsTextEquivUtils::HasNameRule(target, eNameFromSubtreeRule);
   const bool doName = target->HasNameDependent() || maybeTargetNameChanged;
   const bool doDesc = target->HasDescriptionDependent();
+
   if (!doName && !doDesc) {
     return false;
   }
@@ -80,12 +102,34 @@ bool EventQueue::PushNameOrDescriptionChange(AccEvent* aOrigEvent) {
     if (doName) {
       if (nameCheckAncestor && (maybeTargetNameChanged || parent != target) &&
           nsTextEquivUtils::HasNameRule(parent, eNameFromSubtreeRule)) {
-        nsAutoString name;
-        ENameValueFlag nameFlag = parent->Name(name);
-        // If name is obtained from subtree, fire name change event.
         // HTML file inputs always get part of their name from the subtree, even
         // if the author provided a name.
-        if (nameFlag == eNameFromSubtree || parent->IsHTMLFileInput()) {
+        bool fireNameChange = parent->IsHTMLFileInput();
+        if (!fireNameChange) {
+          nsAutoString name;
+          ENameValueFlag nameFlag = parent->Name(name);
+          switch (nameFlag) {
+            case eNameOK:
+              // Descendants of subtree may have been removed, making the name
+              // void.
+              fireNameChange = name.IsVoid();
+              break;
+            case eNameFromSubtree:
+              // If name is obtained from subtree, fire name change event.
+              fireNameChange = true;
+              break;
+            case eNameFromTooltip:
+              // If the descendants of this accessible were removed, the name
+              // may be calculated using the tooltip. We can guess that the name
+              // was obtained from the subtree before.
+              fireNameChange = true;
+              break;
+            default:
+              MOZ_ASSERT_UNREACHABLE("All name flags not covered!");
+          }
+        }
+
+        if (fireNameChange) {
           RefPtr<AccEvent> nameChangeEvent =
               new AccEvent(nsIAccessibleEvent::EVENT_NAME_CHANGE, parent);
           pushed |= PushEvent(nameChangeEvent);
@@ -93,21 +137,13 @@ bool EventQueue::PushNameOrDescriptionChange(AccEvent* aOrigEvent) {
         nameCheckAncestor = false;
       }
 
-      Relation rel = parent->RelationByType(RelationType::LABEL_FOR);
-      while (LocalAccessible* relTarget = rel.LocalNext()) {
-        RefPtr<AccEvent> nameChangeEvent =
-            new AccEvent(nsIAccessibleEvent::EVENT_NAME_CHANGE, relTarget);
-        pushed |= PushEvent(nameChangeEvent);
-      }
+      pushed |= PushNameOrDescriptionChangeToRelations(parent,
+                                                       RelationType::LABEL_FOR);
     }
 
     if (doDesc) {
-      Relation rel = parent->RelationByType(RelationType::DESCRIPTION_FOR);
-      while (LocalAccessible* relTarget = rel.LocalNext()) {
-        RefPtr<AccEvent> descChangeEvent = new AccEvent(
-            nsIAccessibleEvent::EVENT_DESCRIPTION_CHANGE, relTarget);
-        pushed |= PushEvent(descChangeEvent);
-      }
+      pushed |= PushNameOrDescriptionChangeToRelations(
+          parent, RelationType::DESCRIPTION_FOR);
     }
 
     if (parent->IsDoc()) {
@@ -231,7 +267,7 @@ void EventQueue::CoalesceEvents() {
 
     default:
       break;  // case eAllowDupes, eDoNotEmit
-  }           // switch
+  }  // switch
 }
 
 void EventQueue::CoalesceSelChangeEvents(AccSelChangeEvent* aTailEvent,
@@ -422,6 +458,20 @@ void EventQueue::ProcessEventQueue() {
 
     if (!mDocument) {
       return;
+    }
+
+    // Some mutation events may be queued incidentally by this function. Send
+    // them immediately so they stay in order. This can happen due to code in
+    // DoInitialUpdate and TextUpdater that calls FireDelayedEvent for mutation
+    // events, rather than QueueMutationEvent. DoInitialUpdate can do this with
+    // reorder events, and TextUpdater can do this with text inserted/removed
+    // events. Process these events now to avoid sending them out-of-order.
+    if (eventType == nsIAccessibleEvent::EVENT_REORDER ||
+        eventType == nsIAccessibleEvent::EVENT_TEXT_INSERTED ||
+        eventType == nsIAccessibleEvent::EVENT_TEXT_REMOVED) {
+      if (auto* ipcDoc = mDocument->IPCDoc()) {
+        ipcDoc->SendQueuedMutationEvents();
+      }
     }
   }
 

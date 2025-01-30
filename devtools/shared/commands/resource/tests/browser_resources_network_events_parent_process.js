@@ -21,8 +21,8 @@ const createParentProcessRequests = async () => {
 const EXPECTED_METHOD_NAME = "createParentProcessRequests";
 const EXPECTED_REQUEST_LINE_1 = 12;
 const EXPECTED_REQUEST_COL_1 = 9;
-const EXPECTED_REQUEST_LINE_2 = 17;
-const EXPECTED_REQUEST_COL_2 = 3;
+// const EXPECTED_REQUEST_LINE_2 = 17;
+// const EXPECTED_REQUEST_COL_2 = 3;
 
 // Test the ResourceCommand API around NETWORK_EVENT for the parent process
 
@@ -31,6 +31,10 @@ const FETCH_URI = "https://example.com/document-builder.sjs?html=foo";
 // Add a random parameter to the request to bypass the cache.
 const uuid = `${Date.now()}-${Math.random()}`;
 const IMAGE_URI = URL_ROOT_SSL + "test_image.png?" + uuid;
+
+// Loading the content page might also trigger priviledge image requests from the firefox UI, this seems to
+// happen when a new tab is created for the page.
+const ignoreRequestPatterns = "file:///";
 
 add_task(async function testParentProcessRequests() {
   // The test expects the main process commands instance to receive resources
@@ -46,6 +50,9 @@ add_task(async function testParentProcessRequests() {
   const onAvailable = resources => {
     for (const resource of resources) {
       if (resource.resourceType == resourceCommand.TYPES.NETWORK_EVENT) {
+        if (resource.url.startsWith(ignoreRequestPatterns)) {
+          return;
+        }
         receivedNetworkEvents.push(resource);
       } else if (
         resource.resourceType == resourceCommand.TYPES.NETWORK_EVENT_STACKTRACE
@@ -126,13 +133,20 @@ add_task(async function testParentProcessRequests() {
   ok(!firstImageRequest.fromCache, "The first image request isn't cached");
   ok(firstImageRequest.chromeContext, "The first image request is privileged");
 
-  const firstImageStacktrace = receivedStacktraces[1].lastFrame;
   is(receivedStacktraces[1].resourceId, firstImageRequest.stacktraceResourceId);
+  const firstImageStacktrace = receivedStacktraces[1].lastFrame;
+  // TODO(bug 1911435).
+  todo(
+    !!firstImageStacktrace,
+    "After bug 1076583, image load is async and we can't get a stack trace"
+  );
+  /*
   is(firstImageStacktrace.filename, gTestPath);
   is(firstImageStacktrace.lineNumber, EXPECTED_REQUEST_LINE_2);
   is(firstImageStacktrace.columnNumber, EXPECTED_REQUEST_COL_2);
   is(firstImageStacktrace.functionName, EXPECTED_METHOD_NAME);
   is(firstImageStacktrace.asyncCause, null);
+  */
 
   info("Assert the second image request");
   const secondImageRequest = receivedNetworkEvents[2];
@@ -140,6 +154,10 @@ add_task(async function testParentProcessRequests() {
     secondImageRequest.url,
     IMAGE_URI,
     "The third resource is for the second image request"
+  );
+  await waitFor(
+    () => secondImageRequest.fromCache,
+    "Wait for fromCache attribute to be set asynchronously via a resource update"
   );
   ok(secondImageRequest.fromCache, "The second image request is cached");
   ok(

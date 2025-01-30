@@ -5,7 +5,12 @@
 # The title of the about:translations page, referencing the translations feature.
 about-translations-title = Translations
 about-translations-header = { -translations-brand-name }
+# The title attribute for the swap languages button, that swaps the
+# source and target languages, reversing the translation direction.
+about-translations-swap-languages =
+  .title = Swap languages
 about-translations-results-placeholder = Translation
+about-translations-translating-message = Translating…
 # Text displayed on from-language dropdown when no language is selected
 about-translations-detect = Detect language
 # Text displayed on from-language dropdown when a language is detected

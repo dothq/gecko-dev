@@ -27,6 +27,7 @@
 #include "js/Prefs.h"
 #include "js/PropertySpec.h"
 #include "util/DifferentialTesting.h"
+#include "vm/Float16.h"
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
 #include "vm/Time.h"
@@ -297,6 +298,46 @@ static bool math_fround(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   return RoundFloat32(cx, args[0], args.rval());
+}
+
+double js::RoundFloat16(double d) {
+  AutoUnsafeCallWithABI unsafe;
+
+  // http://tc39.es/proposal-float16array/#sec-function-properties-of-the-math-object
+
+  // 1. Let n be ? ToNumber(x).
+  // [Not applicable here]
+
+  // 2. If n is NaN, return NaN.
+  // 3. If n is one of +0𝔽, -0𝔽, +∞𝔽, or -∞𝔽, return n.
+  // 4. Let n16 be the result of converting n to IEEE 754-2019 binary16 format
+  // using roundTiesToEven mode.
+  js::float16 f16 = js::float16(d);
+
+  // 5. Let n64 be the result of converting n16 to IEEE 754-2019 binary64
+  // format.
+  // 6. Return the ECMAScript Number value corresponding to n64.
+  return static_cast<double>(f16);
+}
+
+static bool math_f16round(JSContext* cx, unsigned argc, Value* vp) {
+  // http://tc39.es/proposal-float16array/#sec-function-properties-of-the-math-object
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (args.length() == 0) {
+    args.rval().setNaN();
+    return true;
+  }
+
+  // 1. Let n be ? ToNumber(x).
+  double d;
+  if (!ToNumber(cx, args[0], &d)) {
+    return false;
+  }
+
+  // Steps 2-6.
+  args.rval().setDouble(RoundFloat16(d));
+  return true;
 }
 
 double js::math_log_impl(double x) {
@@ -868,7 +909,7 @@ double js::math_sign_impl(double x) {
   return x == 0 ? x : x < 0 ? -1 : 1;
 }
 
-static bool math_sign(JSContext* cx, unsigned argc, Value* vp) {
+bool js::math_sign(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   if (args.length() == 0) {
     args.rval().setNaN();
@@ -899,6 +940,17 @@ static bool math_toSource(JSContext* cx, unsigned argc, Value* vp) {
   args.rval().setString(cx->names().Math);
   return true;
 }
+
+#ifdef NIGHTLY_BUILD
+/**
+ * Math.sumPrecise ( items )
+ *
+ * https://tc39.es/proposal-math-sum/#sec-math.sumprecise
+ */
+static bool math_sumPrecise(JSContext* cx, unsigned argc, Value* vp) {
+  return false;
+}
+#endif
 
 UnaryMathFunctionType js::GetUnaryMathFunctionPtr(UnaryMathFunction fun) {
   switch (fun) {
@@ -958,20 +1010,20 @@ UnaryMathFunctionType js::GetUnaryMathFunctionPtr(UnaryMathFunction fun) {
   MOZ_CRASH("Unknown function");
 }
 
-const char* js::GetUnaryMathFunctionName(UnaryMathFunction fun) {
+const char* js::GetUnaryMathFunctionName(UnaryMathFunction fun, bool enumName) {
   switch (fun) {
     case UnaryMathFunction::SinNative:
-      return "Sin (native)";
+      return enumName ? "SinNative" : "Sin (native)";
     case UnaryMathFunction::SinFdlibm:
-      return "Sin (fdlibm)";
+      return enumName ? "SinFdlibm" : "Sin (fdlibm)";
     case UnaryMathFunction::CosNative:
-      return "Cos (native)";
+      return enumName ? "CosNative" : "Cos (native)";
     case UnaryMathFunction::CosFdlibm:
-      return "Cos (fdlibm)";
+      return enumName ? "CosFdlibm" : "Cos (fdlibm)";
     case UnaryMathFunction::TanNative:
-      return "Tan (native)";
+      return enumName ? "TanNative" : "Tan (native)";
     case UnaryMathFunction::TanFdlibm:
-      return "Tan (fdlibm)";
+      return enumName ? "TanFdlibm" : "Tan (fdlibm)";
     case UnaryMathFunction::Log:
       return "Log";
     case UnaryMathFunction::Exp:
@@ -1030,6 +1082,7 @@ static const JSFunctionSpec math_static_methods[] = {
     JS_INLINABLE_FN("floor", math_floor, 1, 0, MathFloor),
     JS_INLINABLE_FN("imul", math_imul, 2, 0, MathImul),
     JS_INLINABLE_FN("fround", math_fround, 1, 0, MathFRound),
+    JS_INLINABLE_FN("f16round", math_f16round, 1, 0, MathF16Round),
     JS_INLINABLE_FN("log", math_log, 1, 0, MathLog),
     JS_INLINABLE_FN("max", math_max, 2, 0, MathMax),
     JS_INLINABLE_FN("min", math_min, 2, 0, MathMin),
@@ -1053,7 +1106,11 @@ static const JSFunctionSpec math_static_methods[] = {
     JS_INLINABLE_FN("trunc", math_trunc, 1, 0, MathTrunc),
     JS_INLINABLE_FN("sign", math_sign, 1, 0, MathSign),
     JS_INLINABLE_FN("cbrt", math_cbrt, 1, 0, MathCbrt),
-    JS_FS_END};
+#ifdef NIGHTLY_BUILD
+    JS_FN("sumPrecise", math_sumPrecise, 1, 0),
+#endif
+    JS_FS_END,
+};
 
 static const JSPropertySpec math_static_properties[] = {
     JS_DOUBLE_PS("E", M_E, JSPROP_READONLY | JSPROP_PERMANENT),
@@ -1066,20 +1123,27 @@ static const JSPropertySpec math_static_properties[] = {
     JS_DOUBLE_PS("SQRT1_2", M_SQRT1_2, JSPROP_READONLY | JSPROP_PERMANENT),
 
     JS_STRING_SYM_PS(toStringTag, "Math", JSPROP_READONLY),
-    JS_PS_END};
+    JS_PS_END,
+};
 
 static JSObject* CreateMathObject(JSContext* cx, JSProtoKey key) {
   RootedObject proto(cx, &cx->global()->getObjectPrototype());
   return NewTenuredObjectWithGivenProto(cx, &MathClass, proto);
 }
 
-static const ClassSpec MathClassSpec = {CreateMathObject,
-                                        nullptr,
-                                        math_static_methods,
-                                        math_static_properties,
-                                        nullptr,
-                                        nullptr,
-                                        nullptr};
+static const ClassSpec MathClassSpec = {
+    CreateMathObject,
+    nullptr,
+    math_static_methods,
+    math_static_properties,
+    nullptr,
+    nullptr,
+    nullptr,
+};
 
-const JSClass js::MathClass = {"Math", JSCLASS_HAS_CACHED_PROTO(JSProto_Math),
-                               JS_NULL_CLASS_OPS, &MathClassSpec};
+const JSClass js::MathClass = {
+    "Math",
+    JSCLASS_HAS_CACHED_PROTO(JSProto_Math),
+    JS_NULL_CLASS_OPS,
+    &MathClassSpec,
+};

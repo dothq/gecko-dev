@@ -92,7 +92,7 @@ def env_extras(**kwargs):
 
 
 def run_info_extras(logger, **kwargs):
-    rv = fx_run_info_extras(logger, **kwargs)
+    rv = fx_run_info_extras(logger, default_prefs=ProfileCreator.default_prefs(), **kwargs)
     rv.update({"headless": False})
 
     if kwargs["browser_version"] is None:
@@ -137,6 +137,7 @@ def get_environ(chaos_mode_flags, env_extras=None):
     env = {}
     if env_extras is not None:
         env.update(env_extras)
+    env["MINIDUMP_SAVE_PATH"] = os.environ["MINIDUMP_SAVE_PATH"]
     env["MOZ_CRASHREPORTER"] = "1"
     env["MOZ_CRASHREPORTER_SHUTDOWN"] = "1"
     env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"] = "1"
@@ -148,11 +149,17 @@ def get_environ(chaos_mode_flags, env_extras=None):
 class ProfileCreator(FirefoxProfileCreator):
     def __init__(self, logger, prefs_root, config, test_type, extra_prefs,
                  disable_fission, debug_test, browser_channel, binary,
-                 package_name, certutil_binary, ca_certificate_path):
+                 package_name, certutil_binary, ca_certificate_path,
+                 allow_list_paths=None):
 
         super().__init__(logger, prefs_root, config, test_type, extra_prefs,
                          disable_fission, debug_test, browser_channel, None,
-                         package_name, certutil_binary, ca_certificate_path)
+                         package_name, certutil_binary, ca_certificate_path,
+                         allow_list_paths)
+
+    @staticmethod
+    def default_prefs():
+        return {"fission.disableSessionHistoryInParent": True}
 
     def _set_required_prefs(self, profile):
         profile.set_preferences({
@@ -323,6 +330,7 @@ class FirefoxAndroidBrowser(Browser):
             self.runner.cleanup()
         self.logger.debug("stopped")
 
+    @property
     def pid(self):
         if self.runner.process_handler is None:
             return None
@@ -400,7 +408,7 @@ class FirefoxAndroidWdSpecBrowser(FirefoxWdSpecBrowser):
             self.logger.warning("Failed to remove forwarded or reversed ports: %s" % e)
         super().stop(force=force)
 
-    def get_env(self, binary, debug_info, headless, chaos_mode_flags, e10s):
+    def get_env(self, binary, debug_info, headless, gmp_path, chaos_mode_flags, e10s):
         env = get_environ(chaos_mode_flags)
         env["RUST_BACKTRACE"] = "1"
         return env

@@ -96,7 +96,6 @@ function logScriptError(message) {
   consoleMessage.init(
     message,
     stack.fileName,
-    null,
     stack.lineNumber,
     0,
     Ci.nsIScriptError.errorFlag,
@@ -853,9 +852,7 @@ ConnectionData.prototype = Object.freeze({
               // generated an unexpected error. Then we rollback.
               if (ex.becauseTimedOut) {
                 let caller_module = caller.split(":", 1)[0];
-                Services.telemetry.keyedScalarAdd(
-                  "mozstorage.sqlitejsm_transaction_timeout",
-                  caller_module,
+                Glean.mozstorage.sqlitejsmTransactionTimeout[caller_module].add(
                   1
                 );
                 this._logger.error(
@@ -961,7 +958,9 @@ ConnectionData.prototype = Object.freeze({
 
     function bindParam(obj, key, val) {
       let isBlob =
-        val && typeof val == "object" && val.constructor.name == "Uint8Array";
+        val &&
+        typeof val == "object" &&
+        ["Uint8Array", "Uint8ClampedArray"].includes(val.constructor.name);
       let args = [key, val];
       if (isBlob) {
         args.push(val.length);
@@ -1083,14 +1082,14 @@ ConnectionData.prototype = Object.freeze({
 
         switch (reason) {
           case Ci.mozIStorageStatementCallback.REASON_FINISHED:
-          case Ci.mozIStorageStatementCallback.REASON_CANCELED:
+          case Ci.mozIStorageStatementCallback.REASON_CANCELED: {
             // If there is an onRow handler, we always instead resolve to a
             // boolean indicating whether the onRow handler was called or not.
             let result = onRow ? handledRow : rows;
             deferred.resolve(result);
             break;
-
-          case Ci.mozIStorageStatementCallback.REASON_ERROR:
+          }
+          case Ci.mozIStorageStatementCallback.REASON_ERROR: {
             let error = new Error(
               "Error(s) encountered during statement execution: " +
                 errors.map(e => e.message).join(", ")
@@ -1108,7 +1107,7 @@ ConnectionData.prototype = Object.freeze({
 
             deferred.reject(error);
             break;
-
+          }
           default:
             deferred.reject(
               new Error("Unknown completion reason code: " + reason)
@@ -1184,9 +1183,15 @@ ConnectionData.prototype = Object.freeze({
    * @param {string} destFilePath
    *   The path on the local filesystem to write the database copy. Any existing
    *   file at this path will be overwritten.
+   * @param {number} [pagesPerStep=0]
+   *   The number of pages to copy per step. If not supplied or is 0, falls back
+   *   to the platform default which is currently 5.
+   * @param {number} [stepDelayMs=0]
+   *   The number of milliseconds to wait between copying step. If not supplied
+   *   or is 0, falls back to the platform default which is currently 250.
    * @return Promise<undefined, nsresult>
    */
-  async backupToFile(destFilePath) {
+  async backupToFile(destFilePath, pagesPerStep = 0, stepDelayMs = 0) {
     if (!this._dbConn) {
       return Promise.reject(
         new Error("No opened database connection to create a backup from.")
@@ -1194,13 +1199,18 @@ ConnectionData.prototype = Object.freeze({
     }
     let destFile = await IOUtils.getFile(destFilePath);
     return new Promise((resolve, reject) => {
-      this._dbConn.backupToFileAsync(destFile, result => {
-        if (Components.isSuccessCode(result)) {
-          resolve();
-        } else {
-          reject(result);
-        }
-      });
+      this._dbConn.backupToFileAsync(
+        destFile,
+        result => {
+          if (Components.isSuccessCode(result)) {
+            resolve();
+          } else {
+            reject(result);
+          }
+        },
+        pagesPerStep,
+        stepDelayMs
+      );
     });
   },
 });
@@ -1236,6 +1246,9 @@ ConnectionData.prototype = Object.freeze({
  *       return "false positive" corruption errors if other connections write
  *       to the DB at the same time.
  *
+ *   openNotExclusive -- (bool) Whether to open the database without an exclusive
+ *       lock so the database can be accessed from multiple processes.
+ *
  *   vacuumOnIdle -- (bool) Whether to register this connection to be vacuumed
  *       on idle by the VacuumManager component.
  *       If you're vacuum-ing an incremental vacuum database, ensure to also
@@ -1255,6 +1268,10 @@ ConnectionData.prototype = Object.freeze({
  *
  *   testDelayedOpenPromise -- (promise) Used by tests to delay the open
  *       callback handling and execute code between asyncOpen and its callback.
+ *
+ *   extensions -- (array) Array of SQLite extension names that should be
+ *       loaded for the connection. List of approved extensions is hardcoded in
+ *       `mozStorageConnection`, no other extensions can be loaded.
  *
  * FUTURE options to control:
  *
@@ -1373,6 +1390,9 @@ function openConnection(options) {
       dbOpenOptions |= Ci.mozIStorageService.OPEN_IGNORE_LOCKING_MODE;
       dbOpenOptions |= Ci.mozIStorageService.OPEN_READONLY;
     }
+    if (options.openNotExclusive) {
+      dbOpenOptions |= Ci.mozIStorageService.OPEN_NOT_EXCLUSIVE;
+    }
 
     let dbConnectionOptions = Ci.mozIStorageService.CONNECTION_DEFAULT;
 
@@ -1390,14 +1410,41 @@ function openConnection(options) {
           reject(error);
           return;
         }
+
         logger.debug("Connection opened");
+        connection.QueryInterface(Ci.mozIStorageAsyncConnection);
 
         if (options.testDelayedOpenPromise) {
           await options.testDelayedOpenPromise;
         }
 
+        if (options.extensions) {
+          for (let extension of options.extensions) {
+            try {
+              await new Promise((resolve2, reject2) =>
+                connection.loadExtension(extension, rv => {
+                  if (Components.isSuccessCode(rv)) {
+                    resolve2();
+                  } else {
+                    reject2(rv);
+                  }
+                })
+              );
+            } catch (ex) {
+              logger.error(`Could not load extension '${extension}'`, ex);
+              connection.asyncClose();
+              reject(
+                new Error(`Could not load extension '${extension}'`, {
+                  cause: ex,
+                })
+              );
+              return;
+            }
+          }
+        }
+
         if (isClosed()) {
-          connection.QueryInterface(Ci.mozIStorageAsyncConnection).asyncClose();
+          connection.asyncClose();
           reject(
             new Error(
               "Sqlite.sys.mjs has been shutdown. Cannot open connection to: " +
@@ -1408,13 +1455,7 @@ function openConnection(options) {
         }
 
         try {
-          resolve(
-            new OpenedConnection(
-              connection.QueryInterface(Ci.mozIStorageAsyncConnection),
-              identifier,
-              openedOptions
-            )
-          );
+          resolve(new OpenedConnection(connection, identifier, openedOptions));
         } catch (ex) {
           logger.error("Could not open database", ex);
           connection.asyncClose();
@@ -2002,10 +2043,20 @@ OpenedConnection.prototype = Object.freeze({
    * @param {string} destFilePath
    *   The path on the local filesystem to write the database copy. Any existing
    *   file at this path will be overwritten.
+   * @param {number} [pagesPerStep=0]
+   *   The number of pages to copy per step. If not supplied or is 0, falls back
+   *   to the platform default which is currently 5.
+   * @param {number} [stepDelayMs=0]
+   *   The number of milliseconds to wait between copying step. If not supplied
+   *   or is 0, falls back to the platform default which is currently 250.
    * @return Promise<undefined, nsresult>
    */
-  backup(destFilePath) {
-    return this._connectionData.backupToFile(destFilePath);
+  backup(destFilePath, pagesPerStep = 0, stepDelayMs = 0) {
+    return this._connectionData.backupToFile(
+      destFilePath,
+      pagesPerStep,
+      stepDelayMs
+    );
   },
 });
 

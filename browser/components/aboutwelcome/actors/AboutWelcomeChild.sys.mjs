@@ -86,6 +86,10 @@ export class AboutWelcomeChild extends JSWindowActorChild {
       defineAs: "AWEvaluateScreenTargeting",
     });
 
+    Cu.exportFunction(this.AWEvaluateAttributeTargeting.bind(this), window, {
+      defineAs: "AWEvaluateAttributeTargeting",
+    });
+
     Cu.exportFunction(this.AWSendEventTelemetry.bind(this), window, {
       defineAs: "AWSendEventTelemetry",
     });
@@ -100,6 +104,10 @@ export class AboutWelcomeChild extends JSWindowActorChild {
 
     Cu.exportFunction(this.AWFinish.bind(this), window, {
       defineAs: "AWFinish",
+    });
+
+    Cu.exportFunction(this.AWGetInstalledAddons.bind(this), window, {
+      defineAs: "AWGetInstalledAddons",
     });
 
     Cu.exportFunction(this.AWEnsureAddonInstalled.bind(this), window, {
@@ -128,6 +136,9 @@ export class AboutWelcomeChild extends JSWindowActorChild {
 
     Cu.exportFunction(this.AWNewScreen.bind(this), window, {
       defineAs: "AWNewScreen",
+    });
+    Cu.exportFunction(this.AWGetUnhandledCampaignAction.bind(this), window, {
+      defineAs: "AWGetUnhandledCampaignAction",
     });
   }
 
@@ -164,6 +175,12 @@ export class AboutWelcomeChild extends JSWindowActorChild {
     return this.sendQueryAndCloneForContent(
       "AWPage:EVALUATE_SCREEN_TARGETING",
       data
+    );
+  }
+
+  AWEvaluateAttributeTargeting(data) {
+    return this.wrapPromise(
+      this.sendQuery("AWPage:EVALUATE_ATTRIBUTE_TARGETING", data)
     );
   }
 
@@ -280,23 +297,28 @@ export class AboutWelcomeChild extends JSWindowActorChild {
     });
   }
 
-  AWFinish() {
-    const shouldFocusNewtabUrlBar =
-      lazy.NimbusFeatures.aboutwelcome.getVariable("newtabUrlBarFocus");
+  focusUrlBar() {
+    this.AWSendToParent("SPECIAL_ACTION", {
+      type: "FOCUS_URLBAR",
+    });
+  }
 
+  AWFinish() {
     this.setDidSeeFinalScreen();
 
     this.contentWindow.location.href = "about:home";
-    if (shouldFocusNewtabUrlBar) {
-      this.AWSendToParent("SPECIAL_ACTION", {
-        type: "FOCUS_URLBAR",
-      });
-    }
+    this.focusUrlBar();
   }
 
   AWEnsureAddonInstalled(addonId) {
     return this.wrapPromise(
       this.sendQuery("AWPage:ENSURE_ADDON_INSTALLED", addonId)
+    );
+  }
+
+  AWGetInstalledAddons() {
+    return this.wrapPromise(
+      this.sendQueryAndCloneForContent("AWPage:GET_INSTALLED_ADDONS")
     );
   }
 
@@ -370,6 +392,12 @@ export class AboutWelcomeChild extends JSWindowActorChild {
     return this.wrapPromise(this.sendQuery("AWPage:NEW_SCREEN", screenId));
   }
 
+  AWGetUnhandledCampaignAction() {
+    return this.sendQueryAndCloneForContent(
+      "AWPage:GET_UNHANDLED_CAMPAIGN_ACTION"
+    );
+  }
+
   /**
    * @param {{type: string, detail?: any}} event
    * @override
@@ -378,6 +406,90 @@ export class AboutWelcomeChild extends JSWindowActorChild {
     lazy.log.debug(`Received page event ${event.type}`);
   }
 }
+
+const OPTIN_SIDEBAR_VARIANT = {
+  id: "FAKESPOT_OPTIN_SIDEBAR_VARIANT",
+  template: "multistage",
+  backdrop: "transparent",
+  aria_role: "alert",
+  UTMTerm: "opt-in",
+  screens: [
+    {
+      id: "FS_OPT_IN_SIDEBAR_VARIANT",
+      content: {
+        position: "split",
+        title: { string_id: "shopping-opt-in-integrated-headline" },
+        logo: {
+          type: "image",
+          imageURL: "chrome://browser/content/shopping/assets/optInLight.avif",
+          darkModeImageURL:
+            "chrome://browser/content/shopping/assets/optInDark.avif",
+          marginInline: "24px",
+          marginBlock: "50% 0",
+        },
+        above_button_content: [
+          {
+            type: "text",
+            text: {
+              string_id: "",
+            },
+            link_keys: ["learn_more"],
+            args: {},
+          },
+          {
+            type: "text",
+            text: {
+              string_id:
+                "shopping-opt-in-integrated-privacy-policy-and-terms-of-use",
+            },
+            link_keys: ["privacy_policy", "terms_of_use"],
+            font_styles: "legal",
+          },
+        ],
+        learn_more: {
+          action: {
+            type: "OPEN_URL",
+            data: {
+              args: "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/review-checker-review-quality?utm_source=review-checker&utm_campaign=learn-more&utm_medium=in-product",
+              where: "tab",
+            },
+          },
+        },
+        privacy_policy: {
+          action: {
+            type: "OPEN_URL",
+            data: {
+              args: "https://www.mozilla.org/privacy/firefox?utm_source=review-checker&utm_campaign=privacy-policy&utm_medium=in-product&utm_term=opt-in-screen",
+              where: "tab",
+            },
+          },
+        },
+        terms_of_use: {
+          action: {
+            type: "OPEN_URL",
+            data: {
+              args: "https://www.fakespot.com/terms?utm_source=review-checker&utm_campaign=terms-of-use&utm_medium=in-product",
+              where: "tab",
+            },
+          },
+        },
+        primary_button: {
+          should_focus_button: true,
+          label: { string_id: "shopping-opt-in-integrated-button" },
+          action: {
+            type: "SET_PREF",
+            data: {
+              pref: {
+                name: "browser.shopping.experience2023.optedIn",
+                value: 1,
+              },
+            },
+          },
+        },
+      },
+    },
+  ],
+};
 
 const OPTIN_DEFAULT = {
   id: "FAKESPOT_OPTIN_DEFAULT",
@@ -678,6 +790,13 @@ const OPTED_IN_TIME_PREF = "browser.shopping.experience2023.survey.optedInTime";
 
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
+  "isIntegratedSidebar",
+  "browser.shopping.experience2023.integratedSidebar",
+  false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
   "isSurveySeen",
   "browser.shopping.experience2023.survey.hasSeen",
   false
@@ -755,7 +874,7 @@ export class AboutWelcomeShoppingChild extends AboutWelcomeChild {
       lazy.pdpVisits >= MIN_VISITS_TO_SHOW_SURVEY &&
       hasBeen24HrsSinceOptin;
 
-    if (this.showMicroSurvey) {
+    if (this.showMicroSurvey && !this.showOnboarding) {
       this.renderMessage();
     }
   }
@@ -776,13 +895,19 @@ export class AboutWelcomeShoppingChild extends AboutWelcomeChild {
   handleEvent(event) {
     // Decide when to show/hide onboarding and survey message
     const { productUrl, showOnboarding, data } = event.detail;
+    this.showOnboarding = showOnboarding;
 
     // Display onboarding if a user hasn't opted-in
-    const optInReady = showOnboarding && productUrl;
+    // The sidebar panel that is integrated into the main sidebar
+    // can be opened for any URL, so we shouldn't check if this is
+    // a productURL for that.
+    const optInReady = lazy.isIntegratedSidebar
+      ? showOnboarding
+      : showOnboarding && productUrl;
     if (optInReady) {
       // Render opt-in message
       AboutWelcomeShoppingChild.optedInSession = true;
-      this.AWSetProductURL(new URL(productUrl).hostname);
+      this.AWSetProductURL(productUrl);
       this.renderMessage();
       return;
     }
@@ -820,18 +945,24 @@ export class AboutWelcomeShoppingChild extends AboutWelcomeChild {
   }
 
   renderMessage() {
+    this.contentWindow.clearTimeout(this.thankYouFadeTimeout);
     this.document.getElementById("multi-stage-message-root").hidden = false;
     this.document.dispatchEvent(
-      new this.contentWindow.CustomEvent("RenderWelcome", {
-        bubbles: true,
-      })
+      new this.contentWindow.CustomEvent("RenderWelcome", { bubbles: true })
     );
+  }
+
+  resetOnboardingContainer(root) {
+    root.innerHTML = "";
+    let newRoot = root.cloneNode(false);
+    root.replaceWith(newRoot);
+    return newRoot;
   }
 
   // TODO - Move messages into an ASRouter message provider. See bug 1848251.
   AWGetFeatureConfig() {
     let messageContent = optInDynamicContent;
-    if (this.showMicroSurvey) {
+    if (this.showMicroSurvey && !this.showOnboarding) {
       messageContent = SHOPPING_MICROSURVEY;
       this.setShoppingSurveySeen();
     }
@@ -856,19 +987,84 @@ export class AboutWelcomeShoppingChild extends AboutWelcomeChild {
     if (this._destroyed) {
       return;
     }
-    const root = this.document.getElementById("multi-stage-message-root");
+    let root = this.document.getElementById("multi-stage-message-root");
     if (root) {
-      root.innerHTML = "";
+      root = this.resetOnboardingContainer(root);
       root
         .appendChild(this.document.createElement("shopping-message-bar"))
         .setAttribute("type", "thank-you-for-feedback");
-      this.contentWindow.setTimeout(() => {
+      this.contentWindow.clearTimeout(this.thankYouFadeTimeout);
+      this.thankYouFadeTimeout = this.contentWindow.setTimeout(() => {
+        root = this.resetOnboardingContainer(root);
         root.hidden = true;
       }, 5000);
     }
   }
 
   AWSetProductURL(productUrl) {
+    let productHostname;
+    if (productUrl) {
+      productHostname = new URL(productUrl).hostname;
+    }
+    let content = lazy.isIntegratedSidebar
+      ? this._AWGetOptInSidebarVariantContent(productHostname)
+      : this._AWGetOptInDefaultContent(productHostname);
+    optInDynamicContent = content;
+  }
+
+  _AWGetOptInSidebarVariantContent(productUrl) {
+    let content = JSON.parse(JSON.stringify(OPTIN_SIDEBAR_VARIANT));
+    const [optInScreen] = content.screens;
+
+    if (productUrl) {
+      optInScreen.content.above_button_content[0].text.string_id =
+        "shopping-opt-in-integrated-subtitle-all-sites";
+
+      switch (
+        productUrl // Insert the productUrl into content
+      ) {
+        case "www.amazon.fr":
+        case "www.amazon.de":
+          optInScreen.content.above_button_content[0].text.string_id =
+            "shopping-opt-in-integrated-subtitle-single-site";
+          optInScreen.content.above_button_content[0].text.args = {
+            currentSite: "Amazon",
+          };
+          break;
+        case "www.amazon.com":
+          optInScreen.content.above_button_content[0].text.args = {
+            currentSite: "Amazon",
+            secondSite: "Walmart",
+            thirdSite: "Best Buy",
+          };
+          break;
+        case "www.walmart.com":
+          optInScreen.content.above_button_content[0].text.args = {
+            currentSite: "Walmart",
+            secondSite: "Amazon",
+            thirdSite: "Best Buy",
+          };
+          break;
+        case "www.bestbuy.com":
+          optInScreen.content.above_button_content[0].text.args = {
+            currentSite: "Best Buy",
+            secondSite: "Amazon",
+            thirdSite: "Walmart",
+          };
+          break;
+        default:
+          optInScreen.content.above_button_content[0].text.args = {
+            currentSite: "Amazon",
+            secondSite: "Walmart",
+            thirdSite: "Best Buy",
+          };
+      }
+    }
+
+    return content;
+  }
+
+  _AWGetOptInDefaultContent(productUrl) {
     let content = JSON.parse(JSON.stringify(OPTIN_DEFAULT));
     const [optInScreen] = content.screens;
 
@@ -917,7 +1113,7 @@ export class AboutWelcomeShoppingChild extends AboutWelcomeChild {
       }
     }
 
-    optInDynamicContent = content;
+    return content;
   }
 
   AWEnsureLangPackInstalled() {}

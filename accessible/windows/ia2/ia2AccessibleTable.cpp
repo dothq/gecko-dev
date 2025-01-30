@@ -16,12 +16,11 @@
 #include "mozilla/a11y/TableAccessible.h"
 #include "nsCOMPtr.h"
 #include "nsString.h"
-#include "Statistics.h"
 
 using namespace mozilla::a11y;
 
 TableAccessible* ia2AccessibleTable::TableAcc() {
-  Accessible* acc = Acc();
+  Accessible* acc = MsaaAccessible::Acc();
   return acc ? acc->AsTable() : nullptr;
 }
 
@@ -34,7 +33,6 @@ ia2AccessibleTable::QueryInterface(REFIID iid, void** ppv) {
   *ppv = nullptr;
 
   if (IID_IAccessibleTable == iid) {
-    statistics::IAccessibleTableUsed();
     *ppv = static_cast<IAccessibleTable*>(this);
     (reinterpret_cast<IUnknown*>(*ppv))->AddRef();
     return S_OK;
@@ -42,6 +40,18 @@ ia2AccessibleTable::QueryInterface(REFIID iid, void** ppv) {
 
   if (IID_IAccessibleTable2 == iid) {
     *ppv = static_cast<IAccessibleTable2*>(this);
+    (reinterpret_cast<IUnknown*>(*ppv))->AddRef();
+    return S_OK;
+  }
+
+  if (IID_IGridProvider == iid) {
+    *ppv = static_cast<IGridProvider*>(this);
+    (reinterpret_cast<IUnknown*>(*ppv))->AddRef();
+    return S_OK;
+  }
+
+  if (IID_ITableProvider == iid) {
+    *ppv = static_cast<ITableProvider*>(this);
     (reinterpret_cast<IUnknown*>(*ppv))->AddRef();
     return S_OK;
   }

@@ -24,7 +24,7 @@ var tests = [
       checkPopup(popup, this.notifyObj);
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.notifyObj.dismissalCallbackTriggered,
         "dismissal callback triggered"
@@ -52,7 +52,7 @@ var tests = [
       );
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    onHidden() {
       let icon = document.getElementById("geo-notification-icon");
       isnot(
         icon.getBoundingClientRect().width,
@@ -84,7 +84,7 @@ var tests = [
       });
       this.notification = showNotification(this.notifyObj);
     },
-    async onShown(popup) {
+    async onShown() {
       this.complete = false;
       // eslint-disable-next-line @microsoft/sdl/no-insecure-url
       await promiseTabLoadEvent(gBrowser.selectedTab, "http://example.org/");
@@ -95,7 +95,7 @@ var tests = [
       // eslint-disable-next-line @microsoft/sdl/no-insecure-url
       await promiseTabLoadEvent(gBrowser.selectedTab, "http://example.org/");
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.complete,
         "Should only have hidden the notification after 3 page loads"
@@ -122,7 +122,7 @@ var tests = [
       });
       this.notification = showNotification(this.notifyObj);
     },
-    async onShown(popup) {
+    async onShown() {
       this.complete = false;
       // eslint-disable-next-line @microsoft/sdl/no-insecure-url
       await promiseTabLoadEvent(gBrowser.selectedTab, "http://example.org/");
@@ -134,7 +134,7 @@ var tests = [
       // eslint-disable-next-line @microsoft/sdl/no-insecure-url
       await promiseTabLoadEvent(gBrowser.selectedTab, "http://example.org/");
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.complete,
         "Should only have hidden the notification after the timeout was passed"
@@ -172,7 +172,7 @@ var tests = [
       this.complete = true;
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.complete,
         "Should only have hidden the notification after it was dismissed"
@@ -204,15 +204,14 @@ var tests = [
       // This test places a normal button in the notification area, which has
       // standard GTK styling and dimensions. Due to the clip-path, this button
       // gets clipped off, which makes it necessary to synthesize the mouse click
-      // a little bit downward. To be safe, I adjusted the x-offset with the same
-      // amount.
-      EventUtils.synthesizeMouse(button, 4, 4, {});
+      // a little bit downward. To be safe, we click at center.
+      EventUtils.synthesizeMouseAtCenter(button, {});
     },
     onShown(popup) {
       checkPopup(popup, this.notifyObj);
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    onHidden() {
       this.notification.remove();
       this.box.remove();
     },
@@ -272,7 +271,7 @@ var tests = [
       let notification = popup.children[0];
       EventUtils.synthesizeMouseAtCenter(notification.closebutton, {});
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.notifyObj.dismissalCallbackTriggered,
         "dismissal callback triggered"
@@ -302,7 +301,7 @@ var tests = [
       );
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    onHidden() {
       ok(
         this.notifyObj.dismissalCallbackTriggered,
         "dismissal callback triggered"

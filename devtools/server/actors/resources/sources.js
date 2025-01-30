@@ -4,9 +4,6 @@
 
 "use strict";
 
-const {
-  TYPES: { SOURCE },
-} = require("resource://devtools/server/actors/resources/index.js");
 const Targets = require("resource://devtools/server/actors/targets/index.js");
 
 const {
@@ -44,6 +41,8 @@ class SourceWatcher {
     this.sourcesManager = targetActor.sourcesManager;
     this.onAvailable = onAvailable;
 
+    threadActor.attach({});
+
     // Disable `ThreadActor.newSource` RDP event in order to avoid unnecessary traffic
     threadActor.disableNewSourceEvents();
 
@@ -72,7 +71,6 @@ class SourceWatcher {
     const sources = [];
     for (const sourceActor of threadActor.sourcesManager.iter()) {
       const resource = sourceActor.form();
-      resource.resourceType = SOURCE;
       sources.push(resource);
     }
     onAvailable(sources);
@@ -92,7 +90,6 @@ class SourceWatcher {
 
   onNewSource(source) {
     const resource = source.form();
-    resource.resourceType = SOURCE;
     this.onAvailable([resource]);
   }
 }

@@ -11,6 +11,12 @@ const { SpecialMessageActions } = ChromeUtils.importESModule(
   "resource://messaging-system/lib/SpecialMessageActions.sys.mjs"
 );
 
+const PRODUCT_URI = Services.io.newURI(
+  "https://example.com/product/B09TJGHL5F"
+);
+const SHOPPING_SIDEBAR_ACTOR = "ShoppingSidebar";
+const REVIEW_CHECKER_ACTOR = "ReviewChecker";
+
 /**
  * Toggle prefs involved in automatically activating the sidebar on PDPs if the
  * user has not opted in. Onboarding should only try to auto-activate the
@@ -96,6 +102,13 @@ add_task(async function test_showOnboarding_notOptedIn() {
   Services.fog.testResetFOG();
   await Services.fog.testFlushAllChildren();
 
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.shopping.experience2023.integratedSidebar", false],
+      ["browser.shopping.experience2023.shoppingSidebar", true],
+    ],
+  });
+
   await BrowserTestUtils.withNewTab(
     {
       url: "about:shoppingsidebar",
@@ -105,9 +118,9 @@ add_task(async function test_showOnboarding_notOptedIn() {
       // Get the actor to update the product URL, since no content will render without one
       let actor =
         gBrowser.selectedBrowser.browsingContext.currentWindowGlobal.getExistingActor(
-          "ShoppingSidebar"
+          SHOPPING_SIDEBAR_ACTOR
         );
-      actor.updateProductURL("https://example.com/product/B09TJGHL5F");
+      actor.updateCurrentURL(PRODUCT_URI);
 
       await SpecialPowers.spawn(browser, [], async () => {
         let shoppingContainer = await ContentTaskUtils.waitForCondition(
@@ -132,6 +145,11 @@ add_task(async function test_showOnboarding_notOptedIn() {
           !content.document.getElementById("multi-stage-message-root").hidden,
           "message is shown"
         );
+
+        ok(
+          content.document.querySelector(".FS_OPT_IN"),
+          "Rendered correct message"
+        );
       });
     }
   );
@@ -148,6 +166,86 @@ add_task(async function test_showOnboarding_notOptedIn() {
       info("Failed to get Glean value due to unknown bug. See bug 1862389.");
     }
   }
+  await SpecialPowers.popPrefEnv();
+});
+
+/**
+ * Test to check onboarding message container is rendered
+ * when user is not opted-in for the sidebar integrated version
+ * of Review Checker.
+ */
+add_task(async function test_showOnboarding_notOptedIn_integrated_sidebar() {
+  // OptedIn pref Value is 0 when a user hasn't opted-in
+  setOnboardingPrefs({ active: false, optedIn: 0, telemetryEnabled: true });
+
+  Services.fog.testResetFOG();
+  await Services.fog.testFlushAllChildren();
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.shopping.experience2023.integratedSidebar", true],
+      ["browser.shopping.experience2023.shoppingSidebar", false],
+    ],
+  });
+
+  await BrowserTestUtils.withNewTab(
+    {
+      url: "about:shoppingsidebar",
+      gBrowser,
+    },
+    async browser => {
+      // Get the actor to update the product URL, since no content will render without one
+      let actor =
+        gBrowser.selectedBrowser.browsingContext.currentWindowGlobal.getExistingActor(
+          REVIEW_CHECKER_ACTOR
+        );
+      actor.updateCurrentURL(PRODUCT_URI);
+
+      await SpecialPowers.spawn(browser, [], async () => {
+        let shoppingContainer = await ContentTaskUtils.waitForCondition(
+          () => content.document.querySelector("shopping-container"),
+          "shopping-container"
+        );
+
+        let containerElem =
+          shoppingContainer.shadowRoot.getElementById("shopping-container");
+        let messageSlot = containerElem.getElementsByTagName("slot");
+
+        // Check multi-stage-message-slot used to show opt-In message is
+        // rendered inside shopping container when user optedIn pref value is 0
+        ok(messageSlot.length, `message slot element exists`);
+        is(
+          messageSlot[0].name,
+          "multi-stage-message-slot",
+          "multi-stage-message-slot showing opt-in message rendered"
+        );
+
+        ok(
+          !content.document.getElementById("multi-stage-message-root").hidden,
+          "message is shown"
+        );
+
+        ok(
+          content.document.querySelector(".FS_OPT_IN_SIDEBAR_VARIANT"),
+          "Rendered correct message"
+        );
+      });
+    }
+  );
+
+  if (!AppConstants.platform != "linux") {
+    await Services.fog.testFlushAllChildren();
+    const events = Glean.shopping.surfaceOnboardingDisplayed.testGetValue();
+
+    if (events) {
+      Assert.greater(events.length, 0);
+      Assert.equal(events[0].category, "shopping");
+      Assert.equal(events[0].name, "surface_onboarding_displayed");
+    } else {
+      info("Failed to get Glean value due to unknown bug. See bug 1862389.");
+    }
+  }
+  await SpecialPowers.popPrefEnv();
 });
 
 /**
@@ -165,9 +263,9 @@ add_task(async function test_hideOnboarding_optedIn() {
       // Get the actor to update the product URL, since no content will render without one
       let actor =
         gBrowser.selectedBrowser.browsingContext.currentWindowGlobal.getExistingActor(
-          "ShoppingSidebar"
+          SHOPPING_SIDEBAR_ACTOR
         );
-      actor.updateProductURL("https://example.com/product/B09TJGHL5F");
+      actor.updateCurrentURL(PRODUCT_URI);
 
       await SpecialPowers.spawn(browser, [], async () => {
         await ContentTaskUtils.waitForCondition(
@@ -185,7 +283,8 @@ add_task(async function test_hideOnboarding_optedIn() {
 });
 
 /**
- * Test to check onboarding message does not show when selecting "not now"
+ * Test to check onboarding message does not show when selecting "not now".
+ * This is only applicable to the non-integrated version of Review Checker.
  *
  * Also confirms a Glean event was triggered.
  */
@@ -194,6 +293,14 @@ add_task(async function test_hideOnboarding_onClose() {
   Services.fog.testResetFOG();
   // OptedIn pref value is 0 when a user has not opted-in
   setOnboardingPrefs({ active: false, optedIn: 0, telemetryEnabled: true });
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.shopping.experience2023.integratedSidebar", false],
+      ["browser.shopping.experience2023.shoppingSidebar", true],
+    ],
+  });
+
   await BrowserTestUtils.withNewTab(
     {
       url: "about:shoppingsidebar",
@@ -203,9 +310,9 @@ add_task(async function test_hideOnboarding_onClose() {
       // Get the actor to update the product URL, since no content will render without one
       let actor =
         gBrowser.selectedBrowser.browsingContext.currentWindowGlobal.getExistingActor(
-          "ShoppingSidebar"
+          SHOPPING_SIDEBAR_ACTOR
         );
-      actor.updateProductURL("https://example.com/product/B09TJGHL5F");
+      actor.updateCurrentURL(PRODUCT_URI);
 
       await SpecialPowers.spawn(browser, [], async () => {
         let shoppingContainer = await ContentTaskUtils.waitForCondition(
@@ -239,11 +346,13 @@ add_task(async function test_hideOnboarding_onClose() {
   Assert.greater(events.length, 0);
   Assert.equal(events[0].category, "shopping");
   Assert.equal(events[0].name, "surface_not_now_clicked");
+  await SpecialPowers.popPrefEnv();
 });
 
 /**
- * Test to check behavior when selecting 'Yes, try it  to opt in to the
- * shopping experience.
+ * Test to check behavior when selecting the opt-in button.
+ * This is the 'Yes, try it' button for the non-integrated version of Review Checker
+ * or the 'Try Review Checker' button for the integrated version of Review Checker.
  *
  * Also tests if a Glean event was correctly recorded.
  */
@@ -595,9 +704,9 @@ add_task(async function test_hideOnboarding_OptIn_AfterSurveySeen() {
     async browser => {
       let actor =
         gBrowser.selectedBrowser.browsingContext.currentWindowGlobal.getExistingActor(
-          "ShoppingSidebar"
+          SHOPPING_SIDEBAR_ACTOR
         );
-      actor.updateProductURL("https://example.com/product/B09TJGHL5F");
+      actor.updateCurrentURL(PRODUCT_URI);
 
       await SpecialPowers.spawn(browser, [], async () => {
         let shoppingContainer = await ContentTaskUtils.waitForCondition(

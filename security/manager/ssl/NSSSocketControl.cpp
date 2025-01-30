@@ -11,21 +11,23 @@
 #include "nsISocketProvider.h"
 #include "secerr.h"
 #include "mozilla/Base64.h"
+#include "mozilla/dom/Promise.h"
 #include "nsNSSCallbacks.h"
+#include "nsProxyRelease.h"
 
 using namespace mozilla;
 using namespace mozilla::psm;
 
 extern LazyLogModule gPIPNSSLog;
 
-NSSSocketControl::NSSSocketControl(const nsCString& aHostName, int32_t aPort,
-                                   SharedSSLState& aState,
-                                   uint32_t providerFlags,
-                                   uint32_t providerTlsFlags)
+NSSSocketControl::NSSSocketControl(
+    const nsCString& aHostName, int32_t aPort,
+    already_AddRefed<nsSSLIOLayerHelpers> aSSLIOLayerHelpers,
+    uint32_t providerFlags, uint32_t providerTlsFlags)
     : CommonSocketControl(aHostName, aPort, providerFlags),
       mFd(nullptr),
       mCertVerificationState(BeforeCertVerification),
-      mSharedState(aState),
+      mSSLIOLayerHelpers(aSSLIOLayerHelpers),
       mForSTARTTLS(false),
       mTLSVersionRange{0, 0},
       mHandshakePending(true),
@@ -37,7 +39,7 @@ NSSSocketControl::NSSSocketControl(const nsCString& aHostName, int32_t aPort,
       mIsFullHandshake(false),
       mNotedTimeUntilReady(false),
       mEchExtensionStatus(EchExtensionStatus::kNotPresent),
-      mSentXyberShare(false),
+      mSentMlkemShare(false),
       mHasTls13HandshakeSecrets(false),
       mIsShortWritePending(false),
       mShortWritePendingByte(0),
@@ -201,7 +203,7 @@ NSSSocketControl::GetAlpnEarlySelection(nsACString& aAlpnSelected) {
   unsigned char chosenAlpn[MAX_ALPN_LENGTH];
   unsigned int chosenAlpnLen;
   rv = SSL_GetNextProto(mFd, &alpnState, chosenAlpn, &chosenAlpnLen,
-                        AssertedCast<unsigned int>(ArrayLength(chosenAlpn)));
+                        AssertedCast<unsigned int>(std::size(chosenAlpn)));
 
   if (rv != SECSuccess) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -290,6 +292,58 @@ NS_IMETHODIMP
 NSSSocketControl::StartTLS() {
   COMMON_SOCKET_CONTROL_ASSERT_ON_OWNING_THREAD();
   return ActivateSSL();
+}
+
+NS_IMETHODIMP
+NSSSocketControl::AsyncStartTLS(JSContext* aCx,
+                                mozilla::dom::Promise** aPromise) {
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  NS_ENSURE_ARG_POINTER(aCx);
+  NS_ENSURE_ARG_POINTER(aPromise);
+
+  nsIGlobalObject* globalObject = xpc::CurrentNativeGlobal(aCx);
+  if (!globalObject) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  ErrorResult result;
+  RefPtr<mozilla::dom::Promise> promise =
+      mozilla::dom::Promise::Create(globalObject, result);
+  if (result.Failed()) {
+    return result.StealNSResult();
+  }
+
+  nsCOMPtr<nsIEventTarget> target(
+      do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID));
+  if (!target) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  auto promiseHolder = MakeRefPtr<nsMainThreadPtrHolder<dom::Promise>>(
+      "AsyncStartTLS promise", promise);
+
+  nsCOMPtr<nsIRunnable> runnable(NS_NewRunnableFunction(
+      "AsyncStartTLS::StartTLS",
+      [promiseHolder = std::move(promiseHolder), self = RefPtr{this}]() {
+        nsresult rv = self->StartTLS();
+        NS_DispatchToMainThread(NS_NewRunnableFunction(
+            "AsyncStartTLS::Resolve", [rv, promiseHolder]() {
+              dom::Promise* promise = promiseHolder.get()->get();
+              if (NS_FAILED(rv)) {
+                promise->MaybeReject(rv);
+              } else {
+                promise->MaybeResolveWithUndefined();
+              }
+            }));
+      }));
+
+  nsresult rv = target->Dispatch(runnable, NS_DISPATCH_NORMAL);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  promise.forget(aPromise);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -437,8 +491,7 @@ void NSSSocketControl::ClientAuthCertificateSelected(
   bool sendingClientAuthCert = cert && key;
   if (sendingClientAuthCert) {
     mSentClientCert = true;
-    Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_AUTH_CERT_USAGE,
-                         u"sent"_ns, 1);
+    glean::security::client_auth_cert_usage.Get("sent"_ns).Add(1);
   }
 
   Unused << SSL_ClientCertCallbackComplete(
@@ -452,16 +505,6 @@ void NSSSocketControl::ClientAuthCertificateSelected(
   if (mTlsHandshakeCallback) {
     Unused << mTlsHandshakeCallback->ClientAuthCertificateSelected();
   }
-}
-
-SharedSSLState& NSSSocketControl::SharedState() {
-  COMMON_SOCKET_CONTROL_ASSERT_ON_OWNING_THREAD();
-  return mSharedState;
-}
-
-void NSSSocketControl::SetSharedOwningReference(SharedSSLState* aRef) {
-  COMMON_SOCKET_CONTROL_ASSERT_ON_OWNING_THREAD();
-  mOwningSharedRef = aRef;
 }
 
 NS_IMETHODIMP

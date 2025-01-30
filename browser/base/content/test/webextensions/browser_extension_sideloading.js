@@ -16,11 +16,14 @@ const kSideloaded = true;
 async function createWebExtension(details) {
   let options = {
     manifest: {
+      manifest_version: details.manifest_version ?? 2,
+
       browser_specific_settings: { gecko: { id: details.id } },
 
       name: details.name,
 
       permissions: details.permissions,
+      host_permissions: details.host_permissions,
     },
   };
 
@@ -69,7 +72,7 @@ add_task(async function test_sideloading() {
     set: [
       ["xpinstall.signatures.required", false],
       ["extensions.autoDisableScopes", 15],
-      ["extensions.ui.ignoreUnsigned", true],
+      ["extensions.ui.showAddonIconForUnsigned", true],
     ],
   });
 
@@ -86,9 +89,10 @@ add_task(async function test_sideloading() {
 
   const ID2 = "addon2@tests.mozilla.org";
   await createWebExtension({
+    manifest_version: 3,
     id: ID2,
     name: "Test 2",
-    permissions: ["<all_urls>"],
+    host_permissions: ["<all_urls>"],
   });
 
   const ID3 = "addon3@tests.mozilla.org";
@@ -224,7 +228,7 @@ add_task(async function test_sideloading() {
   // Close the hamburger menu and go directly to the addons manager
   await gCUITestUtils.hideMainMenu();
 
-  win = await BrowserOpenAddonsMgr(VIEW);
+  win = await BrowserAddonUI.openAddonsMgr(VIEW);
   await waitAboutAddonsViewLoaded(win.document);
 
   // about:addons addon entry element.
@@ -247,6 +251,18 @@ add_task(async function test_sideloading() {
 
   // Test incognito checkbox in post install notification
   function setupPostInstallNotificationTest() {
+    if (!ExtensionsUI.POSTINSTALL_PRIVATEBROWSING_CHECKBOX) {
+      // When the post install private browsing checkbox is disabled,
+      // the private browsing checkbox has been already shown in the
+      // initial install dialog and so the post install dialog is
+      // expected to not be shown at all and so we return a no-op
+      // function.
+      //
+      // Assertions related to the private browsing checkbox expected
+      // to be shown in the initial dialog have been already been
+      // covered internally by the checkNotification test helper.
+      return () => {};
+    }
     let promiseNotificationShown =
       promiseAppMenuNotificationShown("addon-installed");
     return async function (addon) {
@@ -264,7 +280,17 @@ add_task(async function test_sideloading() {
         incognitoCheckbox,
         "Got an incognito checkbox in the post install notification panel"
       );
-      ok(!incognitoCheckbox.hidden, "Incognito checkbox should not be hidden");
+      if (ExtensionsUI.POSTINSTALL_PRIVATEBROWSING_CHECKBOX) {
+        ok(
+          !incognitoCheckbox.hidden,
+          "Incognito checkbox should not be hidden"
+        );
+      } else {
+        ok(
+          incognitoCheckbox.hidden,
+          "Incognito checkbox expected to be hidden in the post install dialog"
+        );
+      }
       // Dismiss post install notification.
       postInstallPanel.button.click();
     };
@@ -293,7 +319,7 @@ add_task(async function test_sideloading() {
   // Close the hamburger menu and go to the detail page for this addon
   await gCUITestUtils.hideMainMenu();
 
-  win = await BrowserOpenAddonsMgr(
+  win = await BrowserAddonUI.openAddonsMgr(
     `addons://detail/${encodeURIComponent(ID3)}`
   );
 
@@ -357,6 +383,8 @@ add_task(async function test_sideloading() {
 
   const baseEventAddon1 = createBaseEventAddon(1);
 
+  const blocklist_state = `${Ci.nsIBlocklistService.STATE_NOT_BLOCKED}`;
+
   Assert.deepEqual(
     AddonTestUtils.getAMGleanEvents("manage", { addon_id: ID1 }),
     [
@@ -367,6 +395,7 @@ add_task(async function test_sideloading() {
         source: "app-profile",
         source_method: "sideload",
         num_strings: "2",
+        blocklist_state,
       },
       {
         addon_id: ID1,
@@ -374,6 +403,7 @@ add_task(async function test_sideloading() {
         addon_type: "extension",
         source: "app-profile",
         source_method: "sideload",
+        blocklist_state,
       },
     ],
     "Got the expected Glean events for addon1."
@@ -387,9 +417,13 @@ add_task(async function test_sideloading() {
     {
       ...baseEventAddon1,
       method: "sideload_prompt",
-      extra: { ...expectedExtra, num_strings: "2" },
+      extra: { ...expectedExtra, num_strings: "2", blocklist_state },
     },
-    { ...baseEventAddon1, method: "uninstall" },
+    {
+      ...baseEventAddon1,
+      method: "uninstall",
+      extra: { ...expectedExtra, blocklist_state },
+    },
   ];
 
   let i = 0;
@@ -416,10 +450,18 @@ add_task(async function test_sideloading() {
     {
       ...baseEventAddon2,
       method: "sideload_prompt",
-      extra: { ...expectedExtra, num_strings: "1" },
+      extra: { ...expectedExtra, num_strings: "1", blocklist_state },
     },
-    { ...baseEventAddon2, method: "enable" },
-    { ...baseEventAddon2, method: "uninstall" },
+    {
+      ...baseEventAddon2,
+      method: "enable",
+      extra: { ...expectedExtra, blocklist_state },
+    },
+    {
+      ...baseEventAddon2,
+      method: "uninstall",
+      extra: { ...expectedExtra, blocklist_state },
+    },
   ];
 
   i = 0;
@@ -447,6 +489,7 @@ add_task(async function test_sideloading() {
         source: "app-profile",
         source_method: "sideload",
         num_strings: "1",
+        blocklist_state,
       },
       {
         addon_id: ID2,
@@ -454,6 +497,7 @@ add_task(async function test_sideloading() {
         addon_type: "extension",
         source: "app-profile",
         source_method: "sideload",
+        blocklist_state,
       },
       {
         addon_id: ID2,
@@ -461,6 +505,7 @@ add_task(async function test_sideloading() {
         addon_type: "extension",
         source: "app-profile",
         source_method: "sideload",
+        blocklist_state,
       },
     ],
     "Got the expected Glean events for addon2."

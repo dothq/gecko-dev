@@ -40,7 +40,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -58,7 +58,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -76,7 +76,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -178,7 +178,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}`,
-        fallbackTitle: `http://${query}`,
+        fallbackTitle: `${query}`,
         iconUri: "page-icon:http://mozilla.org/",
         heuristic: true,
       }),
@@ -227,7 +227,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -245,7 +245,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}`,
-        fallbackTitle: `http://${query}`,
+        fallbackTitle: `${query}`,
         iconUri: "page-icon:http://firefox/",
         heuristic: true,
       }),
@@ -265,7 +265,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}`,
-        fallbackTitle: `http://${query}`,
+        fallbackTitle: `${query}`,
         iconUri: "page-icon:http://mozilla/",
         heuristic: true,
       }),
@@ -282,7 +282,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
     ],
@@ -297,7 +297,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
     ],
@@ -318,7 +318,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
     ],
@@ -351,6 +351,34 @@ add_task(async function () {
         query: "bacon",
       }),
     ],
+  });
+
+  info("Forced search through search mode, keyword.enabled = false");
+  query = "bacon";
+  context = createContext(query, {
+    isPrivate: false,
+    searchMode: {
+      engineName: SUGGESTIONS_ENGINE_NAME,
+      isGeneralPurposeEngine: false,
+    },
+  });
+  await check_results({
+    context,
+    matches: [
+      makeSearchResult(context, {
+        engineName: SUGGESTIONS_ENGINE_NAME,
+        heuristic: true,
+        query: "bacon",
+      }),
+    ],
+  });
+
+  info("Non-search restriction token and invalid URL, keyword.enabled = false");
+  query = "bacon *";
+  context = createContext(query, { isPrivate: false });
+  await check_results({
+    context,
+    matches: [],
   });
 
   Services.prefs.setBoolPref("keyword.enabled", true);
@@ -408,7 +436,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
     ],
@@ -614,7 +642,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -650,7 +678,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: "http://user:pass@not-host/",
-        fallbackTitle: "http://user:pass@not-host/",
+        fallbackTitle: "user:pass@not-host/",
         heuristic: true,
       }),
     ],
@@ -665,7 +693,7 @@ add_task(async function () {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: "http://user@192.168.0.1/",
-        fallbackTitle: "http://user@192.168.0.1/",
+        fallbackTitle: "user@192.168.0.1/",
         heuristic: true,
       }),
       makeSearchResult(context, {
@@ -751,7 +779,7 @@ add_task(async function dont_fixup_urls_with_at_symbol() {
       makeVisitResult(context, {
         source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${query}/`,
-        fallbackTitle: `http://${query}/`,
+        fallbackTitle: `${query}/`,
         heuristic: true,
       }),
       makeSearchResult(context, {

@@ -1,7 +1,4 @@
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import {
   DiscoveryStreamAdminInner,
   CollapseToggle,
@@ -63,13 +60,23 @@ describe("DiscoveryStreamAdmin", () => {
         feeds: {
           data: {},
         },
+        blocks: {},
+        impressions: {
+          feed: {},
+        },
       };
       wrapper = shallow(
         <DiscoveryStreamAdminUI
           dispatch={dispatch}
-          otherPrefs={{}}
+          otherPrefs={{
+            "discoverystream.contextualContent.selectedFeed": "foo",
+            "discoverystream.contextualContent.feeds": "foo, bar",
+          }}
           state={{
             DiscoveryStream: state,
+            Weather: {
+              suggestions: [],
+            },
           }}
         />
       );
@@ -81,7 +88,7 @@ describe("DiscoveryStreamAdmin", () => {
       state.spocs = {
         frequency_caps: [],
         data: {
-          spocs: {
+          newtab_spocs: {
             items: [
               {
                 id: 12345,
@@ -92,8 +99,16 @@ describe("DiscoveryStreamAdmin", () => {
       };
       wrapper = shallow(
         <DiscoveryStreamAdminUI
-          otherPrefs={{}}
-          state={{ DiscoveryStream: state }}
+          otherPrefs={{
+            "discoverystream.contextualContent.selectedFeed": "foo",
+            "discoverystream.contextualContent.feeds": "foo, bar",
+          }}
+          state={{
+            DiscoveryStream: state,
+            Weather: {
+              suggestions: [],
+            },
+          }}
         />
       );
       wrapper.instance().onStoryToggle({ id: 12345 });
@@ -158,14 +173,14 @@ describe("DiscoveryStreamAdmin", () => {
       );
     });
     it("should fire setConfigValue with DISCOVERY_STREAM_CONFIG_SET_VALUE", () => {
-      const name = "name";
-      const value = "value";
-      wrapper.instance().setConfigValue(name, value);
+      const configName = "name";
+      const configValue = "value";
+      wrapper.instance().setConfigValue(configName, configValue);
       assert.calledWith(
         dispatch,
         ac.OnlyToMain({
           type: at.DISCOVERY_STREAM_CONFIG_SET_VALUE,
-          data: { name, value },
+          data: { name: configName, value: configValue },
         })
       );
     });

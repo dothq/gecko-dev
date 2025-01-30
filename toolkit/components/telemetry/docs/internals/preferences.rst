@@ -159,10 +159,6 @@ Preferences
   sending them to the parent process.
   Default is 2000 (milliseconds).
 
-``toolkit.telemetry.pioneerId``
-
-  If a user has opted into the Pioneer program, this will contain their Pioneer ID.
-
 Data-choices notification
 -------------------------
 
@@ -201,26 +197,6 @@ Data-choices notification
 ``datareporting.policy.minimumPolicyVersion.channel-NAME``
 
   This is the only channel-specific version that we currently use for the minimum policy version.
-
-GeckoView
----------
-
-``toolkit.telemetry.geckoview.streaming``
-
-   Whether the GeckoView mode we're running in is the variety that uses the :doc:`GeckoView Streaming Telemetry API <../internals/geckoview-streaming>` or not.
-   Defaults to false.
-
-``toolkit.telemetry.geckoview.batchDurationMS``
-
-   The duration in milliseconds over which :doc:`GeckoView Streaming Telemetry <../internals/geckoview-streaming>` will batch accumulations before passing it on to its delegate.
-   Defaults to 5000.
-
-``toolkit.telemetry.geckoview.maxBatchStalenessMS``
-
-   The maximum time (in milliseconds) between flushes of the
-   :doc:`GeckoView Streaming Telemetry <../internals/geckoview-streaming>`
-   batch to its delegate.
-   Defaults to 60000.
 
 Testing
 -------

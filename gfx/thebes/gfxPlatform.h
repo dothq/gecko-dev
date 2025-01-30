@@ -82,7 +82,7 @@ enum class CMSMode : int32_t {
   Off = 0,         // No color management
   All = 1,         // Color manage everything
   TaggedOnly = 2,  // Color manage tagged Images Only
-  AllCount = 3
+  _ENUM_MAX = TaggedOnly
 };
 
 enum eGfxLog {
@@ -150,26 +150,6 @@ inline const char* GetBackendName(mozilla::gfx::BackendType aBackend) {
   MOZ_CRASH("Incomplete switch");
 }
 
-enum class DeviceResetReason {
-  OK = 0,        // No reset.
-  HUNG,          // Windows specific, guilty device reset.
-  REMOVED,       // Windows specific, device removed or driver upgraded.
-  RESET,         // Guilty device reset.
-  DRIVER_ERROR,  // Innocent device reset.
-  INVALID_CALL,  // Windows specific, guilty device reset.
-  OUT_OF_MEMORY,
-  FORCED_RESET,  // Simulated device reset.
-  OTHER,         // Unrecognized reason for device reset.
-  D3D9_RESET,    // Windows specific, not used.
-  NVIDIA_VIDEO,  // Linux specific, NVIDIA video memory was reset.
-  UNKNOWN,       // GL specific, unknown if guilty or innocent.
-};
-
-enum class ForcedDeviceResetReason {
-  OPENSHAREDHANDLE = 0,
-  COMPOSITOR_UPDATED,
-};
-
 struct BackendPrefsData {
   uint32_t mCanvasBitmask = 0;
   mozilla::gfx::BackendType mCanvasDefault = mozilla::gfx::BackendType::NONE;
@@ -197,7 +177,12 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
    * This is a singleton; it contains mostly convenience
    * functions to obtain platform-specific objects.
    */
-  static gfxPlatform* GetPlatform();
+  static gfxPlatform* GetPlatform() {
+    if (MOZ_UNLIKELY(!gPlatform)) {
+      Init();
+    }
+    return gPlatform;
+  }
 
   /**
    * Returns whether or not graphics has been initialized yet. This is
@@ -285,7 +270,8 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
       bool aFallback = false);
 
   already_AddRefed<DrawTarget> CreateOffscreenCanvasDrawTarget(
-      const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
+      const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat,
+      bool aRequireSoftwareRender = false);
 
   already_AddRefed<DrawTarget> CreateSimilarSoftwareDrawTarget(
       DrawTarget* aDT, const IntSize& aSize,
@@ -363,7 +349,7 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
    * available fonts on the platform; used to pass the list from chrome to
    * content process. Currently implemented only on MacOSX and Linux.
    */
-  virtual void ReadSystemFontList(mozilla::dom::SystemFontList*){};
+  virtual void ReadSystemFontList(mozilla::dom::SystemFontList*) {};
 
   /**
    * Rebuilds the system font lists (if aFullRebuild is true), or just notifies
@@ -493,7 +479,7 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   bool IsKnownIconFontFamily(const nsAtom* aFamilyName) const;
 
   virtual bool DidRenderingDeviceReset(
-      DeviceResetReason* aResetReason = nullptr) {
+      mozilla::gfx::DeviceResetReason* aResetReason = nullptr) {
     return false;
   }
 
@@ -511,6 +497,13 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   static bool OffMainThreadCompositingEnabled();
 
   void UpdateCanUseHardwareVideoDecoding();
+
+  inline static void EnsureCMSInitialized() {
+    if (MOZ_UNLIKELY(!gCMSInitialized)) {
+      MaybeInitializeCMS();
+      MOZ_ASSERT(gCMSInitialized);
+    }
+  }
 
   /**
    * Are we going to try color management?
@@ -547,48 +540,42 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
    * Return the output device ICC profile.
    */
   static qcms_profile* GetCMSOutputProfile() {
-    EnsureCMSInitialized();
-    return gCMSOutputProfile;
+    return GetPlatform()->mCMSOutputProfile;
   }
 
   /**
    * Return the sRGB ICC profile.
    */
   static qcms_profile* GetCMSsRGBProfile() {
-    EnsureCMSInitialized();
-    return gCMSsRGBProfile;
+    return GetPlatform()->mCMSsRGBProfile;
   }
 
   /**
    * Return sRGB -> output device transform.
    */
   static qcms_transform* GetCMSRGBTransform() {
-    EnsureCMSInitialized();
-    return gCMSRGBTransform;
+    return GetPlatform()->mCMSRGBTransform;
   }
 
   /**
    * Return output -> sRGB device transform.
    */
   static qcms_transform* GetCMSInverseRGBTransform() {
-    MOZ_ASSERT(gCMSInitialized);
-    return gCMSInverseRGBTransform;
+    return GetPlatform()->mCMSInverseRGBTransform;
   }
 
   /**
    * Return sRGBA -> output device transform.
    */
   static qcms_transform* GetCMSRGBATransform() {
-    MOZ_ASSERT(gCMSInitialized);
-    return gCMSRGBATransform;
+    return GetPlatform()->mCMSRGBATransform;
   }
 
   /**
    * Return sBGRA -> output device transform.
    */
   static qcms_transform* GetCMSBGRATransform() {
-    MOZ_ASSERT(gCMSInitialized);
-    return gCMSBGRATransform;
+    return GetPlatform()->mCMSBGRATransform;
   }
 
   /**
@@ -645,9 +632,6 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
    * Returns a logger if one is available and logging is enabled
    */
   static mozilla::LogModule* GetLog(eGfxLog aWhichLog);
-
-  int GetScreenDepth() const { return mScreenDepth; }
-  mozilla::gfx::IntSize GetScreenSize() const { return mScreenSize; }
 
   static void PurgeSkiaFontCache();
 
@@ -802,7 +786,7 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   virtual void OnMemoryPressure(
       mozilla::layers::MemoryPressureReason aWhy) override;
 
-  virtual void EnsureDevicesInitialized(){};
+  virtual void EnsureDevicesInitialized() {};
   virtual bool DevicesInitialized() { return true; };
 
   virtual bool IsWaylandDisplay() { return false; }
@@ -810,8 +794,6 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   static uint32_t TargetFrameRate();
 
   static bool UseDesktopZoomingScrollbars();
-
-  virtual bool SupportsHDR() { return false; }
 
  protected:
   gfxPlatform();
@@ -878,16 +860,6 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   static nsTArray<uint8_t> GetPrefCMSOutputProfileData();
 
  protected:
-  /**
-   * If inside a child process and currently being initialized by the
-   * SetXPCOMProcessAttributes message, this can be used by subclasses to
-   * retrieve the ContentDeviceData passed by the message
-   *
-   * If not currently being initialized, will return nullptr. In this case,
-   * child should send a sync message to ask parent for color profile
-   */
-  const mozilla::gfx::ContentDeviceData* GetInitContentDeviceData();
-
   /**
    * If inside a child process and have ever received a
    * SetXPCOMProcessAttributes message, this contains the cmsOutputProfileData
@@ -959,30 +931,13 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
 
   static void InitOpenGLConfig();
 
-  static mozilla::Atomic<bool, mozilla::MemoryOrdering::ReleaseAcquire>
-      gCMSInitialized;
-  static CMSMode gCMSMode;
+  static gfxPlatform* gPlatform;
 
-  // These two may point to the same profile
-  static qcms_profile* gCMSOutputProfile;
-  static qcms_profile* gCMSsRGBProfile;
-
-  static qcms_transform* gCMSRGBTransform;
-  static qcms_transform* gCMSInverseRGBTransform;
-  static qcms_transform* gCMSRGBATransform;
-  static qcms_transform* gCMSBGRATransform;
-
-  inline static void EnsureCMSInitialized() {
-    if (MOZ_UNLIKELY(!gCMSInitialized)) {
-      InitializeCMS();
-    }
-  }
-
-  static void InitializeCMS();
-  static void ShutdownCMS();
+  void InitializeCMS();
+  void ShutdownCMS();
 
   /**
-   * This uses nsIScreenManager to determine the screen size and color depth
+   * This uses nsIScreenManager to determine the primary screen color depth
    */
   void PopulateScreenInfo();
 
@@ -997,6 +952,23 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   static bool IsDXNV12Blocked();
   static bool IsDXP010Blocked();
   static bool IsDXP016Blocked();
+
+  static void MaybeInitializeCMS();
+
+  // We need these to be static because we might call them in the GPU process,
+  // even if we don't do color management there.
+  static mozilla::Atomic<bool, mozilla::ReleaseAcquire> gCMSInitialized;
+  static CMSMode gCMSMode;
+
+  // These two may point to the same profile
+  qcms_profile* mCMSOutputProfile = nullptr;
+  qcms_profile* mCMSsRGBProfile = nullptr;
+
+  qcms_transform* mCMSRGBTransform = nullptr;
+  qcms_transform* mCMSInverseRGBTransform = nullptr;
+  qcms_transform* mCMSRGBATransform = nullptr;
+  qcms_transform* mCMSBGRATransform = nullptr;
+  mozilla::Maybe<nsTArray<uint8_t>> mCMSOutputProfileData;
 
   RefPtr<gfxASurface> mScreenReferenceSurface;
   RefPtr<mozilla::layers::MemoryPressureObserver> mMemoryPressureObserver;
@@ -1026,9 +998,6 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   // Backend that we are compositing with. NONE, if no compositor has been
   // created yet.
   mozilla::layers::LayersBackend mCompositorBackend;
-
-  int32_t mScreenDepth;
-  mozilla::gfx::IntSize mScreenSize;
 
   mozilla::Maybe<mozilla::layers::OverlayInfo> mOverlayInfo;
   mozilla::Maybe<mozilla::layers::SwapChainInfo> mSwapChainInfo;

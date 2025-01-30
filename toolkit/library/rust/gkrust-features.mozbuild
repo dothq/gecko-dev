@@ -21,7 +21,7 @@ if CONFIG["MOZ_WEBRENDER_DEBUGGER"]:
 if CONFIG["MOZ_PULSEAUDIO"]:
     gkrust_features += ["cubeb_pulse_rust"]
 
-if CONFIG["MOZ_AUDIOUNIT_RUST"]:
+if CONFIG["MOZ_AUDIOUNIT_RUST"] and CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     gkrust_features += ["cubeb_coreaudio_rust"]
 
 if CONFIG["MOZ_RUST_SIMD"]:
@@ -66,9 +66,6 @@ gkrust_features += ["glean_with_gecko"]
 if not CONFIG["MOZILLA_OFFICIAL"]:
     gkrust_features += ["glean_disable_upload"]
 
-if CONFIG["OS_TARGET"] != "Android":
-    gkrust_features += ["glean_million_queue"]
-
 if CONFIG["MOZ_ENABLE_DBUS"]:
     gkrust_features += ["with_dbus"]
 
@@ -85,6 +82,12 @@ if CONFIG["MOZ_UNIFFI_FIXTURES"]:
 
 if CONFIG["MOZ_ICU4X"]:
     gkrust_features += ["icu4x"]
+
+if CONFIG["JS_HAS_TEMPORAL_API"]:
+    gkrust_features += ["icu4x_calendar"]
+
+if CONFIG["USE_LIBZ_RS"]:
+    gkrust_features += ["libz-rs-sys"]
 
 # This must remain last.
 gkrust_features = ["gkrust-shared/%s" % f for f in gkrust_features]

@@ -31,7 +31,7 @@
 
 #include "frontend/FrontendContext.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
-#include "util/StringBuffer.h"
+#include "util/StringBuilder.h"
 #include "util/Unicode.h"  // unicode::REPLACEMENT_CHARACTER
 #include "vm/JSContext.h"
 
@@ -286,7 +286,6 @@ static bool InflateUTF8ToUTF16(JSContext* cx, const UTF8Chars& src,
         break;
       }
     } else {
-
 #define INVALID(report, arg, n2)                                    \
   do {                                                              \
     if (ErrorAction == OnUTF8Error::Throw) {                        \
@@ -871,7 +870,7 @@ JS_PUBLIC_API JS::UniqueWideChars JS::EncodeUtf8ToWide(JSContext* cx,
 #endif
 }
 
-bool StringBuffer::append(const Utf8Unit* units, size_t len) {
+bool StringBuilder::append(const Utf8Unit* units, size_t len) {
   MOZ_ASSERT(maybeCx_);
 
   if (isLatin1()) {

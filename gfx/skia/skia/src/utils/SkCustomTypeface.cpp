@@ -23,6 +23,7 @@
 #include "include/core/SkRect.h"
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkScalar.h"
+#include "include/core/SkSerialProcs.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkString.h"
 #include "include/core/SkTypeface.h"
@@ -200,6 +201,7 @@ sk_sp<SkTypeface> SkCustomTypefaceBuilder::detach() {
 /////////////
 
 void SkUserTypeface::onFilterRec(SkScalerContextRec* rec) const {
+    rec->useStrokeForFakeBold();
     rec->setHinting(SkFontHinting::kNone);
 }
 
@@ -253,45 +255,39 @@ public:
     }
 
 protected:
-    bool generateAdvance(SkGlyph* glyph) override {
+    GlyphMetrics generateMetrics(const SkGlyph& glyph, SkArenaAlloc*) override {
+        GlyphMetrics mx(glyph.maskFormat());
+
         const SkUserTypeface* tf = this->userTF();
-        auto advance = fMatrix.mapXY(tf->fGlyphRecs[glyph->getGlyphID()].fAdvance, 0);
+        const SkGlyphID gid = glyph.getGlyphID();
+        if (gid >= tf->fGlyphRecs.size()) {
+            mx.neverRequestPath = true;
+            return mx;
+        }
 
-        glyph->fAdvanceX = advance.fX;
-        glyph->fAdvanceY = advance.fY;
-        return true;
-    }
+        const auto& rec = tf->fGlyphRecs[gid];
+        mx.advance = fMatrix.mapXY(rec.fAdvance, 0);
 
-    void generateMetrics(SkGlyph* glyph, SkArenaAlloc* alloc) override {
-        glyph->zeroMetrics();
-        this->generateAdvance(glyph);
-
-        const auto& rec = this->userTF()->fGlyphRecs[glyph->getGlyphID()];
         if (rec.isDrawable()) {
-            glyph->fMaskFormat = SkMask::kARGB32_Format;
+            mx.maskFormat = SkMask::kARGB32_Format;
 
             SkRect bounds = fMatrix.mapRect(rec.fBounds);
-            bounds.offset(SkFixedToScalar(glyph->getSubXFixed()),
-                          SkFixedToScalar(glyph->getSubYFixed()));
-
-            SkIRect ibounds;
-            bounds.roundOut(&ibounds);
-            glyph->fLeft   = ibounds.fLeft;
-            glyph->fTop    = ibounds.fTop;
-            glyph->fWidth  = ibounds.width();
-            glyph->fHeight = ibounds.height();
+            bounds.offset(SkFixedToScalar(glyph.getSubXFixed()),
+                          SkFixedToScalar(glyph.getSubYFixed()));
+            bounds.roundOut(&mx.bounds);
 
             // These do not have an outline path.
-            glyph->setPath(alloc, nullptr, false);
+            mx.neverRequestPath = true;
         }
+        return mx;
     }
 
-    void generateImage(const SkGlyph& glyph) override {
+    void generateImage(const SkGlyph& glyph, void* imageBuffer) override {
         const auto& rec = this->userTF()->fGlyphRecs[glyph.getGlyphID()];
         SkASSERTF(rec.isDrawable(), "Only drawable-backed glyphs should reach generateImage.");
 
-        auto canvas = SkCanvas::MakeRasterDirectN32(glyph.fWidth, glyph.fHeight,
-                                                    static_cast<SkPMColor*>(glyph.fImage),
+        auto canvas = SkCanvas::MakeRasterDirectN32(glyph.width(), glyph.height(),
+                                                    static_cast<SkPMColor*>(imageBuffer),
                                                     glyph.rowBytes());
         if constexpr (kSkShowTextBlitCoverage) {
             canvas->clear(0x33FF0000);
@@ -299,13 +295,13 @@ protected:
             canvas->clear(SK_ColorTRANSPARENT);
         }
 
-        canvas->translate(-glyph.fLeft, -glyph.fTop);
+        canvas->translate(-glyph.left(), -glyph.top());
         canvas->translate(SkFixedToScalar(glyph.getSubXFixed()),
                           SkFixedToScalar(glyph.getSubYFixed()));
         canvas->drawDrawable(rec.fDrawable.get(), &fMatrix);
     }
 
-    bool generatePath(const SkGlyph& glyph, SkPath* path) override {
+    bool generatePath(const SkGlyph& glyph, SkPath* path, bool* modified) override {
         const auto& rec = this->userTF()->fGlyphRecs[glyph.getGlyphID()];
 
         SkASSERT(!rec.isDrawable());
@@ -494,7 +490,9 @@ sk_sp<SkTypeface> SkCustomTypefaceBuilder::Deserialize(SkStream* stream) {
 
         switch (gtype) {
         case GlyphType::kDrawable: {
-            auto drawable = SkDrawable::Deserialize(data->data(), data->size());
+            SkDeserialProcs procs;
+            procs.fAllowSkSL = false;
+            auto drawable = SkDrawable::Deserialize(data->data(), data->size(), &procs);
             if (!drawable) {
                 return nullptr;
             }

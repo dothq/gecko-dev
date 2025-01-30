@@ -17,7 +17,7 @@ XPCOMUtils.defineLazyServiceGetter(
 
 async function flush() {
   try {
-    ProfileService.flush();
+    await ProfileService.asyncFlush();
     rebuildProfileList();
   } catch (e) {
     let [title, msg, button] = await document.l10n.formatValues([
@@ -139,7 +139,7 @@ function display(profileData) {
 
         td.appendChild(button);
 
-        button.addEventListener("click", function (e) {
+        button.addEventListener("click", function () {
           value.reveal();
         });
       }

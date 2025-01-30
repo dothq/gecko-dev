@@ -11,3 +11,9 @@ all-tabs-menu-new-user-context =
 
 all-tabs-menu-hidden-tabs =
   .label = Hidden tabs
+
+all-tabs-menu-close-all-duplicate-tabs =
+  .label = Close all duplicate tabs
+
+all-tabs-menu-synced-tabs =
+  .label = Tabs from other devices

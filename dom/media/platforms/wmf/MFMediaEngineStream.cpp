@@ -11,6 +11,7 @@
 #include "TimeUnits.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/ProfilerMarkerTypes.h"
+#include "mozilla/ScopeExit.h"
 #include "WMF.h"
 #include "WMFUtils.h"
 
@@ -106,6 +107,19 @@ MFMediaEngineStreamWrapper::NeedsConversion() const {
                  : MediaDataDecoder::ConversionRequired::kNeedNone;
 }
 
+bool MFMediaEngineStreamWrapper::ShouldDecoderAlwaysBeRecycled() const {
+  return true;
+}
+
+bool MFMediaEngineStreamWrapper::IsHardwareAccelerated(
+    nsACString& aFailureReason) const {
+  if (!mStream) {
+    return false;
+  }
+  // Video is always hardware accelerated.
+  return mStream->AsVideoStream() != nullptr;
+}
+
 MFMediaEngineStream::MFMediaEngineStream()
     : mIsShutdown(false),
       mIsSelected(false),
@@ -121,11 +135,20 @@ MFMediaEngineStream::~MFMediaEngineStream() {
 }
 
 HRESULT MFMediaEngineStream::RuntimeClassInitialize(
-    uint64_t aStreamId, const TrackInfo& aInfo, MFMediaSource* aParentSource) {
+    uint64_t aStreamId, const TrackInfo& aInfo, bool aIsEncrytpedCustomInit,
+    MFMediaSource* aParentSource) {
   mParentSource = aParentSource;
   mTaskQueue = aParentSource->GetTaskQueue();
   MOZ_ASSERT(mTaskQueue);
   mStreamId = aStreamId;
+  mIsEncrytpedCustomInit = aIsEncrytpedCustomInit;
+
+  auto errorExit = MakeScopeExit([&] {
+    SLOG("Failed to initialize media stream (id=%" PRIu64 ")", aStreamId);
+    mIsShutdown = true;
+    Unused << mMediaEventQueue->Shutdown();
+  });
+
   RETURN_IF_FAILED(wmf::MFCreateEventQueue(&mMediaEventQueue));
 
   ComPtr<IMFMediaType> mediaType;
@@ -134,6 +157,7 @@ HRESULT MFMediaEngineStream::RuntimeClassInitialize(
   RETURN_IF_FAILED(GenerateStreamDescriptor(mediaType));
   SLOG("Initialized %s (id=%" PRIu64 ", descriptorId=%lu)",
        GetDescriptionName().get(), aStreamId, mStreamDescriptorId);
+  errorExit.release();
   return S_OK;
 }
 
@@ -391,7 +415,8 @@ HRESULT MFMediaEngineStream::AddEncryptAttributes(
   if (aCryptoConfig.mCryptoScheme == CryptoScheme::Cenc) {
     protectionScheme = MFSampleEncryptionProtectionScheme::
         MF_SAMPLE_ENCRYPTION_PROTECTION_SCHEME_AES_CTR;
-  } else if (aCryptoConfig.mCryptoScheme == CryptoScheme::Cbcs) {
+  } else if (aCryptoConfig.mCryptoScheme == CryptoScheme::Cbcs ||
+             aCryptoConfig.mCryptoScheme == CryptoScheme::Cbcs_1_9) {
     protectionScheme = MFSampleEncryptionProtectionScheme::
         MF_SAMPLE_ENCRYPTION_PROTECTION_SCHEME_AES_CBC;
   } else {

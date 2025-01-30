@@ -15,7 +15,7 @@ if CONFIG["OS_ARCH"] == "WINNT":
 MOCHITEST_MANIFESTS += ["test/mochitest.toml"]
 BROWSER_CHROME_MANIFESTS += ["test/browser.toml"]
 XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell.toml"]
-MARIONETTE_MANIFESTS += ["test/marionette/marionette.toml"]
+MARIONETTE_MANIFESTS += ["test/marionette/manifest.toml"]
 
 XPIDL_SOURCES += [
     "nsINativeAppSupport.idl",
@@ -41,9 +41,6 @@ EXPORTS.mozilla += [
     "MultiInstanceLock.h",
     "SafeMode.h",
 ]
-
-if CONFIG["MOZ_INSTRUMENT_EVENT_LOOP"]:
-    EXPORTS += ["EventTracer.h"]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     EXPORTS.mozilla += [
@@ -76,12 +73,14 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     EXPORTS.mozilla += [
         "MacRunFromDmgUtils.h",
+        "MacUtils.h",
     ]
     UNIFIED_SOURCES += [
         "MacApplicationDelegate.mm",
         "MacAutoreleasePool.mm",
         "MacLaunchHelper.mm",
         "MacRunFromDmgUtils.mm",
+        "MacUtils.mm",
         "nsCommandLineServiceMac.mm",
         "nsNativeAppSupportCocoa.mm",
         "updaterfileutils_osx.mm",
@@ -91,9 +90,16 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
         "../components/printingui",
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "uikit":
+    EXPORTS.GeckoView += [
+        "IOSBootstrap.h",
+    ]
     UNIFIED_SOURCES += [
+        "IOSBootstrap.mm",
         "nsNativeAppSupportDefault.cpp",
         "UIKitDirProvider.mm",
+    ]
+    LOCAL_INCLUDES += [
+        "!/build",
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     UNIFIED_SOURCES += [
@@ -125,11 +131,6 @@ if CONFIG["MOZ_X11"]:
         "nsX11ErrorHandler.cpp",
     ]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
-    UNIFIED_SOURCES += [
-        "nsAndroidStartup.cpp",
-    ]
-
 if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
     UNIFIED_SOURCES += [
         "MultiInstanceLock.cpp",
@@ -141,6 +142,7 @@ UNIFIED_SOURCES += [
     "Bootstrap.cpp",
     "CmdLineAndEnvUtils.cpp",
     "CreateAppData.cpp",
+    "GeckoArgs.cpp",
     "nsConsoleWriter.cpp",
     "nsNativeAppSupportBase.cpp",
     "nsSigHandlers.cpp",
@@ -157,15 +159,11 @@ SOURCES += [
     "ProfileReset.cpp",
 ]
 
-if CONFIG["MOZ_INSTRUMENT_EVENT_LOOP"]:
-    UNIFIED_SOURCES += [
-        "EventTracer.cpp",
-    ]
-
 if CONFIG["MOZ_UPDATER"]:
     if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
         UNIFIED_SOURCES += [
             "nsUpdateDriver.cpp",
+            "nsUpdateMutex.cpp",
             "nsUpdateSyncManager.cpp",
         ]
 
@@ -247,7 +245,9 @@ LOCAL_INCLUDES += [
     "/dom/commandhandler",
     "/dom/ipc",
     "/dom/webbrowserpersist",
+    "/js/xpconnect/loader",
     "/testing/gtest/mozilla",
+    "/third_party/sqlite3/ext/",
     "/toolkit/crashreporter",
     "/xpcom/build",
 ]
@@ -277,9 +277,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     CXXFLAGS += CONFIG["MOZ_PANGO_CFLAGS"]
 
 DEFINES["TOPOBJDIR"] = TOPOBJDIR
-
-if not CONFIG["MOZ_ARTIFACT_BUILDS"]:
-    FINAL_TARGET_PP_FILES += ["platform.ini"]
+FINAL_TARGET_PP_FILES += ["platform.ini"]
 
 if CONFIG["ENABLE_TESTS"]:
     DIRS += ["test/gtest"]

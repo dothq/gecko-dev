@@ -2,10 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import React from "react";
 
 export class SafeAnchor extends React.PureComponent {
@@ -24,7 +21,8 @@ export class SafeAnchor extends React.PureComponent {
           type: at.OPEN_LINK,
           data: {
             event: { altKey, button, ctrlKey, metaKey, shiftKey },
-            referrer: "https://getpocket.com/recommendations",
+            referrer:
+              this.props.referrer || "https://getpocket.com/recommendations",
             // Use the anchor's url, which could have been cleaned up
             url: event.currentTarget.href,
           },

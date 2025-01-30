@@ -9,34 +9,12 @@
 #ifndef nsCSSValue_h___
 #define nsCSSValue_h___
 
-#include "mozilla/Attributes.h"
-#include "mozilla/CORSMode.h"
-#include "mozilla/EnumTypeTraits.h"
-#include "mozilla/MemoryReporting.h"
-#include "mozilla/ServoBindingTypes.h"
-#include "mozilla/URLExtraData.h"
-#include "mozilla/UniquePtr.h"
-
 #include "nsCoord.h"
-#include "nsTArray.h"
 
-#include <type_traits>
-
-// XXX Avoid including this here by moving function bodies to the cpp file
-#include "mozilla/FloatingPoint.h"
-
-class imgRequestProxy;
-class nsAtom;
-class nsIContent;
-
-class nsIPrincipal;
-class nsIURI;
-class nsPresContext;
-template <class T>
-class nsPtrHashKey;
 struct RawServoCssUrlData;
 
 namespace mozilla {
+struct URLExtraData;
 class CSSStyleSheet;
 }  // namespace mozilla
 
@@ -55,14 +33,16 @@ enum nsCSSUnit : uint32_t {
                            // different behavior than percent)
 
   // Font relative measure
-  eCSSUnit_EM = 800,           // == current font size
-  eCSSUnit_XHeight = 801,      // distance from top of lower case x to
-                               // baseline
-  eCSSUnit_Char = 802,         // number of characters, used for width with
-                               // monospace font
-  eCSSUnit_RootEM = 803,       // == root element font size
-  eCSSUnit_Ideographic = 804,  // == CJK water ideograph width
-  eCSSUnit_CapHeight = 805,    // == Capital letter height
+  eCSSUnit_EM = 800,              // == current font size
+  eCSSUnit_XHeight = 801,         // distance from top of lower case x to
+                                  // baseline
+  eCSSUnit_Char = 802,            // number of characters, used for width with
+                                  // monospace font
+  eCSSUnit_RootEM = 803,          // == root element font size
+  eCSSUnit_Ideographic = 804,     // == CJK water ideograph width
+  eCSSUnit_CapHeight = 805,       // == Capital letter height
+  eCSSUnit_LineHeight = 806,      // == Line height
+  eCSSUnit_RootLineHeight = 807,  // == Root line height
 
   // Screen relative measure
   eCSSUnit_Point = 900,       // 4/3 of a CSS pixel

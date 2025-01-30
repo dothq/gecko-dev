@@ -81,19 +81,13 @@ appmenu-remote-tabs-turn-on-sync =
 
 # This is shown after the tabs list if we can display more tabs by clicking on the button
 appmenu-remote-tabs-showmore =
-  .label = Show More Tabs
+  .label = Show more tabs
   .tooltiptext = Show more tabs from this device
 
-# This is shown when there are inactive tabs which are not being shown.
-# Variables
-# $count (Number) - The number of inactive tabs which are not being shown (at least 1)
-appmenu-remote-tabs-showinactive =
-  .label =
-    { $count ->
-        [one] Show one inactive tab
-       *[other] Show { $count } inactive tabs
-    }
-  .tooltiptext = Show the inactive tabs on this device
+# This is shown as the label for an element to show inactive tabs from this device.
+appmenu-remote-tabs-show-inactive-tabs =
+  .label = Inactive tabs
+  .tooltiptext = See inactive tabs on this device
 
 # This is shown beneath the name of a device when that device has no open tabs
 appmenu-remote-tabs-notabs = No open tabs
@@ -126,9 +120,12 @@ appmenu-fxa-sync-and-save-data2 = Sync and save data
 appmenu-fxa-signed-in-label = Sign In
 appmenu-fxa-setup-sync =
     .label = Turn On Syncing…
-
+appmenu-fxa-setup-sync-new = Turn On
 appmenuitem-save-page =
     .label = Save page as…
+
+appmenuitem-fxa-sync-off-title = Sync is off
+appmenuitem-fxa-sync-off-description = Protect and access your bookmarks, passwords, and more anywhere.
 
 ## What's New panel in App menu.
 
@@ -232,6 +229,10 @@ profiler-popup-presets-power-description = Preset for investigating power use bu
 profiler-popup-presets-power-label =
   .label = Power
 
+profiler-popup-presets-debug-description = Preset for debugging in { -brand-shorter-name }. High overhead, do not use for performance work but use for focusing on understanding browser behavior.
+profiler-popup-presets-debug-label =
+  .label = Debug
+
 profiler-popup-presets-custom-label =
   .label = Custom
 
@@ -312,5 +313,20 @@ appmenuitem-monitor-title = { -monitor-brand-short-name }
 appmenuitem-monitor-description = Get data breach alerts
 appmenuitem-relay-title = { -relay-brand-short-name }
 appmenuitem-relay-description = Mask your real email and phone
+appmenuitem-services-relay-description = Launch email masks dashboard
 appmenuitem-vpn-title = { -mozilla-vpn-brand-name }
 appmenuitem-vpn-description = Protect your online activity
+
+appmenu-services-header = My services
+appmenu-other-protection-header = Try other protection tools from { -vendor-short-name }:
+
+## Profiles panel
+
+appmenu-profiles = Profiles
+appmenu-other-profiles = Other profiles
+appmenu-manage-profiles =
+    .label = Manage profiles
+appmenu-create-profile =
+    .label = New profile
+appmenu-edit-profile =
+    .aria-label = Edit profile

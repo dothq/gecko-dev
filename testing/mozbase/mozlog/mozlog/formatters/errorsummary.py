@@ -46,6 +46,7 @@ class ErrorSummaryFormatter(BaseFormatter):
             "expected": item["expected"],
             "message": item.get("message"),
             "stack": item.get("stack"),
+            "modifiers": item.get("extra", {}).get("modifiers", ""),
             "known_intermittent": item.get("known_intermittent", []),
         }
         return self._output("test_result", data)
@@ -157,8 +158,18 @@ class ErrorSummaryFormatter(BaseFormatter):
 
     def shutdown_failure(self, item):
         data = {"status": "FAIL", "test": item["group"], "message": item["message"]}
-        data["group"] = [g for g in self.groups if item["group"].endswith(g)][0]
-        self.groups[data["group"]]["status"] = "FAIL"
+        data["group"] = [g for g in self.groups if item["group"].endswith(g)]
+        if data["group"]:
+            data["group"] = data["group"][0]
+            self.groups[data["group"]]["status"] = "FAIL"
+        else:
+            self.log(
+                {
+                    "level": "ERROR",
+                    "message": "Group '%s' was not found in known groups: %s.  Please look at item: %s"
+                    % (item["group"], self.groups, item),
+                }
+            )
         return self._output("log", data)
 
     def crash(self, item):

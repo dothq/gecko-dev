@@ -277,6 +277,10 @@ class ScalarType:
             ).handle_later()
 
         # Validate operating_systems.
+        if self._strict_type_checks and "operating_systems" in definition:
+            ParserError(
+                f"{self._name} - uses obsolete field 'operating_systems'."
+            ).handle_later()
         operating_systems = definition.get("operating_systems", [])
         for operating_system in operating_systems:
             if not utils.is_valid_os(operating_system):
@@ -308,13 +312,6 @@ class ScalarType:
                     + product
                     + ".\nSee: {}".format(BASE_DOC_URL)
                 ).handle_later()
-            if utils.is_geckoview_streaming_product(product):
-                keyed = definition.get("keyed")
-                if keyed:
-                    ParserError(
-                        "%s - keyed Scalars not supported for product %s"
-                        % (self._name, product)
-                    ).handle_later()
 
         # Validate the expiration version.
         # Historical versions of Scalars.json may contain expiration versions

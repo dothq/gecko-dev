@@ -121,7 +121,6 @@ add_task(async function engagement_before_showing_results() {
     assertEngagementTelemetry([
       {
         selected_result: "input_field",
-        selected_result_subtype: "",
         provider: undefined,
         results: "",
         groups: "",
@@ -174,11 +173,10 @@ add_task(async function engagement_after_closing_results() {
 
       assertEngagementTelemetry([
         {
-          selected_result: "input_field",
-          selected_result_subtype: "",
-          provider: undefined,
-          results: "",
-          groups: "",
+          selected_result: "search_engine",
+          provider: "HeuristicFallback",
+          results: "search_engine",
+          groups: "heuristic",
         },
       ]);
     });
@@ -196,7 +194,6 @@ add_task(async function enter_to_reload_current_url() {
     await BrowserTestUtils.waitForCondition(
       () => window.document.activeElement === gURLBar.inputField
     );
-    await UrlbarTestUtils.promiseSearchComplete(window);
 
     // Press Enter key to reload the page without selecting any suggestions.
     await doEnter();
@@ -204,17 +201,15 @@ add_task(async function enter_to_reload_current_url() {
     assertEngagementTelemetry([
       {
         selected_result: "url",
-        selected_result_subtype: "",
         provider: "HeuristicFallback",
         results: "url",
         groups: "heuristic",
       },
       {
         selected_result: "input_field",
-        selected_result_subtype: "",
         provider: undefined,
-        results: "action",
-        groups: "suggested_index",
+        results: "",
+        groups: "",
       },
     ]);
   });

@@ -14,6 +14,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   MockFilePicker: "resource://testing-common/MockFilePicker.sys.mjs",
   MockPermissionPrompt:
     "resource://testing-common/MockPermissionPrompt.sys.mjs",
+  MockSound: "resource://testing-common/MockSound.sys.mjs",
   NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
   PerTestCoverageUtils:
     "resource://testing-common/PerTestCoverageUtils.sys.mjs",
@@ -75,7 +76,6 @@ SPConsoleListener.prototype = {
       errorMessage: null,
       cssSelectors: null,
       sourceName: null,
-      sourceLine: null,
       lineNumber: null,
       columnNumber: null,
       category: null,
@@ -88,7 +88,6 @@ SPConsoleListener.prototype = {
       m.errorMessage = msg.errorMessage;
       m.cssSelectors = msg.cssSelectors;
       m.sourceName = msg.sourceName;
-      m.sourceLine = msg.sourceLine;
       m.lineNumber = msg.lineNumber;
       m.columnNumber = msg.columnNumber;
       m.category = msg.category;
@@ -447,6 +446,10 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return lazy.MockPermissionPrompt;
   }
 
+  get MockSound() {
+    return lazy.MockSound;
+  }
+
   quit() {
     this.sendAsyncMessage("SpecialPowers.Quit", {});
   }
@@ -472,10 +475,10 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return this.sendQuery("Ping").then(aCallback);
   }
 
-  async registeredServiceWorkers() {
-    // Please see the comment in SpecialPowersObserver.jsm above
+  async registeredServiceWorkers(aForceCheck) {
+    // Please see the comment in SpecialPowersParent.sys.mjs above
     // this._serviceWorkerListener's assignment for what this returns.
-    if (this._serviceWorkerRegistered) {
+    if (this._serviceWorkerRegistered || aForceCheck) {
       // This test registered at least one service worker. Send a synchronous
       // call to the parent to make sure that it called unregister on all of its
       // service workers.
@@ -825,14 +828,14 @@ export class SpecialPowersChild extends JSWindowActorChild {
    * This function should be used when specialpowers is in content process but
    * it want to get the notification from chrome space.
    *
-   * This function will call Services.obs.addObserver in SpecialPowersObserver
+   * This function will call Services.obs.addObserver in SpecialPowersParent
    * (that is in chrome process) and forward the data received to SpecialPowers
    * via messageManager.
    * You can use this._addMessageListener("specialpowers-YOUR_TOPIC") to fire
    * the callback.
    *
    * To get the expected data, you should modify
-   * SpecialPowersObserver.prototype._registerObservers.observe. Or the message
+   * SpecialPowersParent.prototype._registerObservers.observe. Or the message
    * you received from messageManager will only contain 'aData' from Service.obs.
    */
   registerObservers(topic) {
@@ -1136,15 +1139,6 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return Cc["@mozilla.org/satchel/form-fill-controller;1"].getService(
       Ci.nsIFormFillController
     );
-  }
-  attachFormFillControllerTo(window) {
-    this.getFormFillController().attachPopupElementToDocument(
-      window.document,
-      this._getAutoCompletePopup(window)
-    );
-  }
-  detachFormFillControllerFrom(window) {
-    this.getFormFillController().detachFromDocument(window.document);
   }
   isBackButtonEnabled(window) {
     return !this._getTopChromeWindow(window)
@@ -1741,6 +1735,24 @@ export class SpecialPowersChild extends JSWindowActorChild {
     Cc["@mozilla.org/widget/clipboardhelper;1"]
       .getService(Ci.nsIClipboardHelper)
       .copyString(str);
+  }
+
+  cleanupAllClipboard() {
+    // copied from widget/tests/clipboard_helper.js
+    // there is a write there I didn't want to copy
+    const clipboard = Services.clipboard;
+    const clipboardTypes = [
+      clipboard.kGlobalClipboard,
+      clipboard.kSelectionClipboard,
+      clipboard.kFindClipboard,
+      clipboard.kSelectionCache,
+    ];
+
+    clipboardTypes.forEach(function (type) {
+      if (clipboard.isClipboardTypeSupported(type)) {
+        clipboard.emptyClipboard(type);
+      }
+    });
   }
 
   supportsSelectionClipboard() {

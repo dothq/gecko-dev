@@ -1,8 +1,6 @@
 //! The `ResourceMetadata` type.
 
-use crate::resource::Resource;
 use bit_vec::BitVec;
-use std::{borrow::Cow, mem, sync::Arc};
 use wgt::strict_assert;
 
 /// A set of resources, holding a `Arc<T>` and epoch for each member.
@@ -13,15 +11,15 @@ use wgt::strict_assert;
 /// members, but a bit vector tracks occupancy, so iteration touches
 /// only occupied elements.
 #[derive(Debug)]
-pub(super) struct ResourceMetadata<T: Resource> {
+pub(super) struct ResourceMetadata<T: Clone> {
     /// If the resource with index `i` is a member, `owned[i]` is `true`.
     owned: BitVec<usize>,
 
     /// A vector holding clones of members' `T`s.
-    resources: Vec<Option<Arc<T>>>,
+    resources: Vec<Option<T>>,
 }
 
-impl<T: Resource> ResourceMetadata<T> {
+impl<T: Clone> ResourceMetadata<T> {
     pub(super) fn new() -> Self {
         Self {
             owned: BitVec::default(),
@@ -29,14 +27,14 @@ impl<T: Resource> ResourceMetadata<T> {
         }
     }
 
-    /// Returns the number of indices we can accommodate.
-    pub(super) fn size(&self) -> usize {
-        self.owned.len()
-    }
-
     pub(super) fn set_size(&mut self, size: usize) {
         self.resources.resize(size, None);
         resize_bitvec(&mut self.owned, size);
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.resources.clear();
+        self.owned.clear();
     }
 
     /// Ensures a given index is in bounds for all arrays and does
@@ -63,7 +61,7 @@ impl<T: Resource> ResourceMetadata<T> {
 
     /// Returns true if the set contains the resource with the given index.
     pub(super) fn contains(&self, index: usize) -> bool {
-        self.owned[index]
+        self.owned.get(index).unwrap_or(false)
     }
 
     /// Returns true if the set contains the resource with the given index.
@@ -82,16 +80,18 @@ impl<T: Resource> ResourceMetadata<T> {
     /// Add the resource with the given index, epoch, and reference count to the
     /// set.
     ///
+    /// Returns a reference to the newly inserted resource.
+    /// (This allows avoiding a clone/reference count increase in many cases.)
+    ///
     /// # Safety
     ///
     /// The given `index` must be in bounds for this `ResourceMetadata`'s
     /// existing tables. See `tracker_assert_in_bounds`.
     #[inline(always)]
-    pub(super) unsafe fn insert(&mut self, index: usize, resource: Arc<T>) {
+    pub(super) unsafe fn insert(&mut self, index: usize, resource: T) -> &T {
         self.owned.set(index, true);
-        unsafe {
-            *self.resources.get_unchecked_mut(index) = Some(resource);
-        }
+        let resource_dst = unsafe { self.resources.get_unchecked_mut(index) };
+        resource_dst.insert(resource)
     }
 
     /// Get the resource with the given index.
@@ -101,7 +101,7 @@ impl<T: Resource> ResourceMetadata<T> {
     /// The given `index` must be in bounds for this `ResourceMetadata`'s
     /// existing tables. See `tracker_assert_in_bounds`.
     #[inline(always)]
-    pub(super) unsafe fn get_resource_unchecked(&self, index: usize) -> &Arc<T> {
+    pub(super) unsafe fn get_resource_unchecked(&self, index: usize) -> &T {
         unsafe {
             self.resources
                 .get_unchecked(index)
@@ -110,19 +110,8 @@ impl<T: Resource> ResourceMetadata<T> {
         }
     }
 
-    /// Get the reference count of the resource with the given index.
-    ///
-    /// # Safety
-    ///
-    /// The given `index` must be in bounds for this `ResourceMetadata`'s
-    /// existing tables. See `tracker_assert_in_bounds`.
-    #[inline(always)]
-    pub(super) unsafe fn get_ref_count_unchecked(&self, index: usize) -> usize {
-        unsafe { Arc::strong_count(self.get_resource_unchecked(index)) }
-    }
-
     /// Returns an iterator over the resources owned by `self`.
-    pub(super) fn owned_resources(&self) -> impl Iterator<Item = Arc<T>> + '_ {
+    pub(super) fn owned_resources(&self) -> impl Iterator<Item = T> + '_ {
         if !self.owned.is_empty() {
             self.tracker_assert_in_bounds(self.owned.len() - 1)
         };
@@ -130,21 +119,6 @@ impl<T: Resource> ResourceMetadata<T> {
             let resource = unsafe { self.resources.get_unchecked(index) };
             resource.as_ref().unwrap().clone()
         })
-    }
-
-    /// Returns an iterator over the resources owned by `self`.
-    pub(super) fn drain_resources(&mut self) -> Vec<Arc<T>> {
-        if !self.owned.is_empty() {
-            self.tracker_assert_in_bounds(self.owned.len() - 1)
-        };
-        let mut resources = Vec::new();
-        iterate_bitvec_indices(&self.owned).for_each(|index| {
-            let resource = unsafe { self.resources.get_unchecked(index) };
-            resources.push(resource.as_ref().unwrap().clone());
-        });
-        self.owned.clear();
-        self.resources.clear();
-        resources
     }
 
     /// Returns an iterator over the indices of all resources owned by `self`.
@@ -168,28 +142,27 @@ impl<T: Resource> ResourceMetadata<T> {
 ///
 /// This is used to abstract over the various places
 /// trackers can get new resource metadata from.
-pub(super) enum ResourceMetadataProvider<'a, T: Resource> {
+pub(super) enum ResourceMetadataProvider<'a, T: Clone> {
     /// Comes directly from explicit values.
-    Direct { resource: Cow<'a, Arc<T>> },
+    Direct { resource: &'a T },
     /// Comes from another metadata tracker.
     Indirect { metadata: &'a ResourceMetadata<T> },
 }
-impl<T: Resource> ResourceMetadataProvider<'_, T> {
-    /// Get the epoch and an owned refcount from this.
+impl<T: Clone> ResourceMetadataProvider<'_, T> {
+    /// Get a reference to the resource from this.
     ///
     /// # Safety
     ///
     /// - The index must be in bounds of the metadata tracker if this uses an indirect source.
-    /// - info must be Some if this uses a Resource source.
     #[inline(always)]
-    pub(super) unsafe fn get_own(self, index: usize) -> Arc<T> {
+    pub(super) unsafe fn get(&self, index: usize) -> &T {
         match self {
-            ResourceMetadataProvider::Direct { resource } => resource.into_owned(),
+            ResourceMetadataProvider::Direct { resource } => resource,
             ResourceMetadataProvider::Indirect { metadata } => {
                 metadata.tracker_assert_in_bounds(index);
                 {
-                    let resource = unsafe { metadata.resources.get_unchecked(index) };
-                    unsafe { resource.clone().unwrap_unchecked() }
+                    let resource = unsafe { metadata.resources.get_unchecked(index) }.as_ref();
+                    unsafe { resource.unwrap_unchecked() }
                 }
             }
         }
@@ -212,7 +185,7 @@ fn resize_bitvec<B: bit_vec::BitBlock>(vec: &mut BitVec<B>, size: usize) {
 ///
 /// Will skip entire usize's worth of bits if they are all false.
 fn iterate_bitvec_indices(ownership: &BitVec<usize>) -> impl Iterator<Item = usize> + '_ {
-    const BITS_PER_BLOCK: usize = mem::size_of::<usize>() * 8;
+    const BITS_PER_BLOCK: usize = usize::BITS as usize;
 
     let size = ownership.len();
 

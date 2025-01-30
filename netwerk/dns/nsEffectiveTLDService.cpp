@@ -9,6 +9,7 @@
 // http://wiki.mozilla.org/Gecko:Effective_TLD_Service
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Components.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ResultExtensions.h"
@@ -20,7 +21,6 @@
 #include "nsCRT.h"
 #include "nsEffectiveTLDService.h"
 #include "nsIFile.h"
-#include "nsIIDNService.h"
 #include "nsIObserverService.h"
 #include "nsIURI.h"
 #include "nsNetCID.h"
@@ -56,12 +56,6 @@ nsresult nsEffectiveTLDService::Init() {
 
   if (gService) {
     return NS_ERROR_ALREADY_INITIALIZED;
-  }
-
-  nsresult rv;
-  mIDNService = do_GetService(NS_IDNSERVICE_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
-    return rv;
   }
 
   gService = this;
@@ -105,10 +99,7 @@ NS_IMETHODIMP nsEffectiveTLDService::Observe(nsISupports* aSubject,
 
 nsEffectiveTLDService::~nsEffectiveTLDService() {
   UnregisterWeakMemoryReporter(this);
-  if (mIDNService) {
-    // Only clear gService if Init() finished successfully.
-    gService = nullptr;
-  }
+  gService = nullptr;
 }
 
 // static
@@ -116,8 +107,8 @@ nsEffectiveTLDService* nsEffectiveTLDService::GetInstance() {
   if (gService) {
     return gService;
   }
-  nsCOMPtr<nsIEffectiveTLDService> tldService =
-      do_GetService(NS_EFFECTIVETLDSERVICE_CONTRACTID);
+  nsCOMPtr<nsIEffectiveTLDService> tldService;
+  tldService = mozilla::components::EffectiveTLD::Service();
   if (!tldService) {
     return nullptr;
   }
@@ -147,10 +138,6 @@ nsEffectiveTLDService::CollectReports(nsIHandleReportCallback* aHandleReport,
 size_t nsEffectiveTLDService::SizeOfIncludingThis(
     mozilla::MallocSizeOf aMallocSizeOf) {
   size_t n = aMallocSizeOf(this);
-
-  // Measurement of the following members may be added later if DMD finds it is
-  // worthwhile:
-  // - mIDNService
 
   return n;
 }
@@ -219,6 +206,23 @@ nsEffectiveTLDService::GetSchemelessSite(nsIURI* aURI, nsACString& aSite) {
   return rv;
 }
 
+// Variant of GetSchemelessSite which accepts a host string instead of a URI.
+NS_IMETHODIMP
+nsEffectiveTLDService::GetSchemelessSiteFromHost(const nsACString& aHostname,
+                                                 nsACString& aSite) {
+  NS_ENSURE_TRUE(!aHostname.IsEmpty(), NS_ERROR_FAILURE);
+
+  nsresult rv = GetBaseDomainFromHost(aHostname, 0, aSite);
+  if (rv == NS_ERROR_HOST_IS_IP_ADDRESS ||
+      rv == NS_ERROR_INSUFFICIENT_DOMAIN_LEVELS) {
+    aSite.Assign(aHostname);
+    nsContentUtils::MaybeFixIPv6Host(aSite);
+
+    return NS_OK;
+  }
+  return rv;
+}
+
 // External function for dealing with URIs to get site correctly.
 // Calls through to GetSchemelessSite(), and serializes with the scheme and
 // "://" prepended.
@@ -257,10 +261,9 @@ nsEffectiveTLDService::GetSite(nsIURI* aURI, nsACString& aSite) {
 NS_IMETHODIMP
 nsEffectiveTLDService::GetPublicSuffixFromHost(const nsACString& aHostname,
                                                nsACString& aPublicSuffix) {
-  // Create a mutable copy of the hostname and normalize it to ACE.
   // This will fail if the hostname includes invalid characters.
-  nsAutoCString normHostname(aHostname);
-  nsresult rv = NormalizeHostname(normHostname);
+  nsAutoCString normHostname;
+  nsresult rv = NS_DomainToASCIIAllowAnyGlyphfulASCII(aHostname, normHostname);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -271,10 +274,9 @@ nsEffectiveTLDService::GetPublicSuffixFromHost(const nsACString& aHostname,
 NS_IMETHODIMP
 nsEffectiveTLDService::GetKnownPublicSuffixFromHost(const nsACString& aHostname,
                                                     nsACString& aPublicSuffix) {
-  // Create a mutable copy of the hostname and normalize it to ACE.
   // This will fail if the hostname includes invalid characters.
-  nsAutoCString normHostname(aHostname);
-  nsresult rv = NormalizeHostname(normHostname);
+  nsAutoCString normHostname;
+  nsresult rv = NS_DomainToASCIIAllowAnyGlyphfulASCII(aHostname, normHostname);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -291,10 +293,9 @@ nsEffectiveTLDService::GetBaseDomainFromHost(const nsACString& aHostname,
                                              nsACString& aBaseDomain) {
   NS_ENSURE_TRUE(((int32_t)aAdditionalParts) >= 0, NS_ERROR_INVALID_ARG);
 
-  // Create a mutable copy of the hostname and normalize it to ACE.
   // This will fail if the hostname includes invalid characters.
-  nsAutoCString normHostname(aHostname);
-  nsresult rv = NormalizeHostname(normHostname);
+  nsAutoCString normHostname;
+  nsresult rv = NS_DomainToASCIIAllowAnyGlyphfulASCII(aHostname, normHostname);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -306,11 +307,12 @@ nsEffectiveTLDService::GetBaseDomainFromHost(const nsACString& aHostname,
 NS_IMETHODIMP
 nsEffectiveTLDService::GetNextSubDomain(const nsACString& aHostname,
                                         nsACString& aBaseDomain) {
-  // Create a mutable copy of the hostname and normalize it to ACE.
   // This will fail if the hostname includes invalid characters.
-  nsAutoCString normHostname(aHostname);
-  nsresult rv = NormalizeHostname(normHostname);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsAutoCString normHostname;
+  nsresult rv = NS_DomainToASCIIAllowAnyGlyphfulASCII(aHostname, normHostname);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   return GetBaseDomainInternal(normHostname, -1, false, aBaseDomain);
 }
@@ -496,23 +498,70 @@ nsresult nsEffectiveTLDService::GetBaseDomainInternal(
   return NS_OK;
 }
 
-// Normalizes the given hostname, component by component.  ASCII/ACE
-// components are lower-cased, and UTF-8 components are normalized per
-// RFC 3454 and converted to ACE.
-nsresult nsEffectiveTLDService::NormalizeHostname(nsCString& aHostname) {
-  if (!IsAscii(aHostname)) {
-    nsresult rv = mIDNService->ConvertUTF8toACE(aHostname, aHostname);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-  ToLowerCase(aHostname);
-  return NS_OK;
-}
-
 NS_IMETHODIMP
 nsEffectiveTLDService::HasRootDomain(const nsACString& aInput,
                                      const nsACString& aHost, bool* aResult) {
   return net::HasRootDomain(aInput, aHost, aResult);
+}
+
+NS_IMETHODIMP
+nsEffectiveTLDService::HasKnownPublicSuffix(nsIURI* aURI, bool* aResult) {
+  NS_ENSURE_ARG_POINTER(aURI);
+
+  nsAutoCString host;
+  nsresult rv = NS_GetInnermostURIHost(aURI, host);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  return HasKnownPublicSuffixFromHost(host, aResult);
+}
+
+NS_IMETHODIMP
+nsEffectiveTLDService::HasKnownPublicSuffixFromHost(const nsACString& aHostname,
+                                                    bool* aResult) {
+  // Create a mutable copy of the hostname and normalize it to ACE.
+  // This will fail if the hostname includes invalid characters.
+  nsAutoCString hostname;
+  nsresult rv = NS_DomainToASCIIAllowAnyGlyphfulASCII(aHostname, hostname);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  if (hostname.IsEmpty() || hostname == ".") {
+    return NS_ERROR_INSUFFICIENT_DOMAIN_LEVELS;
+  }
+
+  // Remove any trailing dot ("example.com." should have a valid suffix)
+  if (hostname.Last() == '.') {
+    hostname.Truncate(hostname.Length() - 1);
+  }
+
+  AutoReadLock lock(mGraphLock);
+
+  // Check if we can find a suffix on the PSL. Start with the top level domain
+  // (for example "com" in "example.com"). If that isn't on the PSL, continue to
+  // add domain segments from the end (for example for "example.co.za", "za" is
+  // not on the PSL, but "co.za" is).
+  int32_t dotBeforeSuffix = -1;
+  int8_t i = 0;
+  do {
+    dotBeforeSuffix = Substring(hostname, 0, dotBeforeSuffix).RFindChar('.');
+
+    const nsACString& suffix = Substring(
+        hostname, dotBeforeSuffix == kNotFound ? 0 : dotBeforeSuffix + 1);
+
+    if (mGraph->Lookup(suffix) != Dafsa::kKeyNotFound) {
+      *aResult = true;
+      return NS_OK;
+    }
+
+    // To save time, only check up to 9 segments. We can be certain at that
+    // point that the PSL doesn't contain a suffix with that many segments if we
+    // didn't find a suffix earlier.
+    i++;
+  } while (dotBeforeSuffix != kNotFound && i < 10);
+
+  *aResult = false;
+  return NS_OK;
 }

@@ -59,12 +59,31 @@ XPCOMUtils.defineLazyPreferenceGetter(
   90
 );
 
+// This pref stores whether recalculation should be faster.
+// It is set when we detect that a lot of changes happened recently, and it
+// will survive restarts. Once there's nothing left to recalculate, we unset
+// the pref and return to the normal recalculation rate.
+// Note this getter transforms the boolean pref value into an integer
+// acceleration rate.
+const PREF_ACCELERATE_RECALCULATION = "places.frecency.accelerateRecalculation";
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "accelerationRate",
+  PREF_ACCELERATE_RECALCULATION,
+  false,
+  null,
+  accelerate => (accelerate ? 2 : 1)
+);
+
 // Time between deferred task executions.
 const DEFERRED_TASK_INTERVAL_MS = 2 * 60000;
 // Maximum time to wait for an idle before the task is executed anyway.
 const DEFERRED_TASK_MAX_IDLE_WAIT_MS = 5 * 60000;
 // Number of entries to update at once.
 const DEFAULT_CHUNK_SIZE = 50;
+// Threshold used to evaluate whether the number of Places events from the last
+// recalculation is high enough to deserve a recalculation rate increase.
+const ACCELERATION_EVENTS_THRESHOLD = 250;
 
 export class PlacesFrecencyRecalculator {
   classID = Components.ID("1141fd31-4c1a-48eb-8f1a-2f05fad94085");
@@ -79,6 +98,14 @@ export class PlacesFrecencyRecalculator {
    * This allows to manager alternative ranking algorithms to experiment with.
    */
   #alternativeFrecencyHelper = null;
+
+  /**
+   * Tracks whether the recalculator was finalized, usually due to shutdown.
+   * We use this explicit boolean rather than checking for a null `#task`
+   * because, due to async behavior, `#task` could be resurrected by
+   * `#createOrUpdateTask`.
+   */
+  #finalized = false;
 
   /**
    * This is useful for testing.
@@ -98,18 +125,16 @@ export class PlacesFrecencyRecalculator {
     // Do not initialize during shutdown.
     if (
       Services.startup.isInOrBeyondShutdownPhase(
-        Ci.nsIAppStartup.SHUTDOWN_PHASE_APPSHUTDOWNTEARDOWN
+        Ci.nsIAppStartup.SHUTDOWN_PHASE_APPSHUTDOWNCONFIRMED
       )
     ) {
+      this.#finalized = true;
       return;
     }
 
-    this.#task = new lazy.DeferredTask(
-      this.#taskFn.bind(this),
-      DEFERRED_TASK_INTERVAL_MS,
-      DEFERRED_TASK_MAX_IDLE_WAIT_MS
-    );
-    lazy.AsyncShutdown.profileChangeTeardown.addBlocker(
+    this.#createOrUpdateTask();
+
+    lazy.AsyncShutdown.quitApplicationGranted.addBlocker(
       "PlacesFrecencyRecalculator: shutdown",
       () => this.#finalize()
     );
@@ -131,6 +156,26 @@ export class PlacesFrecencyRecalculator {
     // Run once on startup, so we pick up any leftover work.
     lazy.PlacesUtils.history.shouldStartFrecencyRecalculation = true;
     this.maybeStartFrecencyRecalculation();
+  }
+
+  #createOrUpdateTask() {
+    if (this.#finalized) {
+      lazy.logger.trace(`Not resurrecting #task because finalized`);
+      return;
+    }
+    let wasArmed = this.#task?.isArmed;
+    if (this.#task) {
+      this.#task.disarm();
+      this.#task.finalize().catch(console.error);
+    }
+    this.#task = new lazy.DeferredTask(
+      this.#taskFn.bind(this),
+      DEFERRED_TASK_INTERVAL_MS / lazy.accelerationRate,
+      DEFERRED_TASK_MAX_IDLE_WAIT_MS / lazy.accelerationRate
+    );
+    if (wasArmed) {
+      this.#task.arm();
+    }
   }
 
   async #taskFn() {
@@ -159,6 +204,41 @@ export class PlacesFrecencyRecalculator {
     // next session.
     this.#task.disarm();
     this.#task.finalize().catch(console.error);
+    this.#finalized = true;
+  }
+
+  #lastEventsCount = 0;
+
+  /**
+   * Evaluates whether recalculation speed should be increased, and eventually
+   * accelerates.
+   * @returns {boolean} whether the recalculation rate is increased.
+   */
+  maybeUpdateRecalculationSpeed() {
+    if (lazy.accelerationRate > 1) {
+      return true;
+    }
+    // We mostly care about additions to cover the common case of importing
+    // bookmarks or history. We may care about removals, but in most cases they
+    // reduce the number of entries to recalculate.
+    let eventsCount =
+      PlacesObservers.counts.get("page-visited") +
+      PlacesObservers.counts.get("bookmark-added");
+    let accelerate =
+      eventsCount - this.#lastEventsCount > ACCELERATION_EVENTS_THRESHOLD;
+    if (accelerate) {
+      Services.prefs.setBoolPref(PREF_ACCELERATE_RECALCULATION, true);
+      this.#createOrUpdateTask();
+    }
+    this.#lastEventsCount = eventsCount;
+    return accelerate;
+  }
+
+  #resetRecalculationSpeed() {
+    if (lazy.accelerationRate > 1) {
+      Services.prefs.clearUserPref(PREF_ACCELERATE_RECALCULATION);
+      this.#createOrUpdateTask();
+    }
   }
 
   /**
@@ -169,6 +249,8 @@ export class PlacesFrecencyRecalculator {
    * @resolves {boolean} Whether any entry was recalculated.
    */
   async recalculateSomeFrecencies({ chunkSize = DEFAULT_CHUNK_SIZE } = {}) {
+    // In case of acceleration we don't bump up the chunkSize to avoid issues
+    // with slow disk systems.
     lazy.logger.trace(
       `Recalculate ${chunkSize >= 0 ? chunkSize : "infinite"} frecency values`
     );
@@ -182,7 +264,7 @@ export class PlacesFrecencyRecalculator {
         WHERE id IN (
           SELECT id FROM moz_places
           WHERE recalc_frecency = 1
-          ORDER BY frecency DESC
+          ORDER BY frecency DESC, visit_count DESC
           LIMIT ${chunkSize}
         )
         RETURNING id`
@@ -212,8 +294,10 @@ export class PlacesFrecencyRecalculator {
 
     if (chunkSize > 0 && shouldRestartRecalculation) {
       // There's more entries to recalculate, rearm the task.
+      this.maybeUpdateRecalculationSpeed();
       this.#task.arm();
     } else {
+      this.#resetRecalculationSpeed();
       // There's nothing left to recalculate, wait for the next change.
       lazy.PlacesUtils.history.shouldStartFrecencyRecalculation = false;
       this.#task.disarm();
@@ -350,6 +434,10 @@ export class PlacesFrecencyRecalculator {
 
   observe(subject, topic) {
     lazy.logger.trace(`Got ${topic} topic`);
+    if (this.#finalized) {
+      lazy.logger.trace(`Ignoring topic because finalized`);
+      return;
+    }
     switch (topic) {
       case "idle-daily":
         this.pendingFrecencyDecayPromise = this.decay();
@@ -360,6 +448,7 @@ export class PlacesFrecencyRecalculator {
         return;
       case "frecency-recalculation-needed":
         lazy.logger.trace("Frecency recalculation requested");
+        this.maybeUpdateRecalculationSpeed();
         this.maybeStartFrecencyRecalculation();
         return;
       case "test-execute-taskFn":

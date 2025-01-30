@@ -20,6 +20,8 @@ add_task(async function test_translations_panel_switch_language() {
   await FullPageTranslationsTestUtils.assertPageIsUntranslated(runInPage);
 
   await FullPageTranslationsTestUtils.openPanel({
+    expectedFromLanguage: "es",
+    expectedToLanguage: "en",
     onOpenPanel: FullPageTranslationsTestUtils.assertPanelViewDefault,
   });
 
@@ -27,32 +29,39 @@ add_task(async function test_translations_panel_switch_language() {
 
   ok(!translateButton.disabled, "The translate button starts as enabled");
 
-  FullPageTranslationsTestUtils.assertSelectedFromLanguage({ langTag: "es" });
-  FullPageTranslationsTestUtils.assertSelectedToLanguage({ langTag: "en" });
-
-  FullPageTranslationsTestUtils.switchSelectedFromLanguage("en");
+  await FullPageTranslationsTestUtils.changeSelectedFromLanguage({
+    langTag: "en",
+  });
 
   ok(
     translateButton.disabled,
     "The translate button is disabled when the languages are the same"
   );
 
-  FullPageTranslationsTestUtils.switchSelectedFromLanguage("es");
+  await FullPageTranslationsTestUtils.changeSelectedFromLanguage({
+    langTag: "es",
+  });
 
   ok(
     !translateButton.disabled,
     "When the languages are different it can be translated"
   );
 
-  FullPageTranslationsTestUtils.switchSelectedFromLanguage("");
+  await FullPageTranslationsTestUtils.changeSelectedFromLanguage({
+    langTag: "",
+  });
 
   ok(
     translateButton.disabled,
     "The translate button is disabled nothing is selected."
   );
 
-  FullPageTranslationsTestUtils.switchSelectedFromLanguage("en");
-  FullPageTranslationsTestUtils.switchSelectedToLanguage("fr");
+  await FullPageTranslationsTestUtils.changeSelectedFromLanguage({
+    langTag: "en",
+  });
+  await FullPageTranslationsTestUtils.changeSelectedToLanguage({
+    langTag: "fr",
+  });
 
   ok(!translateButton.disabled, "The translate button can now be used");
 
@@ -60,11 +69,11 @@ add_task(async function test_translations_panel_switch_language() {
     downloadHandler: resolveDownloads,
   });
 
-  await FullPageTranslationsTestUtils.assertPageIsTranslated(
-    "en",
-    "fr",
-    runInPage
-  );
+  await FullPageTranslationsTestUtils.assertPageIsTranslated({
+    fromLanguage: "en",
+    toLanguage: "fr",
+    runInPage,
+  });
 
   await cleanup();
 });

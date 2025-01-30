@@ -11,6 +11,8 @@
 #  include "nsCocoaFeatures.h"
 #endif
 #include "PathSkia.h"
+#include "skia/include/core/SkFont.h"
+#include "skia/include/core/SkFontTypes.h"
 #include "skia/include/core/SkPaint.h"
 #include "skia/include/core/SkPath.h"
 #include "skia/include/ports/SkTypeface_mac.h"
@@ -288,7 +290,7 @@ bool UnscaledFontMac::GetFontFileData(FontFileDataOutput aDataCallback,
   bool CFF = false;
   for (CFIndex i = 0; i < count; i++) {
     uint32_t tag = (uint32_t)(uintptr_t)CFArrayGetValueAtIndex(tags, i);
-    if (tag == 0x43464620) {  // 'CFF '
+    if (tag == 0x43464620 || tag == 0x43464632) {  // 'CFF ', 'CFF2'
       CFF = true;
     }
     CFDataRef data = CGFontCopyTableForTag(mFont, tag);
@@ -466,7 +468,7 @@ bool ScaledFontMac::GetWRFontInstanceOptions(
     std::vector<FontVariation>* aOutVariations) {
   GetVariationsForCTFont(mCTFont, aOutVariations);
 
-  wr::FontInstanceOptions options;
+  wr::FontInstanceOptions options = {};
   options.render_mode = wr::FontRenderMode::Subpixel;
   options.flags = wr::FontInstanceFlags::SUBPIXEL_POSITION;
   if (mUseFontSmoothing) {
@@ -591,8 +593,7 @@ static CFDictionaryRef CreateVariationDictionaryOrNull(
     double value = defDouble;
     for (uint32_t j = 0; j < aVariationCount; ++j) {
       if (aVariations[j].mTag == tagLong) {
-        value = std::min(std::max<double>(aVariations[j].mValue, minDouble),
-                         maxDouble);
+        value = std::clamp<double>(aVariations[j].mValue, minDouble, maxDouble);
         if (value != defDouble) {
           allDefaultValues = false;
         }
@@ -674,8 +675,7 @@ static CFDictionaryRef CreateVariationTagDictionaryOrNull(
     double value = defDouble;
     for (uint32_t j = 0; j < aVariationCount; ++j) {
       if (aVariations[j].mTag == tagLong) {
-        value = std::min(std::max<double>(aVariations[j].mValue, minDouble),
-                         maxDouble);
+        value = std::clamp<double>(aVariations[j].mValue, minDouble, maxDouble);
         if (value != defDouble) {
           allDefaultValues = false;
         }

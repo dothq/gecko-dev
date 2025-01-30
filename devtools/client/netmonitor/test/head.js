@@ -125,6 +125,8 @@ const OPEN_REQUEST_IN_TAB_URL = EXAMPLE_URL + "html_open-request-in-tab.html";
 const CSP_URL = EXAMPLE_URL + "html_csp-test-page.html";
 const CSP_RESEND_URL = EXAMPLE_URL + "html_csp-resend-test-page.html";
 const IMAGE_CACHE_URL = HTTPS_EXAMPLE_URL + "html_image-cache.html";
+const STYLESHEET_CACHE_URL = HTTPS_EXAMPLE_URL + "html_stylesheet-cache.html";
+const SCRIPT_CACHE_URL = HTTPS_EXAMPLE_URL + "html_script-cache.html";
 const SLOW_REQUESTS_URL = EXAMPLE_URL + "html_slow-requests-test-page.html";
 
 const SIMPLE_SJS = EXAMPLE_URL + "sjs_simple-test-server.sjs";
@@ -321,6 +323,7 @@ function initNetMonitor(
     expectedEventTimings,
     waitForLoad = true,
     enableCache = false,
+    openInPrivateWindow = false,
   }
 ) {
   info("Initializing a network monitor pane.");
@@ -333,15 +336,22 @@ function initNetMonitor(
   }
 
   return (async function () {
-    await SpecialPowers.pushPrefEnv({
-      set: [
-        // Capture all stacks so that the timing of devtools opening
-        // doesn't affect the stack trace results.
-        ["javascript.options.asyncstack_capture_debuggee_only", false],
-      ],
-    });
+    let tab = null;
+    let privateWindow = null;
 
-    const tab = await addTab(url, { waitForLoad });
+    if (openInPrivateWindow) {
+      privateWindow = await BrowserTestUtils.openNewBrowserWindow({
+        private: true,
+      });
+      ok(
+        PrivateBrowsingUtils.isContentWindowPrivate(privateWindow),
+        "window is private"
+      );
+      tab = BrowserTestUtils.addTab(privateWindow.gBrowser, url);
+    } else {
+      tab = await addTab(url, { waitForLoad });
+    }
+
     info("Net tab added successfully: " + url);
 
     const toolbox = await gDevTools.showToolboxForTab(tab, {
@@ -371,7 +381,7 @@ function initNetMonitor(
       await clearNetworkEvents(monitor);
     }
 
-    return { tab, monitor, toolbox };
+    return { tab, monitor, toolbox, privateWindow };
   })();
 }
 
@@ -405,10 +415,10 @@ async function clearNetworkEvents(monitor) {
   await waitForAllNetworkUpdateEvents();
 
   info("Clearing the network requests in the UI");
-  store.dispatch(Actions.clearRequests());
+  store.dispatch(Actions.clearRequests({ isExplicitClear: true }));
 }
 
-function teardown(monitor) {
+function teardown(monitor, privateWindow) {
   info("Destroying the specified network monitor.");
 
   return (async function () {
@@ -419,6 +429,12 @@ function teardown(monitor) {
 
     await monitor.toolbox.destroy();
     await removeTab(tab);
+
+    if (privateWindow) {
+      const closed = BrowserTestUtils.windowClosed(privateWindow);
+      privateWindow.BrowserCommands.tryToCloseWindow();
+      await closed;
+    }
   })();
 }
 
@@ -437,20 +453,26 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
   return new Promise(resolve => {
     const panel = monitor.panelWin;
     let networkEvent = 0;
-    let nonBlockedNetworkEvent = 0;
     let payloadReady = 0;
     let eventTimings = 0;
+
+    // Use a set to monitor blocked events, because a network resource might
+    // only receive its blockedReason in onPayloadReady.
+    let nonBlockedNetworkEvents = new Set();
 
     function onNetworkEvent(resource) {
       networkEvent++;
       if (!resource.blockedReason) {
-        nonBlockedNetworkEvent++;
+        nonBlockedNetworkEvents.add(resource.actor);
       }
       maybeResolve(TEST_EVENTS.NETWORK_EVENT, resource.actor);
     }
 
     function onPayloadReady(resource) {
       payloadReady++;
+      if (resource.blockedReason) {
+        nonBlockedNetworkEvents.delete(resource.actor);
+      }
       maybeResolve(EVENTS.PAYLOAD_READY, resource.actor);
     }
 
@@ -462,7 +484,7 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
     function onClearNetworkResources() {
       // Reset all counters.
       networkEvent = 0;
-      nonBlockedNetworkEvent = 0;
+      nonBlockedNetworkEvents = new Set();
       payloadReady = 0;
       eventTimings = 0;
     }
@@ -474,7 +496,7 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
       // * hidden in background,
       // * for any blocked request,
       let expectedEventTimings =
-        document.visibilityState == "hidden" ? 0 : nonBlockedNetworkEvent;
+        document.visibilityState == "hidden" ? 0 : nonBlockedNetworkEvents.size;
       let expectedPayloadReady = getRequests;
       // Typically ignore this option if it is undefined or null
       if (typeof options?.expectedEventTimings == "number") {
@@ -1288,7 +1310,7 @@ function validateRequests(requests, monitor, options = {}) {
  * Retrieve the context menu element corresponding to the provided id, for the provided
  * netmonitor instance.
  * @param {Object} monitor
- *        The network monnitor object
+ *        The network monitor object
  * @param {String} id
  *        The id of the context menu item
  */
@@ -1317,7 +1339,7 @@ async function maybeOpenAncestorMenu(menuItem) {
  * Selects and clicks the context menu item, it should
  * also wait for the popup to close.
  * @param {Object} monitor
- *        The network monnitor object
+ *        The network monitor object
  * @param {String} id
  *        The id of the context menu item
  */
@@ -1547,4 +1569,39 @@ async function waitForEagerEvaluationResult(hud, text) {
     return false;
   });
   ok(true, `Got eager evaluation result ${text}`);
+}
+
+/**
+ * Assert the contents of the filter urls autocomplete box
+ *
+ * @param {Array} expected
+ * @param {Object} document
+ */
+function testAutocompleteContents(expected, document) {
+  expected.forEach(function (item, i) {
+    is(
+      document.querySelector(
+        `.devtools-autocomplete-listbox .autocomplete-item:nth-child(${i + 1})`
+      ).textContent,
+      item,
+      `${expected[i]} found`
+    );
+  });
+}
+
+/**
+ * Check if a valid numerical size is displayed in the request column for the
+ * provided request.
+ *
+ * @param {Element} request
+ *     A request element from the netmonitor requests list.
+ * @return {boolean}
+ *     True if the size column contains a valid size, false otherwise.
+ *
+ */
+function hasValidSize(request) {
+  const VALID_SIZE_RE = /^\d+(\.\d+)? \w+/;
+  return VALID_SIZE_RE.test(
+    request.querySelector(".requests-list-size").innerText
+  );
 }

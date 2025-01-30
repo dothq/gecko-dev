@@ -219,17 +219,17 @@ TextEditor::InsertLineFeedCharacterAtSelection() {
 
   // Insert a linefeed character.
   Result<InsertTextResult, nsresult> insertTextResult =
-      InsertTextWithTransaction(*document, u"\n"_ns, pointToInsert);
+      InsertTextWithTransaction(*document, u"\n"_ns, pointToInsert,
+                                InsertTextTo::ExistingTextNodeIfAvailable);
   if (MOZ_UNLIKELY(insertTextResult.isErr())) {
     NS_WARNING("TextEditor::InsertTextWithTransaction(\"\\n\") failed");
     return insertTextResult.propagateErr();
   }
   insertTextResult.inspect().IgnoreCaretPointSuggestion();
-  EditorDOMPoint pointToPutCaret = insertTextResult.inspect().Handled()
-                                       ? insertTextResult.inspect()
-                                             .EndOfInsertedTextRef()
-                                             .To<EditorDOMPoint>()
-                                       : pointToInsert;
+  EditorDOMPoint pointToPutCaret =
+      insertTextResult.inspect().Handled()
+          ? insertTextResult.inspect().EndOfInsertedTextRef()
+          : pointToInsert;
   if (NS_WARN_IF(!pointToPutCaret.IsSetAndValid())) {
     return Err(NS_ERROR_FAILURE);
   }
@@ -461,7 +461,8 @@ Result<EditActionResult, nsresult> TextEditor::HandleInsertText(
     }
     Result<InsertTextResult, nsresult> insertTextResult =
         InsertTextWithTransaction(*document, insertionString,
-                                  compositionStartPoint);
+                                  compositionStartPoint,
+                                  InsertTextTo::ExistingTextNodeIfAvailable);
     if (MOZ_UNLIKELY(insertTextResult.isErr())) {
       NS_WARNING("EditorBase::InsertTextWithTransaction() failed");
       return insertTextResult.propagateErr();
@@ -482,7 +483,8 @@ Result<EditActionResult, nsresult> TextEditor::HandleInsertText(
 
     Result<InsertTextResult, nsresult> insertTextResult =
         InsertTextWithTransaction(*document, insertionString,
-                                  atStartOfSelection);
+                                  atStartOfSelection,
+                                  InsertTextTo::ExistingTextNodeIfAvailable);
     if (MOZ_UNLIKELY(insertTextResult.isErr())) {
       NS_WARNING("EditorBase::InsertTextWithTransaction() failed");
       return insertTextResult.propagateErr();
@@ -495,9 +497,8 @@ Result<EditActionResult, nsresult> TextEditor::HandleInsertText(
       // a LF, in which case make the caret attach to the next line.
       const bool endsWithLF =
           !insertionString.IsEmpty() && insertionString.Last() == nsCRT::LF;
-      EditorDOMPoint pointToPutCaret = insertTextResult.inspect()
-                                           .EndOfInsertedTextRef()
-                                           .To<EditorDOMPoint>();
+      EditorDOMPoint pointToPutCaret =
+          insertTextResult.inspect().EndOfInsertedTextRef();
       pointToPutCaret.SetInterlinePosition(
           endsWithLF ? InterlinePosition::StartOfNextLine
                      : InterlinePosition::EndOfLine);

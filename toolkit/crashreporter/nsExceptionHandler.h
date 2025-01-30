@@ -15,6 +15,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 #include "CrashAnnotations.h"
 
@@ -46,6 +47,26 @@ namespace CrashReporter {
 
 using mozilla::Maybe;
 using mozilla::Nothing;
+
+#if defined(XP_WIN)
+typedef HANDLE ProcessHandle;
+typedef DWORD ProcessId;
+typedef DWORD ThreadId;
+typedef HANDLE FileHandle;
+const FileHandle kInvalidFileHandle = INVALID_HANDLE_VALUE;
+#elif defined(XP_MACOSX)
+typedef task_t ProcessHandle;
+typedef pid_t ProcessId;
+typedef mach_port_t ThreadId;
+typedef int FileHandle;
+const FileHandle kInvalidFileHandle = -1;
+#else
+typedef int ProcessHandle;
+typedef pid_t ProcessId;
+typedef int ThreadId;
+typedef int FileHandle;
+const FileHandle kInvalidFileHandle = -1;
+#endif
 
 /**
  * Returns true if the crash reporter is using the dummy implementation.
@@ -151,7 +172,7 @@ nsresult UnregisterAppMemory(void* ptr);
 // Include heap regions of the crash context.
 void SetIncludeContextHeap(bool aValue);
 
-void GetAnnotation(uint32_t childPid, Annotation annotation,
+void GetAnnotation(ProcessId childPid, Annotation annotation,
                    nsACString& outStr);
 
 // Functions for working with minidumps and .extras
@@ -209,11 +230,9 @@ void OOPInit();
 // Return true if a dump was found for |childPid|, and return the
 // path in |dump|.  The caller owns the last reference to |dump| if it
 // is non-nullptr. The annotations for the crash will be stored in
-// |aAnnotations|. The sequence parameter will be filled with an ordinal
-// indicating which remote process crashed first.
-bool TakeMinidumpForChild(uint32_t childPid, nsIFile** dump,
-                          AnnotationTable& aAnnotations,
-                          uint32_t* aSequence = nullptr);
+// |aAnnotations|.
+bool TakeMinidumpForChild(ProcessId childPid, nsIFile** dump,
+                          AnnotationTable& aAnnotations);
 
 /**
  * If a dump was found for |childPid| then write a minimal .extra file to
@@ -226,29 +245,9 @@ bool TakeMinidumpForChild(uint32_t childPid, nsIFile** dump,
  * @param aType The type of the crashed process
  * @param aDumpId A string that will be filled with the dump ID
  */
-[[nodiscard]] bool FinalizeOrphanedMinidump(uint32_t aChildPid,
+[[nodiscard]] bool FinalizeOrphanedMinidump(ProcessId aChildPid,
                                             GeckoProcessType aType,
                                             nsString* aDumpId = nullptr);
-
-#if defined(XP_WIN)
-typedef HANDLE ProcessHandle;
-typedef DWORD ProcessId;
-typedef DWORD ThreadId;
-typedef HANDLE FileHandle;
-const FileHandle kInvalidFileHandle = INVALID_HANDLE_VALUE;
-#elif defined(XP_MACOSX)
-typedef task_t ProcessHandle;
-typedef pid_t ProcessId;
-typedef mach_port_t ThreadId;
-typedef int FileHandle;
-const FileHandle kInvalidFileHandle = -1;
-#else
-typedef int ProcessHandle;
-typedef pid_t ProcessId;
-typedef int ThreadId;
-typedef int FileHandle;
-const FileHandle kInvalidFileHandle = -1;
-#endif
 
 // Return the current thread's ID.
 //
@@ -281,55 +280,17 @@ bool CreateMinidumpsAndPair(ProcessHandle aTargetPid,
                             nsIFile** aTargetDumpOut);
 
 #if defined(XP_WIN) || defined(XP_MACOSX)
-// Parent-side API for children
-const char* GetChildNotificationPipe();
-
-#  ifdef MOZ_CRASHREPORTER_INJECTOR
-// Inject a crash report client into an arbitrary process, and inform the
-// callback object when it crashes. Parent process only.
-
-class InjectorCrashCallback {
- public:
-  InjectorCrashCallback() {}
-
-  /**
-   * Inform the callback of a crash. The client code should call
-   * TakeMinidumpForChild to remove it from the PID mapping table.
-   *
-   * The callback will not be fired if the client has already called
-   * TakeMinidumpForChild for this process ID.
-   */
-  virtual void OnCrash(DWORD processID) = 0;
-};
-
-// This method implies OOPInit
-void InjectCrashReporterIntoProcess(DWORD processID, InjectorCrashCallback* cb);
-void UnregisterInjectorCallback(DWORD processID);
-#  endif
+using CrashPipeType = const char*;
 #else
+using CrashPipeType = mozilla::UniqueFileHandle;
+#endif
+
 // Parent-side API for children
-
-// Set the outparams for crash reporter server's fd (|childCrashFd|)
-// and the magic fd number it should be remapped to
-// (|childCrashRemapFd|) before exec() in the child process.
-// |SetRemoteExceptionHandler()| in the child process expects to find
-// the server at |childCrashRemapFd|.  Return true if successful.
-//
-// If crash reporting is disabled, both outparams will be set to -1
-// and |true| will be returned.
-bool CreateNotificationPipeForChild(int* childCrashFd, int* childCrashRemapFd);
-
-#endif  // XP_WIN
+CrashPipeType GetChildNotificationPipe();
 
 // Child-side API
-bool SetRemoteExceptionHandler(const char* aCrashPipe = nullptr);
+bool SetRemoteExceptionHandler(CrashPipeType aCrashPipe);
 bool UnsetRemoteExceptionHandler(bool wasSet = true);
-
-#if defined(MOZ_WIDGET_ANDROID)
-// Android creates child process as services so we must explicitly set
-// the handle for the pipe since it can't get remapped to a default value.
-void SetNotificationPipeForChild(FileHandle childCrashFd);
-#endif
 
 }  // namespace CrashReporter
 

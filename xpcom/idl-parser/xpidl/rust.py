@@ -363,10 +363,6 @@ def print_rust_bindings(idl, fd, relpath):
 
         if p.kind == "typedef":
             try:
-                # Skip bool and C++ stdint typedefs marked with [substitute].
-                if p.substitute:
-                    continue
-
                 if printdoccomments:
                     fd.write(
                         "/// `typedef %s %s;`\n///\n"
@@ -592,7 +588,7 @@ def write_interface(iface, fd):
 
     entries = []
     for member in iface.members:
-        if type(member) == xpidl.Attribute:
+        if type(member) is xpidl.Attribute:
             entries.append(
                 vtable_entry_tmpl
                 % {
@@ -609,7 +605,7 @@ def write_interface(iface, fd):
                     }
                 )
 
-        elif type(member) == xpidl.Method:
+        elif type(member) is xpidl.Method:
             entries.append(
                 vtable_entry_tmpl
                 % {
@@ -630,7 +626,7 @@ def write_interface(iface, fd):
     # Get all of the constants
     consts = []
     for member in iface.members:
-        if type(member) == xpidl.ConstMember:
+        if type(member) is xpidl.ConstMember:
             consts.append(
                 const_wrapper_tmpl
                 % {
@@ -640,7 +636,7 @@ def write_interface(iface, fd):
                     "val": member.getValue(),
                 }
             )
-        if type(member) == xpidl.CEnum:
+        if type(member) is xpidl.CEnum:
             for var in member.variants:
                 consts.append(
                     const_wrapper_tmpl
@@ -654,7 +650,7 @@ def write_interface(iface, fd):
 
     methods = []
     for member in iface.members:
-        if type(member) == xpidl.Attribute:
+        if type(member) is xpidl.Attribute:
             methods.append(
                 method_wrapper_tmpl
                 % {
@@ -673,7 +669,7 @@ def write_interface(iface, fd):
                     }
                 )
 
-        elif type(member) == xpidl.Method:
+        elif type(member) is xpidl.Method:
             methods.append(
                 method_wrapper_tmpl
                 % {

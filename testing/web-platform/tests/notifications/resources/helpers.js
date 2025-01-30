@@ -30,6 +30,16 @@ async function trySettingPermission(perm) {
   // Notification.permission.
   const permission = Notification.permission === "default" ? "prompt" : Notification.permission;
   if (permission !== perm) {
-    throw new Error(`Should have the permission ${perm} to continue`);
+    throw new Error(`Should have the permission ${perm} to continue but found ${permission}`);
   }
+}
+
+// Use this in service workers where activation is required e.g. when testing showNotification()
+async function untilActivate() {
+  if (registration.active) {
+    return;
+  }
+  return new Promise(resolve => {
+    addEventListener("activate", resolve, { once: true });
+  });
 }

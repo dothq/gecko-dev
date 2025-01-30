@@ -22,6 +22,7 @@ class nsSliderFrame;
 namespace mozilla {
 class nsDisplaySliderMarks;
 class PresShell;
+class ScrollContainerFrame;
 }  // namespace mozilla
 
 nsIFrame* NS_NewSliderFrame(mozilla::PresShell* aPresShell,
@@ -152,8 +153,9 @@ class nsSliderFrame final : public nsContainerFrame {
 
   bool OnlySystemGroupDispatch(mozilla::EventMessage aMessage) const override;
 
-  // Returns the associated scrollframe that contains this slider if any.
-  nsIScrollableFrame* GetScrollFrame();
+  // Returns the associated scroll container frame that contains this slider if
+  // any.
+  mozilla::ScrollContainerFrame* GetScrollContainerFrame();
 
  private:
   bool GetScrollToClick();
@@ -174,7 +176,7 @@ class nsSliderFrame final : public nsContainerFrame {
   void DragThumb(bool aGrabMouseEvents);
   void AddListener();
   void RemoveListener();
-  bool isDraggingThumb() const;
+  bool IsDraggingThumb() const;
 
   void SuppressDisplayport();
   void UnsuppressDisplayport();
@@ -212,7 +214,7 @@ class nsSliderFrame final : public nsContainerFrame {
 
   nscoord mRepeatDirection;
 
-  bool mDragFinished;
+  bool mDragInProgress = false;
 
   // true if an attribute change has been caused by the user manipulating the
   // slider. This allows notifications to tell how a slider's current position

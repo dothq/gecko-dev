@@ -73,10 +73,18 @@ static bool sRenderThreadEverStarted = false;
 size_t RenderThread::sRendererCount = 0;
 size_t RenderThread::sActiveRendererCount = 0;
 
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
+static bool USE_DEDICATED_GLYPH_RASTER_THREAD = true;
+#else
+static bool USE_DEDICATED_GLYPH_RASTER_THREAD = false;
+#endif
+
 RenderThread::RenderThread(RefPtr<nsIThread> aThread)
     : mThread(std::move(aThread)),
       mThreadPool(false),
       mThreadPoolLP(true),
+      mChunkPool(wr_chunk_pool_new()),
+      mGlyphRasterThread(USE_DEDICATED_GLYPH_RASTER_THREAD),
       mSingletonGLIsForHardwareWebRender(true),
       mBatteryInfo("RenderThread.mBatteryInfo"),
       mWindowInfos("RenderThread.mWindowInfos"),
@@ -85,7 +93,10 @@ RenderThread::RenderThread(RefPtr<nsIThread> aThread)
       mHandlingDeviceReset(false),
       mHandlingWebRenderError(false) {}
 
-RenderThread::~RenderThread() { MOZ_ASSERT(mRenderTexturesDeferred.empty()); }
+RenderThread::~RenderThread() {
+  MOZ_ASSERT(mRenderTexturesDeferred.empty());
+  wr_chunk_pool_delete(mChunkPool);
+}
 
 // static
 RenderThread* RenderThread::Get() { return sRenderThread; }
@@ -120,6 +131,11 @@ void RenderThread::Start(uint32_t aNamespace) {
   if (stackSize && !gfx::gfxVars::SupportsThreadsafeGL()) {
     stackSize = std::max(stackSize, 4096U << 10);
   }
+#if !defined(__OPTIMIZE__)
+  // swgl's draw_quad_spans will allocate ~1.5MB in no-opt builds
+  // and the default thread stack size on macOS is 512KB
+  stackSize = std::max(stackSize, 4 * 1024 * 1024U);
+#endif
 
   RefPtr<nsIThread> thread;
   nsresult rv = NS_NewNamedThread(
@@ -563,7 +579,7 @@ void RenderThread::WrNotifierEvent_HandleExternalEvent(
     wr::WindowId aWindowId, UniquePtr<RendererEvent> aRendererEvent) {
   MOZ_ASSERT(IsInRenderThread());
 
-  RunEvent(aWindowId, std::move(aRendererEvent));
+  RunEvent(aWindowId, std::move(aRendererEvent), /* aViaWebRender */ true);
 }
 
 void RenderThread::BeginRecordingForWindow(wr::WindowId aWindowId,
@@ -645,10 +661,12 @@ void RenderThread::HandleFrameOneDocInner(wr::WindowId aWindowId, bool aRender,
     SetFramePublishId(aWindowId, aPublishId.ref());
   }
 
+  RendererStats stats = {0};
+
   UpdateAndRender(aWindowId, frame.mStartId, frame.mStartTime, render,
                   /* aReadbackSize */ Nothing(),
                   /* aReadbackFormat */ Nothing(),
-                  /* aReadbackBuffer */ Nothing());
+                  /* aReadbackBuffer */ Nothing(), &stats);
 
   // The start time is from WebRenderBridgeParent::CompositeToTarget. From that
   // point until now (when the frame is finally pushed to the screen) is
@@ -657,6 +675,12 @@ void RenderThread::HandleFrameOneDocInner(wr::WindowId aWindowId, bool aRender,
   mozilla::glean::gfx::composite_time.AccumulateRawDuration(compositeDuration);
   PerfStats::RecordMeasurement(PerfStats::Metric::Compositing,
                                compositeDuration);
+  if (stats.frame_build_time > 0.0) {
+    TimeDuration fbTime =
+        TimeDuration::FromMilliseconds(stats.frame_build_time);
+    mozilla::glean::wr::framebuild_time.AccumulateRawDuration(fbTime);
+    PerfStats::RecordMeasurement(PerfStats::Metric::FrameBuilding, fbTime);
+  }
 }
 
 void RenderThread::SetClearColor(wr::WindowId aWindowId, wr::ColorF aColor) {
@@ -703,17 +727,40 @@ void RenderThread::SetProfilerUI(wr::WindowId aWindowId,
 
 void RenderThread::PostEvent(wr::WindowId aWindowId,
                              UniquePtr<RendererEvent> aEvent) {
-  PostRunnable(NewRunnableMethod<wr::WindowId, UniquePtr<RendererEvent>&&>(
-      "wr::RenderThread::PostEvent", this, &RenderThread::RunEvent, aWindowId,
-      std::move(aEvent)));
+  PostRunnable(
+      NewRunnableMethod<wr::WindowId, UniquePtr<RendererEvent>&&, bool>(
+          "wr::RenderThread::PostEvent", this, &RenderThread::RunEvent,
+          aWindowId, std::move(aEvent), /* aViaWebRender */ false));
 }
 
 void RenderThread::RunEvent(wr::WindowId aWindowId,
-                            UniquePtr<RendererEvent> aEvent) {
+                            UniquePtr<RendererEvent> aEvent,
+                            bool aViaWebRender) {
   MOZ_ASSERT(IsInRenderThread());
+
+#ifndef DEBUG
+  const auto maxDurationMs = 2 * 1000;
+  const auto start = TimeStamp::Now();
+  const auto delayMs = static_cast<uint32_t>(
+      (start - aEvent->mCreationTimeStamp).ToMilliseconds());
+  // Check for the delay only if RendererEvent is delivered without using
+  // WebRender. Its delivery via WebRender can be very slow.
+  if (aViaWebRender && (delayMs > maxDurationMs)) {
+    gfxCriticalNote << "Calling " << aEvent->Name()
+                    << "::Run: is delayed: " << delayMs;
+  }
+#endif
 
   aEvent->Run(*this, aWindowId);
   aEvent = nullptr;
+
+#ifndef DEBUG
+  const auto end = TimeStamp::Now();
+  const auto durationMs = static_cast<uint32_t>((end - start).ToMilliseconds());
+  if (durationMs > maxDurationMs) {
+    gfxCriticalNote << "NewRenderer::Run is slow: " << durationMs;
+  }
+#endif
 }
 
 static void NotifyDidRender(layers::CompositorBridgeParent* aBridge,
@@ -768,7 +815,8 @@ void RenderThread::UpdateAndRender(
     const TimeStamp& aStartTime, bool aRender,
     const Maybe<gfx::IntSize>& aReadbackSize,
     const Maybe<wr::ImageFormat>& aReadbackFormat,
-    const Maybe<Range<uint8_t>>& aReadbackBuffer, bool* aNeedsYFlip) {
+    const Maybe<Range<uint8_t>>& aReadbackBuffer, RendererStats* aStats,
+    bool* aNeedsYFlip) {
   AUTO_PROFILER_LABEL("RenderThread::UpdateAndRender", GRAPHICS);
   MOZ_ASSERT(IsInRenderThread());
   MOZ_ASSERT(aRender || aReadbackBuffer.isNothing());
@@ -799,15 +847,16 @@ void RenderThread::UpdateAndRender(
                           renderer->GetCompositorBridge()));
 
   wr::RenderedFrameId latestFrameId;
-  RendererStats stats = {0};
   if (aRender) {
     latestFrameId = renderer->UpdateAndRender(
-        aReadbackSize, aReadbackFormat, aReadbackBuffer, aNeedsYFlip, &stats);
+        aReadbackSize, aReadbackFormat, aReadbackBuffer, aNeedsYFlip, aStats);
   } else {
     renderer->Update();
   }
   // Check graphics reset status even when rendering is skipped.
-  renderer->CheckGraphicsResetStatus("PostUpdate", /* aForce */ false);
+  renderer->CheckGraphicsResetStatus(
+      gfx::DeviceResetDetectPlace::WR_POST_UPDATE,
+      /* aForce */ false);
 
   TimeStamp end = TimeStamp::Now();
   RefPtr<const WebRenderPipelineInfo> info = renderer->GetLastPipelineInfo();
@@ -815,7 +864,7 @@ void RenderThread::UpdateAndRender(
   layers::CompositorThread()->Dispatch(
       NewRunnableFunction("NotifyDidRenderRunnable", &NotifyDidRender,
                           renderer->GetCompositorBridge(), info, aStartId,
-                          aStartTime, start, end, aRender, stats));
+                          aStartTime, start, end, aRender, *aStats));
 
   ipc::FileDescriptor fenceFd;
 
@@ -886,6 +935,17 @@ bool RenderThread::Resume(wr::WindowId aWindowId) {
   UpdateActiveRendererCount();
 
   return resumed;
+}
+
+void RenderThread::NotifyIdle() {
+  if (!IsInRenderThread()) {
+    PostRunnable(NewRunnableMethod("RenderThread::NotifyIdle", this,
+                                   &RenderThread::NotifyIdle));
+
+    return;
+  }
+
+  wr_chunk_pool_purge(mChunkPool);
 }
 
 bool RenderThread::TooManyPendingFrames(wr::WindowId aWindowId) {
@@ -979,6 +1039,21 @@ void RenderThread::RegisterExternalImage(
     mSyncObjectNeededRenderTextures.emplace(aExternalImageId, texture);
   }
   mRenderTextures.emplace(aExternalImageId, texture);
+
+#ifdef DEBUG
+  int32_t maxAllowedIncrease =
+      StaticPrefs::gfx_testing_assert_render_textures_increase();
+
+  if (maxAllowedIncrease <= 0) {
+    mRenderTexturesLastTime = -1;
+  } else {
+    if (mRenderTexturesLastTime < 0) {
+      mRenderTexturesLastTime = static_cast<int32_t>(mRenderTextures.size());
+    }
+    MOZ_ASSERT((static_cast<int32_t>(mRenderTextures.size()) -
+                mRenderTexturesLastTime) < maxAllowedIncrease);
+  }
+#endif
 }
 
 void RenderThread::UnregisterExternalImage(
@@ -1126,6 +1201,22 @@ void RenderThread::HandleRenderTextureOps() {
   }
 }
 
+RefPtr<RenderTextureHostUsageInfo> RenderThread::GetOrMergeUsageInfo(
+    const wr::ExternalImageId& aExternalImageId,
+    RefPtr<RenderTextureHostUsageInfo> aUsageInfo) {
+  MutexAutoLock lock(mRenderTextureMapLock);
+  if (mHasShutdown) {
+    return nullptr;
+  }
+  auto it = mRenderTextures.find(aExternalImageId);
+  if (it == mRenderTextures.end()) {
+    return nullptr;
+  }
+
+  auto& texture = it->second;
+  return texture->GetOrMergeUsageInfo(lock, aUsageInfo);
+}
+
 void RenderThread::UnregisterExternalImageDuringShutdown(
     const wr::ExternalImageId& aExternalImageId) {
   MOZ_ASSERT(IsInRenderThread());
@@ -1156,10 +1247,24 @@ RenderTextureHost* RenderThread::GetRenderTexture(
   return it->second;
 }
 
+std::tuple<RenderTextureHost*, RefPtr<RenderTextureHostUsageInfo>>
+RenderThread::GetRenderTextureAndUsageInfo(
+    const wr::ExternalImageId& aExternalImageId) {
+  MutexAutoLock lock(mRenderTextureMapLock);
+  auto it = mRenderTextures.find(aExternalImageId);
+  MOZ_ASSERT(it != mRenderTextures.end());
+  if (it == mRenderTextures.end()) {
+    return {};
+  }
+  return {it->second, it->second->GetTextureHostUsageInfo(lock)};
+}
+
 void RenderThread::InitDeviceTask() {
   MOZ_ASSERT(IsInRenderThread());
   MOZ_ASSERT(!mSingletonGL);
   LOG("RenderThread::InitDeviceTask()");
+
+  const auto start = TimeStamp::Now();
 
   if (gfx::gfxVars::UseSoftwareWebRender()) {
     // Ensure we don't instantiate any shared GL context when SW-WR is used.
@@ -1174,6 +1279,14 @@ void RenderThread::InitDeviceTask() {
   // Query the shared GL context to force the
   // lazy initialization to happen now.
   SingletonGL();
+
+  const auto maxDurationMs = 3 * 1000;
+  const auto end = TimeStamp::Now();
+  const auto durationMs = static_cast<uint32_t>((end - start).ToMilliseconds());
+  if (durationMs > maxDurationMs) {
+    gfxCriticalNoteOnce << "RenderThread::InitDeviceTask is slow: "
+                        << durationMs;
+  }
 }
 
 void RenderThread::PostRunnable(already_AddRefed<nsIRunnable> aRunnable) {
@@ -1181,32 +1294,12 @@ void RenderThread::PostRunnable(already_AddRefed<nsIRunnable> aRunnable) {
   mThread->Dispatch(runnable.forget());
 }
 
-#ifndef XP_WIN
-static DeviceResetReason GLenumToResetReason(GLenum aReason) {
-  switch (aReason) {
-    case LOCAL_GL_NO_ERROR:
-      return DeviceResetReason::FORCED_RESET;
-    case LOCAL_GL_INNOCENT_CONTEXT_RESET_ARB:
-      return DeviceResetReason::DRIVER_ERROR;
-    case LOCAL_GL_PURGED_CONTEXT_RESET_NV:
-      return DeviceResetReason::NVIDIA_VIDEO;
-    case LOCAL_GL_GUILTY_CONTEXT_RESET_ARB:
-      return DeviceResetReason::RESET;
-    case LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB:
-      return DeviceResetReason::UNKNOWN;
-    case LOCAL_GL_OUT_OF_MEMORY:
-      return DeviceResetReason::OUT_OF_MEMORY;
-    default:
-      return DeviceResetReason::OTHER;
-  }
-}
-#endif
-
-void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
+void RenderThread::HandleDeviceReset(gfx::DeviceResetDetectPlace aPlace,
+                                     gfx::DeviceResetReason aReason) {
   MOZ_ASSERT(IsInRenderThread());
 
   // This happens only on simulate device reset.
-  if (aReason == LOCAL_GL_NO_ERROR) {
+  if (aReason == gfx::DeviceResetReason::FORCED_RESET) {
     if (!mHandlingDeviceReset) {
       mHandlingDeviceReset = true;
 
@@ -1219,15 +1312,8 @@ void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
       // All RenderCompositors will be destroyed by the GPUProcessManager in
       // either OnRemoteProcessDeviceReset via the GPUChild, or
       // OnInProcessDeviceReset here directly.
-      if (XRE_IsGPUProcess()) {
-        gfx::GPUParent::GetSingleton()->NotifyDeviceReset();
-      } else {
-        NS_DispatchToMainThread(NS_NewRunnableFunction(
-            "gfx::GPUProcessManager::OnInProcessDeviceReset", []() -> void {
-              gfx::GPUProcessManager::Get()->OnInProcessDeviceReset(
-                  /* aTrackThreshold */ false);
-            }));
-      }
+      gfx::GPUProcessManager::GPUProcessManager::NotifyDeviceReset(
+          gfx::DeviceResetReason::FORCED_RESET, aPlace);
     }
     return;
   }
@@ -1240,7 +1326,7 @@ void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
 
 #ifndef XP_WIN
   // On Windows, see DeviceManagerDx::MaybeResetAndReacquireDevices.
-  gfx::GPUProcessManager::RecordDeviceReset(GLenumToResetReason(aReason));
+  gfx::GPUProcessManager::RecordDeviceReset(aReason);
 #endif
 
   {
@@ -1255,18 +1341,15 @@ void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
   // either OnRemoteProcessDeviceReset via the GPUChild, or
   // OnInProcessDeviceReset here directly.
   // On Windows, device will be re-created before sessions re-creation.
-  gfxCriticalNote << "GFX: RenderThread detected a device reset in " << aWhere;
   if (XRE_IsGPUProcess()) {
-    gfx::GPUParent::GetSingleton()->NotifyDeviceReset();
+    gfx::GPUProcessManager::GPUProcessManager::NotifyDeviceReset(aReason,
+                                                                 aPlace);
   } else {
 #ifndef XP_WIN
     // FIXME(aosmond): Do we need to do this on Windows? nsWindow::OnPaint
     // seems to do its own detection for the parent process.
-    bool guilty = aReason == LOCAL_GL_GUILTY_CONTEXT_RESET_ARB;
-    NS_DispatchToMainThread(NS_NewRunnableFunction(
-        "gfx::GPUProcessManager::OnInProcessDeviceReset", [guilty]() -> void {
-          gfx::GPUProcessManager::Get()->OnInProcessDeviceReset(guilty);
-        }));
+    gfx::GPUProcessManager::GPUProcessManager::NotifyDeviceReset(aReason,
+                                                                 aPlace);
 #endif
   }
 }
@@ -1284,7 +1367,8 @@ void RenderThread::SimulateDeviceReset() {
     // When this function is called GPUProcessManager::SimulateDeviceReset()
     // already triggers destroying all CompositorSessions before re-creating
     // them.
-    HandleDeviceReset("SimulateDeviceReset", LOCAL_GL_NO_ERROR);
+    HandleDeviceReset(gfx::DeviceResetDetectPlace::WR_SIMULATE,
+                      gfx::DeviceResetReason::FORCED_RESET);
   }
 }
 
@@ -1476,6 +1560,20 @@ void WebRenderThreadPool::Release() {
   if (mThreadPool) {
     wr_thread_pool_delete(mThreadPool);
     mThreadPool = nullptr;
+  }
+}
+
+MaybeWebRenderGlyphRasterThread::MaybeWebRenderGlyphRasterThread(bool aEnable) {
+  if (aEnable) {
+    mThread = wr_glyph_raster_thread_new();
+  } else {
+    mThread = nullptr;
+  }
+}
+
+MaybeWebRenderGlyphRasterThread::~MaybeWebRenderGlyphRasterThread() {
+  if (mThread) {
+    wr_glyph_raster_thread_delete(mThread);
   }
 }
 

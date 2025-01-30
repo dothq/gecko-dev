@@ -15,6 +15,7 @@ use std::os::raw::c_void;
 use std::sync::Arc;
 use std::mem::replace;
 
+use crate::internal_types::FrameVec;
 
 // Matches the definition of SK_ScalarNearlyZero in Skia.
 const NEARLY_ZERO: f32 = 1.0 / 4096.0;
@@ -66,9 +67,6 @@ pub trait VecHelper<T> {
     /// Equivalent to `mem::replace(&mut vec, Vec::new())`
     fn take(&mut self) -> Self;
 
-    /// Call clear and return self (useful for chaining with calls that move the vector).
-    fn cleared(self) -> Self;
-
     /// Functionally equivalent to `mem::replace(&mut vec, Vec::new())` but tries
     /// to keep the allocation in the caller if it is empty or replace it with a
     /// pre-allocated vector.
@@ -102,12 +100,6 @@ impl<T> VecHelper<T> for Vec<T> {
         replace(self, Vec::new())
     }
 
-    fn cleared(mut self) -> Self {
-        self.clear();
-
-        self
-    }
-
     fn take_and_preallocate(&mut self) -> Self {
         let len = self.len();
         if len == 0 {
@@ -117,7 +109,6 @@ impl<T> VecHelper<T> for Vec<T> {
         replace(self, Vec::with_capacity(len + 8))
     }
 }
-
 
 // Represents an optimized transform where there is only
 // a scale and translation (which are guaranteed to maintain
@@ -217,8 +208,8 @@ impl ScaleOffset {
         }
     }
 
-    pub fn offset(&self, offset: default::Vector2D<f32>) -> Self {
-        self.accumulate(
+    pub fn pre_offset(&self, offset: default::Vector2D<f32>) -> Self {
+        self.pre_transform(
             &ScaleOffset {
                 scale: Vector2D::new(1.0, 1.0),
                 offset,
@@ -226,19 +217,24 @@ impl ScaleOffset {
         )
     }
 
-    pub fn scale(&self, scale: f32) -> Self {
-        self.accumulate(
-            &ScaleOffset {
-                scale: Vector2D::new(scale, scale),
-                offset: Vector2D::zero(),
-            }
-        )
+    pub fn pre_scale(&self, scale: f32) -> Self {
+        ScaleOffset {
+            scale: self.scale * scale,
+            offset: self.offset,
+        }
+    }
+
+    pub fn then_scale(&self, scale: f32) -> Self {
+        ScaleOffset {
+            scale: self.scale * scale,
+            offset: self.offset * scale,
+        }
     }
 
     /// Produce a ScaleOffset that includes both self and other.
-    /// The 'self' ScaleOffset is applied after other.
+    /// The 'self' ScaleOffset is applied after `other`.
     /// This is equivalent to `Transform3D::pre_transform`.
-    pub fn accumulate(&self, other: &ScaleOffset) -> Self {
+    pub fn pre_transform(&self, other: &ScaleOffset) -> Self {
         ScaleOffset {
             scale: Vector2D::new(
                 self.scale.x * other.scale.x,
@@ -250,6 +246,24 @@ impl ScaleOffset {
             ),
         }
     }
+
+    /// Produce a ScaleOffset that includes both self and other.
+    /// The 'other' ScaleOffset is applied after `self`.
+    /// This is equivalent to `Transform3D::then`.
+    #[allow(unused)]
+    pub fn then(&self, other: &ScaleOffset) -> Self {
+        ScaleOffset {
+            scale: Vector2D::new(
+                self.scale.x * other.scale.x,
+                self.scale.y * other.scale.y,
+            ),
+            offset: Vector2D::new(
+                other.scale.x * self.offset.x + other.offset.x,
+                other.scale.y * self.offset.y + other.offset.y,
+            ),
+        }
+    }
+
 
     pub fn map_rect<F, T>(&self, rect: &Box2D<f32, F>) -> Box2D<f32, T> {
         // TODO(gw): The logic below can return an unexpected result if the supplied
@@ -335,6 +349,13 @@ impl ScaleOffset {
         )
     }
 
+    pub fn map_size<F, T>(&self, size: &Size2D<f32, F>) -> Size2D<f32, T> {
+        Size2D::new(
+            size.width * self.scale.x,
+            size.height * self.scale.y,
+        )
+    }
+
     pub fn unmap_vector<F, T>(&self, vector: &Vector2D<f32, F>) -> Vector2D<f32, T> {
         Vector2D::new(
             vector.x / self.scale.x,
@@ -399,10 +420,6 @@ pub trait MatrixHelpers<Src, Dst> {
     fn is_2d_scale_translation(&self) -> bool;
     /// Return the determinant of the 2D part of the matrix.
     fn determinant_2d(&self) -> f32;
-    /// This function returns a point in the `Src` space that projects into zero XY.
-    /// It ignores the Z coordinate and is usable for "flattened" transformations,
-    /// since they are not generally inversible.
-    fn inverse_project_2d_origin(&self) -> Option<Point2D<f32, Src>>;
     /// Turn Z transformation into identity. This is useful when crossing "flat"
     /// transform styled stacking contexts upon traversing the coordinate systems.
     fn flatten_z_output(&mut self);
@@ -534,17 +551,6 @@ impl<Src, Dst> MatrixHelpers<Src, Dst> for Transform3D<f32, Src, Dst> {
         self.m11 * self.m22 - self.m12 * self.m21
     }
 
-    fn inverse_project_2d_origin(&self) -> Option<Point2D<f32, Src>> {
-        let det = self.determinant_2d();
-        if det != 0.0 {
-            let x = (self.m21 * self.m42 - self.m41 * self.m22) / det;
-            let y = (self.m12 * self.m41 - self.m11 * self.m42) / det;
-            Some(Point2D::new(x, y))
-        } else {
-            None
-        }
-    }
-
     fn flatten_z_output(&mut self) {
         self.m13 = 0.0;
         self.m23 = 0.0;
@@ -623,22 +629,6 @@ impl<U> RectHelpers<U> for Box2D<f32, U> {
     }
 }
 
-pub trait VectorHelpers<U>
-where
-    Self: Sized,
-{
-    fn snap(&self) -> Self;
-}
-
-impl<U> VectorHelpers<U> for Vector2D<f32, U> {
-    fn snap(&self) -> Self {
-        Vector2D::new(
-            (self.x + 0.5).floor(),
-            (self.y + 0.5).floor(),
-        )
-    }
-}
-
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     (b - a) * t + a
 }
@@ -692,6 +682,17 @@ pub fn extract_inner_rect_safe<U>(
     // value of `k==1.0` is used for extraction of the corner rectangles
     // see `SEGMENT_CORNER_*` in `clip_shared.glsl`
     extract_inner_rect_impl(rect, radii, 1.0)
+}
+
+/// Return an aligned rectangle that is inside the clip region and doesn't intersect
+/// any of the bounding rectangles of the rounded corners, with a specific k factor
+/// to control how much of the rounded corner is included.
+pub fn extract_inner_rect_k<U>(
+    rect: &Box2D<f32, U>,
+    radii: &BorderRadius,
+    k: f32,
+) -> Option<Box2D<f32, U>> {
+    extract_inner_rect_impl(rect, radii, k)
 }
 
 #[cfg(test)]
@@ -816,7 +817,7 @@ pub mod test {
 
     fn validate_inverse(xref: &LayoutTransform) {
         let s0 = ScaleOffset::from_transform(xref).unwrap();
-        let s1 = s0.inverse().accumulate(&s0);
+        let s1 = s0.inverse().pre_transform(&s0);
         assert!((s1.scale.x - 1.0).abs() < NEARLY_ZERO &&
                 (s1.scale.y - 1.0).abs() < NEARLY_ZERO &&
                 s1.offset.x.abs() < NEARLY_ZERO &&
@@ -849,7 +850,7 @@ pub mod test {
         let s0 = ScaleOffset::from_transform(x0).unwrap();
         let s1 = ScaleOffset::from_transform(x1).unwrap();
 
-        let s = s0.accumulate(&s1).to_transform();
+        let s = s0.pre_transform(&s1).to_transform();
 
         assert!(x.approx_eq(&s), "{:?}\n{:?}", x, s);
     }
@@ -871,22 +872,6 @@ pub mod test {
         let s1 = ScaleOffset::new(1.0, 0.0, 10.0, 20.0);
         let i1 = s1.inverse();
         assert_eq!(i1, ScaleOffset::new(0.0, 0.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn inverse_project_2d_origin() {
-        let mut m = Transform3D::identity();
-        assert_eq!(m.inverse_project_2d_origin(), Some(Point2D::zero()));
-        m.m11 = 0.0;
-        assert_eq!(m.inverse_project_2d_origin(), None);
-        m.m21 = -2.0;
-        m.m22 = 0.0;
-        m.m12 = -0.5;
-        m.m41 = 1.0;
-        m.m42 = 0.5;
-        let origin = m.inverse_project_2d_origin().unwrap();
-        assert_eq!(origin, Point2D::new(1.0, 0.5));
-        assert_eq!(m.transform_point2d(origin), Some(Point2D::zero()));
     }
 
     #[test]
@@ -1399,7 +1384,7 @@ impl Preallocator {
     }
 
     /// Record the size of a vector to preallocate it the next frame.
-    pub fn record_vec<T>(&mut self, vec: &Vec<T>) {
+    pub fn record_vec<T>(&mut self, vec: &[T]) {
         let len = vec.len();
         if len > self.size {
             self.size = len;
@@ -1420,6 +1405,18 @@ impl Preallocator {
     /// The preallocated amount depends on the length recorded in the last
     /// record_vec call.
     pub fn preallocate_vec<T>(&self, vec: &mut Vec<T>) {
+        let len = vec.len();
+        let cap = self.preallocation_size();
+        if len < cap {
+            vec.reserve(cap - len);
+        }
+    }
+
+    /// Preallocate vector storage.
+    ///
+    /// The preallocated amount depends on the length recorded in the last
+    /// record_vec call.
+    pub fn preallocate_framevec<T>(&self, vec: &mut FrameVec<T>) {
         let len = vec.len();
         let cap = self.preallocation_size();
         if len < cap {
@@ -1647,4 +1644,14 @@ fn weak_table() {
         tbl.insert(Arc::downgrade(&Arc::new(vec![5])))
     }
     assert!(tbl.inner.capacity() <= 4);
+}
+
+#[test]
+fn scale_offset_pre_post() {
+    let a = ScaleOffset::new(1.0, 2.0, 3.0, 4.0);
+    let b = ScaleOffset::new(5.0, 6.0, 7.0, 8.0);
+
+    assert_eq!(a.then(&b), b.pre_transform(&a));
+    assert_eq!(a.then_scale(10.0), a.then(&ScaleOffset::from_scale(Vector2D::new(10.0, 10.0))));
+    assert_eq!(a.pre_scale(10.0), a.pre_transform(&ScaleOffset::from_scale(Vector2D::new(10.0, 10.0))));
 }

@@ -11,12 +11,19 @@
 
 [package]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.76"
 name = "wgpu-types"
-version = "0.19.0"
+version = "23.0.0"
 authors = ["gfx-rs developers"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "WebGPU types"
 homepage = "https://wgpu.rs/"
+readme = false
 keywords = ["graphics"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/gfx-rs/wgpu"
@@ -35,34 +42,42 @@ targets = [
 ]
 
 [lib]
+name = "wgpu_types"
+path = "src/lib.rs"
 
-[dependencies]
-bitflags = "2"
+[dependencies.bitflags]
+version = "2.6"
+features = ["serde"]
 
 [dependencies.serde]
 version = "1"
-features = ["serde_derive"]
+features = ["derive"]
 optional = true
-
-[dev-dependencies]
-serde_json = "1.0.113"
 
 [dev-dependencies.serde]
 version = "1"
-features = ["serde_derive"]
+features = ["derive"]
+
+[dev-dependencies.serde_json]
+version = "1.0.133"
 
 [features]
+counters = []
 fragile-send-sync-non-atomic-wasm = []
+serde = ["dep:serde"]
 strict_asserts = []
 
-[target."cfg(target_arch = \"wasm32\")".dependencies]
-js-sys = "0.3.67"
+[target.'cfg(target_arch = "wasm32")'.dependencies.js-sys]
+version = "0.3.70"
 
-[target."cfg(target_arch = \"wasm32\")".dependencies.web-sys]
-version = "0.3.67"
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3.74"
 features = [
     "ImageBitmap",
+    "ImageData",
+    "HtmlImageElement",
     "HtmlVideoElement",
     "HtmlCanvasElement",
     "OffscreenCanvas",
+    "VideoFrame",
 ]

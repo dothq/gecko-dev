@@ -142,7 +142,7 @@ class PCUuidGenerator : public mozilla::JsepUuidGenerator {
 // elapsed time is recorded in seconds.
 struct PeerConnectionAutoTimer {
   PeerConnectionAutoTimer()
-      : mRefCnt(0), mStart(TimeStamp::Now()), mUsedAV(false){};
+      : mRefCnt(0), mStart(TimeStamp::Now()), mUsedAV(false) {};
   void RegisterConnection();
   void UnregisterConnection(bool aContainedAV);
   bool IsStopped();
@@ -346,6 +346,8 @@ class PeerConnectionImpl final
            PrincipalPrivacy::Private;
   }
 
+  bool DuplicateFingerprintQuirk() { return mDuplicateFingerprintQuirk; }
+
   NS_IMETHODIMP GetFingerprint(char** fingerprint);
   void GetFingerprint(nsAString& fingerprint) {
     char* tmp;
@@ -531,11 +533,6 @@ class PeerConnectionImpl final
   const dom::RTCStatsTimestampMaker& GetTimestampMaker() const {
     return mTimestampMaker;
   }
-
-  // Utility function, given a string pref and an URI, returns whether or not
-  // the URI occurs in the pref. Wildcards are supported (e.g. *.example.com)
-  // and multiple hostnames can be present, separated by commas.
-  static bool HostnameInPref(const char* aPrefList, const nsCString& aHostName);
 
   void StampTimecard(const char* aEvent);
 
@@ -868,6 +865,8 @@ class PeerConnectionImpl final
 
   // See Bug 1642419, this can be removed when all sites are working with RTX.
   bool mRtxIsAllowed = true;
+
+  bool mDuplicateFingerprintQuirk = false;
 
   nsTArray<RefPtr<Operation>> mOperations;
   bool mChainingOperation = false;

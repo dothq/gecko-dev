@@ -4,6 +4,9 @@
 
 # This script generates jit/CacheIROpsGenerated.h from CacheIROps.yaml
 
+import os
+import os.path
+
 import buildconfig
 import six
 import yaml
@@ -79,6 +82,8 @@ arg_writer_info = {
     "DoubleField": ("double", "writeDoubleField"),
     "AllocSiteField": ("gc::AllocSite*", "writeAllocSiteField"),
     "JSOpImm": ("JSOp", "writeJSOpImm"),
+    "JSTypeImm": ("JSType", "writeJSTypeImm"),
+    "TypeofEqOperandImm": ("TypeofEqOperand", "writeTypeofEqOperandImm"),
     "BoolImm": ("bool", "writeBoolImm"),
     "ByteImm": ("uint32_t", "writeByteImm"),  # uint32_t to enable fits-in-byte asserts.
     "GuardClassKindImm": ("GuardClassKind", "writeGuardClassKindImm"),
@@ -182,6 +187,8 @@ arg_reader_info = {
     "DoubleField": ("uint32_t", "Offset", "reader.stubOffset()"),
     "AllocSiteField": ("uint32_t", "Offset", "reader.stubOffset()"),
     "JSOpImm": ("JSOp", "", "reader.jsop()"),
+    "JSTypeImm": ("JSType", "", "reader.jstype()"),
+    "TypeofEqOperandImm": ("TypeofEqOperand", "", "reader.typeofEqOperand()"),
     "BoolImm": ("bool", "", "reader.readBool()"),
     "ByteImm": ("uint8_t", "", "reader.readByte()"),
     "GuardClassKindImm": ("GuardClassKind", "", "reader.guardClassKind()"),
@@ -275,6 +282,8 @@ arg_spewer_method = {
     "DoubleField": "spewField",
     "AllocSiteField": "spewField",
     "JSOpImm": "spewJSOpImm",
+    "JSTypeImm": "spewJSTypeImm",
+    "TypeofEqOperandImm": "spewTypeofEqOperandImm",
     "BoolImm": "spewBoolImm",
     "ByteImm": "spewByteImm",
     "GuardClassKindImm": "spewGuardClassKindImm",
@@ -420,6 +429,8 @@ arg_length = {
     "ScalarTypeImm": 1,
     "UnaryMathFunctionImm": 1,
     "JSOpImm": 1,
+    "JSTypeImm": 1,
+    "TypeofEqOperandImm": 1,
     "ValueTypeImm": 1,
     "GuardClassKindImm": 1,
     "ArrayBufferViewKindImm": 1,
@@ -542,3 +553,28 @@ def generate_cacheirops_header(c_out, yaml_path):
     contents += "\n\n"
 
     generate_header(c_out, "jit_CacheIROpsGenerated_h", contents)
+
+
+def read_aot_ics(ic_path):
+    ics = ""
+    idx = 0
+    for entry in os.scandir(ic_path):
+        if entry.is_file() and os.path.basename(entry.path).startswith("IC-"):
+            with open(entry.path) as f:
+                content = f.read().strip()
+                ics += "  _(%d, %s) \\\n" % (idx, content)
+                idx += 1
+    return ics
+
+
+def generate_aot_ics_header(c_out, ic_path):
+    """Generate CacheIROpsGenerated.h from AOT IC corpus."""
+
+    # Read in all ICs from js/src/ics/IC-*.
+    ics = read_aot_ics(ic_path)
+
+    contents = "#define JS_AOT_IC_DATA(_) \\\n"
+    contents += ics
+    contents += "\n"
+
+    generate_header(c_out, "jit_CacheIRAOTGenerated_h", contents)

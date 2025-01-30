@@ -10,12 +10,12 @@ ChromeUtils.defineESModuleGetters(lazy, {
   assert: "chrome://remote/content/shared/webdriver/Assert.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   Log: "chrome://remote/content/shared/Log.sys.mjs",
+  pprint: "chrome://remote/content/shared/Format.sys.mjs",
   processCapabilities:
     "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
   quit: "chrome://remote/content/shared/Browser.sys.mjs",
   RemoteAgent: "chrome://remote/content/components/RemoteAgent.sys.mjs",
-  WEBDRIVER_CLASSIC_CAPABILITIES:
-    "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
+  WebDriverSession: "chrome://remote/content/shared/webdriver/Session.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "logger", () =>
@@ -23,6 +23,8 @@ ChromeUtils.defineLazyGetter(lazy, "logger", () =>
 );
 
 export class WebDriverBiDiConnection extends WebSocketConnection {
+  #sessionConfigFlags;
+
   /**
    * @param {WebSocket} webSocket
    *     The WebSocket server connection to wrap.
@@ -34,6 +36,10 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
 
     // Each connection has only a single associated WebDriver session.
     this.session = null;
+
+    this.#sessionConfigFlags = new Set([
+      lazy.WebDriverSession.SESSION_FLAG_BIDI,
+    ]);
   }
 
   /**
@@ -86,7 +92,15 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
    *     Error object with `status`, `message` and `stack` attributes.
    */
   sendError(id, err) {
-    const webDriverError = lazy.error.wrap(err);
+    // Convert specific MessageHandler errors to WebDriver errors
+    let webDriverError;
+    switch (err.name) {
+      case "DiscardedBrowsingContextError":
+        webDriverError = lazy.error.wrap(err, lazy.error.NoSuchFrameError);
+        break;
+      default:
+        webDriverError = lazy.error.wrap(err);
+    }
 
     this.send({
       type: "error",
@@ -168,9 +182,18 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
 
     try {
       // First check for mandatory field in the command packet
-      lazy.assert.positiveInteger(id, "id: unsigned integer value expected");
-      lazy.assert.string(method, "method: string value expected");
-      lazy.assert.object(params, "params: object value expected");
+      lazy.assert.positiveInteger(
+        id,
+        lazy.pprint`Expected "id" to be a postive integer, got ${id}`
+      );
+      lazy.assert.string(
+        method,
+        lazy.pprint`Expected "method" to be a string, got ${method}`
+      );
+      lazy.assert.object(
+        params,
+        lazy.pprint`Expected "params" to be an object, got ${params}`
+      );
 
       // Extract the module and the command name out of `method` attribute
       const { module, command } = splitMethod(method);
@@ -182,21 +205,23 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
 
         result = await lazy.RemoteAgent.webDriverBiDi.createSession(
           processedCapabilities,
+          this.#sessionConfigFlags,
           this
         );
 
-        // Since in Capabilities class we setup default values also for capabilities which are
-        // not relevant for bidi, we want to remove them from the payload before returning to a client.
-        result.capabilities = Array.from(result.capabilities.entries()).reduce(
-          (object, [key, value]) => {
-            if (!lazy.WEBDRIVER_CLASSIC_CAPABILITIES.includes(key)) {
-              object[key] = value;
-            }
-
-            return object;
-          },
-          {}
-        );
+        // Until the spec (see: https://github.com/w3c/webdriver/issues/1834)
+        // is updated to specify what should be the default value for bidi session,
+        // remove this capability from the return value when it's not provided by a client.
+        if (!("unhandledPromptBehavior" in processedCapabilities)) {
+          // We don't want to modify the original `capabilities` field
+          // because it points to an original Capabilities object used by the session.
+          // Since before the result is sent to a client we're going anyway to call
+          // `JSON.stringify` on `result` which will call `toJSON` method recursively,
+          // we can call it already here for the `capabilities` property
+          // to update only the command response object.
+          result.capabilities = result.capabilities.toJSON();
+          delete result.capabilities.unhandledPromptBehavior;
+        }
       } else if (module === "session" && command === "status") {
         result = lazy.RemoteAgent.webDriverBiDi.getSessionReadinessStatus();
       } else {
@@ -250,7 +275,7 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
  * @param {string} method
  *     Name of the method to split, e.g. "session.subscribe".
  *
- * @returns {Object<string, string>}
+ * @returns {Record<string, string>}
  *     Object with the module ("session") and command ("subscribe")
  *     as properties.
  */

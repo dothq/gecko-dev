@@ -96,8 +96,13 @@ var DownloadsPanel = {
     this._initialized = true;
 
     window.addEventListener("unload", this.onWindowUnload);
-
-    window.ensureCustomElements("moz-button-group");
+    const downloadPanelCommands = document.getElementById(
+      "downloadPanelCommands"
+    );
+    downloadPanelCommands.addEventListener("command", this);
+    downloadPanelCommands.addEventListener("commandupdate", () => {
+      goUpdateCommand("cmd_delete");
+    });
 
     // Load and resume active downloads if required.  If there are downloads to
     // be shown in the panel, they will be loaded asynchronously.
@@ -137,6 +142,9 @@ var DownloadsPanel = {
     }
 
     window.removeEventListener("unload", this.onWindowUnload);
+    document
+      .getElementById("downloadPanelCommands")
+      .removeEventListener("command", this);
 
     // Ensure that the panel is closed before shutting down.
     this.hidePanel();
@@ -176,7 +184,7 @@ var DownloadsPanel = {
    * only when data is ready.
    */
   showPanel(openedManually = false, isKeyPress = false) {
-    Services.telemetry.scalarAdd("downloads.panel_shown", 1);
+    Glean.downloads.panelShown.add(1);
     DownloadsCommon.log("Opening the downloads panel.");
 
     this._openedManually = openedManually;
@@ -228,6 +236,26 @@ var DownloadsPanel = {
 
   handleEvent(aEvent) {
     switch (aEvent.type) {
+      case "click":
+        DownloadsPanel.showDownloadsHistory();
+        break;
+      case "command":
+        if (aEvent.currentTarget == DownloadsView.downloadsHistory) {
+          DownloadsPanel.showDownloadsHistory();
+          return;
+        }
+
+        if (
+          aEvent.currentTarget == DownloadsBlockedSubview.elements.deleteButton
+        ) {
+          DownloadsBlockedSubview.confirmBlock();
+          return;
+        }
+
+        // Handle the commands defined in downloadsPanel.inc.xhtml.
+        // Every command "id" is also its corresponding command.
+        goDoCommand(aEvent.target.id);
+        break;
       case "mousemove":
         if (
           !DownloadsView.contextMenuOpen &&
@@ -242,7 +270,24 @@ var DownloadsPanel = {
           this._focusPanel();
         }
         break;
+      case "mouseover":
+        DownloadsView._onDownloadMouseOver(aEvent);
+        break;
+      case "mouseout":
+        DownloadsView._onDownloadMouseOut(aEvent);
+        break;
+      case "contextmenu":
+        DownloadsView._onDownloadContextMenu(aEvent);
+        break;
+      case "dragstart":
+        DownloadsView._onDownloadDragStart(aEvent);
+        break;
       case "keydown":
+        if (aEvent.currentTarget == DownloadsSummary._summaryNode) {
+          DownloadsSummary._onKeyDown(aEvent);
+          return;
+        }
+
         this._onKeyDown(aEvent);
         break;
       case "keypress":
@@ -251,6 +296,12 @@ var DownloadsPanel = {
       case "focus":
       case "select":
         this._onSelect(aEvent);
+        break;
+      case "popupshown":
+        this._onPopupShown(aEvent);
+        break;
+      case "popuphidden":
+        this._onPopupHidden(aEvent);
         break;
     }
   },
@@ -271,9 +322,9 @@ var DownloadsPanel = {
     DownloadsPanel.terminate();
   },
 
-  onPopupShown(aEvent) {
+  _onPopupShown(aEvent) {
     // Ignore events raised by nested popups.
-    if (aEvent.target != aEvent.currentTarget) {
+    if (aEvent.target != this.panel) {
       return;
     }
 
@@ -291,9 +342,9 @@ var DownloadsPanel = {
     this._focusPanel();
   },
 
-  onPopupHidden(aEvent) {
+  _onPopupHidden(aEvent) {
     // Ignore events raised by nested popups.
-    if (aEvent.target != aEvent.currentTarget) {
+    if (aEvent.target != this.panel) {
       return;
     }
 
@@ -327,7 +378,7 @@ var DownloadsPanel = {
     // to the browser window when the panel closes automatically.
     this.hidePanel();
 
-    BrowserDownloadsUI();
+    BrowserCommands.downloadsUI();
   },
 
   // Internal functions
@@ -344,8 +395,22 @@ var DownloadsPanel = {
     // the richlistbox, for keyboard navigation.
     this.panel.addEventListener("keypress", this);
     this.panel.addEventListener("mousemove", this);
+    this.panel.addEventListener("popupshown", this);
+    this.panel.addEventListener("popuphidden", this);
     DownloadsView.richListBox.addEventListener("focus", this);
     DownloadsView.richListBox.addEventListener("select", this);
+    DownloadsView.richListBox.addEventListener("mouseover", this);
+    DownloadsView.richListBox.addEventListener("mouseout", this);
+    DownloadsView.richListBox.addEventListener("contextmenu", this);
+    DownloadsView.richListBox.addEventListener("dragstart", this);
+
+    DownloadsView.downloadsHistory.addEventListener("command", this);
+    DownloadsBlockedSubview.elements.deleteButton.addEventListener(
+      "command",
+      this
+    );
+    DownloadsSummary._summaryNode.addEventListener("click", this);
+    DownloadsSummary._summaryNode.addEventListener("keydown", this);
   },
 
   /**
@@ -356,8 +421,21 @@ var DownloadsPanel = {
     this.panel.removeEventListener("keydown", this);
     this.panel.removeEventListener("keypress", this);
     this.panel.removeEventListener("mousemove", this);
+    this.panel.removeEventListener("popupshown", this);
+    this.panel.removeEventListener("popuphidden", this);
     DownloadsView.richListBox.removeEventListener("focus", this);
     DownloadsView.richListBox.removeEventListener("select", this);
+    DownloadsView.richListBox.removeEventListener("mouseover", this);
+    DownloadsView.richListBox.removeEventListener("mouseout", this);
+    DownloadsView.richListBox.removeEventListener("contextmenu", this);
+    DownloadsView.richListBox.removeEventListener("dragstart", this);
+    DownloadsView.downloadsHistory.removeEventListener("command", this);
+    DownloadsBlockedSubview.elements.deleteButton.removeEventListener(
+      "command",
+      this
+    );
+    DownloadsSummary._summaryNode.removeEventListener("click", this);
+    DownloadsSummary._summaryNode.removeEventListener("keydown", this);
   },
 
   _onKeyPress(aEvent) {
@@ -868,7 +946,7 @@ var DownloadsView = {
       } else if (aEvent.shiftKey || aEvent.ctrlKey || aEvent.metaKey) {
         // We adjust the command for supported modifiers to suggest where the download
         // may be opened
-        let openWhere = target.ownerGlobal.whereToOpenLink(aEvent, false, true);
+        let openWhere = BrowserUtils.whereToOpenLink(aEvent, false, true);
         if (["tab", "window", "tabshifted"].includes(openWhere)) {
           command += ":" + openWhere;
         }
@@ -944,7 +1022,7 @@ var DownloadsView = {
   /**
    * Mouse listeners to handle selection on hover.
    */
-  onDownloadMouseOver(aEvent) {
+  _onDownloadMouseOver(aEvent) {
     let item = aEvent.target.closest("richlistitem,richlistbox");
     if (item.localName != "richlistitem") {
       return;
@@ -964,7 +1042,7 @@ var DownloadsView = {
     }
   },
 
-  onDownloadMouseOut(aEvent) {
+  _onDownloadMouseOut(aEvent) {
     let item = aEvent.target.closest("richlistitem,richlistbox");
     if (item.localName != "richlistitem") {
       return;
@@ -981,7 +1059,7 @@ var DownloadsView = {
     }
   },
 
-  onDownloadContextMenu(aEvent) {
+  _onDownloadContextMenu(aEvent) {
     let element = aEvent.originalTarget.closest("richlistitem");
     if (!element) {
       aEvent.preventDefault();
@@ -1001,7 +1079,7 @@ var DownloadsView = {
       !element._shell.download.source?.url;
   },
 
-  onDownloadDragStart(aEvent) {
+  _onDownloadDragStart(aEvent) {
     let element = aEvent.target.closest("richlistitem");
     if (!element) {
       return;
@@ -1449,23 +1527,13 @@ var DownloadsSummary = {
    * @param aEvent
    *        The keydown event being handled.
    */
-  onKeyDown(aEvent) {
+  _onKeyDown(aEvent) {
     if (
       aEvent.charCode == " ".charCodeAt(0) ||
       aEvent.keyCode == KeyEvent.DOM_VK_RETURN
     ) {
       DownloadsPanel.showDownloadsHistory();
     }
-  },
-
-  /**
-   * Respond to click events on the Downloads Summary node.
-   *
-   * @param aEvent
-   *        The click event being handled.
-   */
-  onClick() {
-    DownloadsPanel.showDownloadsHistory();
   },
 
   /**

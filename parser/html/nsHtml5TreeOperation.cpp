@@ -203,6 +203,8 @@ nsHtml5TreeOperation::~nsHtml5TreeOperation() {
 
     void operator()(const opAddLineNumberId& aOperation) {}
 
+    void operator()(const opShallowCloneInto& aOperation) {}
+
     void operator()(const opStartLayout& aOperation) {}
 
     void operator()(const opEnableEncodingMenu& aOperation) {}
@@ -625,16 +627,17 @@ nsIContent* nsHtml5TreeOperation::CreateMathMLElement(
   return newContent;
 }
 
-void nsHtml5TreeOperation::SetFormElement(nsIContent* aNode,
+void nsHtml5TreeOperation::SetFormElement(nsIContent* aNode, nsIContent* aForm,
                                           nsIContent* aParent) {
-  RefPtr formElement = HTMLFormElement::FromNodeOrNull(aParent);
+  RefPtr formElement = HTMLFormElement::FromNodeOrNull(aForm);
   NS_ASSERTION(formElement,
                "The form element doesn't implement HTMLFormElement.");
-  nsCOMPtr<nsIFormControl> formControl(do_QueryInterface(aNode));
+  nsCOMPtr<nsIFormControl> formControl = nsIFormControl::FromNodeOrNull(aNode);
   if (formControl &&
       formControl->ControlType() !=
           FormControlType::FormAssociatedCustomElement &&
-      !aNode->AsElement()->HasAttr(nsGkAtoms::form)) {
+      !aNode->AsElement()->HasAttr(nsGkAtoms::form) &&
+      aForm->SubtreeRoot() == aParent->SubtreeRoot()) {
     formControl->SetForm(formElement);
   } else if (auto* image = HTMLImageElement::FromNodeOrNull(aNode)) {
     image->SetForm(formElement);
@@ -877,7 +880,8 @@ nsresult nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
     }
 
     nsresult operator()(const opSetFormElement& aOperation) {
-      SetFormElement(*(aOperation.mContent), *(aOperation.mFormElement));
+      SetFormElement(*(aOperation.mContent), *(aOperation.mFormElement),
+                     *(aOperation.mIntendedParent));
       return NS_OK;
     }
 
@@ -934,6 +938,7 @@ nsresult nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       nsIContent* root = nsContentUtils::AttachDeclarativeShadowRoot(
           *aOperation.mHost, aOperation.mShadowRootMode,
           aOperation.mShadowRootIsClonable,
+          aOperation.mShadowRootIsSerializable,
           aOperation.mShadowRootDelegatesFocus);
       if (root) {
         *aOperation.mFragHandle = root;
@@ -1202,6 +1207,19 @@ nsresult nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       val.AppendInt(lineNumber);
       element->SetAttr(kNameSpaceID_None, nsGkAtoms::id, val, true);
       return NS_OK;
+    }
+
+    nsresult operator()(const opShallowCloneInto& aOperation) {
+      nsIContent* src = *aOperation.mSrc;
+      ErrorResult rv;
+      RefPtr<nsINode> clone = src->CloneNode(false, rv);
+      if (NS_WARN_IF(rv.Failed())) {
+        return rv.StealNSResult();
+      }
+      *aOperation.mDst = clone->AsContent();
+      mBuilder->HoldElement(clone.forget().downcast<nsIContent>());
+      return Append(*aOperation.mDst, *aOperation.mIntendedParent,
+                    aOperation.mFromParser, mBuilder);
     }
 
     nsresult operator()(const opStartLayout& aOperation) {

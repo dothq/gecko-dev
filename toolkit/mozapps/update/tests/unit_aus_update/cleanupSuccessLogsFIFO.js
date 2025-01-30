@@ -99,15 +99,19 @@ async function testCleanupSuccessLogsFIFO(
     "Last Update Elevated Log"
   );
 
-  standardInit();
+  await testPostUpdateProcessing();
 
   Assert.ok(
-    !gUpdateManager.downloadingUpdate,
+    !(await gUpdateManager.getDownloadingUpdate()),
     "there should not be a downloading update"
   );
-  Assert.ok(!gUpdateManager.readyUpdate, "there should not be a ready update");
+  Assert.ok(
+    !(await gUpdateManager.getReadyUpdate()),
+    "there should not be a ready update"
+  );
+  const history = await gUpdateManager.getHistory();
   Assert.equal(
-    gUpdateManager.getUpdateCount(),
+    history.length,
     1,
     "the update manager update count" + MSG_SHOULD_EQUAL
   );
@@ -189,7 +193,7 @@ async function testCleanupSuccessLogsFIFO(
   Assert.ok(dir.exists(), MSG_SHOULD_EXIST);
 
   // Clean up so this function can run again.
-  reloadUpdateManagerData(true);
+  await reloadUpdateManagerData(true);
 }
 
 async function run_test() {
@@ -222,5 +226,5 @@ async function run_test() {
       }
     }
   }
-  doTestFinish();
+  await doTestFinish();
 }

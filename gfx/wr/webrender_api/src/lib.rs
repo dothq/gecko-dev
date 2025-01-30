@@ -12,8 +12,15 @@
 //! there.
 
 #![cfg_attr(feature = "nightly", feature(nonzero))]
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::float_cmp, clippy::too_many_arguments))]
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::unreadable_literal, clippy::new_without_default))]
+#![allow(
+    clippy::float_cmp,
+    clippy::too_many_arguments,
+    clippy::unreadable_literal,
+    clippy::new_without_default,
+    clippy::empty_docs,
+    clippy::manual_range_contains,
+)]
+
 
 pub extern crate crossbeam_channel;
 pub extern crate euclid;
@@ -42,6 +49,7 @@ mod display_list;
 mod font;
 mod gradient_builder;
 mod image;
+mod tile_pool;
 pub mod units;
 
 pub use crate::color::*;
@@ -51,6 +59,7 @@ pub use crate::display_list::*;
 pub use crate::font::*;
 pub use crate::gradient_builder::*;
 pub use crate::image::*;
+pub use crate::tile_pool::*;
 
 use crate::units::*;
 use crate::channel::Receiver;
@@ -226,16 +235,11 @@ pub struct SampledScrollOffset {
 /// See https://firefox-source-docs.mozilla.org/performance/scroll-linked_effects.html
 /// for a definition of scroll-linked effect.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub enum HasScrollLinkedEffect {
     Yes,
+    #[default]
     No,
-}
-
-impl Default for HasScrollLinkedEffect {
-    fn default() -> Self {
-        HasScrollLinkedEffect::No
-    }
 }
 
 #[repr(C)]
@@ -488,7 +492,7 @@ impl<T> From<T> for PropertyBinding<T> {
 impl From<PropertyBindingKey<ColorF>> for PropertyBindingKey<ColorU> {
     fn from(key: PropertyBindingKey<ColorF>) -> PropertyBindingKey<ColorU> {
         PropertyBindingKey {
-            id: key.id.clone(),
+            id: key.id,
             _phantom: PhantomData,
         }
     }
@@ -497,7 +501,7 @@ impl From<PropertyBindingKey<ColorF>> for PropertyBindingKey<ColorU> {
 impl From<PropertyBindingKey<ColorU>> for PropertyBindingKey<ColorF> {
     fn from(key: PropertyBindingKey<ColorU>) -> PropertyBindingKey<ColorF> {
         PropertyBindingKey {
-            id: key.id.clone(),
+            id: key.id,
             _phantom: PhantomData,
         }
     }
@@ -570,10 +574,11 @@ pub type VoidPtrToSizeFn = unsafe extern "C" fn(ptr: *const c_void) -> usize;
 ///  - Add a new enum variant here.
 ///  - Add the entry in WR_BOOL_PARAMETER_LIST in gfxPlatform.cpp.
 ///  - React to the parameter change anywhere in WebRender where a SetParam message is received.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Parameter {
     Bool(BoolParameter, bool),
     Int(IntParameter, i32),
+    Float(FloatParameter, f32),
 }
 
 /// Boolean configuration option.
@@ -591,6 +596,14 @@ pub enum BoolParameter {
 #[repr(u32)]
 pub enum IntParameter {
     BatchedUploadThreshold = 0,
+}
+
+/// Floating point configuration option.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum FloatParameter {
+    /// The minimum time for the CPU portion of a frame to be considered slow
+    SlowCpuFrameThreshold = 0,
 }
 
 /// Flags to track why we are rendering.
@@ -720,6 +733,10 @@ bitflags! {
         /// Render large blobs with at a smaller size (incorrectly). This is a temporary workaround for
         /// fuzzing.
         const RESTRICT_BLOB_SIZE        = 1 << 28;
+        /// Enable surface promotion logging.
+        const SURFACE_PROMOTION_LOGGING = 1 << 29;
+        /// Show picture caching debug overlay
+        const PICTURE_BORDERS       = 1 << 30;
     }
 }
 

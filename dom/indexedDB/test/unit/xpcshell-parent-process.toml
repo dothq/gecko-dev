@@ -16,6 +16,7 @@ support-files = [
   "GlobalObjectsSandbox.js",
   "metadata2Restore_profile.zip",
   "metadataRestore_profile.zip",
+  "fileListUpgrade_profile.zip",
   "schema18upgrade_profile.zip",
   "schema21upgrade_profile.zip",
   "schema23upgrade_profile.zip",
@@ -48,11 +49,15 @@ skip-if = ["tsan"]
 
 ["test_connection_idle_maintenance_stop.js"]
 
+["test_databaseWorkStarted.js"]
+
 ["test_database_close_without_onclose.js"]
 
 ["test_database_onclose.js"]
 
 ["test_file_copy_failure.js"]
+
+["test_fileListUpgrade.js"]
 
 ["test_globalObjects_ipc.js"]
 skip-if = ["os == 'android'"]
@@ -60,6 +65,8 @@ skip-if = ["os == 'android'"]
 ["test_idbSubdirUpgrade.js"]
 
 ["test_idle_maintenance.js"]
+
+["test_idle_maintenance_and_databases.js"]
 
 ["test_invalidate.js"]
 # disabled for the moment.
@@ -91,6 +98,10 @@ skip-if = ["true"]
 
 ["test_schema23upgrade.js"]
 
+["test_slowDatabaseInitialization.js"]
+
+["test_slowStorageInitialization.js"]
+
 ["test_snappyUpgrade.js"]
 
 ["test_storagePersistentUpgrade.js"]
@@ -98,6 +109,9 @@ skip-if = ["true"]
 ["test_temporary_storage.js"]
 # bug 951017: intermittent failure on Android x86 emulator
 skip-if = ["os == 'android' && processor == 'x86'"]
+
+["test_transaction_durability.js"]
+run-sequentially = "very high failure rate in parallel"
 
 ["test_unexpectedDirectory.js"]
 

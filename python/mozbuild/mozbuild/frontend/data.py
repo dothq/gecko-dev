@@ -148,7 +148,7 @@ class VariablePassthru(ContextDerived):
     in our build backends since we will continue to be tied to our rules.mk.
     """
 
-    __slots__ = "variables"
+    __slots__ = ("variables",)
 
     def __init__(self, context):
         ContextDerived.__init__(self, context)
@@ -197,7 +197,7 @@ class BaseDefines(ContextDerived):
     which are OrderedDicts.
     """
 
-    __slots__ = "defines"
+    __slots__ = ("defines",)
 
     def __init__(self, context, defines):
         ContextDerived.__init__(self, context)
@@ -391,6 +391,15 @@ class Linkable(ContextDerived):
         self.lib_defines = Defines(context, OrderedDict())
         self.sources = defaultdict(list)
 
+    @property
+    def output_path(self):
+        if self.installed:
+            return ObjDirPath(
+                self._context, "!/" + mozpath.join(self.install_target, self.name)
+            )
+        else:
+            return ObjDirPath(self._context, "!" + self.name)
+
     def link_library(self, obj):
         assert isinstance(obj, BaseLibrary)
         if obj.KIND != self.KIND:
@@ -468,7 +477,7 @@ class BaseProgram(Linkable):
     Otherwise, the suffix is appended to the program name.
     """
 
-    __slots__ = "program"
+    __slots__ = ("program",)
 
     DICT_ATTRS = {"install_target", "KIND", "program", "relobjdir"}
 
@@ -480,15 +489,6 @@ class BaseProgram(Linkable):
             program += bin_suffix
         self.program = program
         self.is_unit_test = is_unit_test
-
-    @property
-    def output_path(self):
-        if self.installed:
-            return ObjDirPath(
-                self._context, "!/" + mozpath.join(self.install_target, self.program)
-            )
-        else:
-            return ObjDirPath(self._context, "!" + self.program)
 
     def __repr__(self):
         return "<%s: %s/%s>" % (type(self).__name__, self.relobjdir, self.program)
@@ -637,6 +637,10 @@ class BaseLibrary(Linkable):
     def name(self):
         return self.lib_name
 
+    @property
+    def import_path(self):
+        return ObjDirPath(self._context, "!" + self.import_name)
+
 
 class Library(BaseLibrary):
     """Context derived container object for a library"""
@@ -692,7 +696,6 @@ class BaseRustLibrary(object):
         "cargo_file",
         "crate_type",
         "dependencies",
-        "deps_path",
         "features",
         "output_category",
         "is_gkrust",
@@ -731,15 +734,21 @@ class BaseRustLibrary(object):
         # build in that case.
         if not context.config.substs.get("COMPILE_ENVIRONMENT"):
             return
-        build_dir = mozpath.join(
-            context.config.topobjdir,
-            cargo_output_directory(context, self.TARGET_SUBST_VAR),
+        self.import_name = self.lib_name
+
+    @property
+    def import_path(self):
+        return ObjDirPath(
+            self._context,
+            "!/"
+            + mozpath.join(
+                cargo_output_directory(self._context, self.TARGET_SUBST_VAR),
+                self.import_name,
+            ),
         )
-        self.import_name = mozpath.join(build_dir, self.lib_name)
-        self.deps_path = mozpath.join(build_dir, "deps")
 
 
-class RustLibrary(StaticLibrary, BaseRustLibrary):
+class RustLibrary(BaseRustLibrary, StaticLibrary):
     """Context derived container object for a rust static library"""
 
     KIND = "target"
@@ -866,12 +875,21 @@ class SharedLibrary(Library):
                     + self.symbols_file
                 )
             elif os_target == "WINNT":
-                if context.config.substs.get("GNU_CC"):
-                    self.symbols_link_arg = self.symbols_file
-                else:
+                if context.config.substs.get("CC_TYPE") == "clang-cl":
                     self.symbols_link_arg = "-DEF:" + self.symbols_file
+                else:
+                    self.symbols_link_arg = self.symbols_file
             elif context.config.substs.get("GCC_USE_GNU_LD"):
                 self.symbols_link_arg = "-Wl,--version-script," + self.symbols_file
+
+    @property
+    def import_path(self):
+        if self.config.substs.get("OS_ARCH") == "WINNT":
+            # We build import libs on windows in a library's objdir
+            # to avoid cluttering up dist/bin.
+            return ObjDirPath(self._context, "!" + self.import_name)
+        assert self.import_name == self.name
+        return self.output_path
 
 
 class HostSharedLibrary(HostMixin, Library):
@@ -913,7 +931,7 @@ class HostLibrary(HostMixin, BaseLibrary):
     no_expand_lib = False
 
 
-class HostRustLibrary(HostLibrary, BaseRustLibrary):
+class HostRustLibrary(BaseRustLibrary, HostLibrary):
     """Context derived container object for a host rust library"""
 
     KIND = "host"
@@ -1183,7 +1201,7 @@ class FinalTargetFiles(ContextDerived):
     HierarchicalStringList, which is created when parsing FINAL_TARGET_FILES.
     """
 
-    __slots__ = "files"
+    __slots__ = ("files",)
 
     def __init__(self, sandbox, files):
         ContextDerived.__init__(self, sandbox)
@@ -1200,7 +1218,7 @@ class FinalTargetPreprocessedFiles(ContextDerived):
     FINAL_TARGET_PP_FILES.
     """
 
-    __slots__ = "files"
+    __slots__ = ("files",)
 
     def __init__(self, sandbox, files):
         ContextDerived.__init__(self, sandbox)

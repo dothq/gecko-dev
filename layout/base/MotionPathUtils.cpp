@@ -354,7 +354,7 @@ Maybe<ResolvedMotionPathData> MotionPathUtils::ResolveMotionPath(
     } else {
       // Per the spec, for unclosed interval, let used offset distance be equal
       // to offset distance clamped by 0 and the total length of the path.
-      usedDistance = clamped(usedDistance, 0.0f, pathLength);
+      usedDistance = std::clamp(usedDistance, 0.0f, pathLength);
     }
     gfx::Point tangent;
     point = path->ComputePointAtLength(usedDistance, &tangent);
@@ -364,7 +364,13 @@ Maybe<ResolvedMotionPathData> MotionPathUtils::ResolveMotionPath(
     // position of this box into account to offset the translation so it's final
     // position is not affected by other boxes in the same containing block.
     point -= NSPointToPoint(data.mCurrentPosition, AppUnitsPerCSSPixel());
-    directionAngle = atan2((double)tangent.y, (double)tangent.x);  // in Radian.
+    // If the path length is 0, it's unlikely to get a valid tangent angle, e.g.
+    // it may be (0, 0). And so we may get an undefined value from atan2().
+    // Therefore, we use 0rad as the default behavior.
+    directionAngle =
+        pathLength < std::numeric_limits<gfx::Float>::epsilon()
+            ? 0.0
+            : atan2((double)tangent.y, (double)tangent.x);  // in Radian.
   } else if (aPath.IsRay()) {
     const auto& ray = aPath.AsRay();
     MOZ_ASSERT(ray.mRay);
@@ -434,7 +440,7 @@ Maybe<ResolvedMotionPathData> MotionPathUtils::ResolveMotionPath(
 
 static inline bool IsClosedLoop(const StyleSVGPathData& aPathData) {
   return !aPathData._0.AsSpan().empty() &&
-         aPathData._0.AsSpan().rbegin()->IsClosePath();
+         aPathData._0.AsSpan().rbegin()->IsClose();
 }
 
 // Create a path for "inset(0 round X)", where X is the value of border-radius
@@ -466,8 +472,8 @@ static already_AddRefed<gfx::Path> BuildDefaultPathForURL(
     return nullptr;
   }
 
-  Array<const StylePathCommand, 1> array(StylePathCommand::MoveTo(
-      StyleCoordPair(gfx::Point{0.0, 0.0}), StyleIsAbsolute::No));
+  Array<const StylePathCommand, 1> array(StylePathCommand::Move(
+      StyleByTo::By, StyleCoordinatePair<StyleCSSFloat>{0.0, 0.0}));
   return SVGPathData::BuildPath(array, aBuilder, StyleStrokeLinecap::Butt, 0.0);
 }
 
@@ -695,6 +701,21 @@ already_AddRefed<gfx::Path> MotionPathUtils::BuildSVGPath(
                                 0.0);
 }
 
+static already_AddRefed<gfx::Path> BuildShape(
+    const Span<const StyleShapeCommand>& aShape, gfx::PathBuilder* aPathBuilder,
+    const nsRect& aCoordBox) {
+  if (!aPathBuilder) {
+    return nullptr;
+  }
+
+  // For motion path, we always use CSSPixel unit to compute the offset
+  // transform (i.e. motion path transform).
+  const auto rect = CSSRect::FromAppUnits(aCoordBox);
+  return SVGPathData::BuildPath(aShape, aPathBuilder, StyleStrokeLinecap::Butt,
+                                0.0, rect.Size(),
+                                rect.TopLeft().ToUnknownPoint());
+}
+
 /* static */
 already_AddRefed<gfx::Path> MotionPathUtils::BuildPath(
     const StyleBasicShape& aBasicShape,
@@ -725,12 +746,22 @@ already_AddRefed<gfx::Path> MotionPathUtils::BuildPath(
     case StyleBasicShape::Tag::Polygon:
       return ShapeUtils::BuildPolygonPath(aBasicShape, aCoordBox,
                                           AppUnitsPerCSSPixel(), aPathBuilder);
-    case StyleBasicShape::Tag::Path:
+    case StyleBasicShape::Tag::PathOrShape: {
       // FIXME: Bug 1836847. Once we support "at <position>" for path(), we have
       // to also check its containing block as well. For now, we are still
       // building its gfx::Path directly by its SVGPathData without other
       // reference. https://github.com/w3c/fxtf-drafts/issues/504
-      return BuildSVGPath(aBasicShape.AsPath().path, aPathBuilder);
+      const auto& pathOrShape = aBasicShape.AsPathOrShape();
+      if (pathOrShape.IsPath()) {
+        return BuildSVGPath(pathOrShape.AsPath().path, aPathBuilder);
+      }
+
+      // Note that shape() always defines the initial position, i.e. "from x y",
+      // by its first move command, so |aOffsetPosition|, i.e. offset-position
+      // property, is ignored.
+      return BuildShape(pathOrShape.AsShape().commands.AsSpan(), aPathBuilder,
+                        aCoordBox);
+    }
   }
 
   return nullptr;

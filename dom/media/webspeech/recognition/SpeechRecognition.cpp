@@ -38,6 +38,7 @@
 #include "nsPIDOMWindow.h"
 #include "nsServiceManagerUtils.h"
 #include "nsQueryObject.h"
+#include "nsGlobalWindowInner.h"
 #include "SpeechTrackListener.h"
 
 #include <algorithm>
@@ -136,7 +137,7 @@ CreateSpeechRecognitionService(nsPIDOMWindowInner* aWindow,
 NS_IMPL_CYCLE_COLLECTION_WEAK_PTR_INHERITED(SpeechRecognition,
                                             DOMEventTargetHelper, mStream,
                                             mTrack, mRecognitionService,
-                                            mSpeechGrammarList)
+                                            mSpeechGrammarList, mListener)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SpeechRecognition)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
@@ -145,12 +146,22 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(SpeechRecognition, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(SpeechRecognition, DOMEventTargetHelper)
 
+NS_IMPL_CYCLE_COLLECTION_INHERITED(SpeechRecognition::TrackListener,
+                                   DOMMediaStream::TrackListener,
+                                   mSpeechRecognition)
+NS_IMPL_ADDREF_INHERITED(SpeechRecognition::TrackListener,
+                         DOMMediaStream::TrackListener)
+NS_IMPL_RELEASE_INHERITED(SpeechRecognition::TrackListener,
+                          DOMMediaStream::TrackListener)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SpeechRecognition::TrackListener)
+NS_INTERFACE_MAP_END_INHERITING(DOMMediaStream::TrackListener)
+
 SpeechRecognition::SpeechRecognition(nsPIDOMWindowInner* aOwnerWindow)
     : DOMEventTargetHelper(aOwnerWindow),
       mEndpointer(kSAMPLE_RATE),
       mAudioSamplesPerChunk(mEndpointer.FrameSize()),
       mSpeechDetectionTimer(NS_NewTimer()),
-      mSpeechGrammarList(new SpeechGrammarList(GetOwner())),
+      mSpeechGrammarList(new SpeechGrammarList(GetOwnerGlobal())),
       mContinuous(false),
       mInterimResults(false),
       mMaxAlternatives(1) {
@@ -472,8 +483,9 @@ void SpeechRecognition::Reset() {
 
   ++mStreamGeneration;
   if (mStream) {
-    mStream->UnregisterTrackListener(this);
+    mStream->UnregisterTrackListener(mListener);
     mStream = nullptr;
+    mListener = nullptr;
   }
   mTrack = nullptr;
   mTrackIsOwned = false;
@@ -642,7 +654,8 @@ RefPtr<GenericNonExclusivePromise> SpeechRecognition::StopRecording() {
     if (mStream) {
       // Ensure we don't start recording because a track became available
       // before we get reset.
-      mStream->UnregisterTrackListener(this);
+      mStream->UnregisterTrackListener(mListener);
+      mListener = nullptr;
     }
     return GenericNonExclusivePromise::CreateAndResolve(true, __func__);
   }
@@ -801,10 +814,13 @@ void SpeechRecognition::Start(const Optional<NonNull<DOMMediaStream>>& aStream,
   MediaStreamConstraints constraints;
   constraints.mAudio.SetAsBoolean() = true;
 
+  MOZ_ASSERT(!mListener);
+  mListener = new TrackListener(this);
+
   if (aStream.WasPassed()) {
     mStream = &aStream.Value();
     mTrackIsOwned = false;
-    mStream->RegisterTrackListener(this);
+    mStream->RegisterTrackListener(mListener);
     nsTArray<RefPtr<AudioStreamTrack>> tracks;
     mStream->GetAudioTracks(tracks);
     for (const RefPtr<AudioStreamTrack>& track : tracks) {
@@ -815,7 +831,7 @@ void SpeechRecognition::Start(const Optional<NonNull<DOMMediaStream>>& aStream,
     }
   } else {
     mTrackIsOwned = true;
-    nsPIDOMWindowInner* win = GetOwner();
+    nsPIDOMWindowInner* win = GetOwnerWindow();
     if (!win || !win->IsFullyActive()) {
       aRv.ThrowInvalidStateError("The document is not fully active.");
       return;
@@ -839,7 +855,7 @@ void SpeechRecognition::Start(const Optional<NonNull<DOMMediaStream>>& aStream,
                 return;
               }
               mStream = std::move(aStream);
-              mStream->RegisterTrackListener(this);
+              mStream->RegisterTrackListener(mListener);
               for (const RefPtr<AudioStreamTrack>& track : tracks) {
                 if (!track->Ended()) {
                   NotifyTrackAdded(track);
@@ -870,7 +886,7 @@ void SpeechRecognition::Start(const Optional<NonNull<DOMMediaStream>>& aStream,
 }
 
 bool SpeechRecognition::SetRecognitionService(ErrorResult& aRv) {
-  if (!GetOwner()) {
+  if (!GetOwnerWindow()) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return false;
   }
@@ -881,7 +897,7 @@ bool SpeechRecognition::SetRecognitionService(ErrorResult& aRv) {
   if (!mLang.IsEmpty()) {
     lang = mLang;
   } else {
-    nsCOMPtr<Document> document = GetOwner()->GetExtantDoc();
+    nsCOMPtr<Document> document = GetOwnerWindow()->GetExtantDoc();
     if (!document) {
       aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
       return false;
@@ -896,7 +912,7 @@ bool SpeechRecognition::SetRecognitionService(ErrorResult& aRv) {
     element->GetLang(lang);
   }
 
-  auto result = CreateSpeechRecognitionService(GetOwner(), this, lang);
+  auto result = CreateSpeechRecognitionService(GetOwnerWindow(), this, lang);
 
   if (result.isErr()) {
     switch (result.unwrapErr()) {
@@ -1115,7 +1131,7 @@ const char* SpeechRecognition::GetName(FSMState aId) {
   };
 
   MOZ_ASSERT(aId < STATE_COUNT);
-  MOZ_ASSERT(ArrayLength(names) == STATE_COUNT);
+  MOZ_ASSERT(std::size(names) == STATE_COUNT);
   return names[aId];
 }
 
@@ -1130,7 +1146,7 @@ const char* SpeechRecognition::GetName(SpeechEvent* aEvent) {
                                 "EVENT_RECOGNITIONSERVICE_ERROR"};
 
   MOZ_ASSERT(aEvent->mType < EVENT_COUNT);
-  MOZ_ASSERT(ArrayLength(names) == EVENT_COUNT);
+  MOZ_ASSERT(std::size(names) == EVENT_COUNT);
   return names[aEvent->mType];
 }
 

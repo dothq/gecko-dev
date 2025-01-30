@@ -20,7 +20,7 @@ ChromeUtils.defineLazyGetter(lazy, "log", () => {
 });
 
 // Don't use const here because this is acessed by
-// tests through the BackstagePass object.
+// tests through the SystemGlobal object.
 export var PROXY_TYPES_MAP = new Map([
   ["none", Ci.nsIProtocolProxyService.PROXYCONFIG_DIRECT],
   ["system", Ci.nsIProtocolProxyService.PROXYCONFIG_SYSTEM],
@@ -28,6 +28,23 @@ export var PROXY_TYPES_MAP = new Map([
   ["autoDetect", Ci.nsIProtocolProxyService.PROXYCONFIG_WPAD],
   ["autoConfig", Ci.nsIProtocolProxyService.PROXYCONFIG_PAC],
 ]);
+
+let proxyPreferences = [
+  "network.proxy.type",
+  "network.proxy.autoconfig_url",
+  "network.proxy.socks_remote_dns",
+  "network.proxy.socks5_remote_dns",
+  "signon.autologin.proxy",
+  "network.proxy.socks_version",
+  "network.proxy.no_proxies_on",
+  "network.proxy.share_proxy_settings",
+  "network.proxy.http",
+  "network.proxy.http_port",
+  "network.proxy.ssl",
+  "network.proxy.ssl_port",
+  "network.proxy.socks",
+  "network.proxy.socks_port",
+];
 
 export var ProxyPolicies = {
   configureProxySettings(param, setPref) {
@@ -41,6 +58,7 @@ export var ProxyPolicies = {
 
     if (param.UseProxyForDNS !== undefined) {
       setPref("network.proxy.socks_remote_dns", param.UseProxyForDNS);
+      setPref("network.proxy.socks5_remote_dns", param.UseProxyForDNS);
     }
 
     if (param.AutoLogin !== undefined) {
@@ -94,7 +112,7 @@ export var ProxyPolicies = {
       // network code. That pref only controls if the checkbox is checked, and
       // then we must manually set the other values.
       if (param.UseHTTPProxyForAllProtocols) {
-        param.SSLProxy = param.SOCKSProxy = param.HTTPProxy;
+        param.SSLProxy = param.HTTPProxy;
       }
     }
 
@@ -104,6 +122,14 @@ export var ProxyPolicies = {
 
     if (param.SOCKSProxy) {
       setProxyHostAndPort("socks", param.SOCKSProxy);
+    }
+
+    // All preferences should be locked regardless of whether or not a
+    // specific value was set.
+    if (param.Locked) {
+      for (let preference of proxyPreferences) {
+        Services.prefs.lockPref(preference);
+      }
     }
   },
 };

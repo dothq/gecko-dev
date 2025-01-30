@@ -797,16 +797,18 @@ auto RTCRtpTransceiver::GetActivePayloadTypes() const
                      });
 }
 
-static void JsepCodecDescToVideoCodecConfig(
-    const JsepVideoCodecDescription& aCodec, Maybe<VideoCodecConfig>* aConfig) {
+static auto JsepCodecDescToVideoCodecConfig(
+    const JsepVideoCodecDescription& aCodec) -> Maybe<VideoCodecConfig> {
   uint16_t pt;
 
+  Maybe<VideoCodecConfig> config;
   // TODO(bug 1761272): Getting the pt for a JsepVideoCodecDescription should be
   // infallible.
+  // Bug 1920249, yes please.
   if (NS_WARN_IF(!aCodec.GetPtAsInt(&pt))) {
     MOZ_MTLOG(ML_ERROR, "Invalid payload type: " << aCodec.mDefaultPt);
     MOZ_ASSERT(false);
-    return;
+    return Nothing();
   }
 
   UniquePtr<VideoCodecConfigH264> h264Config;
@@ -821,35 +823,45 @@ static void JsepCodecDescToVideoCodecConfig(
         static_cast<int>(aCodec.mPacketizationMode);
     h264Config->profile_level_id = static_cast<int>(aCodec.mProfileLevelId);
     h264Config->tias_bw = 0;  // TODO(bug 1403206)
+    config = Some(VideoCodecConfig::CreateH264Config(pt, aCodec.mConstraints,
+                                                     *h264Config));
   }
 
-  *aConfig = Some(VideoCodecConfig(pt, aCodec.mName, aCodec.mConstraints,
-                                   h264Config.get()));
+  if (aCodec.mName == "AV1") {
+    config = Some(VideoCodecConfig::CreateAv1Config(pt, aCodec.mConstraints,
+                                                    aCodec.mAv1Config));
+  }
 
-  (*aConfig)->mAckFbTypes = aCodec.mAckFbTypes;
-  (*aConfig)->mNackFbTypes = aCodec.mNackFbTypes;
-  (*aConfig)->mCcmFbTypes = aCodec.mCcmFbTypes;
-  (*aConfig)->mRembFbSet = aCodec.RtcpFbRembIsSet();
-  (*aConfig)->mFECFbSet = aCodec.mFECEnabled;
-  (*aConfig)->mTransportCCFbSet = aCodec.RtcpFbTransportCCIsSet();
+  if (config.isNothing()) {
+    // TODO bug 1920249, let's just pass in the JsepCodecConfig
+    config = Some(VideoCodecConfig(pt, aCodec.mName, aCodec.mConstraints));
+  }
+
+  config->mAckFbTypes = aCodec.mAckFbTypes;
+  config->mNackFbTypes = aCodec.mNackFbTypes;
+  config->mCcmFbTypes = aCodec.mCcmFbTypes;
+  config->mRembFbSet = aCodec.RtcpFbRembIsSet();
+  config->mFECFbSet = aCodec.mFECEnabled;
+  config->mTransportCCFbSet = aCodec.RtcpFbTransportCCIsSet();
   if (aCodec.mFECEnabled) {
     uint16_t pt;
     if (SdpHelper::GetPtAsInt(aCodec.mREDPayloadType, &pt)) {
-      (*aConfig)->mREDPayloadType = pt;
+      config->mREDPayloadType = pt;
     }
     if (SdpHelper::GetPtAsInt(aCodec.mULPFECPayloadType, &pt)) {
-      (*aConfig)->mULPFECPayloadType = pt;
+      config->mULPFECPayloadType = pt;
     }
     if (SdpHelper::GetPtAsInt(aCodec.mREDRTXPayloadType, &pt)) {
-      (*aConfig)->mREDRTXPayloadType = pt;
+      config->mREDRTXPayloadType = pt;
     }
   }
   if (aCodec.mRtxEnabled) {
     uint16_t pt;
     if (SdpHelper::GetPtAsInt(aCodec.mRtxPayloadType, &pt)) {
-      (*aConfig)->mRTXPayloadType = pt;
+      config->mRTXPayloadType = pt;
     }
   }
+  return config;
 }
 
 // TODO: Maybe move this someplace else?
@@ -863,25 +875,94 @@ void RTCRtpTransceiver::NegotiatedDetailsToVideoCodecConfigs(
         MOZ_ASSERT(false, "Codec is not video! This is a JSEP bug.");
         return;
       }
-      Maybe<VideoCodecConfig> config;
       const JsepVideoCodecDescription& video =
           static_cast<const JsepVideoCodecDescription&>(*codec);
 
-      JsepCodecDescToVideoCodecConfig(video, &config);
+      JsepCodecDescToVideoCodecConfig(video).apply(
+          [&](VideoCodecConfig config) {
+            config.mTias = aDetails.GetTias();
+            for (size_t i = 0; i < aDetails.GetEncodingCount(); ++i) {
+              const JsepTrackEncoding& jsepEncoding(aDetails.GetEncoding(i));
+              if (jsepEncoding.HasFormat(video.mDefaultPt)) {
+                VideoCodecConfig::Encoding encoding;
+                encoding.rid = jsepEncoding.mRid;
+                config.mEncodings.push_back(encoding);
+              }
+            }
 
-      config->mTias = aDetails.GetTias();
-
-      for (size_t i = 0; i < aDetails.GetEncodingCount(); ++i) {
-        const JsepTrackEncoding& jsepEncoding(aDetails.GetEncoding(i));
-        if (jsepEncoding.HasFormat(video.mDefaultPt)) {
-          VideoCodecConfig::Encoding encoding;
-          encoding.rid = jsepEncoding.mRid;
-          config->mEncodings.push_back(encoding);
-        }
-      }
-
-      aConfigs->push_back(std::move(*config));
+            aConfigs->push_back(std::move(config));
+          });
     }
+  }
+}
+
+/* static */
+void RTCRtpTransceiver::ToDomRtpCodec(const JsepCodecDescription& aCodec,
+                                      RTCRtpCodec* aDomCodec) {
+  MOZ_ASSERT(aCodec.Type() == SdpMediaSection::kAudio ||
+             aCodec.Type() == SdpMediaSection::kVideo);
+  if (aCodec.Type() == SdpMediaSection::kAudio) {
+    aDomCodec->mChannels.Construct(aCodec.mChannels);
+  }
+  aDomCodec->mClockRate = aCodec.mClock;
+  std::string mimeType =
+      aCodec.Type() == SdpMediaSection::kAudio ? "audio/" : "video/";
+  mimeType += aCodec.mName;
+  aDomCodec->mMimeType = NS_ConvertASCIItoUTF16(mimeType);
+
+  if (aCodec.mSdpFmtpLine) {
+    // The RTCRtpParameters.codecs case; just use what we parsed out of the SDP
+    if (!aCodec.mSdpFmtpLine->empty()) {
+      aDomCodec->mSdpFmtpLine.Construct(
+          NS_ConvertASCIItoUTF16(aCodec.mSdpFmtpLine->c_str()));
+    }
+  } else {
+    // The getCapabilities case; serialize what we would put in an offer.
+    UniquePtr<SdpFmtpAttributeList::Parameters> params;
+    aCodec.ApplyConfigToFmtp(params);
+
+    if (params != nullptr) {
+      std::ostringstream paramsString;
+      params->Serialize(paramsString);
+      if (!paramsString.str().empty()) {
+        nsTString<char16_t> fmtp;
+        fmtp.AssignASCII(paramsString.str());
+        aDomCodec->mSdpFmtpLine.Construct(fmtp);
+      }
+    }
+  }
+}
+
+/* static */
+void RTCRtpTransceiver::ToDomRtpCodecParameters(
+    const JsepCodecDescription& aCodec,
+    RTCRtpCodecParameters* aDomCodecParameters) {
+  ToDomRtpCodec(aCodec, aDomCodecParameters);
+  uint16_t pt;
+  if (SdpHelper::GetPtAsInt(aCodec.mDefaultPt, &pt)) {
+    aDomCodecParameters->mPayloadType = pt;
+  }
+}
+
+/* static */
+void RTCRtpTransceiver::ToDomRtpCodecRtx(
+    const JsepVideoCodecDescription& aCodec, RTCRtpCodec* aDomCodec) {
+  MOZ_ASSERT(aCodec.Type() == SdpMediaSection::kVideo);
+  aDomCodec->mClockRate = aCodec.mClock;
+  aDomCodec->mMimeType = NS_ConvertASCIItoUTF16("video/rtx");
+  std::ostringstream apt;
+  apt << "apt=" << aCodec.mDefaultPt;
+  aDomCodec->mSdpFmtpLine.Construct(NS_ConvertASCIItoUTF16(apt.str().c_str()));
+}
+
+/* static */
+void RTCRtpTransceiver::ToDomRtpCodecParametersRtx(
+    const JsepVideoCodecDescription& aCodec,
+    RTCRtpCodecParameters* aDomCodecParameters) {
+  ToDomRtpCodecRtx(aCodec, aDomCodecParameters);
+  uint16_t pt;
+  if (SdpHelper::GetPtAsInt(aCodec.mRtxPayloadType, &pt)) {
+    aDomCodecParameters->mPayloadType = pt;
   }
 }
 
@@ -897,6 +978,135 @@ void RTCRtpTransceiver::Stop(ErrorResult& aRv) {
 
   StopTransceiving();
   mPc->UpdateNegotiationNeeded();
+}
+
+void RTCRtpTransceiver::SetCodecPreferences(
+    const nsTArray<RTCRtpCodec>& aCodecs, ErrorResult& aRv) {
+  nsTArray<RTCRtpCodec> aCodecsFiltered;
+  bool rtxPref =
+      Preferences::GetBool("media.peerconnection.video.use_rtx", false);
+  bool useRtx = false;
+  bool useableCodecs = false;
+
+  // kind = transciever's kind.
+  nsAutoString kind;
+  GetKind(kind);
+
+  if (!aCodecs.IsEmpty()) {
+    struct {
+      bool Equals(const RTCRtpCodec& aA, const RTCRtpCodec& aB) const {
+        return ((aA.mMimeType.Equals(aB.mMimeType,
+                                     nsCaseInsensitiveStringComparator)) &&
+                (aA.mClockRate == aB.mClockRate) &&
+                (aA.mChannels == aB.mChannels) &&
+                (aA.mSdpFmtpLine == aB.mSdpFmtpLine));
+      }
+    } CodecComparator;
+
+    // Remove any duplicate values in codecs, ensuring that the first occurrence
+    // of each value remains in place.
+    for (const auto& codec : aCodecs) {
+      if (!std::any_of(aCodecsFiltered.begin(), aCodecsFiltered.end(),
+                       [&codec, CodecComparator](RTCRtpCodec& alreadyInserted) {
+                         return CodecComparator.Equals(alreadyInserted, codec);
+                       })) {
+        aCodecsFiltered.AppendElement(codec);
+      }
+
+      // Ensure a usable codec was supplied and if RTX is still preferred.
+      if (!useableCodecs && !codec.mMimeType.EqualsLiteral("video/ulpfec") &&
+          !codec.mMimeType.EqualsLiteral("video/red") &&
+          !codec.mMimeType.EqualsLiteral("video/rtx")) {
+        useableCodecs = true;
+      }
+      if (codec.mMimeType.EqualsLiteral("video/rtx")) {
+        useRtx = rtxPref;
+      }
+    }
+
+    // If codecs are not in the codecCapabilities of receiver capabilities
+    // throw InvalidModificationError
+    dom::Nullable<dom::RTCRtpCapabilities> codecCapabilities;
+    PeerConnectionImpl::GetCapabilities(kind, codecCapabilities,
+                                        sdp::Direction::kRecv);
+
+    for (const auto& codec : aCodecsFiltered) {
+      if (!std::any_of(codecCapabilities.Value().mCodecs.begin(),
+                       codecCapabilities.Value().mCodecs.end(),
+                       [&codec, CodecComparator](RTCRtpCodec& recvCap) {
+                         return CodecComparator.Equals(codec, recvCap);
+                       })) {
+        aRv.ThrowInvalidModificationError(
+            nsPrintfCString("Codec %s not in capabilities",
+                            NS_ConvertUTF16toUTF8(codec.mMimeType).get()));
+        return;
+      }
+    }
+
+    // If only RTX, RED, or FEC codecs throw InvalidModificationError
+    if (!useableCodecs) {
+      aRv.ThrowInvalidModificationError("No useable codecs supplied");
+      return;
+    }
+  } else {
+    useRtx = rtxPref;
+  }
+
+  mPreferredCodecs.clear();
+  std::vector<UniquePtr<JsepCodecDescription>> defaultCodecs;
+
+  if (kind.EqualsLiteral("video")) {
+    PeerConnectionImpl::GetDefaultVideoCodecs(defaultCodecs, useRtx);
+  } else if (kind.EqualsLiteral("audio")) {
+    PeerConnectionImpl::GetDefaultAudioCodecs(defaultCodecs);
+  }
+
+  if (!aCodecsFiltered.IsEmpty()) {
+    mPreferredCodecsInUse = true;
+
+    std::vector<std::pair<UniquePtr<JsepCodecDescription>, std::string>>
+        defaultCodecsAndParams;
+    for (auto& codec : defaultCodecs) {
+      UniquePtr<SdpFmtpAttributeList::Parameters> params;
+      codec->ApplyConfigToFmtp(params);
+      std::ostringstream paramsString;
+      if (params != nullptr) {
+        params->Serialize(paramsString);
+      }
+      defaultCodecsAndParams.emplace_back(std::move(codec), paramsString.str());
+    }
+
+    // Take the array of RTCRtpCodec and convert it to a vector of
+    // JsepCodecDescription in order to pass to the receive track and populate
+    // codecs.
+    for (auto& inputCodec : aCodecsFiltered) {
+      auto mimeType = NS_ConvertUTF16toUTF8(inputCodec.mMimeType);
+      for (auto& [defaultCodec, precomputedParamsString] :
+           defaultCodecsAndParams) {
+        bool channelsMatch =
+            (!inputCodec.mChannels.WasPassed() && !defaultCodec->mChannels) ||
+            (inputCodec.mChannels.WasPassed() &&
+             (inputCodec.mChannels.Value() == defaultCodec->mChannels));
+        bool sdpFmtpLinesMatch =
+            (precomputedParamsString.empty() &&
+             !inputCodec.mSdpFmtpLine.WasPassed()) ||
+            ((!precomputedParamsString.empty() &&
+              inputCodec.mSdpFmtpLine.WasPassed()) &&
+             NS_ConvertUTF16toUTF8(inputCodec.mSdpFmtpLine.Value())
+                 .EqualsASCII(precomputedParamsString.c_str()));
+
+        if ((mimeType.Find(defaultCodec->mName) != kNotFound) &&
+            (inputCodec.mClockRate == defaultCodec->mClock) && channelsMatch &&
+            sdpFmtpLinesMatch) {
+          mPreferredCodecs.emplace_back(defaultCodec->Clone());
+          break;
+        }
+      }
+    }
+  } else {
+    mPreferredCodecs.swap(defaultCodecs);
+    mPreferredCodecsInUse = false;
+  }
 }
 
 void RTCRtpTransceiver::StopTransceiving() {

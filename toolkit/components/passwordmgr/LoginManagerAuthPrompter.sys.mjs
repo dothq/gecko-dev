@@ -495,7 +495,7 @@ LoginManagerAuthPrompter.prototype = {
       Services.logins.recordPasswordUse(
         selectedLogin,
         this._inPrivateBrowsing,
-        "prompt_login",
+        "PromptLogin",
         autofilled
       );
     }
@@ -711,7 +711,7 @@ LoginManagerAuthPrompter.prototype = {
 
       ok = await Services.prompt.asyncPromptAuth(
         this._browser?.browsingContext,
-        LoginManagerAuthPrompter.promptAuthModalType,
+        Ci.nsIPrompt.MODAL_TYPE_TAB,
         aChannel,
         aLevel,
         aAuthInfo
@@ -768,7 +768,7 @@ LoginManagerAuthPrompter.prototype = {
         Services.logins.recordPasswordUse(
           selectedLogin,
           this._inPrivateBrowsing,
-          "auth_login",
+          "AuthLogin",
           autofilled
         );
       }
@@ -990,7 +990,7 @@ LoginManagerAuthPrompter.prototype = {
     try {
       var uri = Services.io.newURI(aURIString);
       var baseDomain = Services.eTLD.getBaseDomain(uri);
-      displayHost = idnService.convertToDisplayIDN(baseDomain, {});
+      displayHost = idnService.convertToDisplayIDN(baseDomain);
     } catch (e) {
       this.log(`Couldn't process supplied URIString ${aURIString}.`);
     }
@@ -1115,10 +1115,3 @@ ChromeUtils.defineLazyGetter(LoginManagerAuthPrompter.prototype, "log", () => {
   let logger = lazy.LoginHelper.createLogger("LoginManagerAuthPrompter");
   return logger.log.bind(logger);
 });
-
-XPCOMUtils.defineLazyPreferenceGetter(
-  LoginManagerAuthPrompter,
-  "promptAuthModalType",
-  "prompts.modalType.httpAuth",
-  Services.prompt.MODAL_TYPE_WINDOW
-);

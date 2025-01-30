@@ -56,6 +56,7 @@ class ManifestParser(object):
         handle_defaults=True,
         use_toml=True,
         document=False,
+        add_line_no=False,
     ):
         """Creates a ManifestParser from the given manifest files.
 
@@ -82,6 +83,7 @@ class ManifestParser(object):
                                 variable in this case.
         :param use_toml: If True *.toml configration files will be used iff present in the same location as *.ini files (applies to included files as well). If False only *.ini files will be considered. (defaults to True)
         :param document: If True *.toml configration will preserve the parsed document from `tomlkit` in self.source_documents[filename] (defaults to False)
+        :param add_line_no: If True, the *.toml configuration will add the line number where the test name appears in the file to the parsed document. Also, the document should be set to True. (defaults to False)
         """
         self._defaults = defaults or {}
         self.tests = []
@@ -95,6 +97,7 @@ class ManifestParser(object):
         self._handle_defaults = handle_defaults
         self.use_toml = use_toml
         self.document = document
+        self.add_line_no = add_line_no
         self.logger = Logger()
         if manifests:
             self.read(*manifests)
@@ -229,6 +232,7 @@ class ManifestParser(object):
             strict=self.strict,
             handle_defaults=self._handle_defaults,
             document=self.document,
+            add_line_no=self.add_line_no,
         )
         if filename is not None:
             self.source_documents[filename] = document
@@ -243,9 +247,13 @@ class ManifestParser(object):
             #   is True.
             # - Any variables from the "[include:...]" section.
             # - The defaults of the included manifest.
-            self.manifest_defaults[
-                (parentmanifest, manifest_defaults_filename)
-            ] = defaults
+            #
+            # parentmanifest is whatever the value of ancestor_manifest will be,
+            # i.e. a relative path with platform-native separators.
+            # filename is an absolute path with platform-native separators.
+            self.manifest_defaults[(parentmanifest, manifest_defaults_filename)] = (
+                defaults
+            )
             if manifest_defaults_filename != filename:
                 self.manifest_defaults[(parentmanifest, filename)] = defaults
         else:
@@ -884,7 +892,13 @@ class TestManifest(ManifestParser):
         self.last_used_filters = []
 
     def active_tests(
-        self, exists=True, disabled=True, filters=None, noDefaultFilters=False, **values
+        self,
+        exists=True,
+        disabled=True,
+        filters=None,
+        noDefaultFilters=False,
+        strictExpressions=False,
+        **values,
     ):
         """
         Run all applied filters on the set of tests.
@@ -921,7 +935,7 @@ class TestManifest(ManifestParser):
 
         self.last_used_filters = fltrs[:]
         for fn in fltrs:
-            tests = fn(tests, values)
+            tests = fn(tests, values, strict=strictExpressions)
         return list(tests)
 
     def test_paths(self):

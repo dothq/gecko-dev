@@ -58,7 +58,7 @@ template <typename T>
 static nsresult EnumerateCDMStorageDir(const nsACString& aDir, T&& aDirIter) {
   RefPtr<GeckoMediaPluginServiceParent> service =
       GeckoMediaPluginServiceParent::GetSingleton();
-  MOZ_ASSERT(service);
+  MOZ_RELEASE_ASSERT(service);
 
   // $profileDir/gmp/$platform/
   nsCOMPtr<nsIFile> path;
@@ -94,7 +94,7 @@ class GMPShutdownObserver : public nsIRunnable, public nsIObserver {
   NS_DECL_THREADSAFE_ISUPPORTS
 
   NS_IMETHOD Run() override {
-    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
     nsCOMPtr<nsIObserverService> observerService =
         mozilla::services::GetObserverService();
     EXPECT_TRUE(observerService);
@@ -133,7 +133,7 @@ class NotifyObserversTask : public Runnable {
   explicit NotifyObserversTask(const char* aTopic)
       : mozilla::Runnable("NotifyObserversTask"), mTopic(aTopic) {}
   NS_IMETHOD Run() override {
-    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
     nsCOMPtr<nsIObserverService> observerService =
         mozilla::services::GetObserverService();
     if (observerService) {
@@ -153,7 +153,7 @@ class ClearCDMStorageTask : public nsIRunnable, public nsIObserver {
   NS_DECL_THREADSAFE_ISUPPORTS
 
   NS_IMETHOD Run() override {
-    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
     nsCOMPtr<nsIObserverService> observerService =
         mozilla::services::GetObserverService();
     EXPECT_TRUE(observerService);
@@ -272,7 +272,7 @@ static nsCString GetNodeId(const nsAString& aOrigin,
 static bool IsCDMStorageIsEmpty() {
   RefPtr<GeckoMediaPluginServiceParent> service =
       GeckoMediaPluginServiceParent::GetSingleton();
-  MOZ_ASSERT(service);
+  MOZ_RELEASE_ASSERT(service);
   nsCOMPtr<nsIFile> storage;
   nsresult rv = service->GetStorageDir(getter_AddRefs(storage));
   EXPECT_NS_SUCCEEDED(rv);
@@ -286,14 +286,14 @@ static bool IsCDMStorageIsEmpty() {
 static void AssertIsOnGMPThread() {
   RefPtr<GeckoMediaPluginService> service =
       GeckoMediaPluginService::GetGeckoMediaPluginService();
-  MOZ_ASSERT(service);
+  MOZ_RELEASE_ASSERT(service);
   nsCOMPtr<nsIThread> thread;
   service->GetThread(getter_AddRefs(thread));
-  MOZ_ASSERT(thread);
+  MOZ_RELEASE_ASSERT(thread);
   nsCOMPtr<nsIThread> currentThread;
-  DebugOnly<nsresult> rv = NS_GetCurrentThread(getter_AddRefs(currentThread));
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-  MOZ_ASSERT(currentThread == thread);
+  nsresult rv = NS_GetCurrentThread(getter_AddRefs(currentThread));
+  MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
+  MOZ_RELEASE_ASSERT(currentThread == thread);
 }
 
 class CDMStorageTest {
@@ -1049,8 +1049,8 @@ class CDMStorageTest {
 
     constexpr auto data = "Just_some_arbitrary_data."_ns;
 
-    MOZ_ASSERT(longRecordName.Length() < GMP_MAX_RECORD_NAME_SIZE);
-    MOZ_ASSERT(longRecordName.Length() > 260);  // Windows MAX_PATH
+    MOZ_RELEASE_ASSERT(longRecordName.Length() < GMP_MAX_RECORD_NAME_SIZE);
+    MOZ_RELEASE_ASSERT(longRecordName.Length() > 260);  // Windows MAX_PATH
 
     nsCString response("stored ");
     response.Append(longRecordName);
@@ -1262,16 +1262,22 @@ void TestMatchBaseDomain_NoMatch() {
 }
 
 TEST(GeckoMediaPlugins, MatchBaseDomain_MatchOrigin)
-{ TestMatchBaseDomain_MatchOrigin(); }
+{
+  TestMatchBaseDomain_MatchOrigin();
+}
 
 TEST(GeckoMediaPlugins, MatchBaseDomain_MatchTLD)
-{ TestMatchBaseDomain_MatchTLD(); }
+{
+  TestMatchBaseDomain_MatchTLD();
+}
 
 TEST(GeckoMediaPlugins, MatchBaseDomain_NoMatch)
-{ TestMatchBaseDomain_NoMatch(); }
+{
+  TestMatchBaseDomain_NoMatch();
+}
 
-// Bug 1776767 - Skip all GMP tests on Windows ASAN
-#if !(defined(XP_WIN) && defined(MOZ_ASAN))
+// Bug 1776767 - Skip all GMP tests on Windows ASAN / CCOV
+#if !(defined(XP_WIN) && (defined(MOZ_ASAN) || defined(MOZ_CODE_COVERAGE)))
 TEST(GeckoMediaPlugins, CDMStorageGetNodeId)
 {
   RefPtr<CDMStorageTest> runner = new CDMStorageTest();
@@ -1339,4 +1345,5 @@ TEST(GeckoMediaPlugins, GMPOutputProtection)
   runner->DoTest(&CDMStorageTest::TestOutputProtection);
 }
 #  endif  // defined(XP_WIN)
-#endif    // !(defined(XP_WIN) && defined(MOZ_ASAN))
+#endif    // !(defined(XP_WIN) && (defined(MOZ_ASAN) ||
+          // defined(MOZ_CODE_COVERAGE)))

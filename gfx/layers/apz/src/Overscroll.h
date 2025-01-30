@@ -62,8 +62,7 @@ class OverscrollAnimation : public AsyncPanZoomAnimation {
       mDeferredTasks.AppendElement(NewRunnableMethod<ScrollSnapFlags>(
           "layers::AsyncPanZoomController::ScrollSnap", &mApzc,
           &AsyncPanZoomController::ScrollSnap,
-          ScrollSnapFlags::IntendedDirection |
-              ScrollSnapFlags::IntendedEndPosition));
+          ScrollSnapFlags::IntendedEndPosition));
       return false;
     }
     return true;
@@ -220,6 +219,9 @@ class WidgetOverscrollEffect : public OverscrollEffectBase {
 
   void RelieveOverscroll(const ParentLayerPoint& aVelocity,
                          SideBits aOverscrollSideBits) override {
+    if (!mIsOverscrolled) {
+      return;
+    }
     RefPtr<GeckoContentController> controller =
         mApzc.GetGeckoContentController();
     // From APZC's point of view, consider it to no longer be overscrolled

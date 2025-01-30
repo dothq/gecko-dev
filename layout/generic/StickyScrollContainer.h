@@ -12,16 +12,18 @@
 #ifndef StickyScrollContainer_h
 #define StickyScrollContainer_h
 
+#include "mozilla/DepthOrderedFrameList.h"
+#include "nsIScrollPositionListener.h"
 #include "nsPoint.h"
 #include "nsRectAbsolute.h"
 #include "nsTArray.h"
-#include "nsIScrollPositionListener.h"
 
 struct nsRect;
 class nsIFrame;
-class nsIScrollableFrame;
 
 namespace mozilla {
+
+class ScrollContainerFrame;
 
 class StickyScrollContainer final : public nsIScrollPositionListener {
  public:
@@ -39,16 +41,12 @@ class StickyScrollContainer final : public nsIScrollPositionListener {
   static StickyScrollContainer* GetStickyScrollContainerForScrollFrame(
       nsIFrame* aScrollFrame);
 
-  /**
-   * aFrame may have moved into or out of a scroll frame's frame subtree.
-   */
-  static void NotifyReparentedFrameAcrossScrollFrameBoundary(
-      nsIFrame* aFrame, nsIFrame* aOldParent);
+  void AddFrame(nsIFrame* aFrame) { mFrames.Add(aFrame); }
+  void RemoveFrame(nsIFrame* aFrame) { mFrames.Remove(aFrame); }
 
-  void AddFrame(nsIFrame* aFrame) { mFrames.AppendElement(aFrame); }
-  void RemoveFrame(nsIFrame* aFrame) { mFrames.RemoveElement(aFrame); }
-
-  nsIScrollableFrame* ScrollFrame() const { return mScrollFrame; }
+  ScrollContainerFrame* ScrollContainer() const {
+    return mScrollContainerFrame;
+  }
 
   // Compute the offsets for a sticky position element
   static void ComputeStickyOffsets(nsIFrame* aFrame);
@@ -80,12 +78,12 @@ class StickyScrollContainer final : public nsIScrollPositionListener {
   void UpdatePositions(nsPoint aScrollPosition, nsIFrame* aSubtreeRoot);
 
   // nsIScrollPositionListener
-  virtual void ScrollPositionWillChange(nscoord aX, nscoord aY) override;
-  virtual void ScrollPositionDidChange(nscoord aX, nscoord aY) override;
+  void ScrollPositionWillChange(nscoord aX, nscoord aY) override;
+  void ScrollPositionDidChange(nscoord aX, nscoord aY) override;
 
   ~StickyScrollContainer();
 
-  const nsTArray<nsIFrame*>& GetFrames() const { return mFrames; }
+  const DepthOrderedFrameList& GetFrames() const { return mFrames; }
 
   /**
    * Returns true if the frame is "stuck" in the y direction, ie it's acting
@@ -93,8 +91,13 @@ class StickyScrollContainer final : public nsIScrollPositionListener {
    */
   bool IsStuckInYDirection(nsIFrame* aFrame) const;
 
+  /**
+   * Calls FrameNeedsReflow on all sticky position children.
+   */
+  void MarkFramesForReflow();
+
  private:
-  explicit StickyScrollContainer(nsIScrollableFrame* aScrollFrame);
+  explicit StickyScrollContainer(ScrollContainerFrame* aScrollContainerFrame);
 
   /**
    * Compute two rectangles that determine sticky positioning: |aStick|, based
@@ -105,8 +108,8 @@ class StickyScrollContainer final : public nsIScrollPositionListener {
   void ComputeStickyLimits(nsIFrame* aFrame, nsRect* aStick,
                            nsRect* aContain) const;
 
-  nsIScrollableFrame* const mScrollFrame;
-  nsTArray<nsIFrame*> mFrames;
+  ScrollContainerFrame* const mScrollContainerFrame;
+  DepthOrderedFrameList mFrames;
   nsPoint mScrollPosition;
 };
 

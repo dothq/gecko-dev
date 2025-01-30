@@ -130,30 +130,31 @@ function add_task_if_omta_enabled(test) {
   add_task(test);
 }
 
+async function estimateVsyncRate() {
+  await waitForNextFrame();
+
+  const timeAtStart = document.timeline.currentTime;
+  await waitForAnimationFrames(5);
+  return (document.timeline.currentTime - timeAtStart) / 5;
+}
+
 // We need to wait for all paints before running tests to avoid contaminations
 // from styling of this document itself.
-waitForAllPaints(() => {
-  add_task(async function () {
-    // Start vsync rate measurement in after a RAF callback.
-    await waitForNextFrame();
-
-    const timeAtStart = document.timeline.currentTime;
-    await waitForAnimationFrames(5);
-    const vsyncRate = (document.timeline.currentTime - timeAtStart) / 5;
-
-    // In this test we basically observe restyling counts in 5 frames, if it
-    // takes over 200ms during the 5 frames, this test will fail. So
-    // "200ms / 5 = 40ms" is a threshold whether the test works as expected or
-    // not. We'd take 5ms additional tolerance here.
-    // Note that the 200ms is a period we unthrottle throttled animations that
-    // at least one of the animating styles produces change hints causing
-    // overflow, the value is defined in
-    // KeyframeEffect::OverflowRegionRefreshInterval.
-    if (vsyncRate > 40 - 5) {
-      ok(true, `the vsync rate ${vsyncRate} on this machine is too slow to run this test`);
-      SimpleTest.finish();
-    }
-  });
+waitForAllPaints(async () => {
+  const vsyncRate = await estimateVsyncRate();
+  // In this test we basically observe restyling counts in 5 frames, if it
+  // takes over 200ms during the 5 frames, this test will fail. So
+  // "200ms / 5 = 40ms" is a threshold whether the test works as expected or
+  // not. We'd take 5ms additional tolerance here.
+  // Note that the 200ms is a period we unthrottle throttled animations that
+  // at least one of the animating styles produces change hints causing
+  // overflow, the value is defined in
+  // KeyframeEffect::OverflowRegionRefreshInterval.
+  if (vsyncRate > 40 - 5) {
+    ok(true, `the vsync rate ${vsyncRate} on this machine is too slow to run this test`);
+    SimpleTest.finish();
+    return;
+  }
 
   add_task(async function restyling_for_main_thread_animations() {
     const div = addDiv(null, { style: 'animation: on-main-thread 100s' });
@@ -975,13 +976,7 @@ waitForAllPaints(() => {
     animation.pause();
 
     await animation.ready;
-    let restyleCount;
-    restyleCount = await observeStyling(1);
-    is(restyleCount, 1,
-       'Animations running on the compositor should restyle once after ' +
-       'Animation.pause() was called');
-
-    restyleCount = await observeStyling(5);
+    let restyleCount = await observeStyling(5);
     is(restyleCount, 0,
        'Paused animations running on the compositor should never cause ' +
        'restyles');
@@ -997,13 +992,7 @@ waitForAllPaints(() => {
     animation.pause();
 
     await animation.ready;
-    let restyleCount;
-    restyleCount = await observeStyling(1);
-    is(restyleCount, 1,
-       'Animations running on the main-thread should restyle once after ' +
-       'Animation.pause() was called');
-
-    restyleCount = await observeStyling(5);
+    let restyleCount = await observeStyling(5);
     is(restyleCount, 0,
        'Paused animations running on the main-thread should never cause ' +
        'restyles');
@@ -1384,6 +1373,27 @@ waitForAllPaints(() => {
     is(restyleCount, 5,
        'CSS animations on an in-view svg element with post-transform should ' +
        'not be throttled.');
+
+    await ensureElementRemoval(div);
+  });
+
+  add_task_if_omta_enabled(async function svg_non_scaling_stroke_animation() {
+    const div = addDiv(null, { style: 'overflow: scroll;' +
+                                    'height: 100px; width: 100px;' });
+    const svg = addSVGElement(div, 'svg', { viewBox: '0 0 250 250',
+                                          width:   '40px',
+                                          height:  '40px' });
+    const rect = addSVGElement(svg, 'rect', { x:    '0',
+                                            y:      '0',
+                                            width:  '250',
+                                            height: '250',
+                                            fill:   'red',
+                                            style: 'vector-effect: non-scaling-stroke; animation: rotate 100s infinite;'});
+    const animation = rect.getAnimations()[0];
+    await waitForAnimationReadyToRestyle(animation);
+
+    ok(!SpecialPowers.wrap(animation).isRunningOnCompositor,
+         'The animation of a non-scaling-stroke element is not running on the compositor');
 
     await ensureElementRemoval(div);
   });

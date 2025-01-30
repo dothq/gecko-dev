@@ -12,11 +12,16 @@
 
 #include <memory>
 #include <utility>
-#include <vector>
 
+#include "absl/base/nullability.h"
+#include "api/environment/environment.h"
+#include "api/field_trials_view.h"
 #include "api/make_ref_counted.h"
+#include "api/ref_counted_base.h"
 #include "api/rtc_event_log/rtc_event_log.h"
+#include "api/scoped_refptr.h"
 #include "api/task_queue/default_task_queue_factory.h"
+#include "api/task_queue/task_queue_factory.h"
 #include "api/transport/field_trial_based_config.h"
 #include "rtc_base/checks.h"
 #include "system_wrappers/include/clock.h"
@@ -97,12 +102,22 @@ Environment EnvironmentFactory::CreateWithDefaults() && {
   if (field_trials_ == nullptr) {
     Set(std::make_unique<FieldTrialBasedConfig>());
   }
+#if defined(WEBRTC_MOZILLA_BUILD)
+  // We want to use our clock, not GetRealTimeClockRaw, and we avoid
+  // building the code under third_party/libwebrtc/task_queue.  To
+  // ensure we're setting up things correctly, namely providing an
+  // Environment object with a preset task_queue_factory and clock,
+  // we'll do a release assert here.
+  RTC_CHECK(clock_);
+  RTC_CHECK(task_queue_factory_);
+#else
   if (clock_ == nullptr) {
     Set(Clock::GetRealTimeClock());
   }
   if (task_queue_factory_ == nullptr) {
     Set(CreateDefaultTaskQueueFactory(field_trials_));
   }
+#endif
   if (event_log_ == nullptr) {
     Set(std::make_unique<RtcEventLogNull>());
   }

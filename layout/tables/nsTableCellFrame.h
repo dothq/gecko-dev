@@ -18,6 +18,7 @@
 
 namespace mozilla {
 class PresShell;
+class ScrollContainerFrame;
 }  // namespace mozilla
 
 /**
@@ -34,9 +35,6 @@ class PresShell;
 class nsTableCellFrame : public nsContainerFrame,
                          public nsITableCellLayout,
                          public nsIPercentBSizeObserver {
-  typedef mozilla::gfx::DrawTarget DrawTarget;
-  typedef mozilla::image::ImgDrawResult ImgDrawResult;
-
   friend nsTableCellFrame* NS_NewTableCellFrame(mozilla::PresShell* aPresShell,
                                                 ComputedStyle* aStyle,
                                                 nsTableFrame* aTableFrame);
@@ -44,16 +42,11 @@ class nsTableCellFrame : public nsContainerFrame,
   nsTableCellFrame(ComputedStyle* aStyle, nsTableFrame* aTableFrame)
       : nsTableCellFrame(aStyle, aTableFrame, kClassID) {}
 
- protected:
-  typedef mozilla::WritingMode WritingMode;
-  typedef mozilla::LogicalSide LogicalSide;
-  typedef mozilla::LogicalMargin LogicalMargin;
-
  public:
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsTableCellFrame)
 
-  nsIScrollableFrame* GetScrollTargetFrame() const final;
+  mozilla::ScrollContainerFrame* GetScrollTargetFrame() const final;
 
   nsTableRowFrame* GetTableRowFrame() const {
     nsIFrame* parent = GetParent();
@@ -91,8 +84,11 @@ class nsTableCellFrame : public nsContainerFrame,
 #endif
 
   nsContainerFrame* GetContentInsertionFrame() override {
-    return PrincipalChildList().FirstChild()->GetContentInsertionFrame();
+    return Inner()->GetContentInsertionFrame();
   }
+
+  // Return our anonymous inner frame.
+  nsIFrame* Inner() const;
 
   nsIFrame* CellContentFrame() const;
 
@@ -109,8 +105,9 @@ class nsTableCellFrame : public nsContainerFrame,
                               nsDisplayListBuilder* aBuilder,
                               const nsDisplayListSet& aLists);
 
-  nscoord GetMinISize(gfxContext* aRenderingContext) override;
-  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
+  nscoord IntrinsicISize(const mozilla::IntrinsicSizeInput& aInput,
+                         mozilla::IntrinsicISizeType aType) override;
+
   IntrinsicSizeOffsetData IntrinsicISizeOffsets(
       nscoord aPercentageBasis = NS_UNCONSTRAINEDSIZE) override;
 
@@ -122,7 +119,9 @@ class nsTableCellFrame : public nsContainerFrame,
   nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  void BlockDirAlignChild(mozilla::WritingMode aWM, nscoord aMaxAscent);
+  // Align the cell's child frame within the cell.
+  void BlockDirAlignChild(mozilla::WritingMode aWM, nscoord aMaxAscent,
+                          mozilla::ForceAlignTopForTableCell aForceAlignTop);
 
   /*
    * Get the value of vertical-align adjusted for CSS 2's rules for a
@@ -140,7 +139,7 @@ class nsTableCellFrame : public nsContainerFrame,
    * Get the first-line baseline of the cell relative to its block-start border
    * edge, as if the cell were vertically aligned to the top of the row.
    */
-  nscoord GetCellBaseline() const;
+  Maybe<nscoord> GetCellBaseline() const;
 
   /**
    * return the cell's specified row span. this is what was specified in the
@@ -193,20 +192,24 @@ class nsTableCellFrame : public nsContainerFrame,
 
   void SetColIndex(int32_t aColIndex);
 
-  /** return the available isize given to this frame during its last reflow */
-  inline nscoord GetPriorAvailISize();
+  // Get or set the available isize given to this frame during its last reflow.
+  nscoord GetPriorAvailISize() const { return mPriorAvailISize; }
+  void SetPriorAvailISize(nscoord aPriorAvailISize) {
+    mPriorAvailISize = aPriorAvailISize;
+  }
 
-  /** set the available isize given to this frame during its last reflow */
-  inline void SetPriorAvailISize(nscoord aPriorAvailISize);
+  // Get or set the desired size returned by this frame during its last reflow.
+  mozilla::LogicalSize GetDesiredSize() const { return mDesiredSize; }
+  void SetDesiredSize(const ReflowOutput& aDesiredSize) {
+    mDesiredSize = aDesiredSize.Size(GetWritingMode());
+  }
 
-  /** return the desired size returned by this frame during its last reflow */
-  inline mozilla::LogicalSize GetDesiredSize();
-
-  /** set the desired size returned by this frame during its last reflow */
-  inline void SetDesiredSize(const ReflowOutput& aDesiredSize);
-
-  bool GetContentEmpty() const;
-  void SetContentEmpty(bool aContentEmpty);
+  bool GetContentEmpty() const {
+    return HasAnyStateBits(NS_TABLE_CELL_CONTENT_EMPTY);
+  }
+  void SetContentEmpty(bool aContentEmpty) {
+    AddOrRemoveStateBits(NS_TABLE_CELL_CONTENT_EMPTY, aContentEmpty);
+  }
 
   nsTableCellFrame* GetNextCell() const {
     nsIFrame* sibling = GetNextSibling();
@@ -216,7 +219,8 @@ class nsTableCellFrame : public nsContainerFrame,
     return static_cast<nsTableCellFrame*>(sibling);
   }
 
-  virtual LogicalMargin GetBorderWidth(WritingMode aWM) const;
+  virtual mozilla::LogicalMargin GetBorderWidth(mozilla::WritingMode aWM) const;
+  virtual bool BCBordersChanged() const { return false; }
 
   void DecorateForSelection(DrawTarget* aDrawTarget, nsPoint aPt);
 
@@ -251,61 +255,40 @@ class nsTableCellFrame : public nsContainerFrame,
 
   friend class nsTableRowFrame;
 
-  uint32_t mColIndex;  // the starting column for this cell
+  // The starting column for this cell
+  uint32_t mColIndex = 0;
 
-  nscoord mPriorAvailISize;           // the avail isize during the last reflow
-  mozilla::LogicalSize mDesiredSize;  // the last desired inline and block size
+  // The avail isize during the last reflow
+  nscoord mPriorAvailISize = 0;
+
+  // The last desired inline and block size
+  mozilla::LogicalSize mDesiredSize;
 };
 
-inline nscoord nsTableCellFrame::GetPriorAvailISize() {
-  return mPriorAvailISize;
-}
-
-inline void nsTableCellFrame::SetPriorAvailISize(nscoord aPriorAvailISize) {
-  mPriorAvailISize = aPriorAvailISize;
-}
-
-inline mozilla::LogicalSize nsTableCellFrame::GetDesiredSize() {
-  return mDesiredSize;
-}
-
-inline void nsTableCellFrame::SetDesiredSize(const ReflowOutput& aDesiredSize) {
-  mDesiredSize = aDesiredSize.Size(GetWritingMode());
-}
-
-inline bool nsTableCellFrame::GetContentEmpty() const {
-  return HasAnyStateBits(NS_TABLE_CELL_CONTENT_EMPTY);
-}
-
-inline void nsTableCellFrame::SetContentEmpty(bool aContentEmpty) {
-  if (aContentEmpty) {
-    AddStateBits(NS_TABLE_CELL_CONTENT_EMPTY);
-  } else {
-    RemoveStateBits(NS_TABLE_CELL_CONTENT_EMPTY);
-  }
-}
-
-// nsBCTableCellFrame
 class nsBCTableCellFrame final : public nsTableCellFrame {
-  typedef mozilla::image::ImgDrawResult ImgDrawResult;
-
  public:
   NS_DECL_FRAMEARENA_HELPERS(nsBCTableCellFrame)
 
   nsBCTableCellFrame(ComputedStyle* aStyle, nsTableFrame* aTableFrame);
+  void Reflow(nsPresContext*, ReflowOutput&, const ReflowInput&,
+              nsReflowStatus&) override;
 
   ~nsBCTableCellFrame();
 
   nsMargin GetUsedBorder() const override;
+  bool BCBordersChanged() const override {
+    return GetUsedBorder() != mLastUsedBorder;
+  }
 
   // Get the *inner half of the border only*, in twips.
-  LogicalMargin GetBorderWidth(WritingMode aWM) const override;
+  mozilla::LogicalMargin GetBorderWidth(
+      mozilla::WritingMode aWM) const override;
 
-  // Get the *inner half of the border only*, in pixels.
-  BCPixelSize GetBorderWidth(LogicalSide aSide) const;
+  // Get the *inner half of the border only*
+  nscoord GetBorderWidth(mozilla::LogicalSide aSide) const;
 
   // Set the full (both halves) width of the border
-  void SetBorderWidth(LogicalSide aSide, BCPixelSize aPixelValue);
+  void SetBorderWidth(mozilla::LogicalSide aSide, nscoord aValue);
 
   nsMargin GetBorderOverflow() override;
 
@@ -316,10 +299,12 @@ class nsBCTableCellFrame final : public nsTableCellFrame {
  private:
   // These are the entire width of the border (the cell edge contains only
   // the inner half).
-  BCPixelSize mBStartBorder;
-  BCPixelSize mIEndBorder;
-  BCPixelSize mBEndBorder;
-  BCPixelSize mIStartBorder;
+  nscoord mBStartBorder = 0;
+  nscoord mIEndBorder = 0;
+  nscoord mBEndBorder = 0;
+  nscoord mIStartBorder = 0;
+
+  nsMargin mLastUsedBorder;
 };
 
 // Implemented here because that's a sane-ish way to make the includes work out.

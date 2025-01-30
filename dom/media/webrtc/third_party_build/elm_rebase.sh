@@ -54,14 +54,54 @@ be as simple as running the following commands:
 COMMIT_LIST_FILE=$TMP_DIR/rebase-commit-list.txt
 export HGPLAIN=1
 
+if [ "x$MOZ_TOP_FF" = "x" ]; then
+  MOZ_TOP_FF=""
+fi
+if [ "x$MOZ_BOTTOM_FF" = "x" ]; then
+  MOZ_BOTTOM_FF=""
+fi
+if [ "x$STOP_FOR_REORDER" = "x" ]; then
+  STOP_FOR_REORDER=""
+fi
+
 # After this point:
 # * eE: All commands should succeed.
+# * u: All variables should be defined before use.
 # * o pipefail: All stages of all pipes should succeed.
-set -eEo pipefail
+set -eEuo pipefail
+
+# always make sure the repo is clean before doing the rebase
+CHANGED_FILE_CNT=`hg status | wc -l | tr -d " "`
+if [ "x$CHANGED_FILE_CNT" != "x0" ]; then
+  echo "There are modified or untracked files in the repo."
+  echo "Please cleanup the repo before running"
+  echo "$0"
+  exit 1
+fi
 
 if [ -f $STATE_DIR/rebase_resume_state ]; then
   source $STATE_DIR/rebase_resume_state
 else
+
+  # on first run, we want to verify sanity of the patch-stack so
+  # ending guidance is appropriate regarding changes in
+  # third_party/libwebrtc between the old central we're currently
+  # based on and the new central we're rebasing onto.
+  echo "Restoring patch-stack..."
+  ./mach python $SCRIPT_DIR/restore_patch_stack.py --repo-path $MOZ_LIBWEBRTC_SRC
+  echo "Verify vendoring..."
+  ERROR_HELP=$"When verify_vendoring.sh is successful, run the following in bash:
+  (source $SCRIPT_DIR/use_config_env.sh ;
+   ./mach python $SCRIPT_DIR/save_patch_stack.py \\
+    --repo-path $MOZ_LIBWEBRTC_SRC \\
+    --target-branch-head $MOZ_TARGET_UPSTREAM_BRANCH_HEAD  \\
+    --separate-commit-bug-number $MOZ_FASTFORWARD_BUG )
+
+Then resume running this script:
+  bash $0
+"
+  bash $SCRIPT_DIR/verify_vendoring.sh || (echo "$ERROR_HELP" ; exit 1)
+  ERROR_HELP=""
 
   if [ "x" == "x$MOZ_TOP_FF" ]; then
     MOZ_TOP_FF=`hg log -r . -T"{node|short}"`
@@ -119,12 +159,6 @@ That command looks like:
   fi
   ERROR_HELP=""
 
-  # After this point:
-  # * eE: All commands should succeed.
-  # * u: All variables should be defined before use.
-  # * o pipefail: All stages of all pipes should succeed.
-  set -eEuo pipefail
-
   MOZ_NEW_CENTRAL=`hg log -r central -T"{node|short}"`
 
   echo "bottom of fast-foward tree is $MOZ_BOTTOM_FF"
@@ -143,6 +177,19 @@ That command looks like:
 
   hg update $MOZ_NEW_CENTRAL
 
+  ERROR_HELP=$"
+Running ./mach bootstrap has failed.  For details, see:
+$LOG_DIR/log-bootstrap.txt
+"
+  echo "Running ./mach bootstrap..."
+  ./mach bootstrap --application=browser --no-system-changes &> $LOG_DIR/log-bootstrap.txt
+  echo "Done running ./mach bootstrap"
+  ERROR_HELP=""
+
+  echo "Running ./mach clobber..."
+  ./mach clobber &> $LOG_DIR/log-sanity-clobber.txt
+  echo "Done running ./mach clobber"
+
   # pre-work is complete, let's write out a temporary config file that allows
   # us to resume
   echo $"export MOZ_BOTTOM_FF=$MOZ_BOTTOM_FF
@@ -152,6 +199,15 @@ export MOZ_NEW_CENTRAL=$MOZ_NEW_CENTRAL
 export MOZ_BOOKMARK=$MOZ_BOOKMARK
 " > $STATE_DIR/rebase_resume_state
 fi # if [ -f $STATE_DIR/rebase_resume_state ]; then ; else
+
+if [ "x$STOP_FOR_REORDER" = "x1" ]; then
+  echo ""
+  echo "Stopping after generating commit list ($COMMIT_LIST_FILE) to"
+  echo "allow tweaking commit ordering.  Re-running $0 will resume the"
+  echo "rebase processing.  To stop processing during the rebase,"
+  echo "insert a line with only 'STOP'."
+  exit
+fi
 
 # grab all commits
 COMMITS=`cat $COMMIT_LIST_FILE | awk '{print $1;}'`
@@ -170,6 +226,12 @@ for commit in $COMMITS; do
     echo "Removing from list '$FULL_COMMIT_LINE'"
     ed -s $COMMIT_LIST_FILE <<< $'1d\nw\nq'
   }
+
+  if [ "$FULL_COMMIT_LINE" == "STOP" ]; then
+    echo "Stopping for history editing.  Re-run $0 to resume."
+    remove_commit
+    exit
+  fi
 
   IS_BUILD_COMMIT=`hg log -T '{desc|firstline}' -r $commit \
                    | grep "file updates" | wc -l | tr -d " " || true`
@@ -206,10 +268,7 @@ for commit in $COMMITS; do
     continue
   fi
 
-  MODIFIED_BUILD_RELATED_FILE_CNT=`hg diff -c tip --stat \
-      --include 'third_party/libwebrtc/**BUILD.gn' \
-      --include 'third_party/libwebrtc/webrtc.gni' \
-      --include 'dom/media/webrtc/third_party_build/gn-configs/webrtc.json' \
+  MODIFIED_BUILD_RELATED_FILE_CNT=`bash $SCRIPT_DIR/get_build_file_changes.sh \
       | wc -l | tr -d " "`
   echo "MODIFIED_BUILD_RELATED_FILE_CNT: $MODIFIED_BUILD_RELATED_FILE_CNT"
   if [ "x$MODIFIED_BUILD_RELATED_FILE_CNT" != "x0" ]; then
@@ -232,7 +291,46 @@ for commit in $COMMITS; do
   echo "Done processing $commit"
 done
 
-rm $STATE_DIR/rebase_resume_state
+ERROR_HELP=$"
+Running the sanity build has failed.  For details, see:
+$LOG_DIR/log-sanity-build.txt
+
+Please fix the build, commit the changes (if necessary, the
+patch-stack will be fixed up during steps following the
+build), and then run:
+  bash $0
+"
+echo "Running sanity build..."
+./mach build &> $LOG_DIR/log-sanity-build.txt
+echo "Done running sanity build"
+ERROR_HELP=""
+
+# In case any changes were made to fix the build after the rebase,
+# we'll check for changes since the last patch-stack update in
+# third_party/libwebrtc/moz-patch-stack.
+# TODO: this is copied from verify_vendoring.sh.  We should make
+# make this reusable.
+# we grab the entire firstline description for convenient logging
+LAST_PATCHSTACK_UPDATE_COMMIT=`hg log -r ::. --template "{node|short} {desc|firstline}\n" \
+    --include "third_party/libwebrtc/moz-patch-stack/*.patch" | tail -1`
+echo "LAST_PATCHSTACK_UPDATE_COMMIT: $LAST_PATCHSTACK_UPDATE_COMMIT"
+
+LAST_PATCHSTACK_UPDATE_COMMIT_SHA=`echo $LAST_PATCHSTACK_UPDATE_COMMIT \
+    | awk '{ print $1; }'`
+echo "LAST_PATCHSTACK_UPDATE_COMMIT_SHA: $LAST_PATCHSTACK_UPDATE_COMMIT_SHA"
+
+# grab the oldest, non "Vendor from libwebrtc" line
+CANDIDATE_COMMITS=`hg log --template "{node|short} {desc|firstline}\n" \
+    -r "children($LAST_PATCHSTACK_UPDATE_COMMIT_SHA)::. - desc('re:(Vendor libwebrtc)')" \
+    --include "third_party/libwebrtc/" | awk 'BEGIN { ORS=" " }; { print $1; }'`
+echo "CANDIDATE_COMMITS:"
+echo "$CANDIDATE_COMMITS"
+
+EXTRACT_COMMIT_RANGE=""
+if [ "x$CANDIDATE_COMMITS" != "x" ]; then
+  EXTRACT_COMMIT_RANGE="$CANDIDATE_COMMITS"
+  echo "EXTRACT_COMMIT_RANGE: $EXTRACT_COMMIT_RANGE"
+fi
 
 # This is blank in case no changes have been made in third_party/libwebrtc
 # since the previous rebase (or original elm reset).
@@ -242,9 +340,10 @@ echo "Checking for new mercurial changes in third_party/libwebrtc"
 FIXUP_INSTRUCTIONS=$"
 Mercurial changes in third_party/libwebrtc since the last rebase have been
 detected (using the verify_vendoring.sh script).  Running the following
-commands should remedy the situation:
+commands should help remedy the situation:
 
-  ./mach python $SCRIPT_DIR/extract-for-git.py $MOZ_OLD_CENTRAL::$MOZ_NEW_CENTRAL
+  ./mach python $SCRIPT_DIR/extract-for-git.py \\
+         $MOZ_OLD_CENTRAL::$MOZ_NEW_CENTRAL $EXTRACT_COMMIT_RANGE
   mv mailbox.patch $MOZ_LIBWEBRTC_SRC
   (cd $MOZ_LIBWEBRTC_SRC && \\
    git am mailbox.patch)
@@ -257,14 +356,21 @@ When verify_vendoring.sh is successful, run the following in bash:
     --target-branch-head $MOZ_TARGET_UPSTREAM_BRANCH_HEAD  \\
     --separate-commit-bug-number $MOZ_FASTFORWARD_BUG )
 "
+echo "Restoring patch-stack..."
+# restore to make sure new no-op commit files are in the state directory
+# in case the user is instructed to save the patch-stack.
+./mach python $SCRIPT_DIR/restore_patch_stack.py --repo-path $MOZ_LIBWEBRTC_SRC
+echo "Verify vendoring..."
 bash $SCRIPT_DIR/verify_vendoring.sh &> $LOG_DIR/log-verify.txt || PATCH_STACK_FIXUP="$FIXUP_INSTRUCTIONS"
 echo "Done checking for new mercurial changes in third_party/libwebrtc"
+
+# now that we've run all the things that should be fallible, remove the
+# resume state file
+rm $STATE_DIR/rebase_resume_state
 
 REMAINING_STEPS=$"
 The rebase process is complete.  The following steps must be completed manually:
 $PATCH_STACK_FIXUP
-  ./mach bootstrap --application=browser --no-system-changes && \\
-  ./mach build && \\
   hg push -r tip --force && \\
   hg push -B $MOZ_BOOKMARK
 "

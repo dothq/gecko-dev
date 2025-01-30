@@ -17,6 +17,18 @@
 #  define MOZ_BUFFER_STDERR
 #endif
 
+// It appears that this is sometimes compiled without XP_WIN
+#if defined(_WIN32)
+#  include <process.h>
+#  define MOZ_GET_PID() _getpid()
+#elif !defined(__wasi__)
+#  include <unistd.h>
+#  define MOZ_GET_PID() getpid()
+#else
+// Prevent compiler warning
+#  define MOZ_GET_PID() -1
+#endif
+
 #include "mozilla/Attributes.h"
 #include "mozilla/Compiler.h"
 #include "mozilla/Fuzzing.h"
@@ -83,7 +95,10 @@ MOZ_BEGIN_EXTERN_C
 #if defined(ANDROID) && defined(MOZ_DUMP_ASSERTION_STACK)
 MOZ_MAYBE_UNUSED static void MOZ_ReportAssertionFailurePrintFrame(
     const char* aBuf) {
-  __android_log_print(ANDROID_LOG_FATAL, "MOZ_Assert", "%s\n", aBuf);
+  __android_log_print(ANDROID_LOG_FATAL, "MOZ_Assert", "%s", aBuf);
+}
+MOZ_MAYBE_UNUSED static void MOZ_CrashPrintFrame(const char* aBuf) {
+  __android_log_print(ANDROID_LOG_FATAL, "MOZ_Crash", "%s", aBuf);
 }
 #endif
 
@@ -95,14 +110,15 @@ MOZ_MAYBE_UNUSED static void MOZ_ReportAssertionFailurePrintFrame(
  * method is primarily for internal use in this header, and only secondarily
  * for use in implementing release-build assertions.
  */
+
 MOZ_MAYBE_UNUSED static MOZ_COLD MOZ_NEVER_INLINE void
 MOZ_ReportAssertionFailure(const char* aStr, const char* aFilename,
                            int aLine) MOZ_PRETEND_NORETURN_FOR_STATIC_ANALYSIS {
   MOZ_FUZZING_HANDLE_CRASH_EVENT4("MOZ_ASSERT", aFilename, aLine, aStr);
 #ifdef ANDROID
   __android_log_print(ANDROID_LOG_FATAL, "MOZ_Assert",
-                      "Assertion failure: %s, at %s:%d\n", aStr, aFilename,
-                      aLine);
+                      "[%d] Assertion failure: %s, at %s:%d\n", MOZ_GET_PID(),
+                      aStr, aFilename, aLine);
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
   MozWalkTheStackWithWriter(MOZ_ReportAssertionFailurePrintFrame, CallerPC(),
                             /* aMaxFrames */ 0);
@@ -110,11 +126,12 @@ MOZ_ReportAssertionFailure(const char* aStr, const char* aFilename,
 #else
 #  if defined(MOZ_BUFFER_STDERR)
   char msg[1024] = "";
-  snprintf(msg, sizeof(msg) - 1, "Assertion failure: %s, at %s:%d\n", aStr,
-           aFilename, aLine);
+  snprintf(msg, sizeof(msg) - 1, "[%d] Assertion failure: %s, at %s:%d\n",
+           MOZ_GET_PID(), aStr, aFilename, aLine);
   fputs(msg, stderr);
 #  else
-  fprintf(stderr, "Assertion failure: %s, at %s:%d\n", aStr, aFilename, aLine);
+  fprintf(stderr, "[%d] Assertion failure: %s, at %s:%d\n", MOZ_GET_PID(), aStr,
+          aFilename, aLine);
 #  endif
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
   MozWalkTheStack(stderr, CallerPC(), /* aMaxFrames */ 0);
@@ -128,15 +145,21 @@ MOZ_MAYBE_UNUSED static MOZ_COLD MOZ_NEVER_INLINE void MOZ_ReportCrash(
     int aLine) MOZ_PRETEND_NORETURN_FOR_STATIC_ANALYSIS {
 #ifdef ANDROID
   __android_log_print(ANDROID_LOG_FATAL, "MOZ_CRASH",
-                      "Hit MOZ_CRASH(%s) at %s:%d\n", aStr, aFilename, aLine);
+                      "[%d] Hit MOZ_CRASH(%s) at %s:%d\n", MOZ_GET_PID(), aStr,
+                      aFilename, aLine);
+#  if defined(MOZ_DUMP_ASSERTION_STACK)
+  MozWalkTheStackWithWriter(MOZ_CrashPrintFrame, CallerPC(),
+                            /* aMaxFrames */ 0);
+#  endif
 #else
 #  if defined(MOZ_BUFFER_STDERR)
   char msg[1024] = "";
-  snprintf(msg, sizeof(msg) - 1, "Hit MOZ_CRASH(%s) at %s:%d\n", aStr,
-           aFilename, aLine);
+  snprintf(msg, sizeof(msg) - 1, "[%d] Hit MOZ_CRASH(%s) at %s:%d\n",
+           MOZ_GET_PID(), aStr, aFilename, aLine);
   fputs(msg, stderr);
 #  else
-  fprintf(stderr, "Hit MOZ_CRASH(%s) at %s:%d\n", aStr, aFilename, aLine);
+  fprintf(stderr, "[%d] Hit MOZ_CRASH(%s) at %s:%d\n", MOZ_GET_PID(), aStr,
+          aFilename, aLine);
 #  endif
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
   MozWalkTheStack(stderr, CallerPC(), /* aMaxFrames */ 0);
@@ -198,10 +221,10 @@ MOZ_NoReturn(int aLine) {
   MOZ_ASSUME_UNREACHABLE_MARKER();
 }
 
-#  define MOZ_REALLY_CRASH(line) \
-    do {                         \
-      __debugbreak();            \
-      MOZ_NoReturn(line);        \
+#  define MOZ_REALLY_CRASH(line)  \
+    do {                          \
+      MOZ_NOMERGE __debugbreak(); \
+      MOZ_NoReturn(line);         \
     } while (false)
 
 #elif __wasi__
@@ -276,6 +299,19 @@ MOZ_NoReturn(int aLine) {
       MOZ_ReportCrash("" __VA_ARGS__, __FILE__, __LINE__);                    \
       MOZ_CRASH_ANNOTATE("MOZ_CRASH(" __VA_ARGS__ ")");                       \
       MOZ_REALLY_CRASH(__LINE__);                                             \
+    } while (false)
+#endif
+
+/*
+ * MOZ_DIAGNOSTIC_CRASH acts like MOZ_CRASH in a MOZ_DIAGNOSTIC_ASSERT_ENABLED
+ * build, and does nothing otherwise. See the comment later in this file for a
+ * description of when MOZ_DIAGNOSTIC_ASSERT_ENABLED is defined.
+ */
+#if defined(MOZ_DIAGNOSTIC_ASSERT_ENABLED)
+#  define MOZ_DIAGNOSTIC_CRASH(...) MOZ_CRASH(__VA_ARGS__)
+#else
+#  define MOZ_DIAGNOSTIC_CRASH(...) \
+    do { /* nothing */              \
     } while (false)
 #endif
 
@@ -464,7 +500,7 @@ struct AssertionConditionType {
         ("MOZ_ASSERT", __VA_ARGS__))
 #else
 #  define MOZ_ASSERT(...) \
-    do {                  \
+    do { /* nothing */    \
     } while (false)
 #endif /* DEBUG */
 
@@ -475,7 +511,7 @@ struct AssertionConditionType {
         ("MOZ_DIAGNOSTIC_ASSERT", __VA_ARGS__))
 #else
 #  define MOZ_DIAGNOSTIC_ASSERT(...) \
-    do {                             \
+    do { /* nothing */               \
     } while (false)
 #endif
 
@@ -512,7 +548,7 @@ struct AssertionConditionType {
     } while (false)
 #else
 #  define MOZ_ASSERT_IF(cond, expr) \
-    do {                            \
+    do { /* nothing */              \
     } while (false)
 #endif
 
@@ -532,7 +568,7 @@ struct AssertionConditionType {
     } while (false)
 #else
 #  define MOZ_DIAGNOSTIC_ASSERT_IF(cond, expr) \
-    do {                                       \
+    do { /* nothing */                         \
     } while (false)
 #endif
 
@@ -631,18 +667,18 @@ struct AssertionConditionType {
 #endif
 
 /*
- * MOZ_ALWAYS_TRUE(expr) and friends always evaluate the provided expression,
- * in debug builds and in release builds both.  Then, in debug builds and
- * Nightly and early beta builds, the value of the expression is
- * asserted either true or false using MOZ_DIAGNOSTIC_ASSERT.
+ * MOZ_ALWAYS_TRUE(expr) and friends always evaluate the provided expression, in
+ * both debug and release builds.  Then, in debug builds and Nightly and early
+ * beta builds, we crash using the string value of the expression as the message
+ * using MOZ_DIAGNOSTIC_CRASH.
  */
-#define MOZ_ALWAYS_TRUE(expr)              \
-  do {                                     \
-    if (MOZ_LIKELY(expr)) {                \
-      /* Silence [[nodiscard]]. */         \
-    } else {                               \
-      MOZ_DIAGNOSTIC_ASSERT(false, #expr); \
-    }                                      \
+#define MOZ_ALWAYS_TRUE(expr)      \
+  do {                             \
+    if (MOZ_LIKELY(expr)) {        \
+      /* Silence [[nodiscard]]. */ \
+    } else {                       \
+      MOZ_DIAGNOSTIC_CRASH(#expr); \
+    }                              \
   } while (false)
 
 #define MOZ_ALWAYS_FALSE(expr) MOZ_ALWAYS_TRUE(!(expr))
@@ -654,10 +690,10 @@ struct AssertionConditionType {
  */
 #ifdef FUZZING
 #  define MOZ_CRASH_UNLESS_FUZZING(...) \
-    do {                                \
+    do { /* nothing */                  \
     } while (0)
 #  define MOZ_ASSERT_UNLESS_FUZZING(...) \
-    do {                                 \
+    do { /* nothing */                   \
     } while (0)
 #else
 #  define MOZ_CRASH_UNLESS_FUZZING(...) MOZ_CRASH(__VA_ARGS__)

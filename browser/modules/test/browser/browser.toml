@@ -1,6 +1,9 @@
 [DEFAULT]
 support-files = ["head.js"]
-prefs = ["telemetry.number_of_site_origin.min_interval=0"]
+prefs = [
+  "sidebar.revamp=false",
+  "telemetry.number_of_site_origin.min_interval=0",
+]
 
 ["browser_BrowserWindowTracker.js"]
 
@@ -32,8 +35,8 @@ https_first_disabled = true
 ["browser_TabUnloader.js"]
 support-files = [
   "file_webrtc.html",
-  "../../../base/content/test/tabs/dummy_page.html",
-  "../../../base/content/test/tabs/file_mediaPlayback.html",
+  "../../../components/tabbrowser/test/browser/tabs/dummy_page.html",
+  "../../../components/tabbrowser/test/browser/tabs/file_mediaPlayback.html",
   "../../../base/content/test/general/audio.ogg",
 ]
 
@@ -52,8 +55,6 @@ run-if = ["crashreporter"]
 ["browser_UsageTelemetry.js"]
 https_first_disabled = true
 
-["browser_UsageTelemetry_content_aboutRestartRequired.js"]
-
 ["browser_UsageTelemetry_domains.js"]
 https_first_disabled = true
 
@@ -70,18 +71,8 @@ skip-if = ["verify && debug"]
 https_first_disabled = true
 
 ["browser_preloading_tab_moving.js"]
-skip-if = ["os == 'linux' && tsan"] # Bug 1720203
 
 ["browser_taskbar_preview.js"]
-skip-if = [
-  "os != 'win'",               # bug 1456807
-  "os == 'win' && bits == 64", # bug 1456807
-]
+run-if = ["os == 'win'"]
 
 ["browser_urlBar_zoom.js"]
-skip-if = [
-  "os == 'mac'", # Bug 1528429
-  "os == 'linux' && bits == 64 && os_version == '18.04'", # Bug 1619835
-  "win10_2009 && bits == 64",           # Bug 1619835
-  "win11_2009 && bits == 32 && debug", # Bug 1619835
-]

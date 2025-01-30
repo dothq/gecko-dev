@@ -93,7 +93,8 @@ class TextureHostWrapperD3D11 : public TextureHost {
 
   gfx::SurfaceFormat GetFormat() const override;
 
-  already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override {
+  already_AddRefed<gfx::DataSourceSurface> GetAsSurface(
+      gfx::DataSourceSurface* aSurface) override {
     return nullptr;  // XXX - implement this (for MOZ_DUMP_PAINTING)
   }
 
@@ -140,6 +141,10 @@ class TextureHostWrapperD3D11 : public TextureHost {
   bool NeedsDeferredDeletion() const override;
 
   TextureHostWrapperD3D11* AsTextureHostWrapperD3D11() override { return this; }
+
+  DXGITextureHostD3D11* AsDXGITextureHostD3D11() override {
+    return mTextureHostD3D11;
+  }
 
   void PostTask();
 

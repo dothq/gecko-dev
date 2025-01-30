@@ -46,15 +46,13 @@ ConsoleUtils::Level WebIDLevelToConsoleUtilsLevel(ConsoleLevel aLevel) {
 ConsoleInstance::ConsoleInstance(JSContext* aCx,
                                  const ConsoleInstanceOptions& aOptions)
     : mMaxLogLevel(ConsoleLogLevel::All),
-      mConsole(new Console(aCx, nullptr, 0, 0)) {
+      mConsole(new Console(aCx, nullptr, 0, 0, aOptions.mPrefix)) {
   mConsole->mConsoleID = aOptions.mConsoleID;
   mConsole->mPassedInnerID = aOptions.mInnerID;
 
   if (aOptions.mDump.WasPassed()) {
     mConsole->mDumpFunction = &aOptions.mDump.Value();
   }
-
-  mConsole->mPrefix = aOptions.mPrefix;
 
   // Let's inform that this is a custom instance.
   mConsole->mChromeInstance = true;
@@ -65,9 +63,24 @@ ConsoleInstance::ConsoleInstance(JSContext* aCx,
 
   if (!aOptions.mMaxLogLevelPref.IsEmpty()) {
     if (!NS_IsMainThread()) {
-      NS_WARNING("Console.maxLogLevelPref is not supported on workers!");
       // Set the log level based on what we have.
       SetLogLevel();
+
+      // Flag an error to the console.
+      JS::Rooted<JS::Value> msg(aCx);
+      if (!ToJSValue(
+              aCx,
+              nsLiteralCString(
+                  "Console.maxLogLevelPref is not supported within workers!"),
+              &msg)) {
+        JS_ClearPendingException(aCx);
+        return;
+      }
+
+      AutoTArray<JS::Value, 1> sequence;
+      SequenceRooter rootedSequence(aCx, &sequence);
+      sequence.AppendElement(std::move(msg));
+      this->Error(aCx, std::move(sequence));
       return;
     }
 
@@ -80,8 +93,9 @@ ConsoleInstance::ConsoleInstance(JSContext* aCx,
 }
 
 ConsoleInstance::~ConsoleInstance() {
-  AssertIsOnMainThread();
-  if (!mMaxLogLevelPref.IsEmpty()) {
+  // We should only ever have set `mMaxLogLevelPref` when on the main thread,
+  // but check it here to be safe.
+  if (!mMaxLogLevelPref.IsEmpty() && NS_IsMainThread()) {
     Preferences::UnregisterCallback(MaxLogLevelPrefChangedCallback,
                                     mMaxLogLevelPref, this);
   }
@@ -128,7 +142,6 @@ void ConsoleInstance::SetLogLevel() {
 // static
 void ConsoleInstance::MaxLogLevelPrefChangedCallback(
     const char* /* aPrefName */, void* aSelf) {
-  AssertIsOnMainThread();
   auto* instance = static_cast<ConsoleInstance*>(aSelf);
   if (MOZ_UNLIKELY(!instance->mConsole)) {
     // We've been unlinked already but not destroyed yet. Bail.
@@ -253,7 +266,7 @@ bool ConsoleInstance::ShouldLog(ConsoleLogLevel aLevel) {
 
 void ConsoleInstance::ReportForServiceWorkerScope(const nsAString& aScope,
                                                   const nsAString& aMessage,
-                                                  const nsAString& aFilename,
+                                                  const nsACString& aFilename,
                                                   uint32_t aLineNumber,
                                                   uint32_t aColumnNumber,
                                                   ConsoleLevel aLevel) {

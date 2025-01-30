@@ -16,11 +16,10 @@ DIRS += [
     "ffmpeg58",
     "ffmpeg59",
     "ffmpeg60",
+    "ffmpeg61",
 ]
 
-UNIFIED_SOURCES += [
-    "FFmpegRuntimeLinker.cpp",
-]
+UNIFIED_SOURCES += ["FFmpegRuntimeLinker.cpp"]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     include("/ipc/chromium/chromium-config.mozbuild")
@@ -28,5 +27,11 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
 LOCAL_INCLUDES += [
     "/media/libyuv/libyuv/include",
 ]
+
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+    LOCAL_INCLUDES += [
+        "/gfx/thebes",
+        "/media/ffvpx/",
+    ]
 
 FINAL_LIBRARY = "xul"

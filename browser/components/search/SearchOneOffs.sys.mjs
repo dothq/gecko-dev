@@ -975,6 +975,12 @@ export class SearchOneOffs {
       return;
     }
 
+    if (!this.textbox.value) {
+      if (event.shiftKey) {
+        this.popup.openSearchForm(event, engine);
+      }
+      return;
+    }
     // Select the clicked button so that consumers can easily tell which
     // button was acted on.
     this.selectedButton = button;
@@ -1014,7 +1020,11 @@ export class SearchOneOffs {
       // Select the context-clicked button so that consumers can easily
       // tell which button was acted on.
       this.selectedButton = target.closest("menupopup")._triggerButton;
-      this.handleSearchCommand(event, this.selectedButton.engine, true);
+      if (this.textbox.value) {
+        this.handleSearchCommand(event, this.selectedButton.engine, true);
+      } else {
+        this.popup.openSearchForm(event, this.selectedButton.engine, true);
+      }
     }
 
     const isPrivateButton = target.classList.contains(

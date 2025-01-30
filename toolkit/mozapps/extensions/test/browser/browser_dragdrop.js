@@ -16,7 +16,7 @@ const dragService = Cc["@mozilla.org/widget/dragservice;1"].getService(
 async function checkInstallConfirmation(...names) {
   let notificationCount = 0;
   let observer = {
-    observe(aSubject, aTopic, aData) {
+    observe(aSubject) {
       let installInfo = aSubject.wrappedJSObject;
       isnot(
         installInfo.browser,
@@ -89,7 +89,7 @@ function withTestPage(fn) {
   );
 }
 
-function initDragSession({ dragData, dropEffect }) {
+function initDragSession(win, { dragData, dropEffect }) {
   let dropAction;
   switch (dropEffect) {
     case null:
@@ -117,8 +117,8 @@ function initDragSession({ dragData, dropEffect }) {
     }
   }
 
-  dragService.startDragSessionForTests(dropAction);
-  const session = dragService.getCurrentSession();
+  dragService.startDragSessionForTests(win, dropAction);
+  const session = dragService.getCurrentSession(win);
   session.dataTransfer = dataTransfer;
 
   return session;
@@ -129,7 +129,7 @@ async function simulateDragAndDrop(win, dragData) {
   const dragOverTarget = getDragOverTarget(win);
   const dropEffect = "move";
 
-  const session = initDragSession({ dragData, dropEffect });
+  const session = initDragSession(win, { dragData, dropEffect });
 
   info("Simulate drag over and wait for the drop target to be visible");
 
@@ -160,7 +160,7 @@ async function simulateDragAndDrop(win, dragData) {
     { _domDispatchOnly: true }
   );
 
-  dragService.endDragSession(true);
+  dragService.getDragSession(win).endDragSession(true);
 }
 
 // Simulates dropping a URL onto the manager

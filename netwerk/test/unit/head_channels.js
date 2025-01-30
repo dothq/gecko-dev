@@ -377,6 +377,7 @@ async function asyncStartTLSTestServer(
   Services.env.set("LD_LIBRARY_PATH", greBinDir.path + ":/data/local/xpcb");
   Services.env.set("MOZ_TLS_SERVER_DEBUG_LEVEL", "3");
   Services.env.set("MOZ_TLS_SERVER_CALLBACK_PORT", CALLBACK_PORT);
+  Services.env.set("MOZ_TLS_ECH_ALPN_FLAG", "1");
 
   let httpServer = new HttpServer();
   let serverReady = new Promise(resolve => {
@@ -480,7 +481,7 @@ function bytesToString(bytes) {
 function check_http_info(request, expected_httpVersion, expected_proxy) {
   let httpVersion = "";
   try {
-    httpVersion = request.protocolVersion;
+    httpVersion = request.QueryInterface(Ci.nsIHttpChannel).protocolVersion;
   } catch (e) {}
 
   request.QueryInterface(Ci.nsIProxiedChannel);

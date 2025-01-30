@@ -13,9 +13,11 @@
 
 namespace js {
 
+class AutoHelperTaskQueue;
 class AutoLockHelperThreadState;
 struct DelazifyTask;
 struct FreeDelazifyTask;
+class GlobalHelperThreadState;
 class SourceCompressionTask;
 
 namespace jit {
@@ -23,7 +25,8 @@ class IonCompileTask;
 class IonFreeTask;
 }  // namespace jit
 namespace wasm {
-struct Tier2GeneratorTask;
+struct CompleteTier2GeneratorTask;
+struct PartialTier2CompileTask;
 }  // namespace wasm
 
 template <typename T>
@@ -35,8 +38,14 @@ struct MapTypeToThreadType<jit::IonCompileTask> {
 };
 
 template <>
-struct MapTypeToThreadType<wasm::Tier2GeneratorTask> {
-  static const ThreadType threadType = THREAD_TYPE_WASM_GENERATOR_TIER2;
+struct MapTypeToThreadType<wasm::CompleteTier2GeneratorTask> {
+  static const ThreadType threadType =
+      THREAD_TYPE_WASM_GENERATOR_COMPLETE_TIER2;
+};
+
+template <>
+struct MapTypeToThreadType<wasm::PartialTier2CompileTask> {
+  static const ThreadType threadType = THREAD_TYPE_WASM_COMPILE_PARTIAL_TIER2;
 };
 
 template <>
@@ -54,14 +63,21 @@ struct MapTypeToThreadType<SourceCompressionTask> {
   static const ThreadType threadType = THREAD_TYPE_COMPRESS;
 };
 
-struct HelperThreadTask {
-  virtual void runHelperThreadTask(AutoLockHelperThreadState& locked) = 0;
-  virtual ThreadType threadType() = 0;
+}  // namespace js
+
+namespace JS {
+
+class HelperThreadTask {
+ public:
+  virtual void runHelperThreadTask(js::AutoLockHelperThreadState& locked) = 0;
+  virtual js::ThreadType threadType() = 0;
   virtual ~HelperThreadTask() = default;
+
+  virtual const char* getName() = 0;
 
   template <typename T>
   bool is() {
-    return MapTypeToThreadType<T>::threadType == threadType();
+    return js::MapTypeToThreadType<T>::threadType == threadType();
   }
 
   template <typename T>
@@ -69,8 +85,17 @@ struct HelperThreadTask {
     MOZ_ASSERT(this->is<T>());
     return static_cast<T*>(this);
   }
+
+ protected:
+  // Called when this task is dispatched to the thread pool.
+  virtual void onThreadPoolDispatch() {}
+  friend class js::AutoHelperTaskQueue;
 };
 
+}  // namespace JS
+
+namespace js {
+using JS::HelperThreadTask;
 }  // namespace js
 
 #endif /* vm_HelperThreadTask_h */

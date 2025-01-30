@@ -74,6 +74,11 @@ the interactive setup process.
 .. code-block:: shell
 
     curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+
+    # To use Git as your VCS
+    python3 bootstrap.py --vcs=git
+
+    # To use Mercurial as your VCS
     python3 bootstrap.py
 
 .. note::
@@ -94,8 +99,8 @@ If you aren't modifying the Firefox backend, then select one of the
 :ref:`Artifact Mode <Understanding Artifact Builds>` options. If you are
 building Firefox for Android, you should also see the :ref:`GeckoView Contributor Guide <geckoview-contributor-guide>`.
 
-3. Build
---------
+3. Build and Run
+----------------
 
 Now that your system is bootstrapped, you should be able to build!
 
@@ -118,6 +123,15 @@ You can now use the ``./mach run`` command to run your locally built Firefox!
 
 If your build fails, please reference the steps in the `Troubleshooting section <#troubleshooting>`_.
 
+Signing
+~~~~~~~
+
+Code signing your Mac build is not required for local testing and is rarely
+needed for development. The way Firefox is signed does impact functionality
+such as passkey support so it is required in some cases. Generating a build as
+close to a production build as possible requires code signing.
+See :ref:`Signing Local macOS Builds` for more information.
+
 Running outside the development environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -127,7 +141,18 @@ To test your changes on another macOS system (or to keep that particular Firefox
 
    ./mach package
 
-Copy the resulting ``.dmg`` file from ``obj-*/dist/`` to the target system, then double-click it as usual to find an ``.app`` bundle containing all dependencies.
+Copy the resulting ``.dmg`` file from ``obj-*/dist/`` to the target system,
+then double-click it as usual to find an ``.app`` bundle containing all
+dependencies.
+
+On Apple Silicon Macs, you will need to sign the build for this to work using
+:ref:`Signing Local macOS Builds`.
+
+Once the build has been copied to the target system, open it with
+right-click->Open. The build will not launch by default because it is not
+notarized. In addition to code signing, notarization is required on macOS
+10.15+ for a downloaded app to be launchable by double clicking the app in
+Finder.
 
 Now the fun starts
 ------------------
@@ -149,3 +174,39 @@ If you encounter a build error when trying to setup your development environment
    1. Copy the entire build error to your clipboard
    2. Paste this error to `paste.mozilla.org <https://paste.mozilla.org>`_ in the text area and change the "Expire in one hour" option to "Expire in one week". Note: it won't take a week to get help but it's better to have the snippet be around for a bit longer than expected.
    3. Go to the `introduction channel <https://chat.mozilla.org/#/room/#introduction:mozilla.org>`__ and ask for help with your build error. Make sure to post the link to the paste.mozilla.org snippet you created!
+
+The CLOBBER file has been updated
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is a normal error to encounter and tends to appear when working on a bug for a long period of time.
+If you encounter this error, you need to run ``./mach clobber`` before running ``./mach build``.
+Running ``./mach clobber`` will remove previous build artifacts to restart a build from scratch.
+If you are using an artifact build, this will mean that the next build will take slightly longer than usual.
+However, if you are using a non-artifact/full build, the next build will take significantly longer to complete.
+
+Python-related errors
+~~~~~~~~~~~~~~~~~~~~~
+
+Building, running, testing, etc. not always support the latest Python versions, therefore it is possible to encounter Python-related errors,
+especially after updating your Python distribution to a new version.
+
+The recommended way to work around this is to use a virtual environment with a compatible Python version.
+Please consider `mach's <https://searchfox.org/mozilla-central/source/mach>`_ ``MIN_PYTHON_VERSION`` and ``MAX_PYTHON_VERSION_TO_CONSIDER``
+for the range of compatible versions.
+
+Should you be using Python through Homebrew, you can install older releases like this:
+
+.. code-block:: shell
+
+   brew install python@3.<your-desired-version>
+
+You can set up the virtual environment manually or use a supporting tool such as `pyenv <https://github.com/pyenv/pyenv>`_ (recommended).
+Below is an example for manual setup.
+
+.. code-block:: shell
+
+   cd mozilla-unified
+   # Creates virtual environment for <your-desired-version> in folder .venv
+   python3.<your-desired-version> -m venv .venv
+   # Activates virtual environment
+   source .venv/bin/activate

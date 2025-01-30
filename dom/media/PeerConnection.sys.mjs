@@ -30,7 +30,6 @@ function logWebRTCMsg(msg, file, line, flag, win) {
   scriptError.initWithWindowID(
     `WebRTC: ${msg}`,
     file,
-    null,
     line,
     0,
     flag,
@@ -217,6 +216,51 @@ setupPrototype(GlobalPCList, {
 
 var _globalPCList = new GlobalPCList();
 
+// Parses grammar in RFC5245 section 15 and ICE TCP from RFC6544 section 4.5.
+function parseCandidate(line) {
+  const match = line.match(
+    /^(a=)?candidate:([A-Za-z0-9+\/]{1,32}) (\d+) (UDP|TCP) (\d+) ([A-Za-z0-9.:-]+) (\d+) typ (host|srflx|prflx|relay)(?: raddr ([A-Za-z0-9.:-]+) rport (\d+))?(.*)$/i
+  );
+  if (!match) {
+    return null;
+  }
+  const candidate = {
+    foundation: match[2],
+    componentId: parseInt(match[3], 10),
+    transport: match[4],
+    priority: parseInt(match[5], 10),
+    address: match[6],
+    port: parseInt(match[7], 10),
+    type: match[8],
+    relatedAddress: match[9],
+    relatedPort: match[10],
+  };
+  if (candidate.componentId < 1 || candidate.componentId > 256) {
+    return null;
+  }
+  if (candidate.priority < 0 || candidate.priority > 4294967295) {
+    return null;
+  }
+  if (candidate.port < 0 || candidate.port > 65535) {
+    return null;
+  }
+  candidate.component = { 1: "rtp", 2: "rtcp" }[candidate.componentId] || null;
+  candidate.protocol =
+    { udp: "udp", tcp: "tcp" }[candidate.transport.toLowerCase()] || null;
+
+  const tcpTypeMatch = match[11].match(/tcptype (\S+)/i);
+  if (tcpTypeMatch) {
+    candidate.tcpType = tcpTypeMatch[1];
+    if (
+      candidate.protocol != "tcp" ||
+      !["active", "passive", "so"].includes(candidate.tcpType)
+    ) {
+      return null;
+    }
+  }
+  return candidate;
+}
+
 export class RTCIceCandidate {
   init(win) {
     this._win = win;
@@ -229,6 +273,20 @@ export class RTCIceCandidate {
       );
     }
     Object.assign(this, dict);
+    const candidate = parseCandidate(this.candidate);
+    if (!candidate) {
+      return;
+    }
+    Object.assign(this, candidate);
+  }
+
+  toJSON() {
+    return {
+      candidate: this.candidate,
+      sdpMid: this.sdpMid,
+      sdpMLineIndex: this.sdpMLineIndex,
+      usernameFragment: this.usernameFragment,
+    };
   }
 }
 
@@ -307,59 +365,6 @@ setupPrototype(RTCSessionDescription, {
   QueryInterface: ChromeUtils.generateQI(["nsIDOMGlobalPropertyInitializer"]),
 });
 
-// Records PC related telemetry
-class PeerConnectionTelemetry {
-  // ICE connection state enters connected or completed.
-  recordConnected() {
-    Services.telemetry.scalarAdd("webrtc.peerconnection.connected", 1);
-    this.recordConnected = () => {};
-  }
-  // DataChannel is created
-  _recordDataChannelCreated() {
-    Services.telemetry.scalarAdd(
-      "webrtc.peerconnection.datachannel_created",
-      1
-    );
-    this._recordDataChannelCreated = () => {};
-  }
-  // DataChannel initialized with maxRetransmitTime
-  _recordMaxRetransmitTime(maxRetransmitTime) {
-    if (maxRetransmitTime === undefined) {
-      return false;
-    }
-    Services.telemetry.scalarAdd(
-      "webrtc.peerconnection.datachannel_max_retx_used",
-      1
-    );
-    this._recordMaxRetransmitTime = () => true;
-    return true;
-  }
-  // DataChannel initialized with maxPacketLifeTime
-  _recordMaxPacketLifeTime(maxPacketLifeTime) {
-    if (maxPacketLifeTime === undefined) {
-      return false;
-    }
-    Services.telemetry.scalarAdd(
-      "webrtc.peerconnection.datachannel_max_life_used",
-      1
-    );
-    this._recordMaxPacketLifeTime = () => true;
-    return true;
-  }
-  // DataChannel initialized
-  recordDataChannelInit(maxRetransmitTime, maxPacketLifeTime) {
-    const retxUsed = this._recordMaxRetransmitTime(maxRetransmitTime);
-    if (this._recordMaxPacketLifeTime(maxPacketLifeTime) && retxUsed) {
-      Services.telemetry.scalarAdd(
-        "webrtc.peerconnection.datachannel_max_retx_and_life_used",
-        1
-      );
-      this.recordDataChannelInit = () => {};
-    }
-    this._recordDataChannelCreated();
-  }
-}
-
 export class RTCPeerConnection {
   constructor() {
     this._pc = null;
@@ -382,8 +387,6 @@ export class RTCPeerConnection {
 
     this._hasStunServer = this._hasTurnServer = false;
     this._iceGatheredRelayCandidates = false;
-    // Records telemetry
-    this._pcTelemetry = new PeerConnectionTelemetry();
   }
 
   init(win) {
@@ -970,10 +973,33 @@ export class RTCPeerConnection {
       });
   }
 
+  _maybeDuplicateFingerprints(sdp) {
+    if (this._pc.duplicateFingerprintQuirk) {
+      // hack to put a=fingerprint under all m= lines
+      const lines = sdp.split("\n");
+      const fingerprint = lines.find(line => line.startsWith("a=fingerprint"));
+      if (fingerprint) {
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith("m=")) {
+            let j = i + 1;
+            while (j < lines.length && lines[j].startsWith("c=")) {
+              j++;
+            }
+            lines.splice(j, 0, fingerprint);
+          }
+        }
+        sdp = lines.join("\n");
+      }
+    }
+    return sdp;
+  }
+
   _createOffer(options) {
     this._checkClosed();
     this._ensureTransceiversForOfferToReceive(options);
-    return this._chain(() => this._createAnOffer(options));
+    return this._chain(async () =>
+      Cu.cloneInto(await this._createAnOffer(options), this._win)
+    );
   }
 
   async _createAnOffer(options = {}) {
@@ -998,11 +1024,12 @@ export class RTCPeerConnection {
       this._onCreateOfferFailure = reject;
       this._pc.createOffer(options);
     });
+    sdp = this._maybeDuplicateFingerprints(sdp);
     if (haveAssertion) {
       await haveAssertion;
       sdp = this._localIdp.addIdentityAttribute(sdp);
     }
-    return Cu.cloneInto({ type: "offer", sdp }, this._win);
+    return { type: "offer", sdp };
   }
 
   createAnswer(optionsOrOnSucc, onErr) {
@@ -1015,7 +1042,9 @@ export class RTCPeerConnection {
 
   _createAnswer() {
     this._checkClosed();
-    return this._chain(() => this._createAnAnswer());
+    return this._chain(async () =>
+      Cu.cloneInto(await this._createAnAnswer(), this._win)
+    );
   }
 
   async _createAnAnswer() {
@@ -1036,11 +1065,12 @@ export class RTCPeerConnection {
       this._onCreateAnswerFailure = reject;
       this._pc.createAnswer();
     });
+    sdp = this._maybeDuplicateFingerprints(sdp);
     if (haveAssertion) {
       await haveAssertion;
       sdp = this._localIdp.addIdentityAttribute(sdp);
     }
-    return Cu.cloneInto({ type: "answer", sdp }, this._win);
+    return { type: "answer", sdp };
   }
 
   async _getPermission() {
@@ -1116,9 +1146,9 @@ export class RTCPeerConnection {
       }
       if (!sdp) {
         if (type == "offer") {
-          await this._createAnOffer();
+          sdp = (await this._createAnOffer()).sdp;
         } else if (type == "answer") {
-          await this._createAnAnswer();
+          sdp = (await this._createAnAnswer()).sdp;
         }
       } else {
         this._sanityCheckSdp(sdp);
@@ -1700,10 +1730,6 @@ export class RTCPeerConnection {
     } = {}
   ) {
     this._checkClosed();
-    this._pcTelemetry.recordDataChannelInit(
-      maxRetransmitTime,
-      maxPacketLifeTime
-    );
 
     if (maxPacketLifeTime === undefined) {
       maxPacketLifeTime = maxRetransmitTime;

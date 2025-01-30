@@ -361,7 +361,7 @@ class PromptDelegateTest : BaseSessionTest(
         })""",
         )
 
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
         assertThat(
             "Events should be as expected",
@@ -390,7 +390,7 @@ class PromptDelegateTest : BaseSessionTest(
             }
         })
 
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
     }
 
@@ -414,7 +414,7 @@ class PromptDelegateTest : BaseSessionTest(
             }
         })
 
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
     }
 
@@ -543,7 +543,7 @@ class PromptDelegateTest : BaseSessionTest(
             """.trimIndent(),
         )
 
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
         assertThat(
             "Selected item should be as expected",
@@ -575,7 +575,7 @@ class PromptDelegateTest : BaseSessionTest(
             }
         })
 
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
     }
 
@@ -671,6 +671,11 @@ class PromptDelegateTest : BaseSessionTest(
         )
         sessionRule.setPrefsUntilTestEnd(
             mapOf(
+                "dom.security.credentialmanagement.identity.heavyweight.enabled" to true,
+            ),
+        )
+        sessionRule.setPrefsUntilTestEnd(
+            mapOf(
                 "dom.security.credentialmanagement.identity.test_ignore_well_known" to true,
             ),
         )
@@ -733,6 +738,7 @@ class PromptDelegateTest : BaseSessionTest(
         )
     }
 
+    @WithDisplay(width = 100, height = 100)
     @Test
     fun colorTest() {
         sessionRule.setPrefsUntilTestEnd(mapOf("dom.disable_open_during_load" to false))
@@ -751,6 +757,7 @@ class PromptDelegateTest : BaseSessionTest(
 
         mainSession.evaluateJS(
             """
+            document.documentElement.style.paddingTop = "50px";
             this.c = document.getElementById('colorexample');
             """.trimIndent(),
         )
@@ -767,7 +774,8 @@ class PromptDelegateTest : BaseSessionTest(
             """.trimIndent(),
         )
 
-        mainSession.evaluateJS("this.c.click();")
+        mainSession.evaluateJS("document.addEventListener('click', () => this.c.click(), { once: true });")
+        mainSession.synthesizeTap(1, 1)
 
         assertThat(
             "Value should match",
@@ -776,7 +784,9 @@ class PromptDelegateTest : BaseSessionTest(
         )
     }
 
-    @Test fun colorTestWithDatalist() {
+    @WithDisplay(width = 100, height = 100)
+    @Test
+    fun colorTestWithDatalist() {
         sessionRule.setPrefsUntilTestEnd(mapOf("dom.disable_open_during_load" to false))
 
         mainSession.loadTestPath(PROMPT_HTML_PATH)
@@ -795,6 +805,7 @@ class PromptDelegateTest : BaseSessionTest(
 
         mainSession.evaluateJS(
             """
+            document.documentElement.style.paddingTop = "50px";
             this.c = document.getElementById('colorexample');
             this.c.setAttribute('list', 'colorlist');
             """.trimIndent(),
@@ -810,7 +821,9 @@ class PromptDelegateTest : BaseSessionTest(
             })
             """.trimIndent(),
         )
-        mainSession.evaluateJS("this.c.click();")
+
+        mainSession.evaluateJS("document.addEventListener('click', () => this.c.click(), { once: true });")
+        mainSession.synthesizeTap(1, 1)
 
         assertThat(
             "Value should match",
@@ -827,7 +840,8 @@ class PromptDelegateTest : BaseSessionTest(
 
         mainSession.evaluateJS(
             """
-            document.body.addEventListener("click", () => {
+            document.documentElement.style.paddingTop = "50px";
+            document.addEventListener("click", () => {
                 document.getElementById('dateexample').showPicker();
             });
             """.trimIndent(),
@@ -859,7 +873,7 @@ class PromptDelegateTest : BaseSessionTest(
             document.getElementById('dateexample').getBoundingClientRect();
             """.trimIndent(),
         )
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
 
         sessionRule.waitUntilCalled(object : PromptDelegate {
             @AssertCalled(count = 1)
@@ -887,7 +901,7 @@ class PromptDelegateTest : BaseSessionTest(
             document.getElementById('weekexample').getBoundingClientRect();
             """.trimIndent(),
         )
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
 
         sessionRule.waitUntilCalled(object : PromptDelegate {
             @AssertCalled(count = 1)
@@ -915,7 +929,7 @@ class PromptDelegateTest : BaseSessionTest(
             document.getElementById('dateexample').getBoundingClientRect();
             """.trimIndent(),
         )
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
 
         sessionRule.waitUntilCalled(object : PromptDelegate {
             @AssertCalled(count = 1)
@@ -954,8 +968,13 @@ class PromptDelegateTest : BaseSessionTest(
             }
         })
 
-        mainSession.evaluateJS("document.getElementById('selectexample').remove()")
-        mainSession.synthesizeTap(10, 10)
+        mainSession.evaluateJS(
+            """
+            document.getElementById('selectexample').remove();
+            document.getElementById('dateexample').getBoundingClientRect();
+            """.trimIndent(),
+        )
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
     }
 
@@ -988,9 +1007,10 @@ class PromptDelegateTest : BaseSessionTest(
             """
             document.getElementById('selectexample').remove();
             document.getElementById('dateexample').remove();
+            document.getElementById('monthexample').getBoundingClientRect();
             """.trimIndent(),
         )
-        mainSession.synthesizeTap(10, 10)
+        mainSession.synthesizeTap(20, 20)
         sessionRule.waitForResult(result)
     }
 
@@ -1060,13 +1080,16 @@ class PromptDelegateTest : BaseSessionTest(
         })
     }
 
-    @Test fun fileTest() {
+    @WithDisplay(width = 100, height = 100)
+    @Test
+    fun fileTest() {
         sessionRule.setPrefsUntilTestEnd(mapOf("dom.disable_open_during_load" to false))
 
         mainSession.loadTestPath(PROMPT_HTML_PATH)
         mainSession.waitForPageStop()
 
-        mainSession.evaluateJS("document.getElementById('fileexample').click();")
+        mainSession.evaluateJS("document.addEventListener('click', () => document.getElementById('fileexample').click(), { once: true });")
+        mainSession.synthesizeTap(1, 1)
 
         sessionRule.waitUntilCalled(object : PromptDelegate {
             @AssertCalled(count = 1)

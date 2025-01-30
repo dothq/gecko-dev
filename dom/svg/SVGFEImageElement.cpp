@@ -121,7 +121,13 @@ void SVGFEImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                      bool aNotify) {
   if (aName == nsGkAtoms::href && (aNamespaceID == kNameSpaceID_XLink ||
                                    aNamespaceID == kNameSpaceID_None)) {
-    if (aValue) {
+    if (aNamespaceID == kNameSpaceID_XLink &&
+        mStringAttributes[HREF].IsExplicitlySet()) {
+      // href overrides xlink:href
+      return;
+    }
+    if (aValue || (aNamespaceID == kNameSpaceID_None &&
+                   mStringAttributes[XLINK_HREF].IsExplicitlySet())) {
       if (ShouldLoadImage()) {
         LoadSVGImage(true, aNotify);
       }
@@ -313,7 +319,7 @@ SVGFEImageElement::GetAnimatedPreserveAspectRatio() {
 
 SVGElement::StringAttributesInfo SVGFEImageElement::GetStringInfo() {
   return StringAttributesInfo(mStringAttributes, sStringInfo,
-                              ArrayLength(sStringInfo));
+                              std::size(sStringInfo));
 }
 
 //----------------------------------------------------------------------
@@ -369,6 +375,23 @@ void SVGFEImageElement::Notify(imgIRequest* aRequest, int32_t aType,
       SVGObserverUtils::InvalidateDirectRenderingObservers(filter);
     }
   }
+}
+
+void SVGFEImageElement::DidAnimateAttribute(int32_t aNameSpaceID,
+                                            nsAtom* aAttribute) {
+  if ((aNameSpaceID == kNameSpaceID_None ||
+       aNameSpaceID == kNameSpaceID_XLink) &&
+      aAttribute == nsGkAtoms::href) {
+    bool hrefIsSet =
+        mStringAttributes[SVGFEImageElement::HREF].IsExplicitlySet() ||
+        mStringAttributes[SVGFEImageElement::XLINK_HREF].IsExplicitlySet();
+    if (hrefIsSet) {
+      LoadSVGImage(true, true);
+    } else {
+      CancelImageRequests(true);
+    }
+  }
+  SVGFEImageElementBase::DidAnimateAttribute(aNameSpaceID, aAttribute);
 }
 
 }  // namespace mozilla::dom

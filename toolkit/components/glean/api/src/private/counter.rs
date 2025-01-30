@@ -2,10 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use glean::traits::Counter;
 use inherent::inherent;
 use std::sync::Arc;
-
-use glean::traits::Counter;
 
 use super::{CommonMetricData, MetricId};
 use crate::ipc::{need_ipc, with_ipc_payload};
@@ -61,6 +60,29 @@ impl CounterMetric {
         }
     }
 
+    /// Special-purpose ctor for use by codegen.
+    /// Only useful if the metric is:
+    ///   * disabled
+    ///   * lifetime: ping
+    ///   * and is sent in precisely one ping.
+    pub fn codegen_disabled_new(id: u32, category: &str, name: &str, ping: &str) -> Self {
+        if need_ipc() {
+            CounterMetric::Child(CounterMetricIpc(id.into()))
+        } else {
+            let inner = Arc::new(glean::private::CounterMetric::new(CommonMetricData {
+                category: category.into(),
+                name: name.into(),
+                send_in_pings: vec![ping.into()],
+                disabled: true,
+                ..Default::default()
+            }));
+            CounterMetric::Parent {
+                id: id.into(),
+                inner,
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn metric_id(&self) -> MetricId {
         match self {
@@ -90,9 +112,11 @@ impl Counter for CounterMetric {
     ///
     /// Logs an error if the `amount` is 0 or negative.
     pub fn add(&self, amount: i32) {
-        match self {
-            CounterMetric::Parent { inner, .. } => {
+        #[allow(unused)]
+        let id = match self {
+            CounterMetric::Parent { id, inner, .. } => {
                 inner.add(amount);
+                *id
             }
             CounterMetric::Child(c) => {
                 with_ipc_payload(move |payload| {
@@ -102,7 +126,18 @@ impl Counter for CounterMetric {
                         payload.counters.insert(c.0, amount);
                     }
                 });
+                c.0
             }
+        };
+
+        #[cfg(feature = "with_gecko")]
+        if gecko_profiler::can_accept_markers() {
+            gecko_profiler::add_marker(
+                "Counter::add",
+                super::profiler_utils::TelemetryProfilerCategory,
+                Default::default(),
+                super::profiler_utils::IntLikeMetricMarker::new(id, None, amount),
+            );
         }
     }
 
@@ -163,7 +198,7 @@ mod test {
         let metric = &metrics::test_only_ipc::a_counter;
         metric.add(1);
 
-        assert_eq!(1, metric.test_get_value("store1").unwrap());
+        assert_eq!(1, metric.test_get_value("test-ping").unwrap());
     }
 
     #[test]
@@ -197,7 +232,7 @@ mod test {
         assert!(ipc::replay_from_buf(&ipc::take_buf().unwrap()).is_ok());
 
         assert!(
-            45 == parent_metric.test_get_value("store1").unwrap(),
+            45 == parent_metric.test_get_value("test-ping").unwrap(),
             "Values from the 'processes' should be summed"
         );
     }

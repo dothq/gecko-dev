@@ -261,9 +261,9 @@ mozilla::ipc::IPCResult FilePickerParent::RecvOpen(
   mFilePicker->SetCapture(aCapture);
 
   if (!aDisplayDirectory.IsEmpty()) {
-    nsCOMPtr<nsIFile> localFile = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
-    if (localFile) {
-      localFile->InitWithPath(aDisplayDirectory);
+    nsCOMPtr<nsIFile> localFile;
+    if (NS_SUCCEEDED(
+            NS_NewLocalFile(aDisplayDirectory, getter_AddRefs(localFile)))) {
       mFilePicker->SetDisplayDirectory(localFile);
     }
   } else if (!aDisplaySpecialDirectory.IsEmpty()) {
@@ -274,13 +274,6 @@ mozilla::ipc::IPCResult FilePickerParent::RecvOpen(
   mCallback = new FilePickerShownCallback(this);
 
   mFilePicker->Open(mCallback);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult FilePickerParent::RecvClose() {
-  if (mFilePicker) {
-    mFilePicker->Close();
-  }
   return IPC_OK();
 }
 

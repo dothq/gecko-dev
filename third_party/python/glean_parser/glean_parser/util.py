@@ -9,16 +9,22 @@ import functools
 import json
 from pathlib import Path
 import sys
+import re
 import textwrap
 from typing import Any, Callable, Iterable, Sequence, Tuple, Union, Optional
 import urllib.request
 
-import appdirs  # type: ignore
 import diskcache  # type: ignore
 import jinja2
 import jsonschema  # type: ignore
 from jsonschema import _utils  # type: ignore
+import platformdirs  # type: ignore
 import yaml
+
+try:
+    from yaml import CSafeLoader as SafeLoader
+except ImportError:
+    from yaml import SafeLoader  # type: ignore
 
 
 def date_fromisoformat(datestr: str) -> datetime.date:
@@ -44,7 +50,7 @@ class DictWrapper(dict):
     pass
 
 
-class _NoDatesSafeLoader(yaml.SafeLoader):
+class _NoDatesSafeLoader(SafeLoader):
     @classmethod
     def remove_implicit_resolver(cls, tag_to_remove):
         """
@@ -184,6 +190,16 @@ def snake_case(value: str) -> str:
     return value.lower().replace(".", "_").replace("-", "_")
 
 
+def camel_or_pascal_to_snake_case(value: str) -> str:
+    """
+    Convert Camel Case or Pascal Case to Snake Case.
+
+    Any capitalized values beyond the first token are lowered
+    and an `_` is inserted.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
 def screaming_case(value: str) -> str:
     """
     Convert the value to SCREAMING_SNAKE_CASE.
@@ -273,7 +289,7 @@ def fetch_remote_url(url: str, cache: bool = True):
             return fd.read()
 
     if cache:
-        cache_dir = appdirs.user_cache_dir("glean_parser", "mozilla")
+        cache_dir = platformdirs.user_cache_dir("glean_parser", "mozilla")
         with diskcache.Cache(cache_dir) as dc:
             if key in dc:
                 return dc[key]
@@ -401,7 +417,7 @@ def is_expired(expires: str, major_version: Optional[int] = None) -> bool:
         return parse_expiration_version(expires) <= major_version
     else:
         date = parse_expiration_date(expires)
-        return date <= datetime.datetime.utcnow().date()
+        return date <= datetime.datetime.now(datetime.timezone.utc).date()
 
 
 def validate_expires(expires: str, major_version: Optional[int] = None) -> None:
@@ -453,7 +469,7 @@ def build_date(date: Optional[str]) -> datetime.datetime:
         else:
             ts = datetime_fromisoformat(date).replace(tzinfo=datetime.timezone.utc)
     else:
-        ts = datetime.datetime.utcnow()
+        ts = datetime.datetime.now(datetime.timezone.utc)
 
     return ts
 
@@ -526,7 +542,10 @@ ping_args = [
     "send_if_empty",
     "precise_timestamps",
     "include_info_sections",
+    "enabled",
+    "schedules_pings",
     "reason_codes",
+    "follows_collection_enabled",
 ]
 
 

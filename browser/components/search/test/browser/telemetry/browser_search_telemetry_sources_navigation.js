@@ -56,25 +56,44 @@ add_setup(async function () {
   SearchSERPTelemetry.overrideSearchTelemetryForTests(TEST_PROVIDER_INFO);
   await waitForIdle();
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.urlbar.suggest.searches", true],
-      ["browser.search.serpEventTelemetry.enabled", true],
-    ],
+    set: [["browser.urlbar.suggest.searches", true]],
   });
   // Enable local telemetry recording for the duration of the tests.
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
 
-  await SearchTestUtils.installSearchExtension(
+  const CONFIG_V2 = [
     {
-      search_url: getPageUrl(true),
-      search_url_get_params: "s={searchTerms}&abc=ff",
-      suggest_url:
-        "https://example.com/browser/browser/components/search/test/browser/searchSuggestionEngine.sjs",
-      suggest_url_get_params: "query={searchTerms}",
+      recordType: "engine",
+      identifier: "Example",
+      base: {
+        name: "Example",
+        urls: {
+          search: {
+            base: getPageUrl(true),
+            searchTermParamName: "s",
+            params: [
+              {
+                name: "abc",
+                value: "ff",
+              },
+            ],
+          },
+          suggestions: {
+            base: "https://example.com/browser/browser/components/search/test/browser/searchSuggestionEngine.sjs",
+            method: "GET",
+            searchTermParamName: "query",
+          },
+        },
+      },
     },
-    { setAsDefault: true }
-  );
+    {
+      recordType: "defaultEngines",
+      globalDefault: "Example",
+      specificDefaults: [],
+    },
+  ];
+  await SearchTestUtils.updateRemoteSettingsConfig(CONFIG_V2);
 
   tab = await BrowserTestUtils.openNewForegroundTab(gBrowser);
 
@@ -112,7 +131,7 @@ add_task(async function test_search() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -130,6 +149,7 @@ add_task(async function test_search() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -152,7 +172,7 @@ add_task(async function test_reload() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -172,6 +192,7 @@ add_task(async function test_reload() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -194,6 +215,7 @@ add_task(async function test_reload() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -212,7 +234,7 @@ add_task(async function test_reload() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -233,6 +255,7 @@ add_task(async function test_reload() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -255,6 +278,7 @@ add_task(async function test_reload() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {
@@ -288,7 +312,7 @@ add_task(async function test_fresh_search() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -306,6 +330,7 @@ add_task(async function test_fresh_search() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -326,7 +351,7 @@ add_task(async function test_click_ad() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -345,6 +370,7 @@ add_task(async function test_click_ad() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {
@@ -373,7 +399,7 @@ add_task(async function test_go_back() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -394,6 +420,7 @@ add_task(async function test_go_back() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {
@@ -419,6 +446,7 @@ add_task(async function test_go_back() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -437,7 +465,7 @@ add_task(async function test_go_back() {
 
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -459,6 +487,7 @@ add_task(async function test_go_back() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {
@@ -484,6 +513,7 @@ add_task(async function test_go_back() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {
@@ -508,10 +538,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
   resetTelemetry();
 
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.urlbar.showSearchTerms.featureGate", true],
-      ["browser.urlbar.tipShownCount.searchTip_persist", 999],
-    ],
+    set: [["browser.urlbar.showSearchTerms.featureGate", true]],
   });
 
   // Load a SERP once in order to show the search term in the Urlbar.
@@ -520,7 +547,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
   await adImpressionPromise;
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
+      "Example.urlbar": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -538,6 +565,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -556,8 +584,8 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
   await adImpressionPromise;
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
-      "other-Example.urlbar-persisted": 1,
+      "Example.urlbar": 1,
+      "Example.urlbar-persisted": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -577,6 +605,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -599,6 +628,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -618,8 +648,8 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
   await pageLoadPromise;
   await assertSearchSourcesTelemetry(
     {
-      "other-Example.urlbar": 1,
-      "other-Example.urlbar-persisted": 1,
+      "Example.urlbar": 1,
+      "Example.urlbar-persisted": 1,
     },
     {
       "browser.search.content.urlbar": { "example:tagged:ff": 1 },
@@ -640,6 +670,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -662,6 +693,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
         is_private: "false",
+        is_signed_in: "false",
       },
       engagements: [
         {

@@ -16,6 +16,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   ResetProfile: "resource://gre/modules/ResetProfile.sys.mjs",
   Sanitizer: "resource:///modules/Sanitizer.sys.mjs",
+  UrlbarProviderGlobalActions:
+    "resource:///modules/UrlbarProviderGlobalActions.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
 });
@@ -136,6 +138,7 @@ const UPDATE_CHECK_PERIOD_MS = 12 * 60 * 60 * 1000; // 12 hours
 /**
  * A node in the QueryScorer's phrase tree.
  */
+// eslint-disable-next-line no-shadow
 class Node {
   constructor(word) {
     this.word = word;
@@ -437,8 +440,6 @@ class ProviderInterventions extends UrlbarProvider {
     // The tip we should currently show.
     this.currentTip = TIPS.NONE;
 
-    this.tipsShownInCurrentEngagement = new Set();
-
     // This object is used to match the user's queries to tips.
     ChromeUtils.defineLazyGetter(this, "queryScorer", () => {
       let queryScorer = new QueryScorer({
@@ -501,7 +502,8 @@ class ProviderInterventions extends UrlbarProvider {
         queryContext.searchString
       ) ||
       !EN_LOCALE_MATCH.test(Services.locale.appLocaleAsBCP47) ||
-      !Services.policies.isAllowed("urlbarinterventions")
+      !Services.policies.isAllowed("urlbarinterventions") ||
+      lazy.UrlbarProviderGlobalActions.isActive(queryContext)
     ) {
       return false;
     }
@@ -661,7 +663,6 @@ class ProviderInterventions extends UrlbarProvider {
       }
     );
     result.suggestedIndex = 1;
-    this.tipsShownInCurrentEngagement.add(this.currentTip);
     addCallback(this, result);
   }
 
@@ -703,23 +704,20 @@ class ProviderInterventions extends UrlbarProvider {
     }
   }
 
-  onEngagement(state, queryContext, details, controller) {
-    let { result } = details;
-
+  onEngagement(queryContext, controller, details) {
     // `selType` is "tip" when the tip's main button is picked. Ignore clicks on
     // the help command ("tiphelp"), which is handled by UrlbarInput since we
     // set `helpUrl` on the result payload. Currently there aren't any other
     // buttons or commands but this will ignore clicks on them too.
-    if (result?.providerName == this.name && details.selType == "tip") {
-      this.#pickResult(result, controller.browserWindow);
+    if (details.selType == "tip") {
+      this.#pickResult(details.result, controller.browserWindow);
     }
+  }
 
-    if (["engagement", "abandonment"].includes(state)) {
-      for (let tip of this.tipsShownInCurrentEngagement) {
-        Services.telemetry.keyedScalarAdd("urlbar.tips", `${tip}-shown`, 1);
-      }
-    }
-    this.tipsShownInCurrentEngagement.clear();
+  onImpression(state, queryContext, controller, providerVisibleResults) {
+    providerVisibleResults.forEach(({ result }) => {
+      Glean.urlbar.tips[`${result.payload.type}-shown`].add(1);
+    });
   }
 
   /**

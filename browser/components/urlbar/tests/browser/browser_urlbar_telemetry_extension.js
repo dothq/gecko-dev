@@ -87,9 +87,6 @@ add_setup(async function () {
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
 
-  // Enable event recording for the events tested here.
-  Services.telemetry.setEventRecordingEnabled("navigation", true);
-
   // Clear history so that history added by previous tests doesn't mess up this
   // test when it selects results in the urlbar.
   await PlacesUtils.history.clear();
@@ -100,7 +97,6 @@ add_setup(async function () {
     Services.telemetry.canRecordExtended = oldCanRecord;
     await PlacesUtils.history.clear();
     await PlacesUtils.bookmarks.eraseEverything();
-    Services.telemetry.setEventRecordingEnabled("navigation", false);
   });
 });
 
@@ -110,18 +106,17 @@ add_task(async function test_extension() {
       omnibox: {
         keyword: "omniboxtest",
       },
-
-      background() {
-        /* global browser */
-        browser.omnibox.setDefaultSuggestion({
-          description: "doit",
-        });
-        // Just do nothing for this test.
-        browser.omnibox.onInputEntered.addListener(() => {});
-        browser.omnibox.onInputChanged.addListener((text, suggest) => {
-          suggest([]);
-        });
-      },
+    },
+    background() {
+      /* global browser */
+      browser.omnibox.setDefaultSuggestion({
+        description: "doit",
+      });
+      // Just do nothing for this test.
+      browser.omnibox.onInputEntered.addListener(() => {});
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([]);
+      });
     },
   });
 

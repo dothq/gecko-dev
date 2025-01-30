@@ -99,9 +99,9 @@ To verify vendoring, run:
 
 When verify_vendoring.sh is successful, please run the following command
 in bash:
-    (source $SCRIPT_DIR/use_config_env.sh ;
-     ./mach python $SCRIPT_DIR/save_patch_stack.py \
-      --repo-path $MOZ_LIBWEBRTC_SRC \
+    (source $SCRIPT_DIR/use_config_env.sh ; \\
+     ./mach python $SCRIPT_DIR/save_patch_stack.py \\
+      --repo-path $MOZ_LIBWEBRTC_SRC \\
       --target-branch-head $MOZ_TARGET_UPSTREAM_BRANCH_HEAD )
 
 You may resume running this script with the following command:
@@ -174,13 +174,24 @@ commit ($MOZ_CHANGED).  This may indicate a mismatch between the vendoring
 script and this script, or it could be a true error in the import
 processing.  Once the issue has been resolved, the following steps
 remain for this commit:
+  # save the patch-stack
+  ./mach python $SCRIPT_DIR/save_patch_stack.py \\
+    --skip-startup-sanity \\
+    --repo-path $MOZ_LIBWEBRTC_SRC \\
+    --branch $MOZ_LIBWEBRTC_BRANCH \\
+    --patch-path \"third_party/libwebrtc/moz-patch-stack\" \\
+    --state-path $STATE_DIR \\
+    --target-branch-head $MOZ_TARGET_UPSTREAM_BRANCH_HEAD
   # generate moz.build files (may not be necessary)
   ./mach python python/mozbuild/mozbuild/gn_processor.py \\
       $SCRIPT_DIR/gn-configs/webrtc.json
   # commit the updated moz.build files with the appropriate commit msg
   bash $SCRIPT_DIR/commit-build-file-changes.sh
   # do a (hopefully) quick test build
-  ./mach build
+  ./mach build && ./mach build recurse_gtest && echo \"Successful build\"
+
+After a successful build, you may resume this script:
+    bash $SCRIPT_DIR/loop-ff.sh
 "
 echo_log "Verify number of files changed MOZ($MOZ_CHANGED) GIT($GIT_CHANGED)"
 if [ "x$HANDLE_NOOP_COMMIT" == "x1" ]; then
@@ -203,11 +214,8 @@ echo_log "Save patch-stack"
     --target-branch-head $MOZ_TARGET_UPSTREAM_BRANCH_HEAD \
     2>&1| tee -a $LOOP_OUTPUT_LOG
 
-MODIFIED_BUILD_RELATED_FILE_CNT=`hg diff -c tip --stat \
-    --include 'third_party/libwebrtc/**BUILD.gn' \
-    --include 'third_party/libwebrtc/webrtc.gni' \
-    | grep -v "files changed" \
-    | wc -l | tr -d " " || true`
+MODIFIED_BUILD_RELATED_FILE_CNT=`bash $SCRIPT_DIR/get_build_file_changes.sh \
+    | wc -l | tr -d " "`
 ERROR_HELP=$"
 Generating build files has failed.  This likely means changes to one or more
 BUILD.gn files are required.  Commit those changes following the instructions
@@ -219,10 +227,12 @@ Then complete these steps:
   # commit the updated moz.build files with the appropriate commit msg
   bash $SCRIPT_DIR/commit-build-file-changes.sh
   # do a (hopefully) quick test build
-  ./mach build
-After a successful build, you may resume this script.
+  ./mach build && ./mach build recurse_gtest && echo \"Successful build\"
+
+After a successful build, you may resume this script:
+    bash $SCRIPT_DIR/loop-ff.sh
 "
-echo_log "Modified BUILD.gn (or webrtc.gni) files: $MODIFIED_BUILD_RELATED_FILE_CNT"
+echo_log "Modified .gn, **/BUILD.gn, or **/*.gni files: $MODIFIED_BUILD_RELATED_FILE_CNT"
 MOZ_BUILD_CHANGE_CNT=0
 if [ "x$MODIFIED_BUILD_RELATED_FILE_CNT" != "x0" ]; then
   echo_log "Regenerate build files"
@@ -243,10 +253,13 @@ The test build has failed.  Most likely this is due to an upstream api
 change that must be reflected in Mozilla code outside of the
 third_party/libwebrtc directory. After fixing the build, you may resume
 running this script with the following command:
+    ./mach build && ./mach build recurse_gtest && \\
     bash $SCRIPT_DIR/loop-ff.sh
 "
-echo_log "Test build"
+echo_log "Test build - ./mach build"
 ./mach build 2>&1| tee -a $LOOP_OUTPUT_LOG
+echo_log "Test build - ./mach build recurse_gtest"
+./mach build recurse_gtest 2>&1| tee -a $LOOP_OUTPUT_LOG
 ERROR_HELP=""
 
 # If we've committed moz.build changes, spin up try builds.
@@ -262,7 +275,7 @@ if [ "x$MOZ_BUILD_CHANGE_CNT" != "x0" ]; then
   # Show the time used for this command, and don't let it fail if the
   # command times out so the script continues running.  This command
   # can take quite long, occasionally 10min.
-  (time ./mach try fuzzy --full -q $TRY_FUZZY_QUERY_STRING) 2>&1| tee -a $LOOP_OUTPUT_LOG || true
+  (time ./mach try fuzzy --push-to-vcs --full -q $TRY_FUZZY_QUERY_STRING) 2>&1| tee -a $LOOP_OUTPUT_LOG || true
 fi
 
 if [ ! "x$MOZ_STOP_AFTER_COMMIT" = "x" ]; then

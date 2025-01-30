@@ -12,11 +12,12 @@
 [package]
 edition = "2021"
 name = "uniffi_core"
-version = "0.25.3"
+version = "0.28.2"
 authors = ["Firefox Sync Team <sync-team@mozilla.com>"]
 description = "a multi-language bindings generator for rust (runtime support code)"
 homepage = "https://mozilla.github.io/uniffi-rs"
 documentation = "https://mozilla.github.io/uniffi-rs"
+readme = "README.md"
 keywords = [
     "ffi",
     "bindgen",
@@ -34,19 +35,11 @@ optional = true
 [dependencies.bytes]
 version = "1.3"
 
-[dependencies.camino]
-version = "1.0.8"
-
 [dependencies.log]
 version = "0.4"
 
 [dependencies.once_cell]
 version = "1.10.0"
-
-[dependencies.oneshot]
-version = "0.1.5"
-features = ["async"]
-package = "oneshot-uniffi"
 
 [dependencies.paste]
 version = "1.0"
@@ -56,5 +49,5 @@ version = "1.1.0"
 
 [features]
 default = []
-extern-rustbuffer = []
+scaffolding-ffi-buffer-fns = []
 tokio = ["dep:async-compat"]

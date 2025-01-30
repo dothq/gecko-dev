@@ -61,6 +61,7 @@
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "mozilla/widget/ScreenManager.h"
 #include "nsAppDirectoryServiceDefs.h"
+#include "nsBaseDragService.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
 #include "nsDeviceContext.h"
@@ -115,7 +116,7 @@ int32_t nsIWidget::sPointerIdCounter = 0;
 // Some statics from nsIWidget.h
 /*static*/
 uint64_t AutoObserverNotifier::sObserverId = 0;
-/*static*/ nsTHashMap<uint64_t, nsCOMPtr<nsIObserver>>
+MOZ_RUNINIT /*static*/ nsTHashMap<uint64_t, nsCOMPtr<nsIObserver>>
     AutoObserverNotifier::sSavedObservers;
 
 // The maximum amount of time to let the EnableDragDrop runnable wait in the
@@ -419,8 +420,27 @@ void nsBaseWidget::BaseCreate(nsIWidget* aParent, widget::InitData* aInitData) {
     mIsPIPWindow = aInitData->mPIPWindow;
   }
 
-  if (aParent) {
-    aParent->AddChild(this);
+  mParent = aParent;
+  if (mParent) {
+    mParent->AddToChildList(this);
+  }
+}
+
+void nsIWidget::ClearParent() {
+  if (!mParent) {
+    return;
+  }
+  nsCOMPtr<nsIWidget> kungFuDeathGrip = this;
+  nsCOMPtr<nsIWidget> oldParent = mParent;
+  oldParent->RemoveFromChildList(this);
+  mParent = nullptr;
+  DidClearParent(oldParent);
+}
+
+void nsIWidget::RemoveAllChildren() {
+  while (nsCOMPtr<nsIWidget> kid = mLastChild) {
+    kid->ClearParent();
+    MOZ_ASSERT(kid != mLastChild);
   }
 }
 
@@ -439,37 +459,42 @@ void nsBaseWidget::SetWidgetListener(nsIWidgetListener* aWidgetListener) {
 }
 
 already_AddRefed<nsIWidget> nsBaseWidget::CreateChild(
-    const LayoutDeviceIntRect& aRect, widget::InitData* aInitData,
-    bool aForceUseIWidgetParent) {
-  nsIWidget* parent = this;
-  nsNativeWidget nativeParent = nullptr;
-
-  if (!aForceUseIWidgetParent) {
-    // Use only either parent or nativeParent, not both, to match
-    // existing code.  Eventually Create() should be divested of its
-    // nativeWidget parameter.
-    nativeParent = parent ? parent->GetNativeData(NS_NATIVE_WIDGET) : nullptr;
-    parent = nativeParent ? nullptr : parent;
-    MOZ_ASSERT(!parent || !nativeParent, "messed up logic");
-  }
-
+    const LayoutDeviceIntRect& aRect, widget::InitData& aInitData) {
   nsCOMPtr<nsIWidget> widget;
-  if (aInitData && aInitData->mWindowType == WindowType::Popup) {
-    widget = AllocateChildPopupWidget();
-  } else {
-    widget = nsIWidget::CreateChildWindow();
+  switch (mWidgetType) {
+    case WidgetType::Native: {
+      if (aInitData.mWindowType == WindowType::Popup) {
+        widget = AllocateChildPopupWidget();
+      } else {
+        widget = nsIWidget::CreateChildWindow();
+      }
+      break;
+    }
+    case WidgetType::Headless:
+      widget = nsIWidget::CreateHeadlessWidget();
+      break;
+    case WidgetType::Puppet: {
+      // This really only should happen in crashtests that have menupopups.
+      MOZ_ASSERT(aInitData.mWindowType == WindowType::Popup,
+                 "Creating non-popup puppet widget?");
+      widget = nsIWidget::CreatePuppetWidget(nullptr);
+      break;
+    }
   }
 
-  if (widget && mNeedFastSnaphot) {
+  if (!widget) {
+    return nullptr;
+  }
+
+  if (mNeedFastSnaphot) {
     widget->SetNeedFastSnaphot();
   }
 
-  if (widget &&
-      NS_SUCCEEDED(widget->Create(parent, nativeParent, aRect, aInitData))) {
-    return widget.forget();
+  if (NS_FAILED(widget->Create(this, aRect, &aInitData))) {
+    return nullptr;
   }
 
-  return nullptr;
+  return widget.forget();
 }
 
 // Attach a view to our widget which we'll send events to.
@@ -511,39 +536,28 @@ void nsBaseWidget::Destroy() {
   // Just in case our parent is the only ref to us
   nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
   // disconnect from the parent
-  nsIWidget* parent = GetParent();
-  if (parent) {
-    parent->RemoveChild(this);
+  if (mParent) {
+    mParent->RemoveFromChildList(this);
+    mParent = nullptr;
   }
+  // disconnect from the children
+  RemoveAllChildren();
 }
 
-//-------------------------------------------------------------------------
-//
-// Get this nsBaseWidget parent
-//
-//-------------------------------------------------------------------------
-nsIWidget* nsBaseWidget::GetParent(void) { return nullptr; }
-
-//-------------------------------------------------------------------------
-//
-// Get this nsBaseWidget top level widget
-//
-//-------------------------------------------------------------------------
-nsIWidget* nsBaseWidget::GetTopLevelWidget() {
-  nsIWidget *topLevelWidget = nullptr, *widget = this;
-  while (widget) {
-    topLevelWidget = widget;
-    widget = widget->GetParent();
+nsIWidget* nsIWidget::GetTopLevelWidget() {
+  auto* cur = this;
+  while (true) {
+    if (cur->IsTopLevelWidget()) {
+      break;
+    }
+    nsIWidget* parent = cur->GetParent();
+    if (!parent) {
+      break;
+    }
+    cur = parent;
   }
-  return topLevelWidget;
+  return cur;
 }
-
-//-------------------------------------------------------------------------
-//
-// Get this nsBaseWidget's top (non-sheet) parent (if it's a sheet)
-//
-//-------------------------------------------------------------------------
-nsIWidget* nsBaseWidget::GetSheetWindowParent(void) { return nullptr; }
 
 float nsBaseWidget::GetDPI() { return 96.0f; }
 
@@ -591,7 +605,7 @@ RefPtr<mozilla::VsyncDispatcher> nsIWidget::GetVsyncDispatcher() {
 // Add a child to the list of children
 //
 //-------------------------------------------------------------------------
-void nsBaseWidget::AddChild(nsIWidget* aChild) {
+void nsIWidget::AddToChildList(nsIWidget* aChild) {
   MOZ_ASSERT(!aChild->GetNextSibling() && !aChild->GetPrevSibling(),
              "aChild not properly removed from its old child list");
 
@@ -612,17 +626,8 @@ void nsBaseWidget::AddChild(nsIWidget* aChild) {
 // Remove a child from the list of children
 //
 //-------------------------------------------------------------------------
-void nsBaseWidget::RemoveChild(nsIWidget* aChild) {
-#ifdef DEBUG
-#  ifdef XP_MACOSX
-  // nsCocoaWindow doesn't implement GetParent, so in that case parent will be
-  // null and we'll just have to do without this assertion.
-  nsIWidget* parent = aChild->GetParent();
-  NS_ASSERTION(!parent || parent == this, "Not one of our kids!");
-#  else
-  MOZ_RELEASE_ASSERT(aChild->GetParent() == this, "Not one of our kids!");
-#  endif
-#endif
+void nsIWidget::RemoveFromChildList(nsIWidget* aChild) {
+  MOZ_ASSERT(aChild->GetParent() == this, "Not one of our kids!");
 
   if (mLastChild == aChild) {
     mLastChild = mLastChild->GetPrevSibling();
@@ -644,51 +649,6 @@ void nsBaseWidget::RemoveChild(nsIWidget* aChild) {
 
   aChild->SetNextSibling(nullptr);
   aChild->SetPrevSibling(nullptr);
-}
-
-//-------------------------------------------------------------------------
-//
-// Sets widget's position within its parent's child list.
-//
-//-------------------------------------------------------------------------
-void nsBaseWidget::SetZIndex(int32_t aZIndex) {
-  // Hold a ref to ourselves just in case, since we're going to remove
-  // from our parent.
-  nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
-
-  mZIndex = aZIndex;
-
-  // reorder this child in its parent's list.
-  auto* parent = static_cast<nsBaseWidget*>(GetParent());
-  if (parent) {
-    parent->RemoveChild(this);
-    // Scope sib outside the for loop so we can check it afterward
-    nsIWidget* sib = parent->GetFirstChild();
-    for (; sib; sib = sib->GetNextSibling()) {
-      int32_t childZIndex = GetZIndex();
-      if (aZIndex < childZIndex) {
-        // Insert ourselves before sib
-        nsIWidget* prev = sib->GetPrevSibling();
-        mNextSibling = sib;
-        mPrevSibling = prev;
-        sib->SetPrevSibling(this);
-        if (prev) {
-          prev->SetNextSibling(this);
-        } else {
-          NS_ASSERTION(sib == parent->mFirstChild, "Broken child list");
-          // We've taken ownership of sib, so it's safe to have parent let
-          // go of it
-          parent->mFirstChild = this;
-        }
-        PlaceBehind(eZPlacementBelow, sib, false);
-        break;
-      }
-    }
-    // were we added to the list?
-    if (!sib) {
-      parent->AddChild(this);
-    }
-  }
 }
 
 void nsBaseWidget::GetWorkspaceID(nsAString& workspaceID) {
@@ -986,13 +946,34 @@ bool nsBaseWidget::ComputeShouldAccelerate() {
           StaticPrefs::gfx_webrender_unaccelerated_widget_force());
 }
 
-bool nsBaseWidget::UseAPZ() {
-  return (gfxPlatform::AsyncPanZoomEnabled() &&
-          (mWindowType == WindowType::TopLevel ||
-           mWindowType == WindowType::Child ||
-           ((mWindowType == WindowType::Popup ||
-             mWindowType == WindowType::Dialog) &&
-            HasRemoteContent() && StaticPrefs::apz_popups_enabled())));
+bool nsBaseWidget::UseAPZ() const {
+  // APZ disabled globally
+  if (!gfxPlatform::AsyncPanZoomEnabled()) {
+    return false;
+  }
+
+  // Always use APZ for top-level windows
+  if (mWindowType == WindowType::TopLevel || mWindowType == WindowType::Child) {
+    return true;
+  }
+
+  // Never use APZ for tooltips
+  if (mWindowType == WindowType::Popup && mPopupType == PopupType::Tooltip) {
+    return false;
+  }
+
+  if (!StaticPrefs::apz_popups_enabled()) {
+    return false;
+  }
+
+  if (HasRemoteContent()) {
+    return mWindowType == WindowType::Dialog ||
+           mWindowType == WindowType::Popup;
+  } else if (StaticPrefs::apz_popups_without_remote_enabled()) {
+    return mWindowType == WindowType::Popup;
+  }
+
+  return false;
 }
 
 void nsBaseWidget::CreateCompositor() {
@@ -1177,6 +1158,26 @@ class DispatchEventOnMainThread : public Runnable {
   APZEventResult mAPZResult;
 };
 
+template <>
+NS_IMETHODIMP DispatchEventOnMainThread<MouseInput, WidgetMouseEvent>::Run() {
+  MOZ_ASSERT(
+      !mInput.IsPointerEventType(),
+      "Please use DispatchEventOnMainThread<MouseInput, WidgetPointerEvent>");
+  WidgetMouseEvent event = mInput.ToWidgetEvent<WidgetMouseEvent>(mWidget);
+  mWidget->ProcessUntransformedAPZEvent(&event, mAPZResult);
+  return NS_OK;
+}
+
+template <>
+NS_IMETHODIMP DispatchEventOnMainThread<MouseInput, WidgetPointerEvent>::Run() {
+  MOZ_ASSERT(
+      mInput.IsPointerEventType(),
+      "Please use DispatchEventOnMainThread<MouseInput, WidgetMouseEvent>");
+  WidgetPointerEvent event = mInput.ToWidgetEvent<WidgetPointerEvent>(mWidget);
+  mWidget->ProcessUntransformedAPZEvent(&event, mAPZResult);
+  return NS_OK;
+}
+
 template <class InputType, class EventType>
 class DispatchInputOnControllerThread : public Runnable {
  public:
@@ -1299,6 +1300,15 @@ nsIWidget::ContentAndAPZEventStatus nsBaseWidget::DispatchInputEvent(
             new DispatchInputOnControllerThread<ScrollWheelInput,
                                                 WidgetWheelEvent>(*wheelEvent,
                                                                   mAPZC, this);
+        APZThreadUtils::RunOnControllerThread(std::move(r));
+        status.mContentStatus = nsEventStatus_eConsumeDoDefault;
+        return status;
+      }
+      if (WidgetPointerEvent* pointerEvent = aEvent->AsPointerEvent()) {
+        MOZ_ASSERT(aEvent->mMessage == eContextMenu);
+        RefPtr<Runnable> r =
+            new DispatchInputOnControllerThread<MouseInput, WidgetPointerEvent>(
+                *pointerEvent, mAPZC, this);
         APZThreadUtils::RunOnControllerThread(std::move(r));
         status.mContentStatus = nsEventStatus_eConsumeDoDefault;
         return status;
@@ -1655,6 +1665,40 @@ void nsBaseWidget::OnDestroy() {
   ReleaseContentController();
 }
 
+/* static */
+DesktopIntPoint nsBaseWidget::ConstrainPositionToBounds(
+    const DesktopIntPoint& aPoint, const DesktopIntSize& aSize,
+    const DesktopIntRect& aScreenRect) {
+  DesktopIntPoint point = aPoint;
+
+  // The maximum position to which the window can be moved while keeping its
+  // bottom-right corner within screenRect.
+  auto const maxX = aScreenRect.XMost() - aSize.Width();
+  auto const maxY = aScreenRect.YMost() - aSize.Height();
+
+  // Note that the conditional-pairs below are not exclusive with each other,
+  // and cannot be replaced with a simple call to `std::clamp`! If the window
+  // provided is too large to fit on the screen, they will both fire. Their
+  // order has been chosen to ensure that the window's top left corner will be
+  // onscreen.
+
+  if (point.x >= maxX) {
+    point.x = maxX;
+  }
+  if (point.x < aScreenRect.x) {
+    point.x = aScreenRect.x;
+  }
+
+  if (point.y >= maxY) {
+    point.y = maxY;
+  }
+  if (point.y < aScreenRect.y) {
+    point.y = aScreenRect.y;
+  }
+
+  return point;
+}
+
 void nsBaseWidget::MoveClient(const DesktopPoint& aOffset) {
   LayoutDeviceIntPoint clientOffset(GetClientOffset());
 
@@ -1757,12 +1801,6 @@ nsresult nsBaseWidget::GetRestoredBounds(LayoutDeviceIntRect& aRect) {
 LayoutDeviceIntPoint nsBaseWidget::GetClientOffset() {
   return LayoutDeviceIntPoint(0, 0);
 }
-
-nsresult nsBaseWidget::SetNonClientMargins(const LayoutDeviceIntMargin&) {
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-void nsBaseWidget::SetResizeMargin(LayoutDeviceIntCoord aResizeMargin) {}
 
 uint32_t nsBaseWidget::GetMaxTouchPoints() const { return 0; }
 
@@ -2360,7 +2398,7 @@ WidgetWheelEvent nsBaseWidget::MayStartSwipeForAPZ(
     return event;
   }
 
-  if (aPanInput.AllowsSwipe()) {
+  if (aPanInput.mHandledByAPZ && aPanInput.AllowsSwipe()) {
     SwipeInfo swipeInfo = SendMayStartSwipe(aPanInput);
     event.mCanTriggerSwipe = swipeInfo.wantsSwipe;
     if (swipeInfo.wantsSwipe) {
@@ -3284,74 +3322,6 @@ void IMENotification::TextChangeDataBase::Test() {
 #ifdef DEBUG
 //////////////////////////////////////////////////////////////
 //
-// Convert a GUI event message code to a string.
-// Makes it a lot easier to debug events.
-//
-// See gtk/nsWidget.cpp and windows/nsWindow.cpp
-// for a DebugPrintEvent() function that uses
-// this.
-//
-//////////////////////////////////////////////////////////////
-/* static */
-nsAutoString nsBaseWidget::debug_GuiEventToString(WidgetGUIEvent* aGuiEvent) {
-  NS_ASSERTION(nullptr != aGuiEvent, "cmon, null gui event.");
-
-  nsAutoString eventName(u"UNKNOWN"_ns);
-
-#  define _ASSIGN_eventName(_value, _name) \
-    case _value:                           \
-      eventName.AssignLiteral(_name);      \
-      break
-
-  switch (aGuiEvent->mMessage) {
-    _ASSIGN_eventName(eBlur, "eBlur");
-    _ASSIGN_eventName(eDrop, "eDrop");
-    _ASSIGN_eventName(eDragEnter, "eDragEnter");
-    _ASSIGN_eventName(eDragExit, "eDragExit");
-    _ASSIGN_eventName(eDragOver, "eDragOver");
-    _ASSIGN_eventName(eEditorInput, "eEditorInput");
-    _ASSIGN_eventName(eFocus, "eFocus");
-    _ASSIGN_eventName(eFocusIn, "eFocusIn");
-    _ASSIGN_eventName(eFocusOut, "eFocusOut");
-    _ASSIGN_eventName(eFormSelect, "eFormSelect");
-    _ASSIGN_eventName(eFormChange, "eFormChange");
-    _ASSIGN_eventName(eFormReset, "eFormReset");
-    _ASSIGN_eventName(eFormSubmit, "eFormSubmit");
-    _ASSIGN_eventName(eImageAbort, "eImageAbort");
-    _ASSIGN_eventName(eLoadError, "eLoadError");
-    _ASSIGN_eventName(eKeyDown, "eKeyDown");
-    _ASSIGN_eventName(eKeyPress, "eKeyPress");
-    _ASSIGN_eventName(eKeyUp, "eKeyUp");
-    _ASSIGN_eventName(eMouseEnterIntoWidget, "eMouseEnterIntoWidget");
-    _ASSIGN_eventName(eMouseExitFromWidget, "eMouseExitFromWidget");
-    _ASSIGN_eventName(eMouseDown, "eMouseDown");
-    _ASSIGN_eventName(eMouseUp, "eMouseUp");
-    _ASSIGN_eventName(eMouseClick, "eMouseClick");
-    _ASSIGN_eventName(eMouseAuxClick, "eMouseAuxClick");
-    _ASSIGN_eventName(eMouseDoubleClick, "eMouseDoubleClick");
-    _ASSIGN_eventName(eMouseMove, "eMouseMove");
-    _ASSIGN_eventName(eLoad, "eLoad");
-    _ASSIGN_eventName(ePopState, "ePopState");
-    _ASSIGN_eventName(eBeforeScriptExecute, "eBeforeScriptExecute");
-    _ASSIGN_eventName(eAfterScriptExecute, "eAfterScriptExecute");
-    _ASSIGN_eventName(eUnload, "eUnload");
-    _ASSIGN_eventName(eHashChange, "eHashChange");
-    _ASSIGN_eventName(eReadyStateChange, "eReadyStateChange");
-    _ASSIGN_eventName(eXULBroadcast, "eXULBroadcast");
-    _ASSIGN_eventName(eXULCommandUpdate, "eXULCommandUpdate");
-
-#  undef _ASSIGN_eventName
-
-    default: {
-      eventName.AssignLiteral("UNKNOWN: ");
-      eventName.AppendInt(aGuiEvent->mMessage);
-    } break;
-  }
-
-  return nsAutoString(eventName);
-}
-//////////////////////////////////////////////////////////////
-//
 // Code to deal with paint and event debug prefs.
 //
 //////////////////////////////////////////////////////////////
@@ -3371,7 +3341,7 @@ static PrefPair debug_PrefValues[] = {
 bool nsBaseWidget::debug_GetCachedBoolPref(const char* aPrefName) {
   NS_ASSERTION(nullptr != aPrefName, "cmon, pref name is null.");
 
-  for (uint32_t i = 0; i < ArrayLength(debug_PrefValues); i++) {
+  for (uint32_t i = 0; i < std::size(debug_PrefValues); i++) {
     if (strcmp(debug_PrefValues[i].name, aPrefName) == 0) {
       return debug_PrefValues[i].value;
     }
@@ -3383,7 +3353,7 @@ bool nsBaseWidget::debug_GetCachedBoolPref(const char* aPrefName) {
 static void debug_SetCachedBoolPref(const char* aPrefName, bool aValue) {
   NS_ASSERTION(nullptr != aPrefName, "cmon, pref name is null.");
 
-  for (uint32_t i = 0; i < ArrayLength(debug_PrefValues); i++) {
+  for (uint32_t i = 0; i < std::size(debug_PrefValues); i++) {
     if (strcmp(debug_PrefValues[i].name, aPrefName) == 0) {
       debug_PrefValues[i].value = aValue;
 
@@ -3426,7 +3396,7 @@ Debug_PrefObserver::Observe(nsISupports* subject, const char* topic,
   once = false;
 
   nsCOMPtr<nsIObserver> obs(new Debug_PrefObserver());
-  for (uint32_t i = 0; i < ArrayLength(debug_PrefValues); i++) {
+  for (uint32_t i = 0; i < std::size(debug_PrefValues); i++) {
     // Initialize the pref values
     debug_PrefValues[i].value =
         Preferences::GetBool(debug_PrefValues[i].name, false);
@@ -3463,12 +3433,9 @@ void nsBaseWidget::debug_DumpEvent(FILE* aFileOut, nsIWidget* aWidget,
 
   if (!debug_GetCachedBoolPref("nglayout.debug.event_dumping")) return;
 
-  NS_LossyConvertUTF16toASCII tempString(
-      debug_GuiEventToString(aGuiEvent).get());
-
   fprintf(aFileOut, "%4d %-26s widget=%-8p name=%-12s id=0x%-6x refpt=%d,%d\n",
-          _GetPrintCount(), tempString.get(), (void*)aWidget, aWidgetName,
-          aWindowID, aGuiEvent->mRefPoint.x.value,
+          _GetPrintCount(), ToChar(aGuiEvent->mMessage), (void*)aWidget,
+          aWidgetName, aWindowID, aGuiEvent->mRefPoint.x.value,
           aGuiEvent->mRefPoint.y.value);
 }
 //////////////////////////////////////////////////////////////

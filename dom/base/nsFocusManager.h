@@ -220,11 +220,16 @@ class nsFocusManager final : public nsIFocusManager,
   MOZ_CAN_RUN_SCRIPT nsresult SetFocusedWindowWithCallerType(
       mozIDOMWindowProxy* aWindowToFocus, mozilla::dom::CallerType aCallerType);
 
+  /** Given a focused frame loader owner, fix up the focus to be consistent */
+  MOZ_CAN_RUN_SCRIPT void FixUpFocusAfterFrameLoaderChange(
+      mozilla::dom::Element&);
   /**
-   * Given an element, which must be the focused element, activate the remote
-   * frame it embeds, if any.
+   * Keep track of whether the focused window is about to go away, and if so fix
+   * up the focus state so that we can know if we're still focused by the time
+   * the frame loader swap ends.
    */
-  void ActivateRemoteFrameIfNeeded(mozilla::dom::Element&, uint64_t aActionId);
+  void FixUpFocusBeforeFrameLoaderChange(mozilla::dom::Element&,
+                                         mozilla::dom::BrowsingContext* aBc);
 
   /**
    * Raises the top-level window aWindow at the widget level.
@@ -259,7 +264,8 @@ class nsFocusManager final : public nsIFocusManager,
    * longer accept focus.
    */
   MOZ_CAN_RUN_SCRIPT void WindowHidden(mozIDOMWindowProxy* aWindow,
-                                       uint64_t aActionId);
+                                       uint64_t aActionId,
+                                       bool aIsEnteringBFCache);
 
   /**
    * Fire any events that have been delayed due to synchronized actions.
@@ -301,6 +307,13 @@ class nsFocusManager final : public nsIFocusManager,
    * focused at the widget level.
    */
   void EnsureCurrentWidgetFocused(mozilla::dom::CallerType aCallerType);
+
+  /**
+   * Focus the last focused element in aWindow, after aWindow was raised (or if
+   * aWindow was already raised).
+   */
+  MOZ_CAN_RUN_SCRIPT void MoveFocusToWindowAfterRaise(nsPIDOMWindowOuter*,
+                                                      uint64_t aActionId);
 
   /**
    * Activate or deactivate the window and send the activate/deactivate events.
@@ -349,17 +362,21 @@ class nsFocusManager final : public nsIFocusManager,
       nsPIDOMWindowOuter* aWindow, mozilla::dom::BrowsingContext* aContext);
 
   /**
-   * When aBrowsingContext is focused, adjust the ancestors of aBrowsingContext
-   * so that they also have their corresponding frames focused. Thus, one can
-   * start at the active top-level window and navigate down the currently
-   * focused elements for each frame in the tree to get to aBrowsingContext.
+   * When aBrowsingContext is focused or blurred, adjust the ancestors of
+   * aBrowsingContext so that they also have their corresponding frames focused
+   * or blurred. Thus, one can start at the active top-level window and navigate
+   * down the currently focused elements for each frame in the tree to get to
+   * aBrowsingContext.
    */
   MOZ_CAN_RUN_SCRIPT bool AdjustInProcessWindowFocus(
       mozilla::dom::BrowsingContext* aBrowsingContext, bool aCheckPermission,
-      bool aIsVisible, uint64_t aActionId);
+      bool aIsVisible, uint64_t aActionId, bool aShouldClearAncestorFocus,
+      mozilla::dom::BrowsingContext* aAncestorBrowsingContextToFocus);
+
   MOZ_CAN_RUN_SCRIPT void AdjustWindowFocus(
       mozilla::dom::BrowsingContext* aBrowsingContext, bool aCheckPermission,
-      bool aIsVisible, uint64_t aActionId);
+      bool aIsVisible, uint64_t aActionId, bool aShouldClearAncestorFocus,
+      mozilla::dom::BrowsingContext* aAncestorBrowsingContextToFocus);
 
   /**
    * Returns true if aWindow is visible.
@@ -755,6 +772,12 @@ class nsFocusManager final : public nsIFocusManager,
                            nsIContent** aFocusedContent);
 
  private:
+  /**
+   * Given an element, which must be the focused element, activate the remote
+   * frame it embeds, if any.
+   */
+  void ActivateRemoteFrameIfNeeded(mozilla::dom::Element&, uint64_t aActionId);
+
   // Notify that the focus state of aElement has changed.  Note that we need to
   // pass in whether the window should show a focus ring before the
   // SetFocusedNode call on it happened when losing focus and after the
@@ -822,7 +845,8 @@ class nsFocusManager final : public nsIFocusManager,
   // Sets the BrowsingContext corresponding to top-level Web content
   // in the frontmost tab if focus is in Web content.
   void SetActiveBrowsingContextInContent(
-      mozilla::dom::BrowsingContext* aContext, uint64_t aActionId);
+      mozilla::dom::BrowsingContext* aContext, uint64_t aActionId,
+      bool aIsEnteringBFCache);
 
   // Content-only
   // Receives notification of another process setting the top-level Web

@@ -9,9 +9,10 @@ const {
   targetConfigurationSpec,
 } = require("resource://devtools/shared/specs/target-configuration.js");
 
-const {
-  SessionDataHelpers,
-} = require("resource://devtools/server/actors/watcher/SessionDataHelpers.jsm");
+const { SessionDataHelpers } = ChromeUtils.importESModule(
+  "resource://devtools/server/actors/watcher/SessionDataHelpers.sys.mjs",
+  { global: "contextual" }
+);
 const { isBrowsingContextPartOfContext } = ChromeUtils.importESModule(
   "resource://devtools/server/actors/watcher/browsing-context-helpers.sys.mjs",
   { global: "contextual" }
@@ -30,6 +31,8 @@ const SUPPORTED_OPTIONS = {
   customFormatters: true,
   // Set a custom user agent
   customUserAgent: true,
+  // Is the tracer experimental feature manually enabled by the user?
+  isTracerFeatureEnabled: true,
   // Enable JavaScript
   javascriptEnabled: true,
   // Force a custom device pixel ratio (used in RDM). Set to null to restore origin ratio.
@@ -100,6 +103,9 @@ class TargetConfigurationActor extends Actor {
 
     this._browsingContext = this.watcherActor.browserElement?.browsingContext;
   }
+
+  // Value of `logging.console` pref, before starting recording JS Traces
+  #consolePrefValue;
 
   form() {
     return {
@@ -231,6 +237,11 @@ class TargetConfigurationActor extends Actor {
    * @param {Object} configuration: See `updateConfiguration`
    */
   _updateParentProcessConfiguration(configuration) {
+    // Process "tracerOptions" for all session types, as this isn't specific to tab debugging
+    if ("tracerOptions" in configuration) {
+      this._setTracerOptions(configuration.tracerOptions);
+    }
+
     if (!this._shouldHandleConfigurationInParentProcess()) {
       return;
     }
@@ -287,6 +298,11 @@ class TargetConfigurationActor extends Actor {
   }
 
   _restoreParentProcessConfiguration() {
+    // Always process tracer options as this isn't specific to tab debugging
+    if (this.#consolePrefValue !== undefined) {
+      this._setTracerOptions();
+    }
+
     if (!this._shouldHandleConfigurationInParentProcess()) {
       return;
     }
@@ -486,8 +502,42 @@ class TargetConfigurationActor extends Actor {
       "bf-cache-navigation-pageshow",
       this._onBfCacheNavigation
     );
-    this._restoreParentProcessConfiguration();
+    // Avoid trying to restore if the related context is already being destroyed
+    if (this._browsingContext && !this._browsingContext.isDiscarded) {
+      this._restoreParentProcessConfiguration();
+    }
     super.destroy();
+  }
+
+  /**
+   * Called when the tracer is toggled on/off by the frontend.
+   * Note that when `options` is defined, it is meant to be enabled.
+   * It may not actually be tracing yet depending on the passed options.
+   *
+   * @param {Object} options
+   */
+  _setTracerOptions(options) {
+    if (!options) {
+      if (this.#consolePrefValue === -1) {
+        Services.prefs.clearUserPref("logging.console");
+      } else {
+        Services.prefs.setIntPref("logging.console", this.#consolePrefValue);
+      }
+      this.#consolePrefValue = undefined;
+      return;
+    }
+    // Enable `MOZ_LOG=console:5` via the logging.console so that all console API calls
+    // are stored in the profiler when recording JS Traces via the profiler.
+    //
+    // We do this from here as TargetConfiguration runs in the parent process,
+    // where we can set preferences. Whereas the profiler tracer actor runs in the content process.
+    const LOG_DISABLED = -1;
+    const LOG_VERBOSE = 5;
+    this.#consolePrefValue = Services.prefs.getIntPref(
+      "logging.console",
+      LOG_DISABLED
+    );
+    Services.prefs.setIntPref("logging.console", LOG_VERBOSE);
   }
 }
 

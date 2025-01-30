@@ -19,7 +19,6 @@
         "tabpaint",
         "cpstartup",
         "startup_about_home_paint",
-        "pdfpaint",
         "cross_origin_pageload",
         "startup_about_home_paint_cached"
       ]
@@ -28,7 +27,7 @@
       "tests": ["sessionrestore_many_windows"]
     },
     "g1": {
-      "tests": ["tp5o_scroll"],
+      "tests": ["tp5o_scroll", "tp5o_scroll_paint_skip"],
       "pagesets_name": "tp5n.zip"
     },
     "damp": {
@@ -75,7 +74,14 @@
       "benchmark_zip": "jetstream.zip"
     },
     "svgr": {
-      "tests": ["tsvgx", "tsvgr_opacity", "tscrollx", "tsvg_static", "tart"]
+      "tests": [
+        "tsvgx",
+        "tsvgr_opacity",
+        "tscrollx",
+        "tscrollx_paint_skip",
+        "tsvg_static",
+        "tart"
+      ]
     },
     "perf-reftest": {
       "tests": ["perf_reftest"]
@@ -121,6 +127,9 @@
     "realworld-webextensions": {
       "tests": ["startup_about_home_paint_realworld_webextensions"],
       "webextensions_zip": "webextensions.zip"
+    },
+    "pdfpaint": {
+      "tests": ["pdfpaint"]
     }
   }
 }

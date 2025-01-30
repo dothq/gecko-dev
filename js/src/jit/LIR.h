@@ -18,6 +18,7 @@
 #include "jit/InlineList.h"
 #include "jit/JitAllocPolicy.h"
 #include "jit/LIROpsGenerated.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
 #include "jit/Registers.h"
@@ -1176,7 +1177,7 @@ class LInstructionHelper
     operands_[index] = alloc.value();
 #endif
   }
-  const LInt64Allocation getInt64Operand(size_t offset) {
+  LInt64Allocation getInt64Operand(size_t offset) const {
 #if JS_BITS_PER_WORD == 32
     return LInt64Allocation(operands_[offset + INT64HIGH_INDEX],
                             operands_[offset + INT64LOW_INDEX]);
@@ -1229,7 +1230,7 @@ class LBinaryCallInstructionHelper
 
 class LRecoverInfo : public TempObject {
  public:
-  typedef Vector<MNode*, 2, JitAllocPolicy> Instructions;
+  using Instructions = Vector<MNode*, 2, JitAllocPolicy>;
 
  private:
   // List of instructions needed to recover the stack frames.
@@ -1422,6 +1423,8 @@ enum class WasmSafepointKind : uint8_t {
   // For resumable wasm traps where registers will be spilled by the trap
   // handler.
   Trap,
+  // For stack switch call.
+  StackSwitch,
 };
 
 class LSafepoint : public TempObject {
@@ -1429,8 +1432,8 @@ class LSafepoint : public TempObject {
   using NunboxEntry = SafepointNunboxEntry;
 
  public:
-  typedef Vector<SlotEntry, 0, JitAllocPolicy> SlotList;
-  typedef Vector<NunboxEntry, 0, JitAllocPolicy> NunboxList;
+  using SlotList = Vector<SlotEntry, 0, JitAllocPolicy>;
+  using NunboxList = Vector<NunboxEntry, 0, JitAllocPolicy>;
 
  private:
   // The information in a safepoint describes the registers and gc related
@@ -1912,17 +1915,22 @@ class LIRGraph {
   // Values is safe because it is only used within the scope of an
   // AutoSuppressGC (in IonCompile), which inhibits GC.
   mozilla::Vector<Value, 0, JitAllocPolicy> constantPool_;
-  typedef HashMap<Value, uint32_t, ValueHasher, JitAllocPolicy> ConstantPoolMap;
+  using ConstantPoolMap = HashMap<Value, uint32_t, ValueHasher, JitAllocPolicy>;
   ConstantPoolMap constantPoolMap_;
   Vector<LInstruction*, 0, JitAllocPolicy> safepoints_;
   Vector<LInstruction*, 0, JitAllocPolicy> nonCallSafepoints_;
   uint32_t numVirtualRegisters_;
   uint32_t numInstructions_;
 
+  // Number of call-instructions in this LIR graph.
+  uint32_t numCallInstructions_ = 0;
+
   // Size of stack slots needed for local spills.
   uint32_t localSlotsSize_;
   // Number of JS::Value stack slots needed for argument construction for calls.
   uint32_t argumentSlotCount_;
+  // Count the number of extra times a single safepoint would be encoded.
+  uint32_t extraSafepointUses_;
 
   MIRGraph& mir_;
 
@@ -1952,6 +1960,10 @@ class LIRGraph {
   }
   uint32_t getInstructionId() { return numInstructions_++; }
   uint32_t numInstructions() const { return numInstructions_; }
+
+  void incNumCallInstructions() { numCallInstructions_++; }
+  uint32_t numCallInstructions() const { return numCallInstructions_; }
+
   void setLocalSlotsSize(uint32_t localSlotsSize) {
     localSlotsSize_ = localSlotsSize;
   }
@@ -1960,6 +1972,8 @@ class LIRGraph {
     argumentSlotCount_ = argumentSlotCount;
   }
   uint32_t argumentSlotCount() const { return argumentSlotCount_; }
+  void addExtraSafepointUses(uint32_t extra) { extraSafepointUses_ += extra; }
+  uint32_t extraSafepointUses() const { return extraSafepointUses_; }
   [[nodiscard]] bool addConstantToPool(const Value& v, uint32_t* index);
   size_t numConstants() const { return constantPool_.length(); }
   Value* constantPool() { return &constantPool_[0]; }

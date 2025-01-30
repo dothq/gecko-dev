@@ -28,7 +28,7 @@ DEFINES["__ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES"] = "0"
 DEFINES["__STDC_CONSTANT_MACROS"] = True
 DEFINES["__STDC_FORMAT_MACROS"] = True
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
@@ -37,10 +37,10 @@ LOCAL_INCLUDES += [
     "/ipc/chromium/src",
     "/media/libyuv/",
     "/media/libyuv/libyuv/include/",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
     "/third_party/libwebrtc/sdk/objc/",
     "/third_party/libwebrtc/sdk/objc/base/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 

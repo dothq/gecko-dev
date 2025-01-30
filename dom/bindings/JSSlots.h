@@ -23,8 +23,21 @@
 #define DOM_INSTANCE_RESERVED_SLOTS 1
 
 // Interface objects store a number of reserved slots equal to
-// DOM_INTERFACE_SLOTS_BASE + number of legacy factory functions.
-#define DOM_INTERFACE_SLOTS_BASE 0
+// INTERFACE_OBJECT_INFO_RESERVED_SLOT + number of legacy factory functions,
+// with a maximum of js::FunctionExtended::NUM_EXTENDED_SLOTS.
+// INTERFACE_OBJECT_INFO_RESERVED_SLOT contains the DOMInterfaceInfo.
+// INTERFACE_OBJECT_FIRST_LEGACY_FACTORY_FUNCTION and higher contain the
+// JSObjects for the legacy factory functions.
+enum {
+  INTERFACE_OBJECT_INFO_RESERVED_SLOT = 0,
+  INTERFACE_OBJECT_FIRST_LEGACY_FACTORY_FUNCTION,
+};
+// See js::FunctionExtended::NUM_EXTENDED_SLOTS.
+#define INTERFACE_OBJECT_MAX_SLOTS 3
+
+// Legacy factory functions store a LegacyFactoryFunction in the
+// LEGACY_FACTORY_FUNCTION_RESERVED_SLOT slot.
+enum { LEGACY_FACTORY_FUNCTION_RESERVED_SLOT = 0 };
 
 // Interface prototype objects store a number of reserved slots equal to
 // DOM_INTERFACE_PROTO_SLOTS_BASE or DOM_INTERFACE_PROTO_SLOTS_BASE + 1 if a
@@ -37,5 +50,15 @@
 
 // The slot index of backing list stored in observable array exotic object.
 #define OBSERVABLE_ARRAY_BACKING_LIST_OBJECT_SLOT 1
+
+namespace mozilla::dom {
+
+// This mimics xpc::JSSLOT_EXPANDO_COUNT (and we static assert that), but avoids
+// pulling in XPConnect headers.
+enum ExpandoSlots {
+  DOM_EXPANDO_RESERVED_SLOTS = 4,
+};
+
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_DOMSlots_h */

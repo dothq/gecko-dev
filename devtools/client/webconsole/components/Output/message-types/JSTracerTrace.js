@@ -60,7 +60,7 @@ function JSTracerTrace(props) {
     // Attributes specific to function call returns
     returnedValue,
     relatedTraceId,
-    // See tracer.jsm FRAME_EXIT_REASONS
+    // See tracer.sys.mjs FRAME_EXIT_REASONS
     why,
 
     // Attributes specific to DOM Mutations
@@ -86,7 +86,9 @@ function JSTracerTrace(props) {
   // When we are logging a DOM event, we have the `eventName` defined.
   let messageBody;
   if (eventName) {
-    messageBody = [dom.span({ className: "jstracer-dom-event" }, eventName)];
+    messageBody = [
+      dom.span({ className: "jstracer-dom-event" }, `DOM | ${eventName}`),
+    ];
   } else if (typeof relatedTraceId == "number") {
     messageBody = [
       dom.span({ className: "jstracer-io" }, "⟵ "),

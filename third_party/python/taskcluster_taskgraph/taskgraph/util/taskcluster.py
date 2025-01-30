@@ -3,18 +3,19 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 
+import copy
 import datetime
 import functools
 import logging
 import os
+from typing import Dict, List, Union
 
 import requests
 import taskcluster_urls as liburls
-from requests.packages.urllib3.util.retry import Retry
+from requests.packages.urllib3.util.retry import Retry  # type: ignore
 
 from taskgraph.task import Task
 from taskgraph.util import yaml
-from taskgraph.util.memoize import memoize
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ PRODUCTION_TASKCLUSTER_ROOT_URL = None
 CONCURRENCY = 50
 
 
-@memoize
+@functools.lru_cache(maxsize=None)
 def get_root_url(use_proxy):
     """Get the current TASKCLUSTER_ROOT_URL.
 
@@ -53,9 +54,11 @@ def get_root_url(use_proxy):
         logger.debug(
             "Running in Taskcluster instance {}{}".format(
                 os.environ["TASKCLUSTER_ROOT_URL"],
-                " with taskcluster-proxy"
-                if "TASKCLUSTER_PROXY_URL" in os.environ
-                else "",
+                (
+                    " with taskcluster-proxy"
+                    if "TASKCLUSTER_PROXY_URL" in os.environ
+                    else ""
+                ),
             )
         )
         return liburls.normalize_root_url(os.environ["TASKCLUSTER_ROOT_URL"])
@@ -78,20 +81,25 @@ def requests_retry_session(
     status_forcelist=(500, 502, 503, 504),
     concurrency=CONCURRENCY,
     session=None,
+    allowed_methods=None,
 ):
     session = session or requests.Session()
+    kwargs = {}
+    if allowed_methods is not None:
+        kwargs["allowed_methods"] = allowed_methods
     retry = Retry(
         total=retries,
         read=retries,
         connect=retries,
         backoff_factor=backoff_factor,
         status_forcelist=status_forcelist,
+        **kwargs,
     )
 
     # Default HTTPAdapter uses 10 connections. Mount custom adapter to increase
     # that limit. Connections are established as needed, so using a large value
     # should not negatively impact performance.
-    http_adapter = requests.adapters.HTTPAdapter(
+    http_adapter = requests.adapters.HTTPAdapter(  # type: ignore
         pool_connections=concurrency,
         pool_maxsize=concurrency,
         max_retries=retry,
@@ -102,16 +110,22 @@ def requests_retry_session(
     return session
 
 
-@memoize
+@functools.lru_cache(maxsize=None)
 def get_session():
     return requests_retry_session(retries=5)
 
 
-def _do_request(url, method=None, **kwargs):
+@functools.lru_cache(maxsize=None)
+def get_retry_post_session():
+    allowed_methods = set(("POST",)) | Retry.DEFAULT_ALLOWED_METHODS
+    return requests_retry_session(retries=5, allowed_methods=allowed_methods)
+
+
+def _do_request(url, method=None, session=None, **kwargs):
     if method is None:
         method = "post" if kwargs else "get"
-
-    session = get_session()
+    if session is None:
+        session = get_session()
     if method == "get":
         kwargs["stream"] = True
 
@@ -136,22 +150,9 @@ def _handle_artifact(path, response):
 
 def get_artifact_url(task_id, path, use_proxy=False):
     artifact_tmpl = liburls.api(
-        get_root_url(False), "queue", "v1", "task/{}/artifacts/{}"
+        get_root_url(use_proxy), "queue", "v1", "task/{}/artifacts/{}"
     )
-    data = artifact_tmpl.format(task_id, path)
-    if use_proxy:
-        # Until Bug 1405889 is deployed, we can't download directly
-        # from the taskcluster-proxy.  Work around by using the /bewit
-        # endpoint instead.
-        # The bewit URL is the body of a 303 redirect, which we don't
-        # want to follow (which fetches a potentially large resource).
-        response = _do_request(
-            os.environ["TASKCLUSTER_PROXY_URL"] + "/bewit",
-            data=data,
-            allow_redirects=False,
-        )
-        return response.text
-    return data
+    return artifact_tmpl.format(task_id, path)
 
 
 def get_artifact(task_id, path, use_proxy=False):
@@ -196,10 +197,53 @@ def find_task_id(index_path, use_proxy=False):
     try:
         response = _do_request(get_index_url(index_path, use_proxy))
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
+        if e.response.status_code == 404:  # type: ignore
             raise KeyError(f"index path {index_path} not found")
         raise
     return response.json()["taskId"]
+
+
+def find_task_id_batched(index_paths, use_proxy=False):
+    """Gets the task id of multiple tasks given their respective index.
+
+    Args:
+        index_paths (List[str]): A list of task indexes.
+        use_proxy (bool): Whether to use taskcluster-proxy (default: False)
+
+    Returns:
+        Dict[str, str]: A dictionary object mapping each valid index path
+                        to its respective task id.
+
+    See the endpoint here:
+        https://docs.taskcluster.net/docs/reference/core/index/api#findTasksAtIndex
+    """
+    endpoint = liburls.api(get_root_url(use_proxy), "index", "v1", "tasks/indexes")
+    task_ids = {}
+    continuation_token = None
+
+    while True:
+        response = _do_request(
+            endpoint,
+            session=get_retry_post_session(),
+            json={
+                "indexes": index_paths,
+            },
+            params={"continuationToken": continuation_token},
+        )
+
+        response_data = response.json()
+        if not response_data["tasks"]:
+            break
+        response_tasks = response_data["tasks"]
+        if (len(task_ids) + len(response_tasks)) > len(index_paths):
+            # Sanity check
+            raise ValueError("more task ids were returned than were asked for")
+        task_ids.update((t["namespace"], t["taskId"]) for t in response_tasks)
+
+        continuationToken = response_data.get("continuationToken")
+        if continuationToken is None:
+            break
+    return task_ids
 
 
 def get_artifact_from_index(index_path, artifact_path, use_proxy=False):
@@ -244,6 +288,7 @@ def get_task_url(task_id, use_proxy=False):
     return task_tmpl.format(task_id)
 
 
+@functools.lru_cache(maxsize=None)
 def get_task_definition(task_id, use_proxy=False):
     response = _do_request(get_task_url(task_id, use_proxy))
     return response.json()
@@ -279,6 +324,50 @@ def status_task(task_id, use_proxy=False):
         return status
 
 
+def status_task_batched(task_ids, use_proxy=False):
+    """Gets the status of multiple tasks given task_ids.
+
+    In testing mode, just logs that it would have retrieved statuses.
+
+    Args:
+        task_id (List[str]): A list of task ids.
+        use_proxy (bool): Whether to use taskcluster-proxy (default: False)
+
+    Returns:
+        dict: A dictionary object as defined here:
+          https://docs.taskcluster.net/docs/reference/platform/queue/api#statuses
+    """
+    if testing:
+        logger.info(f"Would have gotten status for {len(task_ids)} tasks.")
+        return
+    endpoint = liburls.api(get_root_url(use_proxy), "queue", "v1", "tasks/status")
+    statuses = {}
+    continuation_token = None
+
+    while True:
+        response = _do_request(
+            endpoint,
+            session=get_retry_post_session(),
+            json={
+                "taskIds": task_ids,
+            },
+            params={
+                "continuationToken": continuation_token,
+            },
+        )
+        response_data = response.json()
+        if not response_data["statuses"]:
+            break
+        response_tasks = response_data["statuses"]
+        if (len(statuses) + len(response_tasks)) > len(task_ids):
+            raise ValueError("more task statuses were returned than were asked for")
+        statuses.update((t["taskId"], t["status"]) for t in response_tasks)
+        continuationToken = response_data.get("continuationToken")
+        if continuationToken is None:
+            break
+    return statuses
+
+
 def state_task(task_id, use_proxy=False):
     """Gets the state of a task given a task_id.
 
@@ -296,7 +385,7 @@ def state_task(task_id, use_proxy=False):
     if testing:
         logger.info(f"Would have gotten state for {task_id}.")
     else:
-        status = status_task(task_id, use_proxy=use_proxy).get("state") or "unknown"
+        status = status_task(task_id, use_proxy=use_proxy).get("state") or "unknown"  # type: ignore
         return status
 
 
@@ -327,11 +416,7 @@ def get_purge_cache_url(provisioner_id, worker_type, use_proxy=False):
 def purge_cache(provisioner_id, worker_type, cache_name, use_proxy=False):
     """Requests a cache purge from the purge-caches service."""
     if testing:
-        logger.info(
-            "Would have purged {}/{}/{}.".format(
-                provisioner_id, worker_type, cache_name
-            )
-        )
+        logger.info(f"Would have purged {provisioner_id}/{worker_type}/{cache_name}.")
     else:
         logger.info(f"Purging {provisioner_id}/{worker_type}/{cache_name}.")
         purge_cache_url = get_purge_cache_url(provisioner_id, worker_type, use_proxy)
@@ -371,3 +456,54 @@ def list_task_group_incomplete_tasks(task_group_id):
             params = {"continuationToken": resp.get("continuationToken")}
         else:
             break
+
+
+@functools.lru_cache(maxsize=None)
+def _get_deps(task_ids, use_proxy):
+    upstream_tasks = {}
+    for task_id in task_ids:
+        try:
+            task_def = get_task_definition(task_id, use_proxy)
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                continue
+            raise e
+
+        upstream_tasks[task_def["metadata"]["name"]] = task_id
+
+        upstream_tasks.update(_get_deps(tuple(task_def["dependencies"]), use_proxy))
+
+    return upstream_tasks
+
+
+def get_ancestors(
+    task_ids: Union[List[str], str], use_proxy: bool = False
+) -> Dict[str, str]:
+    """Gets the ancestor tasks of the given task_ids as a dictionary of label -> taskid.
+
+    Args:
+        task_ids (str or [str]): A single task id or a list of task ids to find the ancestors of.
+        use_proxy (bool): See get_root_url.
+
+    Returns:
+        dict: A dict whose keys are task labels and values are task ids.
+    """
+    upstream_tasks: Dict[str, str] = {}
+
+    if isinstance(task_ids, str):
+        task_ids = [task_ids]
+
+    for task_id in task_ids:
+        try:
+            task_def = get_task_definition(task_id, use_proxy)
+        except requests.HTTPError as e:
+            # Task has most likely expired, which means it's no longer a
+            # dependency for the purposes of this function.
+            if e.response.status_code == 404:
+                continue
+
+            raise e
+
+        upstream_tasks.update(_get_deps(tuple(task_def["dependencies"]), use_proxy))
+
+    return copy.deepcopy(upstream_tasks)

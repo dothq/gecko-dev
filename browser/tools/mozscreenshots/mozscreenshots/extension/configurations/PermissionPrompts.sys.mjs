@@ -7,12 +7,12 @@
 
 import { BrowserTestUtils } from "resource://testing-common/BrowserTestUtils.sys.mjs";
 
-const URL =
+const TEST_URL =
   "https://test1.example.com/browser/browser/tools/mozscreenshots/mozscreenshots/extension/mozscreenshots/browser/resources/lib/permissionPrompts.html";
 let lastTab = null;
 
 export var PermissionPrompts = {
-  init(libDir) {
+  init() {
     Services.prefs.setBoolPref("media.navigator.permission.fake", true);
     Services.prefs.setBoolPref("extensions.install.requireBuiltInCerts", false);
     Services.prefs.setBoolPref("signon.rememberSignons", true);
@@ -146,13 +146,18 @@ async function clickOn(selector, beforeContentFn) {
   // Save the tab so we can close it later.
   lastTab = await BrowserTestUtils.openNewForegroundTab(
     browserWindow.gBrowser,
-    URL
+    TEST_URL
   );
 
   let { SpecialPowers } = lastTab.ownerGlobal;
   if (beforeContentFn) {
     await SpecialPowers.spawn(lastTab.linkedBrowser, [], beforeContentFn);
   }
+
+  let popupShownPromise = BrowserTestUtils.waitForEvent(
+    browserWindow.PopupNotifications.panel,
+    "popupshown"
+  );
 
   await SpecialPowers.spawn(lastTab.linkedBrowser, [selector], arg => {
     /* eslint-env mozilla/chrome-script */
@@ -161,8 +166,5 @@ async function clickOn(selector, beforeContentFn) {
   });
 
   // Wait for the popup to actually be shown before making the screenshot
-  await BrowserTestUtils.waitForEvent(
-    browserWindow.PopupNotifications.panel,
-    "popupshown"
-  );
+  await popupShownPromise;
 }

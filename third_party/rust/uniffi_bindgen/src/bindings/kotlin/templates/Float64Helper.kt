@@ -1,3 +1,6 @@
+/**
+ * @suppress
+ */
 public object FfiConverterDouble: FfiConverter<Double, Double> {
     override fun lift(value: Double): Double {
         return value
@@ -11,7 +14,7 @@ public object FfiConverterDouble: FfiConverter<Double, Double> {
         return value
     }
 
-    override fun allocationSize(value: Double) = 8
+    override fun allocationSize(value: Double) = 8UL
 
     override fun write(value: Double, buf: ByteBuffer) {
         buf.putDouble(value)

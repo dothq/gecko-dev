@@ -70,7 +70,9 @@ where
             CssRule::Property(_) |
             CssRule::LayerStatement(_) |
             CssRule::FontFeatureValues(_) |
-            CssRule::FontPaletteValues(_) => None,
+            CssRule::FontPaletteValues(_) |
+            CssRule::NestedDeclarations(_) |
+            CssRule::PositionTry(_) => None,
             CssRule::Page(ref page_rule) => {
                 let page_rule = page_rule.read_with(guard);
                 let rules = page_rule.rules.read_with(guard);
@@ -116,6 +118,8 @@ where
                 Some(supports_rule.rules.read_with(guard).0.iter())
             },
             CssRule::LayerBlock(ref layer_rule) => Some(layer_rule.rules.read_with(guard).0.iter()),
+            CssRule::Scope(ref rule) => Some(rule.rules.read_with(guard).0.iter()),
+            CssRule::StartingStyle(ref rule) => Some(rule.rules.read_with(guard).0.iter()),
         }
     }
 }

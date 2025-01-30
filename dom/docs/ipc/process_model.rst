@@ -63,7 +63,6 @@ Diagram
                     <TR><TD BORDER="1">Data Decoder (RDD) Process</TD></TR>
                     <TR><TD BORDER="1">Network (Socket) Process</TD></TR>
                     <TR><TD BORDER="1">Utility Process</TD></TR>
-                    <TR><TD BORDER="1">Remote Sandbox Broker Process</TD></TR>
                     <TR><TD BORDER="1">Fork Server</TD></TR>
                 </TABLE>
             >
@@ -101,7 +100,7 @@ Content Process
 
 Content processes are used to load web content, and are the only process type (other than the parent process) which can load and execute JS code. These processes are further subdivided into specific "remote types", which specify the type of content loaded within them, their sandboxing behavior, and can gate access to certain privileged IPC methods.
 
-The specific remote type and isolation behaviour used for a specific resource is currently controlled in 2 major places. When performing a document navigation, the final process to load the document in is selected by the logic in `ProcessIsolation.cpp <https://searchfox.org/mozilla-central/source/dom/ipc/ProcessIsolation.cpp>`_. This will combine information about the specific response, such as the site and headers, with other state to select which process and other isolating actions should be taken. When selecting which process to create the initial process for a new tab in, and when selecting processes for serviceworkers and shared workers, the logic in :searchfox:`E10SUtils.sys.mjs <toolkit/modules/E10SUtils.sys.mjs>`_ is used to select a process. The logic in ``E10SUtils.sys.mjs`` will likely be removed and replaced with ``ProcessIsolation.cpp`` in the future.
+The specific remote type and isolation behaviour used for a specific resource is currently controlled in 2 major places. When performing a document navigation, the final process to load the document in is selected by the logic in `ProcessIsolation.cpp <https://searchfox.org/mozilla-central/source/dom/ipc/ProcessIsolation.cpp>`_. This will combine information about the specific response, such as the site and headers, with other state to select which process and other isolating actions should be taken. When selecting which process to create the initial process for a new tab in, and when selecting processes for serviceworkers and shared workers, the logic in :searchfox:`E10SUtils.sys.mjs <toolkit/modules/E10SUtils.sys.mjs>` is used to select a process. The logic in ``E10SUtils.sys.mjs`` will likely be removed and replaced with ``ProcessIsolation.cpp`` in the future.
 
 .. note::
 
@@ -180,6 +179,18 @@ Shared Web Content
 :default count: 8 (``dom.ipc.processCount``)
 
 The shared web content process is used to host content which is not isolated into one of the other web content process types. This includes almost all web content with Fission disabled, and web content which cannot be attributed to a specific origin with Fission enabled, such as user-initiated ``data:`` URI loads.
+
+
+Inference Content
+"""""""""""""""""
+
+:remoteType: ``inference``
+:default count: 1 (``dom.ipc.processCount.inference``)
+
+The inference content process is used to isolate inference runtimes, currently ONNX runtime and Bergamot. This process hosts chrome workers that are running WASM runtimes along with some Javascript to perform inference tasks like translation or image-to-text.
+
+The models can allocate large amounts of memory, which can cause the process to be killed by the OS in memory-constrained environments like Android. This separation ensures other important processes like content processes are not killed.
+
 
 Isolated Web Content
 """"""""""""""""""""
@@ -279,24 +290,13 @@ Network (Socket) Process
 
 The socket process is used to separate certain networking operations from the parent process, allowing them to be performed more directly in a partially sandboxed process. The eventual goal is to move all TCP/UDP network operations into this dedicated process, and is being tracked in `Bug 1322426 <https://bugzilla.mozilla.org/show_bug.cgi?id=1322426>`_.
 
-.. _remote-sandbox-process:
-
-Remote Sandbox Broker Process
------------------------------
-
-:platform: Windows on ARM only
-:primary protocol: `PRemoteSandboxBroker <https://searchfox.org/mozilla-central/source/security/sandbox/win/src/remotesandboxbroker/PRemoteSandboxBroker.ipdl>`_
-:sandboxed?: no
-
-In order to run sandboxed x86 plugin processes from Windows-on-ARM, the remote sandbox broker process is launched in x86-mode, and used to launch sandboxed x86 subprocesses. This avoids issues with the sandboxing layer, which unfortunately assumes that pointer width matches between the sandboxer and sandboxing process. To avoid this, the remote sandbox broker is used as an x86 sandboxing process which wraps these plugins.
-
 .. _fork-server:
 
 Fork Server
 -----------
 
 :platform: Linux only
-:pref: ``dom.ipc.forkserver.enable`` (disabled by default)
+:pref: ``dom.ipc.forkserver.enable`` (enabled by default in Nightly)
 :primary protocol: *none*
 :sandboxed?: no (processes forked by the fork server are sandboxed)
 

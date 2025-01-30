@@ -451,12 +451,6 @@ export const TabsSetupFlowManager = new (class {
       );
       this._noTabsVisibleFromAddedDeviceTimestamp = 0;
       this._deviceAddedResultsNeverSeen = false;
-      Services.telemetry.recordEvent(
-        "firefoxview",
-        "synced_tabs_empty",
-        "since_device_added",
-        Math.round(elapsed / 1000).toString()
-      );
     } else {
       // we are still waiting for some tabs to show...
       this.logger.debug(
@@ -591,12 +585,6 @@ export const TabsSetupFlowManager = new (class {
       );
     this.didFxaTabOpen = true;
     openTabInWindow(window, url, true);
-    Services.telemetry.recordEvent(
-      "firefoxview_next",
-      "fxa_continue",
-      "sync",
-      null
-    );
   }
 
   async openFxAPairDevice(window) {
@@ -605,18 +593,9 @@ export const TabsSetupFlowManager = new (class {
     });
     this.didFxaTabOpen = true;
     openTabInWindow(window, url, true);
-    Services.telemetry.recordEvent(
-      "firefoxview_next",
-      "fxa_mobile",
-      "sync",
-      null,
-      {
-        has_devices: this.secondaryDeviceConnected.toString(),
-      }
-    );
   }
 
-  syncOpenTabs(containerElem) {
+  syncOpenTabs() {
     // Flip the pref on.
     // The observer should trigger re-evaluating state and advance to next step
     Services.prefs.setBoolPref(SYNC_TABS_PREF, true);

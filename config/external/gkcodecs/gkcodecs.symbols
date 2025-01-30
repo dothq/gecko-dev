@@ -8,6 +8,7 @@ aom_codec_decode
 aom_codec_destroy
 aom_codec_destroy
 aom_codec_enc_config_default
+aom_codec_enc_config_set
 aom_codec_enc_init_ver
 aom_codec_encode
 aom_codec_err_to_string
@@ -98,20 +99,8 @@ opus_packet_get_nb_frames
 opus_packet_get_samples_per_frame
 opus_packet_parse
 opus_strerror
-# libtheora symbols
-th_comment_clear
-th_comment_init
-th_decode_alloc
-th_decode_free
-th_decode_headerin
-th_decode_packetin
-th_decode_ycbcr_out
-th_granule_frame
-th_info_clear
-th_info_init
-th_packet_isheader
-th_packet_iskeyframe
-th_setup_free
+opus_multistream_encode_float
+opus_multistream_surround_encoder_create
 vorbis_block_clear
 vorbis_block_init
 vorbis_comment_clear
@@ -127,6 +116,19 @@ vorbis_synthesis_init
 vorbis_synthesis_pcmout
 vorbis_synthesis_read
 vorbis_synthesis_restart
+vorbis_encode_ctl
+vorbis_bitrate_addblock
+vorbis_analysis_buffer
+vorbis_analysis_blockout
+vorbis_encode_setup_vbr
+vorbis_analysis
+vorbis_analysis_init
+vorbis_analysis_headerout
+vorbis_encode_setup_init
+vorbis_encode_setup_managed
+vorbis_comment_add_tag
+vorbis_bitrate_flushpacket
+vorbis_analysis_wrote
 # libvpx symbols
 #ifndef MOZ_SYSTEM_LIBVPX
 vpx_codec_build_config
@@ -156,3 +158,4 @@ vpx_img_alloc
 vpx_img_free
 vpx_img_wrap
 #endif
+#

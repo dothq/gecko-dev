@@ -61,6 +61,9 @@ class WalkerFront extends FrontClassWithSpec(walkerSpec) {
     // calling watchRootNode, so we keep this assignment as a fallback.
     this.rootNode = types.getType("domnode").read(json.root, this);
 
+    // Bug 1861328: boolean set to true when color scheme can't be changed (happens when `privacy.resistFingerprinting` is set to true)
+    this.rfpCSSColorScheme = json.rfpCSSColorScheme;
+
     this.traits = json.traits;
   }
 
@@ -149,13 +152,6 @@ class WalkerFront extends FrontClassWithSpec(walkerSpec) {
   }
 
   async getIdrefNode(queryNode, id) {
-    // @backward-compat { version 125 } getIdrefNode was added in 125, so the whole if
-    // block below can be removed once 125 hits release.
-    if (!this.traits.hasGetIdrefNode) {
-      const doc = await this.document(queryNode);
-      return this.querySelector(doc, "#" + id);
-    }
-
     const response = await super.getIdrefNode(queryNode, id);
     return response.node;
   }

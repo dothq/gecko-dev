@@ -76,19 +76,21 @@ class MockAudioReceiveStream : public webrtc::AudioReceiveStreamInterface {
     return mRtpSources;
   }
 
+  void SetRtcpMode(webrtc::RtcpMode mode) override {}
+
   virtual void SetDepacketizerToDecoderFrameTransformer(
       rtc::scoped_refptr<webrtc::FrameTransformerInterface> frame_transformer)
       override {
-    // Unimplemented after webrtc.org e2561e17e2 removed the Reconfigure
-    // method.
-    MOZ_ASSERT(false);
+    MOZ_CRASH(
+        "Unimplemented after webrtc.org e2561e17e2 removed the Reconfigure "
+        "method.");
   }
   virtual void SetDecoderMap(
       std::map<int, webrtc::SdpAudioFormat> decoder_map) override;
   virtual void SetNackHistory(int history_ms) override {
-    // Unimplemented after webrtc.org e2561e17e2 removed the Reconfigure
-    // method.
-    MOZ_ASSERT(false);
+    MOZ_CRASH(
+        "Unimplemented after webrtc.org e2561e17e2 removed the Reconfigure "
+        "method.");
   }
   virtual void SetNonSenderRttMeasurement(bool enabled) override {}
   void SetFrameDecryptor(rtc::scoped_refptr<webrtc::FrameDecryptorInterface>
@@ -125,8 +127,6 @@ class MockVideoSendStream : public webrtc::VideoSendStream {
                                webrtc::SetParametersCallback callback) override;
 
   Stats GetStats() override { return mStats; }
-
-  void StartPerRtpStream(const std::vector<bool> active_layers) override {}
 
   void AddAdaptationResource(
       rtc::scoped_refptr<webrtc::Resource> resource) override {}
@@ -194,7 +194,7 @@ class MockVideoReceiveStream : public webrtc::VideoReceiveStreamInterface {
   virtual void SetAssociatedPayloadTypes(
       std::map<int, int> associated_payload_types) override {}
 
-  virtual void UpdateRtxSsrc(uint32_t ssrc) override{};
+  virtual void UpdateRtxSsrc(uint32_t ssrc) override {};
 
   virtual ~MockVideoReceiveStream() {}
 
@@ -303,7 +303,7 @@ class MockCall : public webrtc::Call {
 
   std::vector<webrtc::VideoStream> CreateEncoderStreams(int width, int height) {
     return mVideoSendEncoderConfig->video_stream_factory->CreateEncoderStreams(
-        width, height, *mVideoSendEncoderConfig);
+        mUnusedConfig, width, height, *mVideoSendEncoderConfig);
   }
 
   virtual const webrtc::FieldTrialsView& trials() const override {
@@ -318,7 +318,7 @@ class MockCall : public webrtc::Call {
     return nullptr;
   }
 
-  virtual ~MockCall(){};
+  virtual ~MockCall() {};
 
   const RefPtr<MockCallWrapper> mCallWrapper;
   mozilla::Maybe<webrtc::AudioReceiveStreamInterface::Config>
@@ -329,7 +329,7 @@ class MockCall : public webrtc::Call {
   mozilla::Maybe<webrtc::VideoSendStream::Config> mVideoSendConfig;
   mozilla::Maybe<webrtc::VideoEncoderConfig> mVideoSendEncoderConfig;
   webrtc::Call::Stats mStats;
-  webrtc::NoTrialsConfig mUnusedConfig;
+  webrtc::MozTrialsConfig mUnusedConfig;
 };
 
 class MockCallWrapper : public mozilla::WebrtcCallWrapper {

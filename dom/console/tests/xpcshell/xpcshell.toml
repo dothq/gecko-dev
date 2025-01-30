@@ -7,7 +7,14 @@ support-files = ""
 ["test_console_shouldLog.js"]
 
 ["test_failing_console_listener.js"]
+skip-if = ["tsan"]
 
 ["test_formatting.js"]
 
 ["test_reportForServiceWorkerScope.js"]
+
+["test_worker.js"]
+skip-if = ["os == 'android'"] # Uses ChromeWorker.
+support-files = [
+  "worker.mjs",
+]

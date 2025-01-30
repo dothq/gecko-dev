@@ -114,10 +114,11 @@ export class PromptListener {
     // At the moment the event details are present for GeckoView and on desktop
     // only for Services.prompt.MODAL_TYPE_CONTENT prompts.
     if (event.detail) {
-      const { areLeaving, value } = event.detail;
+      const { areLeaving, promptType, value } = event.detail;
       // `areLeaving` returns undefined for alerts, for confirms and prompts
       // it returns true if a user prompt was accepted and false if it was dismissed.
       detail.accepted = areLeaving === undefined ? true : areLeaving;
+      detail.promptType = promptType;
       if (value) {
         detail.userText = value;
       }
@@ -170,9 +171,10 @@ export class PromptListener {
             }
           }
         }
+
         this.emit("opened", {
           contentBrowser: curBrowser.contentBrowser,
-          prompt: new lazy.modal.Dialog(() => curBrowser, subject),
+          prompt: new lazy.modal.Dialog(subject),
         });
 
         break;
@@ -183,14 +185,16 @@ export class PromptListener {
 
       case "geckoview-prompt-show":
         for (let win of Services.wm.getEnumerator(null)) {
-          const prompt = win.prompts().find(item => item.id == subject.id);
+          const subjectObject = subject.wrappedJSObject;
+          const prompt = win
+            .prompts()
+            .find(item => item.getPromptId() == subjectObject.id);
           if (prompt) {
             const tabBrowser = lazy.TabManager.getTabBrowser(win);
             // Since on Android we always have only one tab we can just check
             // the selected tab.
             const tab = tabBrowser.selectedTab;
             const contentBrowser = lazy.TabManager.getBrowserForTab(tab);
-            const window = lazy.TabManager.getWindowForTab(tab);
 
             // Do not send the event if the curBrowser is specified,
             // and it's different from prompt browser.
@@ -200,13 +204,7 @@ export class PromptListener {
 
             this.emit("opened", {
               contentBrowser,
-              prompt: new lazy.modal.Dialog(
-                () => ({
-                  contentBrowser,
-                  window,
-                }),
-                prompt
-              ),
+              prompt: new lazy.modal.Dialog(prompt),
             });
             return;
           }

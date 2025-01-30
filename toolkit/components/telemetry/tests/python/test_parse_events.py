@@ -93,8 +93,6 @@ extra_keys:
   key2: test2
 products:
     - fennec
-operating_systems:
-    - windows
 """
         name = "test_event"
         event = load_event(SAMPLE_EVENT)
@@ -105,7 +103,6 @@ operating_systems:
         self.assertEqual(evt.objects, ["object1", "object2"])
         self.assertEqual(evt.record_in_processes, ["content"])
         self.assertEqual(evt.products, ["fennec"])
-        self.assertEqual(evt.operating_systems, ["windows"])
         self.assertEqual(sorted(evt.extra_keys), ["key1", "key2"])
 
     def test_absent_products(self):
@@ -144,22 +141,6 @@ expiry_version: never
                 "CATEGORY", "test_event", event, strict_type_checks=True
             ),
         )
-
-    def test_geckoview_streaming_product(self):
-        SAMPLE_EVENT = """
-methods: ["method1", "method2"]
-objects: ["object1", "object2"]
-bug_numbers: [12345]
-notification_emails: ["test01@mozilla.com", "test02@mozilla.com"]
-record_in_processes: ["content"]
-description: This is a test entry for Telemetry.
-products: ["geckoview_streaming"]
-expiry_version: never
-"""
-        event = load_event(SAMPLE_EVENT)
-        parse_events.EventData("CATEGORY", "test_event", event, strict_type_checks=True)
-
-        self.assertRaises(SystemExit, ParserError.exit_func)
 
 
 if __name__ == "__main__":

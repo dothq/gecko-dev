@@ -4,7 +4,6 @@
 
 @import url("chrome://browser/skin/browser-shared.css");
 @import url("chrome://browser/skin/contextmenu.css");
-@import url("chrome://browser/skin/browser-custom-colors.css");
 
 #menubar-items {
   flex-direction: column; /* for flex hack */
@@ -26,16 +25,17 @@
   }
 }
 
-@media (-moz-windows-accent-color-in-titlebar) {
-  :root[tabsintitlebar] {
-    /* stylelint-disable-next-line media-query-no-invalid */
-    @media (-moz-bool-pref: "browser.theme.windows.accent-color-in-tabs.enabled") {
-      --toolbox-non-lwt-bgcolor: ActiveCaption;
-      --toolbox-non-lwt-textcolor: CaptionText;
-      --toolbox-non-lwt-bgcolor-inactive: InactiveCaption;
-      --toolbox-non-lwt-textcolor-inactive: InactiveCaptionText;
+@media (-moz-windows-accent-color-in-titlebar) or (-moz-windows-mica) {
+  :root[customtitlebar] {
+    @media (-moz-windows-mica) {
+      &:not([lwtheme]) {
+        background-color: transparent;
+      }
+    }
 
-      #TabsToolbar:not(:-moz-lwtheme) {
+    /* stylelint-disable-next-line media-query-no-invalid */
+    @media (-moz-windows-mica) or (-moz-bool-pref: "browser.theme.windows.accent-color-in-tabs.enabled") {
+      &:not([lwtheme]) #TabsToolbar {
         /* These colors match the Linux/HCM default button colors. We need to
          * override these on the tabs toolbar because the accent color is
          * arbitrary, so the hardcoded colors from browser-custom-colors might
@@ -55,12 +55,6 @@
   }
 }
 
-/* When temporarily showing the menu bar, make it at least as tall as the
- * tab bar such that the window controls don't appear to move up. */
-:root[tabsintitlebar] #toolbar-menubar[autohide="true"] {
-  height: calc(var(--tab-min-height) - var(--tabs-navbar-shadow-size));
-}
-
 /* Titlebar */
 
 .titlebar-buttonbox {
@@ -68,20 +62,13 @@
   /* The button box must appear on top of the navigator-toolbox in order for
    * click and hover mouse events to work properly for the button in the restored
    * window state. Otherwise, elements in the navigator-toolbox, like the menubar,
-   * can swallow those events. It will also place the buttons above the fog on
-   * Windows 7 with Aero Glass.
+   * can swallow those events.
    */
   z-index: 1;
 }
 
 .titlebar-buttonbox-container {
   align-items: stretch;
-
-  /* Prevent window controls from overlapping the nav bar's shadow on the tab
-   * bar. */
-  #TabsToolbar > & {
-    margin-bottom: var(--tabs-navbar-shadow-size);
-  }
 }
 
 /* Window control buttons */
@@ -94,7 +81,13 @@
   -moz-context-properties: stroke;
   stroke: currentColor;
 
-  :root[tabletmode] & {
+  /* Win10's tablet mode is non-windowed -- windows can't be moved or resized
+     freely. In theory "minimize" might still make sense, but for simplicity we
+     just hide everything but "close".
+
+     (This is not called for in Win11's tablet mode, which _is_ windowed.)
+  */
+  :root[win10-tablet-mode] &:not(.titlebar-close) {
     display: none;
   }
 
@@ -309,10 +302,12 @@
     --urlbar-box-hover-text-color: SelectedItemText;
   }
 
-  #urlbar:not(:-moz-lwtheme, [focused="true"]) > #urlbar-background,
-  #searchbar:not(:-moz-lwtheme, :focus-within),
-  .findbar-textbox:not(:-moz-lwtheme, :focus) {
-    border-color: ThreeDShadow;
+  :root:not([lwtheme]) {
+    #urlbar:not([focused]) > #urlbar-background,
+    #searchbar:not(:focus-within),
+    .findbar-textbox:not(:focus) {
+      border-color: ThreeDShadow;
+    }
   }
 }
 

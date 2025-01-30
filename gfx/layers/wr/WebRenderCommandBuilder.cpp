@@ -32,6 +32,7 @@
 #include "mozilla/layers/WebRenderDrawEventRecorder.h"
 #include "UnitTransforms.h"
 #include "gfxEnv.h"
+#include "MediaInfo.h"
 #include "nsDisplayListInvalidation.h"
 #include "nsLayoutUtils.h"
 #include "nsTHashSet.h"
@@ -310,7 +311,6 @@ struct DIGroup {
   LayerIntRect mLastVisibleRect;
 
   // This is the intersection of mVisibleRect and mLastVisibleRect
-  // we ensure that mInvalidRect is contained in mPreservedRect
   LayerIntRect mPreservedRect;
   // mHitTestBounds is the same as mActualBounds except for the bounds
   // of invisible items which are accounted for in the former but not
@@ -336,11 +336,7 @@ struct DIGroup {
         mHitInfo(CompositorHitTestInvisibleToHit) {}
 
   void InvalidateRect(const LayerIntRect& aRect) {
-    auto r = aRect.Intersect(mPreservedRect);
-    // Empty rects get dropped
-    if (!r.IsEmpty()) {
-      mInvalidRect = mInvalidRect.Union(r);
-    }
+    mInvalidRect = mInvalidRect.Union(aRect);
   }
 
   LayerIntRect ItemBounds(nsDisplayItem* aItem) {
@@ -1882,9 +1878,8 @@ struct NewLayerData {
   ScrollableLayerGuid::ViewID mDeferredId = ScrollableLayerGuid::NULL_SCROLL_ID;
   bool mTransformShouldGetOwnLayer = false;
 
-  void ComputeDeferredTransformInfo(
-      const StackingContextHelper& aSc, nsDisplayItem* aItem,
-      nsDisplayTransform* aLastDeferredTransform) {
+  void ComputeDeferredTransformInfo(const StackingContextHelper& aSc,
+                                    nsDisplayItem* aItem) {
     // See the comments on StackingContextHelper::mDeferredTransformItem
     // for an overview of what deferred transforms are.
     // In the case where we deferred a transform, but have a child display
@@ -1900,14 +1895,6 @@ struct NewLayerData {
     // that we deferred, and a child WebRenderLayerScrollData item that
     // holds the scroll metadata for the child's ASR.
     mDeferredItem = aSc.GetDeferredTransformItem();
-    // If this deferred transform is already slated to be emitted onto an
-    // ancestor layer, do not emit it on this layer as well. Note that it's
-    // sufficient to check the most recently deferred item here, because
-    // there's only one per stacking context, and we emit it when changing
-    // stacking contexts.
-    if (mDeferredItem == aLastDeferredTransform) {
-      mDeferredItem = nullptr;
-    }
     if (mDeferredItem) {
       // It's possible the transform's ASR is not only an ancestor of
       // the item's ASR, but an ancestor of stopAtAsr. In such cases,
@@ -2071,10 +2058,7 @@ void WebRenderCommandBuilder::CreateWebRenderCommandsFromDisplayList(
         newLayerData->mLayerCountBeforeRecursing = mLayerScrollData.size();
         newLayerData->mStopAtAsr =
             mAsrStack.empty() ? nullptr : mAsrStack.back();
-        newLayerData->ComputeDeferredTransformInfo(
-            aSc, item,
-            mDeferredTransformStack.empty() ? nullptr
-                                            : mDeferredTransformStack.back());
+        newLayerData->ComputeDeferredTransformInfo(aSc, item);
 
         // Ensure our children's |stopAtAsr| is not be an ancestor of our
         // |stopAtAsr|, otherwise we could get cyclic scroll metadata
@@ -2096,10 +2080,12 @@ void WebRenderCommandBuilder::CreateWebRenderCommandsFromDisplayList(
         mAsrStack.push_back(stopAtAsrForChildren);
 
         // If we're going to emit a deferred transform onto this layer,
-        // keep track of that so descendant layers know not to emit the
-        // same deferred transform.
+        // clear the deferred transform from the StackingContextHelper
+        // while we are building the subtree of descendant layers.
+        // This ensures that the deferred transform is not applied in
+        // duplicate to any of our descendant layers.
         if (newLayerData->mDeferredItem) {
-          mDeferredTransformStack.push_back(newLayerData->mDeferredItem);
+          aSc.ClearDeferredTransformItem();
         }
       }
     }
@@ -2143,8 +2129,7 @@ void WebRenderCommandBuilder::CreateWebRenderCommandsFromDisplayList(
         mAsrStack.pop_back();
 
         if (newLayerData->mDeferredItem) {
-          MOZ_ASSERT(!mDeferredTransformStack.empty());
-          mDeferredTransformStack.pop_back();
+          aSc.RestoreDeferredTransformItem(newLayerData->mDeferredItem);
         }
 
         const ActiveScrolledRoot* stopAtAsr = newLayerData->mStopAtAsr;
@@ -2644,7 +2629,8 @@ WebRenderCommandBuilder::GenerateFallbackData(
 
       imageData->CreateImageClientIfNeeded();
       RefPtr<ImageClient> imageClient = imageData->GetImageClient();
-      RefPtr<ImageContainer> imageContainer = MakeAndAddRef<ImageContainer>();
+      RefPtr<ImageContainer> imageContainer = MakeAndAddRef<ImageContainer>(
+          ImageUsageType::WebRenderFallbackData, ImageContainer::SYNCHRONOUS);
 
       {
         UpdateImageHelper helper(imageContainer, imageClient,

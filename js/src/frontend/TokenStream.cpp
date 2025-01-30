@@ -1487,9 +1487,8 @@ bool TokenStreamAnyChars::fillExceptingContext(ErrorMetadata* err,
         err->filename = JS::ConstUTF8CharsZ(iter.filename());
         JS::TaggedColumnNumberOneOrigin columnNumber;
         err->lineNumber = iter.computeLine(&columnNumber);
-        // NOTE: Wasm frame cannot appear here.
         err->columnNumber =
-            JS::ColumnNumberOneOrigin(columnNumber.toLimitedColumnNumber());
+            JS::ColumnNumberOneOrigin(columnNumber.oneOriginValue());
         return false;
       }
     }
@@ -3604,7 +3603,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
           unit = char16_t(val);
           break;
         }  // default
-      }    // switch (AssertedCast<uint8_t>(CodeUnitValue(toUnit(unit))))
+      }  // switch (AssertedCast<uint8_t>(CodeUnitValue(toUnit(unit))))
 
       if (!this->charBuffer.append(unit)) {
         return false;

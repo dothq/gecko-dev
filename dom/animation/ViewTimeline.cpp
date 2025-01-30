@@ -8,7 +8,7 @@
 
 #include "mozilla/dom/Animation.h"
 #include "mozilla/dom/ElementInlines.h"
-#include "nsIScrollableFrame.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "nsLayoutUtils.h"
 
 namespace mozilla::dom {
@@ -18,19 +18,21 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(ViewTimeline, ScrollTimeline)
 
 /* static */
 already_AddRefed<ViewTimeline> ViewTimeline::MakeNamed(
-    Document* aDocument, Element* aSubject, PseudoStyleType aPseudoType,
+    Document* aDocument, Element* aSubject,
+    const PseudoStyleRequest& aPseudoRequest,
     const StyleViewTimeline& aStyleTimeline) {
   MOZ_ASSERT(NS_IsMainThread());
 
   // 1. Lookup scroller. We have to find the nearest scroller from |aSubject|
   // and |aPseudoType|.
-  auto [element, pseudo] = FindNearestScroller(aSubject, aPseudoType);
-  auto scroller = Scroller::Nearest(const_cast<Element*>(element), pseudo);
+  auto [element, pseudo] = FindNearestScroller(aSubject, aPseudoRequest);
+  auto scroller =
+      Scroller::Nearest(const_cast<Element*>(element), pseudo.mType);
 
   // 2. Create timeline.
-  return MakeAndAddRef<ViewTimeline>(aDocument, scroller,
-                                     aStyleTimeline.GetAxis(), aSubject,
-                                     aPseudoType, aStyleTimeline.GetInset());
+  return MakeAndAddRef<ViewTimeline>(
+      aDocument, scroller, aStyleTimeline.GetAxis(), aSubject,
+      aPseudoRequest.mType, aStyleTimeline.GetInset());
 }
 
 /* static */
@@ -39,18 +41,19 @@ already_AddRefed<ViewTimeline> ViewTimeline::MakeAnonymous(
     StyleScrollAxis aAxis, const StyleViewTimelineInset& aInset) {
   // view() finds the nearest scroll container from the animation target.
   auto [element, pseudo] =
-      FindNearestScroller(aTarget.mElement, aTarget.mPseudoType);
-  Scroller scroller = Scroller::Nearest(const_cast<Element*>(element), pseudo);
+      FindNearestScroller(aTarget.mElement, aTarget.mPseudoRequest);
+  Scroller scroller =
+      Scroller::Nearest(const_cast<Element*>(element), pseudo.mType);
   return MakeAndAddRef<ViewTimeline>(aDocument, scroller, aAxis,
-                                     aTarget.mElement, aTarget.mPseudoType,
-                                     aInset);
+                                     aTarget.mElement,
+                                     aTarget.mPseudoRequest.mType, aInset);
 }
 
-void ViewTimeline::ReplacePropertiesWith(Element* aSubjectElement,
-                                         PseudoStyleType aPseudoType,
-                                         const StyleViewTimeline& aNew) {
+void ViewTimeline::ReplacePropertiesWith(
+    Element* aSubjectElement, const PseudoStyleRequest& aPseudoRequest,
+    const StyleViewTimeline& aNew) {
   mSubject = aSubjectElement;
-  mSubjectPseudoType = aPseudoType;
+  mSubjectPseudoType = aPseudoRequest.mType;
   mAxis = aNew.GetAxis();
   // FIXME: Bug 1817073. We assume it is a non-animatable value for now.
   mInset = aNew.GetInset();
@@ -64,13 +67,13 @@ void ViewTimeline::ReplacePropertiesWith(Element* aSubjectElement,
 }
 
 Maybe<ScrollTimeline::ScrollOffsets> ViewTimeline::ComputeOffsets(
-    const nsIScrollableFrame* aScrollFrame,
+    const ScrollContainerFrame* aScrollContainerFrame,
     layers::ScrollDirection aOrientation) const {
   MOZ_ASSERT(mSubject);
-  MOZ_ASSERT(aScrollFrame);
+  MOZ_ASSERT(aScrollContainerFrame);
 
   const Element* subjectElement =
-      AnimationUtils::GetElementForRestyle(mSubject, mSubjectPseudoType);
+      mSubject->GetPseudoElement(PseudoStyleRequest(mSubjectPseudoType));
   const nsIFrame* subject = subjectElement->GetPrimaryFrame();
   if (!subject) {
     // No principal box of the subject, so we cannot compute the offset. This
@@ -81,8 +84,8 @@ Maybe<ScrollTimeline::ScrollOffsets> ViewTimeline::ComputeOffsets(
 
   // In order to get the distance between the subject and the scrollport
   // properly, we use the position based on the domain of the scrolled frame,
-  // instead of the scrollable frame.
-  const nsIFrame* scrolledFrame = aScrollFrame->GetScrolledFrame();
+  // instead of the scroll container frame.
+  const nsIFrame* scrolledFrame = aScrollContainerFrame->GetScrolledFrame();
   MOZ_ASSERT(scrolledFrame);
   const nsRect subjectRect(subject->GetOffsetTo(scrolledFrame),
                            subject->GetSize());
@@ -90,7 +93,7 @@ Maybe<ScrollTimeline::ScrollOffsets> ViewTimeline::ComputeOffsets(
   // Use scrollport size (i.e. padding box size - scrollbar size), which is used
   // for calculating the view progress visibility range.
   // https://drafts.csswg.org/scroll-animations/#view-progress-visibility-range
-  const nsRect scrollPort = aScrollFrame->GetScrollPortRect();
+  const nsRect scrollPort = aScrollContainerFrame->GetScrollPortRect();
 
   // Adjuct the positions and sizes based on the physical axis.
   nscoord subjectPosition = subjectRect.y;
@@ -114,7 +117,7 @@ Maybe<ScrollTimeline::ScrollOffsets> ViewTimeline::ComputeOffsets(
   // (i.e. the box of the scrollport), where as |startOffset| refers to the
   // start of the timeline, and similarly for end side/offset. [1]
   // https://drafts.csswg.org/css-writing-modes-4/#css-start
-  const auto sideInsets = ComputeInsets(aScrollFrame, aOrientation);
+  const auto sideInsets = ComputeInsets(aScrollContainerFrame, aOrientation);
 
   // Basically, we are computing the "cover" timeline range name, which
   // represents the full range of the view progress timeline.
@@ -131,23 +134,23 @@ Maybe<ScrollTimeline::ScrollOffsets> ViewTimeline::ComputeOffsets(
 }
 
 ScrollTimeline::ScrollOffsets ViewTimeline::ComputeInsets(
-    const nsIScrollableFrame* aScrollFrame,
+    const ScrollContainerFrame* aScrollContainerFrame,
     layers::ScrollDirection aOrientation) const {
   // If view-timeline-inset is auto, it indicates to use the value of
   // scroll-padding. We use logical dimension to map that start/end offset to
   // the corresponding scroll-padding-{inline|block}-{start|end} values.
-  const WritingMode wm = aScrollFrame->GetScrolledFrame()->GetWritingMode();
+  const WritingMode wm =
+      aScrollContainerFrame->GetScrolledFrame()->GetWritingMode();
   const auto& scrollPadding =
-      LogicalMargin(wm, aScrollFrame->GetScrollPadding());
-  const bool isBlockAxis =
-      mAxis == StyleScrollAxis::Block ||
-      (mAxis == StyleScrollAxis::Horizontal && wm.IsVertical()) ||
-      (mAxis == StyleScrollAxis::Vertical && !wm.IsVertical());
+      LogicalMargin(wm, aScrollContainerFrame->GetScrollPadding());
+  const bool isBlockAxis = mAxis == StyleScrollAxis::Block ||
+                           (mAxis == StyleScrollAxis::X && wm.IsVertical()) ||
+                           (mAxis == StyleScrollAxis::Y && !wm.IsVertical());
 
   // The percentages of view-timelne-inset is relative to the corresponding
   // dimension of the relevant scrollport.
   // https://drafts.csswg.org/scroll-animations-1/#view-timeline-inset
-  const nsRect scrollPort = aScrollFrame->GetScrollPortRect();
+  const nsRect scrollPort = aScrollContainerFrame->GetScrollPortRect();
   const nscoord percentageBasis =
       aOrientation == layers::ScrollDirection::eHorizontal ? scrollPort.width
                                                            : scrollPort.height;

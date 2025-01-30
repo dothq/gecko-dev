@@ -129,11 +129,12 @@ class DummyAudioProcessing : public AudioProcessing {
   }
   void set_stream_key_pressed(bool) override { MOZ_CRASH("Unexpected call"); }
   bool CreateAndAttachAecDump(absl::string_view, int64_t,
-                              rtc::TaskQueue*) override {
+                              absl::Nonnull<TaskQueueBase*>) override {
     MOZ_CRASH("Unexpected call");
     return false;
   }
-  bool CreateAndAttachAecDump(FILE*, int64_t, rtc::TaskQueue*) override {
+  bool CreateAndAttachAecDump(FILE*, int64_t,
+                              absl::Nonnull<TaskQueueBase*>) override {
     MOZ_CRASH("Unexpected call");
     return false;
   }
@@ -481,7 +482,7 @@ void PeerConnectionCtx::AddPeerConnection(const std::string& aKey,
                        .release());
 
     UniquePtr<webrtc::FieldTrialsView> trials =
-        WrapUnique(new NoTrialsConfig());
+        WrapUnique(new MozTrialsConfig());
 
     mSharedWebrtcState = MakeAndAddRef<SharedWebrtcState>(
         new CallWorkerThread(std::move(callWorkerThread)),

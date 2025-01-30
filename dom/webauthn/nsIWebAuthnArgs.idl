@@ -40,9 +40,12 @@ interface nsIWebAuthnRegisterArgs : nsISupports {
     // WebAuthn AuthenticationExtensionsClientInputs. That's not feasible here.
     // So we define a getter for each supported extension input and use the
     // return code to signal presence.
-    [must_use] readonly attribute bool credProps;
-    [must_use] readonly attribute bool hmacCreateSecret;
-    [must_use] readonly attribute bool minPinLength;
+    [must_use] readonly attribute boolean credProps;
+    [must_use] readonly attribute boolean hmacCreateSecret;
+    [must_use] readonly attribute boolean minPinLength;
+    [must_use] readonly attribute boolean prf;
+    [must_use] readonly attribute Array<octet> prfEvalFirst;
+    [must_use] readonly attribute Array<octet> prfEvalSecond;
 
     // Options.
     readonly attribute AString residentKey;
@@ -83,8 +86,15 @@ interface nsIWebAuthnSignArgs : nsISupports {
     // WebAuthn AuthenticationExtensionsClientInputs. That's not feasible here.
     // So we define a getter for each supported extension input and use the
     // return code to signal presence.
-    [must_use] readonly attribute bool hmacCreateSecret;
+    [must_use] readonly attribute boolean hmacCreateSecret;
     [must_use] readonly attribute AString appId;
+    [must_use] readonly attribute boolean prf;
+    [must_use] readonly attribute Array<octet> prfEvalFirst;
+    [must_use] readonly attribute Array<octet> prfEvalSecond;
+    [must_use] readonly attribute Array<Array<octet> > prfEvalByCredentialCredentialId;
+    [must_use] readonly attribute Array<Array<octet> > prfEvalByCredentialEvalFirst;
+    [must_use] readonly attribute Array<boolean> prfEvalByCredentialEvalSecondMaybe;
+    [must_use] readonly attribute Array<Array<octet> > prfEvalByCredentialEvalSecond;
 
     // Options
     [must_use] readonly attribute AString userVerification;
@@ -94,5 +104,5 @@ interface nsIWebAuthnSignArgs : nsISupports {
     // cancel transactions.
     readonly attribute unsigned long timeoutMS;
 
-    readonly attribute bool conditionallyMediated;
+    readonly attribute boolean conditionallyMediated;
 };

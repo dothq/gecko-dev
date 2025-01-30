@@ -133,7 +133,6 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked button#device-pixel-ratio-menu e
 ["browser_tab_remoteness_change_fission_switch_target.js"]
 
 ["browser_target_blank.js"]
-https_first_disabled = true
 
 ["browser_telemetry_activate_rdm.js"]
 
@@ -142,6 +141,10 @@ https_first_disabled = true
 ["browser_toolbox_rule_view.js"]
 
 ["browser_toolbox_rule_view_reload.js"]
+skip-if = [
+  "os == 'linux' && os_version == '18.04' && processor == 'x84_64'", # Bug 1767691
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64'", # Bug 1767691
+]
 
 ["browser_toolbox_swap_browsers.js"]
 

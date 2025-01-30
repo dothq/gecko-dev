@@ -2,6 +2,7 @@
 
 import collections
 import json
+import string
 
 from typing import ClassVar, DefaultDict, Type
 
@@ -16,7 +17,7 @@ class WebDriverException(Exception):
     status_code: ClassVar[str]
 
     def __init__(self, http_status=None, status_code=None, message=None, stacktrace=None):
-        super()
+        super().__init__()
 
         if http_status is not None:
             self.http_status = http_status
@@ -32,11 +33,10 @@ class WebDriverException(Exception):
         message = f"{self.status_code} ({self.http_status})"
 
         if self.message is not None:
-            message += ": %s" % self.message
-        message += "\n"
+            message += ": %s" % self.message.strip(string.whitespace)
 
-        if self.stacktrace:
-            message += ("\nRemote-end stacktrace:\n\n%s" % self.stacktrace)
+        if self.stacktrace is not None:
+            message += ("\n\nRemote-end stacktrace:\n\n%s" % self.stacktrace.strip("\n"))
 
         return message
 
@@ -209,9 +209,10 @@ def from_response(response):
             "Expected 'value' key in response body:\n"
             "%s" % json.dumps(response.body))
 
-    # all fields must exist, but stacktrace can be an empty string
+    # all fields must exist, but both message and stacktrace are
+    # implementation-defined and could be empty
     code = value["error"]
-    message = value["message"]
+    message = value["message"] or None
     stack = value["stacktrace"] or None
 
     cls = get(code)

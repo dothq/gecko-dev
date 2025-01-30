@@ -33,7 +33,7 @@
 #include "mozilla/gfx/Types.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/ComputedStyle.h"
-#include "SVGPathDataParser.h"
+#include "SVGOuterSVGFrame.h"
 #include "SVGPathData.h"
 #include "SVGPathElement.h"
 
@@ -42,88 +42,16 @@ using namespace mozilla::dom;
 using namespace mozilla::dom::SVGPreserveAspectRatio_Binding;
 using namespace mozilla::gfx;
 
-static bool ParseNumber(RangedPtr<const char16_t>& aIter,
-                        const RangedPtr<const char16_t>& aEnd, double& aValue) {
-  int32_t sign;
-  if (!SVGContentUtils::ParseOptionalSign(aIter, aEnd, sign)) {
-    return false;
-  }
+static bool StringToValue(const nsAString& aString, float& aValue) {
+  nsresult errorCode;
+  aValue = aString.ToFloat(&errorCode);
+  return NS_SUCCEEDED(errorCode);
+}
 
-  // Absolute value of the integer part of the mantissa.
-  double intPart = 0.0;
-
-  bool gotDot = *aIter == '.';
-
-  if (!gotDot) {
-    if (!mozilla::IsAsciiDigit(*aIter)) {
-      return false;
-    }
-    do {
-      intPart = 10.0 * intPart + mozilla::AsciiAlphanumericToNumber(*aIter);
-      ++aIter;
-    } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
-
-    if (aIter != aEnd) {
-      gotDot = *aIter == '.';
-    }
-  }
-
-  // Fractional part of the mantissa.
-  double fracPart = 0.0;
-
-  if (gotDot) {
-    ++aIter;
-    if (aIter == aEnd || !mozilla::IsAsciiDigit(*aIter)) {
-      return false;
-    }
-
-    // Power of ten by which we need to divide the fraction
-    double divisor = 1.0;
-
-    do {
-      fracPart = 10.0 * fracPart + mozilla::AsciiAlphanumericToNumber(*aIter);
-      divisor *= 10.0;
-      ++aIter;
-    } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
-
-    fracPart /= divisor;
-  }
-
-  bool gotE = false;
-  int32_t exponent = 0;
-  int32_t expSign;
-
-  if (aIter != aEnd && (*aIter == 'e' || *aIter == 'E')) {
-    RangedPtr<const char16_t> expIter(aIter);
-
-    ++expIter;
-    if (expIter != aEnd) {
-      expSign = *expIter == '-' ? -1 : 1;
-      if (*expIter == '-' || *expIter == '+') {
-        ++expIter;
-      }
-      if (expIter != aEnd && mozilla::IsAsciiDigit(*expIter)) {
-        // At this point we're sure this is an exponent
-        // and not the start of a unit such as em or ex.
-        gotE = true;
-      }
-    }
-
-    if (gotE) {
-      aIter = expIter;
-      do {
-        exponent = 10.0 * exponent + mozilla::AsciiAlphanumericToNumber(*aIter);
-        ++aIter;
-      } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
-    }
-  }
-
-  // Assemble the number
-  aValue = sign * (intPart + fracPart);
-  if (gotE) {
-    aValue *= pow(10.0, expSign * exponent);
-  }
-  return true;
+static bool StringToValue(const nsAString& aString, double& aValue) {
+  nsresult errorCode;
+  aValue = aString.ToDouble(&errorCode);
+  return NS_SUCCEEDED(errorCode);
 }
 
 namespace mozilla {
@@ -433,6 +361,26 @@ float SVGContentUtils::GetFontXHeight(const ComputedStyle* aComputedStyle,
   return nsPresContext::AppUnitsToFloatCSSPixels(xHeight) /
          aPresContext->TextZoom();
 }
+
+float SVGContentUtils::GetLineHeight(const Element* aElement) {
+  float result = 16.0f * ReflowInput::kNormalLineHeightFactor;
+  if (!aElement) {
+    return result;
+  }
+  SVGGeometryProperty::DoForComputedStyle(
+      aElement, [&](const ComputedStyle* style) {
+        auto* context = nsContentUtils::GetContextForContent(aElement);
+        if (!context) {
+          return;
+        }
+        const auto lineHeightAu = ReflowInput::CalcLineHeight(
+            *style, context, aElement, NS_UNCONSTRAINEDSIZE, 1.0f);
+        result = CSSPixel::FromAppUnits(lineHeightAu);
+      });
+
+  return result;
+}
+
 nsresult SVGContentUtils::ReportToConsole(const Document* doc,
                                           const char* aWarning,
                                           const nsTArray<nsString>& aParams) {
@@ -469,28 +417,28 @@ SVGViewportElement* SVGContentUtils::GetNearestViewportElement(
   return nullptr;
 }
 
-static gfx::Matrix GetCTMInternal(SVGElement* aElement, bool aScreenCTM,
+enum class CTMType { NearestViewport, NonScalingStroke, Screen };
+
+static gfx::Matrix GetCTMInternal(SVGElement* aElement, CTMType aCTMType,
                                   bool aHaveRecursed) {
   auto getLocalTransformHelper =
       [](SVGElement const* e, bool shouldIncludeChildToUserSpace) -> gfxMatrix {
     gfxMatrix ret;
-
     if (auto* f = e->GetPrimaryFrame()) {
       ret = SVGUtils::GetTransformMatrixInUserSpace(f);
-    } else {
-      // FIXME: Ideally we should also return the correct matrix
-      // for display:none, but currently transform related code relies
-      // heavily on the present of a frame.
-      // For now we just fall back to |PrependLocalTransformsTo| which
-      // doesn't account for CSS transform.
-      ret = e->PrependLocalTransformsTo({}, eUserSpaceToParent);
     }
-
     if (shouldIncludeChildToUserSpace) {
-      ret = e->PrependLocalTransformsTo({}, eChildToUserSpace) * ret;
+      ret = e->ChildToUserSpaceTransform() * ret;
     }
-
     return ret;
+  };
+
+  auto postTranslateFrameOffset = [](nsIFrame* aFrame, nsIFrame* aAncestorFrame,
+                                     gfx::Matrix& aMatrix) {
+    auto point = aFrame->GetOffsetTo(aAncestorFrame);
+    aMatrix =
+        aMatrix.PostTranslate(nsPresContext::AppUnitsToFloatCSSPixels(point.x),
+                              nsPresContext::AppUnitsToFloatCSSPixels(point.y));
   };
 
   gfxMatrix matrix = getLocalTransformHelper(aElement, aHaveRecursed);
@@ -501,8 +449,21 @@ static gfx::Matrix GetCTMInternal(SVGElement* aElement, bool aScreenCTM,
   while (ancestor && ancestor->IsSVGElement() &&
          !ancestor->IsSVGElement(nsGkAtoms::foreignObject)) {
     element = static_cast<SVGElement*>(ancestor);
+    if (aCTMType == CTMType::NonScalingStroke) {
+      if (auto* el = SVGSVGElement::FromNode(element); el && !el->IsInner()) {
+        if (SVGOuterSVGFrame* frame =
+                do_QueryFrame(element->GetPrimaryFrame())) {
+          Matrix childTransform;
+          if (frame->HasChildrenOnlyTransform(&childTransform)) {
+            return gfx::ToMatrix(matrix) * childTransform;
+          }
+        }
+        return gfx::ToMatrix(matrix);
+      }
+    }
     matrix *= getLocalTransformHelper(element, true);
-    if (!aScreenCTM && SVGContentUtils::EstablishesViewport(element)) {
+    if (aCTMType == CTMType::NearestViewport &&
+        SVGContentUtils::EstablishesViewport(element)) {
       if (!element->IsAnyOfSVGElements(nsGkAtoms::svg, nsGkAtoms::symbol)) {
         NS_ERROR("New (SVG > 1.1) SVG viewport establishing element?");
         return gfx::Matrix(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);  // singular
@@ -512,7 +473,7 @@ static gfx::Matrix GetCTMInternal(SVGElement* aElement, bool aScreenCTM,
     }
     ancestor = ancestor->GetFlattenedTreeParent();
   }
-  if (!aScreenCTM) {
+  if (aCTMType == CTMType::NearestViewport) {
     // didn't find a nearestViewportElement
     return gfx::Matrix(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);  // singular
   }
@@ -530,43 +491,74 @@ static gfx::Matrix GetCTMInternal(SVGElement* aElement, bool aScreenCTM,
     matrix = getLocalTransformHelper(aElement, true);
   }
 
-  if (auto* f = element->GetPrimaryFrame()) {
-    if (f->IsSVGOuterSVGFrame()) {
-      nsMargin bp = f->GetUsedBorderAndPadding();
-      matrix.PostTranslate(
-          NSAppUnitsToFloatPixels(bp.left, AppUnitsPerCSSPixel()),
-          NSAppUnitsToFloatPixels(bp.top, AppUnitsPerCSSPixel()));
-    }
+  gfx::Matrix tm = gfx::ToMatrix(matrix);
+  nsIFrame* frame = element->GetPrimaryFrame();
+  if (!frame) {
+    return tm;
+  }
+  if (frame->IsSVGOuterSVGFrame()) {
+    nsMargin bp = frame->GetUsedBorderAndPadding();
+    int32_t appUnitsPerCSSPixel = AppUnitsPerCSSPixel();
+    tm.PostTranslate(NSAppUnitsToFloatPixels(bp.left, appUnitsPerCSSPixel),
+                     NSAppUnitsToFloatPixels(bp.top, appUnitsPerCSSPixel));
   }
 
   if (!ancestor || !ancestor->IsElement()) {
-    return gfx::ToMatrix(matrix);
+    return tm;
   }
   if (auto* ancestorSVG = SVGElement::FromNode(ancestor)) {
-    return gfx::ToMatrix(matrix) * GetCTMInternal(ancestorSVG, true, true);
+    return tm * GetCTMInternal(ancestorSVG, aCTMType, true);
+  }
+  nsIFrame* parentFrame = frame->GetParent();
+  if (!parentFrame) {
+    return tm;
+  }
+  postTranslateFrameOffset(frame, parentFrame, tm);
+
+  nsIContent* nearestSVGAncestor = ancestor;
+  while (nearestSVGAncestor && !nearestSVGAncestor->IsSVGElement()) {
+    nearestSVGAncestor = nearestSVGAncestor->GetFlattenedTreeParent();
   }
 
-  // XXX this does not take into account CSS transform, or that the non-SVG
-  // content that we've hit may itself be inside an SVG foreignObject higher up
-  Document* currentDoc = aElement->GetComposedDoc();
-  float x = 0.0f, y = 0.0f;
-  if (currentDoc && element->IsSVGElement(nsGkAtoms::svg)) {
-    PresShell* presShell = currentDoc->GetPresShell();
-    if (presShell) {
-      nsIFrame* frame = element->GetPrimaryFrame();
-      nsIFrame* ancestorFrame = presShell->GetRootFrame();
-      if (frame && ancestorFrame) {
-        nsPoint point = frame->GetOffsetTo(ancestorFrame);
-        x = nsPresContext::AppUnitsToFloatCSSPixels(point.x);
-        y = nsPresContext::AppUnitsToFloatCSSPixels(point.y);
-      }
-    }
+  nsIFrame* ancestorFrame;
+  if (nearestSVGAncestor) {
+    ancestorFrame = nearestSVGAncestor->GetPrimaryFrame();
+  } else {
+    Document* currentDoc = aElement->GetComposedDoc();
+    PresShell* presShell = currentDoc ? currentDoc->GetPresShell() : nullptr;
+    ancestorFrame = presShell ? presShell->GetRootFrame() : nullptr;
   }
-  return ToMatrix(matrix).PostTranslate(x, y);
+  if (!ancestorFrame) {
+    return tm;
+  }
+  auto transformToAncestor = nsLayoutUtils::GetTransformToAncestor(
+      RelativeTo{parentFrame, ViewportType::Layout},
+      RelativeTo{ancestorFrame, ViewportType::Layout}, nsIFrame::IN_CSS_UNITS);
+  gfx::Matrix result2d;
+  if (transformToAncestor.CanDraw2D(&result2d)) {
+    tm = tm * result2d;
+  } else {
+    // The transform from our outer SVG matrix to the root is a 3D
+    // transform. We can't really process that so give up and just
+    // return the overall translation from the outer SVG to the root.
+    postTranslateFrameOffset(parentFrame, ancestorFrame, tm);
+  }
+  return nearestSVGAncestor
+             ? tm * GetCTMInternal(static_cast<SVGElement*>(nearestSVGAncestor),
+                                   aCTMType, true)
+             : tm;
 }
 
-gfx::Matrix SVGContentUtils::GetCTM(SVGElement* aElement, bool aScreenCTM) {
-  return GetCTMInternal(aElement, aScreenCTM, false);
+gfx::Matrix SVGContentUtils::GetCTM(SVGElement* aElement) {
+  return GetCTMInternal(aElement, CTMType::NearestViewport, false);
+}
+
+gfx::Matrix SVGContentUtils::GetNonScalingStrokeCTM(SVGElement* aElement) {
+  return GetCTMInternal(aElement, CTMType::NonScalingStroke, false);
+}
+
+gfx::Matrix SVGContentUtils::GetScreenCTM(SVGElement* aElement) {
+  return GetCTMInternal(aElement, CTMType::Screen, false);
 }
 
 void SVGContentUtils::RectilinearGetStrokeBounds(
@@ -710,47 +702,83 @@ gfx::Matrix SVGContentUtils::GetViewBoxTransform(
 }
 
 template <class floatType>
-bool SVGContentUtils::ParseNumber(RangedPtr<const char16_t>& aIter,
-                                  const RangedPtr<const char16_t>& aEnd,
+bool SVGContentUtils::ParseNumber(nsAString::const_iterator& aIter,
+                                  const nsAString::const_iterator& aEnd,
                                   floatType& aValue) {
-  RangedPtr<const char16_t> iter(aIter);
+  const nsAString::const_iterator start(aIter);
+  auto resetIterator = mozilla::MakeScopeExit([&]() { aIter = start; });
+  int32_t sign;
+  if (!SVGContentUtils::ParseOptionalSign(aIter, aEnd, sign)) {
+    return false;
+  }
 
-  double value;
-  if (!::ParseNumber(iter, aEnd, value)) {
-    return false;
+  bool gotDot = *aIter == '.';
+
+  if (!gotDot) {
+    if (!mozilla::IsAsciiDigit(*aIter)) {
+      return false;
+    }
+    do {
+      ++aIter;
+    } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
+
+    if (aIter != aEnd) {
+      gotDot = *aIter == '.';
+    }
   }
-  floatType floatValue = floatType(value);
-  if (!std::isfinite(floatValue)) {
-    return false;
+
+  if (gotDot) {
+    ++aIter;
+    if (aIter == aEnd || !mozilla::IsAsciiDigit(*aIter)) {
+      return false;
+    }
+
+    do {
+      ++aIter;
+    } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
   }
-  aValue = floatValue;
-  aIter = iter;
-  return true;
+
+  bool gotE = false;
+
+  if (aIter != aEnd && (*aIter == 'e' || *aIter == 'E')) {
+    nsAString::const_iterator expIter(aIter);
+
+    ++expIter;
+    if (expIter != aEnd) {
+      if (*expIter == '-' || *expIter == '+') {
+        ++expIter;
+      }
+      if (expIter != aEnd && mozilla::IsAsciiDigit(*expIter)) {
+        // At this point we're sure this is an exponent
+        // and not the start of a unit such as em or ex.
+        gotE = true;
+      }
+    }
+
+    if (gotE) {
+      aIter = expIter;
+      do {
+        ++aIter;
+      } while (aIter != aEnd && mozilla::IsAsciiDigit(*aIter));
+    }
+  }
+
+  resetIterator.release();
+  return ::StringToValue(Substring(start, aIter), aValue);
 }
 
 template bool SVGContentUtils::ParseNumber<float>(
-    RangedPtr<const char16_t>& aIter, const RangedPtr<const char16_t>& aEnd,
+    nsAString::const_iterator& aIter, const nsAString::const_iterator& aEnd,
     float& aValue);
-
 template bool SVGContentUtils::ParseNumber<double>(
-    RangedPtr<const char16_t>& aIter, const RangedPtr<const char16_t>& aEnd,
+    nsAString::const_iterator& aIter, const nsAString::const_iterator& aEnd,
     double& aValue);
-
-RangedPtr<const char16_t> SVGContentUtils::GetStartRangedPtr(
-    const nsAString& aString) {
-  return RangedPtr<const char16_t>(aString.Data(), aString.Length());
-}
-
-RangedPtr<const char16_t> SVGContentUtils::GetEndRangedPtr(
-    const nsAString& aString) {
-  return RangedPtr<const char16_t>(aString.Data() + aString.Length(),
-                                   aString.Data(), aString.Length());
-}
 
 template <class floatType>
 bool SVGContentUtils::ParseNumber(const nsAString& aString, floatType& aValue) {
-  RangedPtr<const char16_t> iter = GetStartRangedPtr(aString);
-  const RangedPtr<const char16_t> end = GetEndRangedPtr(aString);
+  nsAString::const_iterator iter, end;
+  aString.BeginReading(iter);
+  aString.EndReading(end);
 
   return ParseNumber(iter, end, aValue) && iter == end;
 }
@@ -761,10 +789,10 @@ template bool SVGContentUtils::ParseNumber<double>(const nsAString& aString,
                                                    double& aValue);
 
 /* static */
-bool SVGContentUtils::ParseInteger(RangedPtr<const char16_t>& aIter,
-                                   const RangedPtr<const char16_t>& aEnd,
+bool SVGContentUtils::ParseInteger(nsAString::const_iterator& aIter,
+                                   const nsAString::const_iterator& aEnd,
                                    int32_t& aValue) {
-  RangedPtr<const char16_t> iter(aIter);
+  nsAString::const_iterator iter(aIter);
 
   int32_t sign;
   if (!ParseOptionalSign(iter, aEnd, sign)) {
@@ -785,16 +813,17 @@ bool SVGContentUtils::ParseInteger(RangedPtr<const char16_t>& aIter,
   } while (iter != aEnd && mozilla::IsAsciiDigit(*iter));
 
   aIter = iter;
-  aValue = int32_t(clamped(sign * value,
-                           int64_t(std::numeric_limits<int32_t>::min()),
-                           int64_t(std::numeric_limits<int32_t>::max())));
+  aValue = int32_t(std::clamp(sign * value,
+                              int64_t(std::numeric_limits<int32_t>::min()),
+                              int64_t(std::numeric_limits<int32_t>::max())));
   return true;
 }
 
 /* static */
 bool SVGContentUtils::ParseInteger(const nsAString& aString, int32_t& aValue) {
-  RangedPtr<const char16_t> iter = GetStartRangedPtr(aString);
-  const RangedPtr<const char16_t> end = GetEndRangedPtr(aString);
+  nsAString::const_iterator iter, end;
+  aString.BeginReading(iter);
+  aString.EndReading(end);
 
   return ParseInteger(iter, end, aValue) && iter == end;
 }
@@ -818,10 +847,9 @@ float SVGContentUtils::CoordToFloat(const SVGElement* aContent,
 }
 
 already_AddRefed<gfx::Path> SVGContentUtils::GetPath(
-    const nsAString& aPathString) {
-  SVGPathData pathData;
-  SVGPathDataParser parser(aPathString, &pathData);
-  if (!parser.Parse()) {
+    const nsACString& aPathString) {
+  SVGPathData pathData(aPathString);
+  if (pathData.IsEmpty()) {
     return nullptr;
   }
 
@@ -830,7 +858,9 @@ already_AddRefed<gfx::Path> SVGContentUtils::GetPath(
   RefPtr<PathBuilder> builder =
       drawTarget->CreatePathBuilder(FillRule::FILL_WINDING);
 
-  return pathData.BuildPath(builder, StyleStrokeLinecap::Butt, 1);
+  // This is called from canvas, so we don't need to get the effective zoom here
+  // or so.
+  return pathData.BuildPath(builder, StyleStrokeLinecap::Butt, 1, 1.0f);
 }
 
 bool SVGContentUtils::ShapeTypeHasNoCorners(const nsIContent* aContent) {

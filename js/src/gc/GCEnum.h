@@ -111,7 +111,7 @@ enum class GCAbortReason {
   _(ObjectElements)                        \
   _(ObjectSlots)                           \
   _(ScriptPrivateData)                     \
-  _(MapObjectTable)                        \
+  _(MapObjectData)                         \
   _(BigIntDigits)                          \
   _(ScopeData)                             \
   _(WeakMapObject)                         \
@@ -122,12 +122,14 @@ enum class GCAbortReason {
   _(ModuleCyclicFields)                    \
   _(ModuleSyntheticFields)                 \
   _(ModuleExports)                         \
+  _(ModuleImportAttributes)                \
   _(BaselineScript)                        \
   _(IonScript)                             \
   _(ArgumentsData)                         \
   _(RareArgumentsData)                     \
   _(RegExpSharedBytecode)                  \
   _(RegExpSharedNamedCaptureData)          \
+  _(RegExpSharedNamedCaptureSliceData)     \
   _(TypedArrayElements)                    \
   _(NativeIterator)                        \
   _(JitScript)                             \

@@ -8,14 +8,14 @@
 use super::feature::{Evaluator, QueryFeatureDescription};
 use super::feature::{FeatureFlags, KeywordDiscriminant};
 use crate::parser::{Parse, ParserContext};
-use crate::queries::condition::KleeneValue;
 use crate::str::{starts_with_ignore_ascii_case, string_as_ascii_lowercase};
 use crate::values::computed::{self, Ratio, ToComputedValue};
 use crate::values::specified::{Integer, Length, Number, Resolution};
 use crate::values::{AtomString, CSSFloat};
 use crate::{Atom, Zero};
 use cssparser::{Parser, Token};
-use std::cmp::{Ordering, PartialOrd};
+use selectors::kleene_value::KleeneValue;
+use std::cmp::Ordering;
 use std::fmt::{self, Write};
 use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
 
@@ -309,20 +309,6 @@ fn consume_operation_or_colon<'i>(
 fn disabled_by_pref(feature: &Atom, context: &ParserContext) -> bool {
     #[cfg(feature = "gecko")]
     {
-        if *feature == atom!("forced-colors") {
-            // forced-colors is always enabled in the ua and chrome. On
-            // the web it is hidden behind a preference, which is defaulted
-            // to 'true' as of bug 1659511.
-            return !context.chrome_rules_enabled() &&
-                !static_prefs::pref!("layout.css.forced-colors.enabled");
-        }
-        // prefers-contrast is always enabled in the ua and chrome. On
-        // the web it is hidden behind a preference.
-        if *feature == atom!("prefers-contrast") {
-            return !context.chrome_rules_enabled() &&
-                !static_prefs::pref!("layout.css.prefers-contrast.enabled");
-        }
-
         // prefers-reduced-transparency is always enabled in the ua and chrome. On
         // the web it is hidden behind a preference (see Bug 1822176).
         if *feature == atom!("prefers-reduced-transparency") {
@@ -331,7 +317,7 @@ fn disabled_by_pref(feature: &Atom, context: &ParserContext) -> bool {
         }
 
         // inverted-colors is always enabled in the ua and chrome. On
-        // the web it is hidden behind a preferenc.
+        // the web it is hidden behind a preference.
         if *feature == atom!("inverted-colors") {
             return !context.chrome_rules_enabled() &&
                 !static_prefs::pref!("layout.css.inverted-colors.enabled");

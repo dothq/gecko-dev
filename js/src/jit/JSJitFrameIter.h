@@ -69,10 +69,9 @@ enum class FrameType {
   // point of view of JS JITs, this is just another kind of entry frame.
   WasmToJSJit,
 
-  // A JS to wasm frame is constructed during fast calls from any JS jits to
-  // wasm, and is a special kind of exit frame that doesn't have the exit
-  // footer. From the point of view of the jit, it can be skipped as an exit.
-  JSJitToWasm,
+  // Frame for a TrampolineNative, a JS builtin implemented with a JIT
+  // trampoline. See jit/TrampolineNatives.h.
+  TrampolineNative,
 };
 
 enum class ReadFrameArgsBehavior {
@@ -111,14 +110,14 @@ class JSJitFrameIter {
  protected:
   uint8_t* current_;
   FrameType type_;
-  uint8_t* resumePCinCurrentFrame_;
+  uint8_t* resumePCinCurrentFrame_ = nullptr;
 
   // Size of the current Baseline frame. Equivalent to
   // BaselineFrame::debugFrameSize_ in debug builds.
   mozilla::Maybe<uint32_t> baselineFrameSize_;
 
  private:
-  mutable const SafepointIndex* cachedSafepointIndex_;
+  mutable const SafepointIndex* cachedSafepointIndex_ = nullptr;
   const JitActivation* activation_;
 
   void dumpBaseline() const;
@@ -129,8 +128,7 @@ class JSJitFrameIter {
 
   // A constructor specialized for jit->wasm frames, which starts at a
   // specific FP.
-  JSJitFrameIter(const JitActivation* activation, FrameType frameType,
-                 uint8_t* fp);
+  JSJitFrameIter(const JitActivation* activation, uint8_t* fp, bool unwinding);
 
   void setResumePCInCurrentFrame(uint8_t* newAddr) {
     resumePCinCurrentFrame_ = newAddr;
@@ -173,6 +171,9 @@ class JSJitFrameIter {
     return type_ == FrameType::BaselineInterpreterEntry;
   }
   bool isRectifier() const { return type_ == FrameType::Rectifier; }
+  bool isTrampolineNative() const {
+    return type_ == FrameType::TrampolineNative;
+  }
   bool isBareExit() const;
   bool isUnwoundJitExit() const;
   template <typename T>
@@ -263,6 +264,7 @@ class JitcodeGlobalTable;
 
 class JSJitProfilingFrameIterator {
   uint8_t* fp_;
+  uint8_t* wasmCallerFP_ = nullptr;
   // See JS::ProfilingFrameIterator::endStackAddress_ comment.
   void* endStackAddress_ = nullptr;
   FrameType type_;
@@ -290,6 +292,11 @@ class JSJitProfilingFrameIterator {
     MOZ_ASSERT(!done());
     return fp_;
   }
+  void* wasmCallerFP() const {
+    MOZ_ASSERT(done());
+    MOZ_ASSERT(bool(wasmCallerFP_) == (type_ == FrameType::WasmToJSJit));
+    return wasmCallerFP_;
+  }
   inline JitFrameLayout* framePtr() const;
   void* stackAddress() const { return fp(); }
   FrameType frameType() const {
@@ -306,7 +313,7 @@ class JSJitProfilingFrameIterator {
 
 class RInstructionResults {
   // Vector of results of recover instructions.
-  typedef mozilla::Vector<HeapPtr<Value>, 1, SystemAllocPolicy> Values;
+  using Values = mozilla::Vector<HeapPtr<Value>, 1, SystemAllocPolicy>;
   UniquePtr<Values> results_;
 
   // The frame pointer is used as a key to check if the current frame already
@@ -491,6 +498,46 @@ class SnapshotIterator {
 
   Value read() { return allocationValue(readAllocation()); }
 
+  // Like |read()| but also supports IntPtr and Int64 allocations, which are
+  // returned as BigInt values.
+  bool readMaybeUnpackedBigInt(JSContext* cx, MutableHandle<Value> result);
+
+  int32_t readInt32() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isInt32());
+    return val.toInt32();
+  }
+
+  double readNumber() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isNumber());
+    return val.toNumber();
+  }
+
+  JSString* readString() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isString());
+    return val.toString();
+  }
+
+  JS::BigInt* readBigInt() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isBigInt());
+    return val.toBigInt();
+  }
+
+  JSObject* readObject() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isObject());
+    return &val.toObject();
+  }
+
+  JS::GCCellPtr readGCCellPtr() {
+    Value val = read();
+    MOZ_RELEASE_ASSERT(val.isGCThing());
+    return val.toGCCellPtr();
+  }
+
   // Read the |Normal| value unless it is not available and that the snapshot
   // provides a |Default| value. This is useful to avoid invalidations of the
   // frame while we are only interested in a few properties which are provided
@@ -513,6 +560,16 @@ class SnapshotIterator {
   }
 
   bool tryRead(Value* result);
+
+ private:
+  int64_t allocationInt64(const RValueAllocation& alloc);
+  intptr_t allocationIntPtr(const RValueAllocation& alloc);
+
+ public:
+  int64_t readInt64() { return allocationInt64(readAllocation()); }
+
+  // Read either a BigInt or unpacked BigInt.
+  JS::BigInt* readBigInt(JSContext* cx);
 
   void traceAllocation(JSTracer* trc);
 

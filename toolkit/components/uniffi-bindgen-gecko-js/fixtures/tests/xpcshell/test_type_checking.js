@@ -30,6 +30,16 @@ add_task(async function testFunctionArguments() {
   );
 });
 
+add_task(async function testNumberOverflow() {
+  // MAX_SAFE_INTEGER + 1 fits in a Rust u64, but overflows a JS Number.
+  // This overflow should be caught by the C++ code.
+  await Assert.rejects(
+    Arithmetic.add(Number.MAX_SAFE_INTEGER, 1),
+    /RangeError/,
+    "add() call that overflows Number.MAX_SAFE_INTEGER"
+  );
+});
+
 add_task(async function testObjectPointers() {
   const todo = await TodoList.TodoList.init();
   const stringifier = await Rondpoint.Stringifier.init();
@@ -39,8 +49,14 @@ add_task(async function testObjectPointers() {
 
   await Assert.rejects(
     todo.getEntries(), // the pointer is incorrect, should throw
-    /Bad pointer type/,
+    /Incorrect UniFFI pointer type/,
     "getEntries() with wrong pointer type"
+  );
+
+  await Assert.rejects(
+    TodoList.setDefaultList(1), // expecting an object
+    /Object is not a 'TodoList' instance/,
+    "attempting to lift the wrong object type"
   );
 });
 
@@ -67,18 +83,6 @@ add_task(async function testRecordTypeCheck() {
     Geometry.gradient(123), // Not a Line object
     UniFFITypeError,
     "gradient with non-Line object should throw"
-  );
-
-  await Assert.rejects(
-    Geometry.gradient({
-      start: {
-        coordX: 0.0,
-        coordY: 0.0,
-      },
-      // missing the end field
-    }),
-    /ln.end/, // Ensure exception message includes the argument name
-    "gradient with Line object with missing end field should throw"
   );
 });
 

@@ -62,9 +62,8 @@ nsresult CheckValidHDROP(STGMEDIUM* pSTG) {
     s = (char16_t*)((char*)pDropFiles + pDropFiles->pFiles + offset);
     if (s.IsEmpty()) break;
     nsresult rv;
-    nsCOMPtr<nsIFile> localFile(
-        do_CreateInstance(NS_LOCAL_FILE_CONTRACTID, &rv));
-    rv = localFile->InitWithPath(s);
+    nsCOMPtr<nsIFile> localFile;
+    rv = NS_NewLocalFile(s, getter_AddRefs(localFile));
     if (NS_FAILED(rv)) {
       fail("File could not be opened");
       return NS_ERROR_UNEXPECTED;
@@ -693,7 +692,7 @@ nsCOMPtr<nsIFile> GetTemporaryDirectory() {
 #define ENSURE(expr) NS_ENSURE_SUCCESS(expr, nullptr);
 
   ENSURE(NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tmpdir)));
-  MOZ_ASSERT(tmpdir);
+  MOZ_RELEASE_ASSERT(tmpdir);
 
   ENSURE(tmpdir->AppendNative("TestWinDND"_ns));
   ENSURE(tmpdir->CreateUnique(nsIFile::DIRECTORY_TYPE, 0777));

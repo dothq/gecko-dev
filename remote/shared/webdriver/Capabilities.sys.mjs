@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -10,23 +12,55 @@ ChromeUtils.defineESModuleGetters(lazy, {
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   pprint: "chrome://remote/content/shared/Format.sys.mjs",
   RemoteAgent: "chrome://remote/content/components/RemoteAgent.sys.mjs",
+  UserPromptHandler:
+    "chrome://remote/content/shared/webdriver/UserPromptHandler.sys.mjs",
+});
+
+ChromeUtils.defineLazyGetter(lazy, "debuggerAddress", () => {
+  return lazy.RemoteAgent.running && lazy.RemoteAgent.cdp
+    ? lazy.remoteAgent.debuggerAddress
+    : null;
+});
+
+ChromeUtils.defineLazyGetter(lazy, "isHeadless", () => {
+  return Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo).isHeadless;
 });
 
 ChromeUtils.defineLazyGetter(lazy, "remoteAgent", () => {
   return Cc["@mozilla.org/remote/agent;1"].createInstance(Ci.nsIRemoteAgent);
 });
 
+ChromeUtils.defineLazyGetter(lazy, "userAgent", () => {
+  return Cc["@mozilla.org/network/protocol;1?name=http"].getService(
+    Ci.nsIHttpProtocolHandler
+  ).userAgent;
+});
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "shutdownTimeout",
+  "toolkit.asyncshutdown.crash_timeout"
+);
+
 // List of capabilities which are only relevant for Webdriver Classic.
 export const WEBDRIVER_CLASSIC_CAPABILITIES = [
   "pageLoadStrategy",
-  "timeouts",
   "strictFileInteractability",
-  "unhandledPromptBehavior",
+  "timeouts",
   "webSocketUrl",
-  "moz:useNonSpecCompliantPointerOrigin",
-  "moz:webdriverClick",
+
+  // Gecko specific capabilities
+  "moz:accessibilityChecks",
   "moz:debuggerAddress",
   "moz:firefoxOptions",
+  "moz:webdriverClick",
+
+  // Extension capabilities
+  "webauthn:extension:credBlob",
+  "webauthn:extension:largeBlob",
+  "webauthn:extension:prf",
+  "webauthn:extension:uvm",
+  "webauthn:virtualAuthenticators",
 ];
 
 /** Representation of WebDriver session timeouts. */
@@ -65,7 +99,8 @@ export class Timeouts {
         case "implicit":
           t.implicit = lazy.assert.positiveInteger(
             ms,
-            lazy.pprint`Expected ${type} to be a positive integer, got ${ms}`
+            `Expected "${type}" to be a positive integer, ` +
+              lazy.pprint`got ${ms}`
           );
           break;
 
@@ -73,7 +108,8 @@ export class Timeouts {
           if (ms !== null) {
             lazy.assert.positiveInteger(
               ms,
-              lazy.pprint`Expected ${type} to be a positive integer, got ${ms}`
+              `Expected "${type}" to be a positive integer, ` +
+                lazy.pprint`got ${ms}`
             );
           }
           t.script = ms;
@@ -82,13 +118,14 @@ export class Timeouts {
         case "pageLoad":
           t.pageLoad = lazy.assert.positiveInteger(
             ms,
-            lazy.pprint`Expected ${type} to be a positive integer, got ${ms}`
+            `Expected "${type}" to be a positive integer, ` +
+              lazy.pprint`got ${ms}`
           );
           break;
 
         default:
           throw new lazy.error.InvalidArgumentError(
-            "Unrecognised timeout: " + type
+            `Unrecognized timeout: ${type}`
           );
       }
     }
@@ -216,7 +253,7 @@ export class Proxy {
   }
 
   /**
-   * @param {Object<string, ?>} json
+   * @param {Record<string, ?>} json
    *     JSON Object to unmarshal.
    *
    * @throws {InvalidArgumentError}
@@ -361,7 +398,7 @@ export class Proxy {
   }
 
   /**
-   * @returns {Object<string, (number | string)>}
+   * @returns {Record<string, (number | string)>}
    *     JSON serialisation of proxy object.
    */
   toJSON() {
@@ -405,78 +442,49 @@ export class Proxy {
   }
 }
 
-/**
- * Enum of unhandled prompt behavior.
- *
- * @enum
- */
-export const UnhandledPromptBehavior = {
-  /** All simple dialogs encountered should be accepted. */
-  Accept: "accept",
-  /**
-   * All simple dialogs encountered should be accepted, and an error
-   * returned that the dialog was handled.
-   */
-  AcceptAndNotify: "accept and notify",
-  /** All simple dialogs encountered should be dismissed. */
-  Dismiss: "dismiss",
-  /**
-   * All simple dialogs encountered should be dismissed, and an error
-   * returned that the dialog was handled.
-   */
-  DismissAndNotify: "dismiss and notify",
-  /** All simple dialogs encountered should be left to the user to handle. */
-  Ignore: "ignore",
-};
-
-/** WebDriver session capabilities representation. */
 export class Capabilities extends Map {
-  /** @class */
-  constructor() {
-    super([
-      // webdriver
+  /**
+   * WebDriver session capabilities representation.
+   *
+   * @param {boolean} isBidi
+   *     Flag indicating that it is a WebDriver BiDi session. Defaults to false.
+   */
+  constructor(isBidi = false) {
+    // Default values for capabilities supported by both WebDriver protocols
+    const defaults = [
+      ["acceptInsecureCerts", false],
       ["browserName", getWebDriverBrowserName()],
       ["browserVersion", lazy.AppInfo.version],
       ["platformName", getWebDriverPlatformName()],
-      ["acceptInsecureCerts", false],
-      ["pageLoadStrategy", PageLoadStrategy.Normal],
       ["proxy", new Proxy()],
-      ["setWindowRect", !lazy.AppInfo.isAndroid],
-      ["timeouts", new Timeouts()],
-      ["strictFileInteractability", false],
-      ["unhandledPromptBehavior", UnhandledPromptBehavior.DismissAndNotify],
-      [
-        "userAgent",
-        Cc["@mozilla.org/network/protocol;1?name=http"].getService(
-          Ci.nsIHttpProtocolHandler
-        ).userAgent,
-      ],
-      ["webSocketUrl", null],
+      ["unhandledPromptBehavior", new lazy.UserPromptHandler()],
+      ["userAgent", lazy.userAgent],
 
-      // proprietary
-      ["moz:accessibilityChecks", false],
+      // Gecko specific capabilities
       ["moz:buildID", lazy.AppInfo.appBuildID],
-      [
-        "moz:debuggerAddress",
-        // With bug 1715481 fixed always use the Remote Agent instance
-        lazy.RemoteAgent.running && lazy.RemoteAgent.cdp
-          ? lazy.remoteAgent.debuggerAddress
-          : null,
-      ],
-      [
-        "moz:headless",
-        Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo).isHeadless,
-      ],
+      ["moz:headless", lazy.isHeadless],
       ["moz:platformVersion", Services.sysinfo.getProperty("version")],
       ["moz:processID", lazy.AppInfo.processID],
       ["moz:profile", maybeProfile()],
-      [
-        "moz:shutdownTimeout",
-        Services.prefs.getIntPref("toolkit.asyncshutdown.crash_timeout"),
-      ],
-      ["moz:webdriverClick", true],
-      ["moz:windowless", false],
-    ]);
+      ["moz:shutdownTimeout", lazy.shutdownTimeout],
+    ];
+
+    if (!isBidi) {
+      // HTTP-only capabilities
+      defaults.push(
+        ["pageLoadStrategy", PageLoadStrategy.Normal],
+        ["timeouts", new Timeouts()],
+        ["setWindowRect", !lazy.AppInfo.isAndroid],
+        ["strictFileInteractability", false],
+
+        ["moz:accessibilityChecks", false],
+        ["moz:debuggerAddress", lazy.debuggerAddress],
+        ["moz:webdriverClick", true],
+        ["moz:windowless", false]
+      );
+    }
+
+    super(defaults);
   }
 
   /**
@@ -500,9 +508,9 @@ export class Capabilities extends Map {
   }
 
   /**
-   * JSON serialisation of capabilities object.
+   * JSON serialization of capabilities object.
    *
-   * @returns {Object<string, ?>}
+   * @returns {Record<string, ?>}
    */
   toJSON() {
     let marshalled = marshal(this);
@@ -513,6 +521,7 @@ export class Capabilities extends Map {
     }
 
     marshalled.timeouts = super.get("timeouts");
+    marshalled.unhandledPromptBehavior = super.get("unhandledPromptBehavior");
 
     return marshalled;
   }
@@ -520,13 +529,15 @@ export class Capabilities extends Map {
   /**
    * Unmarshal a JSON object representation of WebDriver capabilities.
    *
-   * @param {Object<string, *>=} json
+   * @param {Record<string, *>=} json
    *     WebDriver capabilities.
+   * @param {boolean=} isBidi
+   *     Flag indicating that it is a WebDriver BiDi session. Defaults to false.
    *
    * @returns {Capabilities}
    *     Internal representation of WebDriver capabilities.
    */
-  static fromJSON(json) {
+  static fromJSON(json, isBidi = false) {
     if (typeof json == "undefined" || json === null) {
       json = {};
     }
@@ -535,22 +546,28 @@ export class Capabilities extends Map {
       lazy.pprint`Expected "capabilities" to be an object, got ${json}"`
     );
 
-    const capabilities = new Capabilities();
+    const capabilities = new Capabilities(isBidi);
+
     // TODO: Bug 1823907. We can start using here spec compliant method `validate`,
     // as soon as `desiredCapabilities` and `requiredCapabilities` are not supported.
     for (let [k, v] of Object.entries(json)) {
+      if (isBidi && WEBDRIVER_CLASSIC_CAPABILITIES.includes(k)) {
+        // Ignore any WebDriver classic capability for a WebDriver BiDi session.
+        continue;
+      }
+
       switch (k) {
         case "acceptInsecureCerts":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "pageLoadStrategy":
           lazy.assert.string(
             v,
-            lazy.pprint`Expected ${k} to be a string, got ${v}`
+            `Expected "${k}" to be a string, ` + lazy.pprint`got ${v}`
           );
           if (!Object.values(PageLoadStrategy).includes(v)) {
             throw new lazy.error.InvalidArgumentError(
@@ -566,7 +583,7 @@ export class Capabilities extends Map {
         case "setWindowRect":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           if (!lazy.AppInfo.isAndroid && !v) {
             throw new lazy.error.InvalidArgumentError(
@@ -584,30 +601,25 @@ export class Capabilities extends Map {
           break;
 
         case "strictFileInteractability":
-          v = lazy.assert.boolean(v);
+          v = lazy.assert.boolean(
+            v,
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
+          );
           break;
 
         case "unhandledPromptBehavior":
-          lazy.assert.string(
-            v,
-            lazy.pprint`Expected ${k} to be a string, got ${v}`
-          );
-          if (!Object.values(UnhandledPromptBehavior).includes(v)) {
-            throw new lazy.error.InvalidArgumentError(
-              `Unknown unhandled prompt behavior: ${v}`
-            );
-          }
+          v = lazy.UserPromptHandler.fromJSON(v);
           break;
 
         case "webSocketUrl":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
 
           if (!v) {
             throw new lazy.error.InvalidArgumentError(
-              lazy.pprint`Expected ${k} to be true, got ${v}`
+              `Expected "${k}" to be true, ` + lazy.pprint`got ${v}`
             );
           }
           break;
@@ -615,42 +627,42 @@ export class Capabilities extends Map {
         case "webauthn:virtualAuthenticators":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "webauthn:extension:uvm":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "webauthn:extension:prf":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "webauthn:extension:largeBlob":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "webauthn:extension:credBlob":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be a boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "moz:accessibilityChecks":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
@@ -659,25 +671,17 @@ export class Capabilities extends Map {
         case "moz:debuggerAddress":
           continue;
 
-        case "moz:useNonSpecCompliantPointerOrigin":
-          if (v !== undefined) {
-            throw new lazy.error.InvalidArgumentError(
-              `Since Firefox 116 the capability ${k} is no longer supported`
-            );
-          }
-          break;
-
         case "moz:webdriverClick":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
           break;
 
         case "moz:windowless":
           lazy.assert.boolean(
             v,
-            lazy.pprint`Expected ${k} to be boolean, got ${v}`
+            `Expected "${k}" to be a boolean, ` + lazy.pprint`got ${v}`
           );
 
           // Only supported on MacOS
@@ -717,7 +721,7 @@ export class Capabilities extends Map {
       case "acceptInsecureCerts":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
         return value;
 
@@ -726,13 +730,13 @@ export class Capabilities extends Map {
       case "platformName":
         return lazy.assert.string(
           value,
-          lazy.pprint`Expected ${name} to be a string, got ${value}`
+          `Expected "${name}" to be a string, ` + lazy.pprint`got ${value}`
         );
 
       case "pageLoadStrategy":
         lazy.assert.string(
           value,
-          lazy.pprint`Expected ${name} to be a string, got ${value}`
+          `Expected "${name}" to be a string, ` + lazy.pprint`got ${value}`
         );
         if (!Object.values(PageLoadStrategy).includes(value)) {
           throw new lazy.error.InvalidArgumentError(
@@ -745,32 +749,26 @@ export class Capabilities extends Map {
         return Proxy.fromJSON(value);
 
       case "strictFileInteractability":
-        return lazy.assert.boolean(value);
+        return lazy.assert.boolean(
+          value,
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
+        );
 
       case "timeouts":
         return Timeouts.fromJSON(value);
 
       case "unhandledPromptBehavior":
-        lazy.assert.string(
-          value,
-          lazy.pprint`Expected ${name} to be a string, got ${value}`
-        );
-        if (!Object.values(UnhandledPromptBehavior).includes(value)) {
-          throw new lazy.error.InvalidArgumentError(
-            `Unknown unhandled prompt behavior: ${value}`
-          );
-        }
-        return value;
+        return lazy.UserPromptHandler.fromJSON(value);
 
       case "webSocketUrl":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
 
         if (!value) {
           throw new lazy.error.InvalidArgumentError(
-            lazy.pprint`Expected ${name} to be true, got ${value}`
+            `Expected "${name}" to be true, ` + lazy.pprint`got ${value}`
           );
         }
         return value;
@@ -778,46 +776,46 @@ export class Capabilities extends Map {
       case "webauthn:virtualAuthenticators":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
         return value;
 
       case "webauthn:extension:uvm":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
         return value;
 
       case "webauthn:extension:largeBlob":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
         return value;
 
       case "moz:firefoxOptions":
         return lazy.assert.object(
           value,
-          lazy.pprint`Expected ${name} to be an object, got ${value}`
+          `Expected "${name}" to be an object, ` + lazy.pprint`got ${value}`
         );
 
       case "moz:accessibilityChecks":
         return lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
 
       case "moz:webdriverClick":
         return lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
 
       case "moz:windowless":
         lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
 
         // Only supported on MacOS
@@ -831,13 +829,14 @@ export class Capabilities extends Map {
       case "moz:debuggerAddress":
         return lazy.assert.boolean(
           value,
-          lazy.pprint`Expected ${name} to be a boolean, got ${value}`
+          `Expected "${name}" to be a boolean, ` + lazy.pprint`got ${value}`
         );
 
       default:
         lazy.assert.string(
           name,
-          lazy.pprint`Expected capability name to be a string, got ${name}`
+          `Expected capability "name" to be a string, ` +
+            lazy.pprint`got ${name}`
         );
         if (name.includes(":")) {
           const [prefix] = name.split(":");
@@ -995,16 +994,18 @@ export function mergeCapabilities(primary, secondary) {
  *     If <var>capabilities</var> is not an object.
  */
 export function validateCapabilities(capabilities) {
-  lazy.assert.object(capabilities);
+  lazy.assert.object(
+    capabilities,
+    lazy.pprint`Expected "capabilities" to be an object, got ${capabilities}`
+  );
 
   const result = {};
 
   Object.entries(capabilities).forEach(([name, value]) => {
     const deserialized = Capabilities.validate(name, value);
     if (deserialized !== null) {
-      if (name === "proxy" || name === "timeouts") {
-        // Return pure value, the Proxy and Timeouts objects will be setup
-        // during session creation.
+      if (["proxy", "timeouts", "unhandledPromptBehavior"].includes(name)) {
+        // Return pure values for objects that will be setup during session creation.
         result[name] = value;
       } else {
         result[name] = deserialized;
@@ -1031,7 +1032,10 @@ export function validateCapabilities(capabilities) {
  */
 export function processCapabilities(params) {
   const { capabilities } = params;
-  lazy.assert.object(capabilities);
+  lazy.assert.object(
+    capabilities,
+    lazy.pprint`Expected "capabilities" to be an object, got ${capabilities}`
+  );
 
   let {
     alwaysMatch: requiredCapabilities = {},
@@ -1040,10 +1044,13 @@ export function processCapabilities(params) {
 
   requiredCapabilities = validateCapabilities(requiredCapabilities);
 
-  lazy.assert.array(allFirstMatchCapabilities);
+  lazy.assert.array(
+    allFirstMatchCapabilities,
+    lazy.pprint`Expected "firstMatch" to be an array, got ${allFirstMatchCapabilities}`
+  );
   lazy.assert.that(
     firstMatch => firstMatch.length >= 1,
-    lazy.pprint`Expected firstMatch ${allFirstMatchCapabilities} to have at least 1 entry`
+    lazy.pprint`Expected "firstMatch" to be an array of length 1 or greater, got ${allFirstMatchCapabilities}`
   )(allFirstMatchCapabilities);
 
   const validatedFirstMatchCapabilities =
@@ -1059,7 +1066,8 @@ export function processCapabilities(params) {
   });
 
   // TODO: Bug 1836288. Implement the capability matching logic
-  // for "browserName", "browserVersion" and "platformName" features,
+  // for "browserName", "browserVersion", "platformName", and
+  // "unhandledPromptBehavior" features,
   // for now we can just pick the first merged capability.
   const matchedCapabilities = mergedCapabilities[0];
 

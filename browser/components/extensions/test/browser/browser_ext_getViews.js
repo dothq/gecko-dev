@@ -78,44 +78,6 @@ function genericChecker() {
   browser.test.sendMessage(kind + "-ready");
 }
 
-async function promiseBrowserContentUnloaded(browser) {
-  // Wait until the content has unloaded before resuming the test, to avoid
-  // calling extension.getViews too early (and having intermittent failures).
-  const MSG_WINDOW_DESTROYED = "Test:BrowserContentDestroyed";
-  let unloadPromise = new Promise(resolve => {
-    Services.ppmm.addMessageListener(MSG_WINDOW_DESTROYED, function listener() {
-      Services.ppmm.removeMessageListener(MSG_WINDOW_DESTROYED, listener);
-      resolve();
-    });
-  });
-
-  await ContentTask.spawn(
-    browser,
-    MSG_WINDOW_DESTROYED,
-    MSG_WINDOW_DESTROYED => {
-      let innerWindowId = this.content.windowGlobalChild.innerWindowId;
-      let observer = subject => {
-        if (
-          innerWindowId === subject.QueryInterface(Ci.nsISupportsPRUint64).data
-        ) {
-          Services.obs.removeObserver(observer, "inner-window-destroyed");
-
-          // Use process message manager to ensure that the message is delivered
-          // even after the <browser>'s message manager is disconnected.
-          Services.cpmm.sendAsyncMessage(MSG_WINDOW_DESTROYED);
-        }
-      };
-      // Observe inner-window-destroyed, like ExtensionPageChild, to ensure that
-      // the ExtensionPageContextChild instance has been unloaded when we resolve
-      // the unloadPromise.
-      Services.obs.addObserver(observer, "inner-window-destroyed");
-    }
-  );
-
-  // Return an object so that callers can use "await".
-  return { unloadPromise };
-}
-
 add_task(async function () {
   let win1 = await BrowserTestUtils.openNewBrowserWindow();
   let win2 = await BrowserTestUtils.openNewBrowserWindow();
@@ -372,7 +334,9 @@ add_task(async function test_getViews_excludes_blocked_parsing_documents() {
     // to prevent intermittent failures that where often triggered in macos
     // PGO builds when this was using EventUtils.synthesizeMouseAtCenter).
     let mouseOverEvent = new MouseEvent("mouseover");
-    widget.node.firstElementChild.dispatchEvent(mouseOverEvent);
+    widget.node
+      .querySelector(".unified-extensions-item-action-button")
+      .dispatchEvent(mouseOverEvent);
 
     await TestUtils.waitForCondition(
       () => browserAction.pendingPopup?.browser,

@@ -112,7 +112,19 @@ struct MOZ_STACK_CLASS PeekOffsetStruct {
                    // Passing by value here is intentional because EnumSet
                    // is optimized as uint*_t in opt builds.
                    const PeekOffsetOptions aOptions,
-                   EWordMovementType aWordMovementType = eDefaultBehavior);
+                   EWordMovementType aWordMovementType = eDefaultBehavior,
+                   const dom::Element* aAncestorLimiter = nullptr);
+
+  /**
+   * Return true if the ancestor limiter is not specified or if the content for
+   * aFrame is an inclusive descendant of mAncestorLimiter.
+   */
+  [[nodiscard]] bool FrameContentIsInAncestorLimiter(
+      const nsIFrame* aFrame) const {
+    return !mAncestorLimiter ||
+           (aFrame->GetContent() &&
+            aFrame->GetContent()->IsInclusiveDescendantOf(mAncestorLimiter));
+  }
 
   // Note: Most arguments (input and output) are only used with certain values
   // of mAmount. These values are indicated for each argument below.
@@ -155,6 +167,9 @@ struct MOZ_STACK_CLASS PeekOffsetStruct {
   EWordMovementType mWordMovementType;
 
   PeekOffsetOptions mOptions;
+
+  // The ancestor limiter element to peek offset.
+  const dom::Element* const mAncestorLimiter;
 
   /*** Output arguments ***/
 
@@ -200,6 +215,7 @@ class SelectionChangeEventDispatcher;
 namespace dom {
 class Highlight;
 class Selection;
+enum class ClickSelectionType { NotApplicable, Double, Triple };
 }  // namespace dom
 
 /**
@@ -216,7 +232,6 @@ enum class TableSelectionMode : uint32_t {
 };
 
 }  // namespace mozilla
-class nsIScrollableFrame;
 
 class nsFrameSelection final {
  public:
@@ -259,14 +274,17 @@ class nsFrameSelection final {
 
  public:
   /**
-   * Sets flag to true if a selection is created by doubleclick or
-   * long tapping a word.
+   * Sets the type of the selection based on whether a selection is created
+   * by doubleclick, long tapping a word or tripleclick.
    *
-   * @param aIsDoubleClickSelection   True if the selection is created by
-   *                                  doubleclick or long tap over a word.
+   * @param aClickSelectionType   ClickSelectionType::Double if the selection
+   *                              is created by doubleclick,
+   *                              ClickSelectionType::Triple if the selection
+   *                              is created by tripleclick.
    */
-  void SetIsDoubleClickSelection(bool aIsDoubleClickSelection) {
-    mIsDoubleClickSelection = aIsDoubleClickSelection;
+  void SetClickSelectionType(
+      mozilla::dom::ClickSelectionType aClickSelectionType) {
+    mClickSelectionType = aClickSelectionType;
   }
 
   /**
@@ -274,7 +292,14 @@ class nsFrameSelection final {
    * long tap over a word.
    */
   [[nodiscard]] bool IsDoubleClickSelection() const {
-    return mIsDoubleClickSelection;
+    return mClickSelectionType == mozilla::dom::ClickSelectionType::Double;
+  }
+
+  /**
+   * Returns true if the selection was created by triple click
+   */
+  [[nodiscard]] bool IsTripleClickSelection() const {
+    return mClickSelectionType == mozilla::dom::ClickSelectionType::Triple;
   }
 
   /**
@@ -429,6 +454,13 @@ class nsFrameSelection final {
    */
   mozilla::dom::Selection* GetSelection(
       mozilla::SelectionType aSelectionType) const;
+
+  /**
+   * Convenience method to access the `eNormal` Selection.
+   */
+  mozilla::dom::Selection& NormalSelection() const {
+    return *GetSelection(mozilla::SelectionType::eNormal);
+  }
 
   /**
    * @brief Adds a highlight selection for `aHighlight`.
@@ -868,20 +900,36 @@ class nsFrameSelection final {
   // Whether MoveCaret should use logical or visual movement,
   // or follow the bidi.edit.caret_movement_style preference.
   enum CaretMovementStyle { eLogical, eVisual, eUsePrefStyle };
+  enum class ExtendSelection : bool { No, Yes };
   MOZ_CAN_RUN_SCRIPT nsresult MoveCaret(nsDirection aDirection,
-                                        bool aContinueSelection,
+                                        ExtendSelection aExtendSelection,
                                         nsSelectionAmount aAmount,
                                         CaretMovementStyle aMovementStyle);
 
   /**
-   * PeekOffsetForCaretMove() only peek offset for caret move from the focus
-   * point of the normal selection.  I.e., won't change selection ranges nor
-   * bidi information.
+   * @brief Creates `PeekOffsetOptions` for caret move operations.
+   *
+   * @param aSelection       The selection object. Must be non-null
+   * @param aExtendSelection Whether the selection should be extended or not
+   * @param aMovementStyle   The `CaretMovementStyle` (logical or visual)
+   * @return mozilla::Result<mozilla::PeekOffsetOptions, nsresult>
    */
-  mozilla::Result<mozilla::PeekOffsetStruct, nsresult> PeekOffsetForCaretMove(
-      nsDirection aDirection, bool aContinueSelection,
-      const nsSelectionAmount aAmount, CaretMovementStyle aMovementStyle,
-      const nsPoint& aDesiredCaretPos) const;
+  mozilla::Result<mozilla::PeekOffsetOptions, nsresult>
+  CreatePeekOffsetOptionsForCaretMove(mozilla::dom::Selection* aSelection,
+                                      ExtendSelection aExtendSelection,
+                                      CaretMovementStyle aMovementStyle) const;
+
+  /**
+   * @brief Get the Ancestor Limiter for caret move operation.
+   *
+   * If the selection is an editor selection, the correct editing host is
+   * identified and chosen as limiting element.
+   *
+   * @param aSelection The selection object. Must be non-null
+   * @return The ancestor limiter, or nullptr.
+   */
+  mozilla::Result<mozilla::dom::Element*, nsresult>
+  GetAncestorLimiterForCaretMove(mozilla::dom::Selection* aSelection) const;
 
   /**
    * CreateRangeExtendedToSomewhere() is common method to implement
@@ -899,16 +947,14 @@ class nsFrameSelection final {
 
   bool IsBatching() const { return mBatching.mCounter > 0; }
 
-  void SetChangesDuringBatchingFlag() {
-    MOZ_ASSERT(mBatching.mCounter > 0);
-
-    mBatching.mChangesDuringBatching = true;
-  }
+  enum class IsBatchingEnd : bool { No, Yes };
 
   // nsFrameSelection may get deleted when calling this,
   // so remember to use nsCOMPtr when needed.
   MOZ_CAN_RUN_SCRIPT
-  nsresult NotifySelectionListeners(mozilla::SelectionType aSelectionType);
+  nsresult NotifySelectionListeners(
+      mozilla::SelectionType aSelectionType,
+      IsBatchingEnd aEndBatching = IsBatchingEnd::No);
 
   static nsresult GetCellIndexes(const nsIContent* aCell, int32_t& aRowIndex,
                                  int32_t& aColIndex);
@@ -1033,7 +1079,6 @@ class nsFrameSelection final {
 
   struct Batching {
     uint32_t mCounter = 0;
-    bool mChangesDuringBatching = false;
   };
 
   Batching mBatching;
@@ -1061,7 +1106,7 @@ class nsFrameSelection final {
     CaretAssociationHint mHint = CaretAssociationHint::Before;
     mozilla::intl::BidiEmbeddingLevel mBidiLevel = BIDI_LEVEL_UNDEFINED;
 
-    bool IsVisualMovement(bool aContinueSelection,
+    bool IsVisualMovement(ExtendSelection aExtendSelection,
                           CaretMovementStyle aMovementStyle) const;
   };
 
@@ -1102,17 +1147,18 @@ class nsFrameSelection final {
   bool mDragState = false;  // for drag purposes
   bool mAccessibleCaretEnabled = false;
 
-  // Records if a selection was created by doubleclicking a word.
-  // This information is needed later on to determine if a leading
+  // Records if a selection was created by doubleclicking or tripleclicking
+  // a word. This information is needed later on to determine if a leading
   // or trailing whitespace needs to be removed as well to achieve
   // native behaviour on macOS.
-  bool mIsDoubleClickSelection{false};
+  mozilla::dom::ClickSelectionType mClickSelectionType =
+      mozilla::dom::ClickSelectionType::NotApplicable;
 };
 
 /**
  * Selection Batcher class that supports multiple FrameSelections.
  */
-class MOZ_STACK_CLASS AutoFrameSelectionBatcher {
+class MOZ_RAII AutoFrameSelectionBatcher final {
  public:
   explicit AutoFrameSelectionBatcher(const char* aFunctionName,
                                      size_t aEstimatedSize = 1)

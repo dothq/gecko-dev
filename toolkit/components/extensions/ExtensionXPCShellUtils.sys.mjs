@@ -7,6 +7,7 @@
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { XPCShellContentUtils } from "resource://testing-common/XPCShellContentUtils.sys.mjs";
 
+/** @type {Lazy} */
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -32,9 +33,9 @@ let BASE_MANIFEST = Object.freeze({
 });
 
 class ExtensionWrapper {
-  /** @type {AddonWrapper} */
+  /** @type {import("resource://gre/modules/addons/XPIDatabase.sys.mjs").AddonWrapper} */
   addon;
-  /** @type {Promise<AddonWrapper>} */
+  /** @type {Promise} */
   addonPromise;
   /** @type {nsIFile[]} */
   cleanupFiles;
@@ -230,7 +231,7 @@ class ExtensionWrapper {
       await this.extension.shutdown();
     }
 
-    if (AppConstants.platform === "android") {
+    if (AppConstants.MOZ_GECKOVIEW) {
       // We need a way to notify the embedding layer that an extension has been
       // uninstalled, so that the java layer can be updated too.
       Services.obs.notifyObservers(
@@ -248,8 +249,17 @@ class ExtensionWrapper {
    *
    * @returns {Promise} resolves after the background is asleep and listeners primed.
    */
-  terminateBackground(...args) {
-    return this.extension.terminateBackground(...args);
+  async terminateBackground({ expectStopped = true, ...rest } = {}) {
+    await this.extension.terminateBackground(rest);
+    if (expectStopped) {
+      lazy.ExtensionTestCommon.testAssertions.assertBackgroundStatusStopped(
+        this
+      );
+    } else {
+      lazy.ExtensionTestCommon.testAssertions.assertBackgroundStatusRunning(
+        this
+      );
+    }
   }
 
   wakeupBackground() {
@@ -384,6 +394,14 @@ class AOMExtensionWrapper extends ExtensionWrapper {
             this.addonPromise = null;
           }
         );
+        // Ensure we are still listening to the AOM addon events (e.g. to
+        // still received calls to the onUninstalled method after the test may
+        // have restarted the AddonManager using the related AddonTestUtils methods).
+        //
+        // AddonManager will have already cleared the previously registered
+        // addon listeners when shutdown is simulated through the related
+        // AddonTestUtils methods.
+        lazy.AddonManager.addAddonListener(this);
       // FALLTHROUGH
       case "addon-manager-shutdown":
         if (this.state === "uninitialized") {
@@ -418,7 +436,7 @@ class AOMExtensionWrapper extends ExtensionWrapper {
         let [extension] = args;
         if (extension.id === this.id) {
           this.state = "running";
-          if (AppConstants.platform === "android") {
+          if (AppConstants.MOZ_GECKOVIEW) {
             // We need a way to notify the embedding layer that a new extension
             // has been installed, so that the java layer can be updated too.
             Services.obs.notifyObservers(

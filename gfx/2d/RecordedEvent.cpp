@@ -58,6 +58,8 @@ std::string RecordedEvent::GetEventName(EventType aType) {
       return "PushClipRect";
     case POPCLIP:
       return "PopClip";
+    case REMOVEALLCLIPS:
+      return "RemoveAllClips";
     case FILL:
       return "Fill";
     case FILLGLYPHS:
@@ -70,6 +72,8 @@ std::string RecordedEvent::GetEventName(EventType aType) {
       return "Stroke";
     case DRAWSURFACE:
       return "DrawSurface";
+    case DRAWSURFACEDESCRIPTOR:
+      return "DrawSurfaceDescriptor";
     case DRAWDEPENDENTSURFACE:
       return "DrawDependentSurface";
     case DRAWSURFACEWITHSHADOW:

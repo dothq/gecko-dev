@@ -9,6 +9,7 @@
 
 #include "nsIObserverService.h"
 #include "mozilla/StaticPrefs_network.h"
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Services.h"
 #include "mozilla/Logging.h"
 
@@ -240,4 +241,9 @@ void nsAndroidNetworkLinkService::NotifyObservers(const char* aTopic,
         static_cast<nsINetworkLinkService*>(this), aTopic,
         aData ? NS_ConvertASCIItoUTF16(aData).get() : nullptr);
   }
+}
+
+// static
+bool nsINetworkLinkService::HasNonLocalIPv6Address() {
+  return mozilla::net::NetlinkService::HasNonLocalIPv6Address();
 }

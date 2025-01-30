@@ -1,5 +1,5 @@
 [DEFAULT]
-head = "../../../common/tests/unit/head_global.js ../../../common/tests/unit/head_helpers.js"
+head = "../../../common/tests/unit/head_global.js ../../../common/tests/unit/head_helpers.js head_settings.js"
 firefox-appdir = "browser"
 tags = "remote-settings"
 support-files = ["test_remote_settings_signatures/**"]
@@ -23,6 +23,9 @@ support-files = ["test_attachments_downloader/**"]
 ["test_remote_settings_release_prefs.js"]
 
 ["test_remote_settings_signatures.js"]
+
+["test_remote_settings_startup_bundle.js"]
+support-files = ["test_remote_settings_startup_bundle/**"]
 
 ["test_remote_settings_sync_history.js"]
 

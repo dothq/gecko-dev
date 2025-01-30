@@ -31,6 +31,7 @@
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/UniquePtr.h"
 #include "nsTHashMap.h"
+#include "TimeUnits.h"
 
 #ifdef XP_WIN
 struct ID3D10Texture2D;
@@ -324,19 +325,15 @@ class ImageContainer final : public SupportsThreadSafeWeakPtr<ImageContainer> {
 
   static const uint64_t sInvalidAsyncContainerId = 0;
 
-  explicit ImageContainer(ImageContainer::Mode flag = SYNCHRONOUS);
-
-  /**
-   * Create ImageContainer just to hold another ASYNCHRONOUS ImageContainer's
-   * async container ID.
-   * @param aAsyncContainerID async container ID for which we are a proxy
-   */
-  explicit ImageContainer(const CompositableHandle& aHandle);
+  ImageContainer(ImageUsageType aUsageType, ImageContainer::Mode aFlag);
 
   ~ImageContainer();
 
-  typedef ContainerFrameID FrameID;
-  typedef ContainerProducerID ProducerID;
+  using FrameID = ContainerFrameID;
+  using ProducerID = ContainerProducerID;
+  using CaptureTime = ContainerCaptureTime;
+  using ReceiveTime = ContainerReceiveTime;
+  using RtpTimestamp = ContainerRtpTimestamp;
 
   RefPtr<PlanarYCbCrImage> CreatePlanarYCbCrImage();
 
@@ -344,17 +341,32 @@ class ImageContainer final : public SupportsThreadSafeWeakPtr<ImageContainer> {
   RefPtr<SharedRGBImage> CreateSharedRGBImage();
 
   struct NonOwningImage {
-    explicit NonOwningImage(Image* aImage = nullptr,
-                            TimeStamp aTimeStamp = TimeStamp(),
-                            FrameID aFrameID = 0, ProducerID aProducerID = 0)
+    explicit NonOwningImage(
+        Image* aImage = nullptr, TimeStamp aTimeStamp = TimeStamp(),
+        FrameID aFrameID = 0, ProducerID aProducerID = 0,
+        media::TimeUnit aProcessingDuration = media::TimeUnit::Invalid(),
+        media::TimeUnit aMediaTime = media::TimeUnit::Invalid(),
+        const CaptureTime& aWebrtcCaptureTime = AsVariant(Nothing()),
+        const ReceiveTime& aWebrtcReceiveTime = Nothing(),
+        const RtpTimestamp& aRtpTimestamp = Nothing())
         : mImage(aImage),
           mTimeStamp(aTimeStamp),
           mFrameID(aFrameID),
-          mProducerID(aProducerID) {}
+          mProducerID(aProducerID),
+          mProcessingDuration(aProcessingDuration),
+          mMediaTime(aMediaTime),
+          mWebrtcCaptureTime(aWebrtcCaptureTime),
+          mWebrtcReceiveTime(aWebrtcReceiveTime),
+          mRtpTimestamp(aRtpTimestamp) {}
     Image* mImage;
     TimeStamp mTimeStamp;
     FrameID mFrameID;
     ProducerID mProducerID;
+    media::TimeUnit mProcessingDuration = media::TimeUnit::Invalid();
+    media::TimeUnit mMediaTime = media::TimeUnit::Invalid();
+    CaptureTime mWebrtcCaptureTime = AsVariant(Nothing());
+    ReceiveTime mWebrtcReceiveTime;
+    RtpTimestamp mRtpTimestamp;
   };
   /**
    * Set aImages as the list of timestamped to display. The Images must have
@@ -447,12 +459,16 @@ class ImageContainer final : public SupportsThreadSafeWeakPtr<ImageContainer> {
   bool HasCurrentImage();
 
   struct OwningImage {
-    OwningImage() : mFrameID(0), mProducerID(0), mComposited(false) {}
     RefPtr<Image> mImage;
     TimeStamp mTimeStamp;
-    FrameID mFrameID;
-    ProducerID mProducerID;
-    bool mComposited;
+    media::TimeUnit mProcessingDuration = media::TimeUnit::Invalid();
+    media::TimeUnit mMediaTime = media::TimeUnit::Invalid();
+    CaptureTime mWebrtcCaptureTime = AsVariant(Nothing());
+    ReceiveTime mWebrtcReceiveTime;
+    RtpTimestamp mRtpTimestamp;
+    FrameID mFrameID = 0;
+    ProducerID mProducerID = 0;
+    bool mComposited = false;
   };
   /**
    * Copy the current Image list to aImages.
@@ -586,6 +602,9 @@ class ImageContainer final : public SupportsThreadSafeWeakPtr<ImageContainer> {
 
   void DropImageClient();
 
+  const ImageUsageType mUsageType;
+  const bool mIsAsync;
+
  private:
   typedef mozilla::RecursiveMutex RecursiveMutex;
 
@@ -662,7 +681,6 @@ class ImageContainer final : public SupportsThreadSafeWeakPtr<ImageContainer> {
   // than asynchronusly using the ImageBridge IPDL protocol.
   RefPtr<ImageClient> mImageClient MOZ_GUARDED_BY(mRecursiveMutex);
 
-  const bool mIsAsync;
   CompositableHandle mAsyncContainerHandle MOZ_GUARDED_BY(mRecursiveMutex);
 
   // ProducerID for last current image(s)
@@ -684,7 +702,8 @@ class AutoLockImage {
     return mImages.IsEmpty() ? nullptr : mImages[0].mImage.get();
   }
 
-  Image* GetImage(TimeStamp aTimeStamp) const {
+  const ImageContainer::OwningImage* GetOwningImage(
+      TimeStamp aTimeStamp) const {
     if (mImages.IsEmpty()) {
       return nullptr;
     }
@@ -697,7 +716,14 @@ class AutoLockImage {
       ++chosenIndex;
     }
 
-    return mImages[chosenIndex].mImage.get();
+    return &mImages[chosenIndex];
+  }
+
+  Image* GetImage(TimeStamp aTimeStamp) const {
+    if (const auto* owningImage = GetOwningImage(aTimeStamp)) {
+      return owningImage->mImage.get();
+    }
+    return nullptr;
   }
 
  private:
@@ -853,6 +879,10 @@ class PlanarYCbCrImage : public Image {
       SurfaceDescriptorBuffer& aSdBuffer, BuildSdbFlags aFlags,
       const std::function<MemoryOrShmem(uint32_t)>& aAllocate) override;
 
+  void SetColorDepth(gfx::ColorDepth aColorDepth) { mColorDepth = aColorDepth; }
+
+  gfx::ColorDepth GetColorDepth() const override { return mColorDepth; }
+
  protected:
   already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
 
@@ -864,6 +894,7 @@ class PlanarYCbCrImage : public Image {
   Data mData;
   gfx::IntPoint mOrigin;
   gfx::IntSize mSize;
+  gfx::ColorDepth mColorDepth = gfx::ColorDepth::COLOR_8;
   gfxImageFormat mOffscreenFormat;
   RefPtr<gfx::DataSourceSurface> mSourceSurface;
   uint32_t mBufferSize;
@@ -914,7 +945,7 @@ class NVImage final : public Image {
   NVImage* AsNVImage() override;
 
   // Methods mimic layers::PlanarYCbCrImage.
-  bool SetData(const Data& aData);
+  nsresult SetData(const Data& aData);
   const Data* GetData() const;
   uint32_t GetBufferSize() const;
 

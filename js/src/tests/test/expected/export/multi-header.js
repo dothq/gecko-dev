@@ -2,23 +2,20 @@
 // This code is governed by the BSD license found in the LICENSE file.
 
 /*---
-info: |
-  foo bar  baz
-description: |
-  Outside AsyncFunction, |await| is a perfectly cromulent LexicalDeclaration variable
-  name.  Therefore ASI doesn't apply, and so the |0| where a |=| was expected is a
-  syntax error.
 author: Jeff Walden <jwalden+code@mit.edu>
+esid: sec-let-and-const-declarations
+description: |
+  Outside AsyncFunction, |await| is a perfectly cromulent LexicalDeclaration variable name.  Therefore ASI doesn't apply, and so the |0| where a |=| was expected is a syntax error.
 negative:
   phase: early
   type: SyntaxError
 flags:
 - module
-esid: sec-let-and-const-declarations
 features:
-- foobar
+- async-iteration
+info: |
+  foo bar  baz
 ---*/
-
 function f() {
     let
     await 0;

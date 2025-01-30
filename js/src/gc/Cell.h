@@ -209,6 +209,8 @@ struct Cell {
   inline JS::Zone* nurseryZone() const;
   inline JS::Zone* nurseryZoneFromAnyThread() const;
 
+  inline ChunkBase* chunk() const;
+
   // Default implementation for kinds that cannot be permanent. This may be
   // overriden by derived classes.
   MOZ_ALWAYS_INLINE bool isPermanentAndMayBeShared() const { return false; }
@@ -222,7 +224,6 @@ struct Cell {
 
  protected:
   uintptr_t address() const;
-  inline ChunkBase* chunk() const;
 
  private:
   // Cells are destroyed by the GC. Do not delete them directly.
@@ -238,9 +239,7 @@ class TenuredCell : public Cell {
     return true;
   }
 
-  TenuredChunk* chunk() const {
-    return static_cast<TenuredChunk*>(Cell::chunk());
-  }
+  ArenaChunk* chunk() const { return static_cast<ArenaChunk*>(Cell::chunk()); }
 
   // Mark bit management.
   MOZ_ALWAYS_INLINE bool isMarkedAny() const;
@@ -296,7 +295,8 @@ class TenuredCell : public Cell {
   // Default implementation for kinds that don't require fixup.
   void fixupAfterMovingGC() {}
 
-  static inline CellColor getColor(MarkBitmap* bitmap, const TenuredCell* cell);
+  static inline CellColor getColor(ChunkMarkBitmap* bitmap,
+                                   const TenuredCell* cell);
 
 #ifdef DEBUG
   inline bool isAligned() const;
@@ -350,7 +350,7 @@ inline JSRuntime* Cell::runtimeFromAnyThread() const {
 inline uintptr_t Cell::address() const {
   uintptr_t addr = uintptr_t(this);
   MOZ_ASSERT(addr % CellAlignBytes == 0);
-  MOZ_ASSERT(TenuredChunk::withinValidRange(addr));
+  MOZ_ASSERT(ArenaChunk::withinValidRange(addr));
   return addr;
 }
 
@@ -427,7 +427,7 @@ MOZ_ALWAYS_INLINE CellColor TenuredCell::color() const {
 }
 
 /* static */
-inline CellColor TenuredCell::getColor(MarkBitmap* bitmap,
+inline CellColor TenuredCell::getColor(ChunkMarkBitmap* bitmap,
                                        const TenuredCell* cell) {
   // Note that this method isn't synchronised so may give surprising results if
   // the mark bitmap is being modified concurrently.
@@ -443,27 +443,6 @@ inline CellColor TenuredCell::getColor(MarkBitmap* bitmap,
   return CellColor::White;
 }
 
-bool TenuredCell::markIfUnmarked(MarkColor color /* = Black */) const {
-  return chunk()->markBits.markIfUnmarked(this, color);
-}
-
-bool TenuredCell::markIfUnmarkedAtomic(MarkColor color) const {
-  return chunk()->markBits.markIfUnmarkedAtomic(this, color);
-}
-
-void TenuredCell::markBlack() const { chunk()->markBits.markBlack(this); }
-void TenuredCell::markBlackAtomic() const {
-  chunk()->markBits.markBlackAtomic(this);
-}
-
-void TenuredCell::copyMarkBitsFrom(const TenuredCell* src) {
-  MarkBitmap& markBits = chunk()->markBits;
-  markBits.copyMarkBit(this, src, ColorBit::BlackBit);
-  markBits.copyMarkBit(this, src, ColorBit::GrayOrBlackBit);
-}
-
-void TenuredCell::unmark() { chunk()->markBits.unmark(this); }
-
 inline Arena* TenuredCell::arena() const {
   MOZ_ASSERT(isTenured());
   uintptr_t addr = address();
@@ -478,15 +457,15 @@ JS::TraceKind TenuredCell::getTraceKind() const {
 }
 
 JS::Zone* TenuredCell::zone() const {
-  JS::Zone* zone = arena()->zone;
+  JS::Zone* zone = zoneFromAnyThread();
   MOZ_ASSERT(CurrentThreadIsGCMarking() || CurrentThreadCanAccessZone(zone));
   return zone;
 }
 
-JS::Zone* TenuredCell::zoneFromAnyThread() const { return arena()->zone; }
+JS::Zone* TenuredCell::zoneFromAnyThread() const { return arena()->zone(); }
 
 bool TenuredCell::isInsideZone(JS::Zone* zone) const {
-  return zone == arena()->zone;
+  return zone == zoneFromAnyThread();
 }
 
 // Read barrier and pre-write barrier implementation for GC cells.

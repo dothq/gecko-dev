@@ -75,6 +75,69 @@ add_task(async function () {
     { line: 84, column: 16, expression: "boom", result: `0` },
   ]);
 
+  await testPreviews(dbg, "thisProperties", [
+    { line: 96, column: 13, expression: "myProperty", result: "Object" },
+    { line: 96, column: 23, expression: "x", result: "this-myProperty-x" },
+    {
+      line: 98,
+      column: 13,
+      expression: "propertyName",
+      result: "myProperty",
+    },
+    {
+      line: 98,
+      column: 26,
+      expression: "y",
+      result: "this-myProperty-y",
+    },
+    {
+      line: 99,
+      column: 14,
+      expression: "propertyName",
+      result: "myProperty",
+    },
+    {
+      line: 99,
+      column: 28,
+      expression: "z",
+      result: "this-myProperty-z",
+    },
+  ]);
+
+  await testPreviews(dbg, "valueOfExpression", [
+    { line: 107, column: 6, expression: "value", result: "foo" },
+  ]);
+
+  // javascript.options.experimental.explicit_resource_management is set to true, but it's
+  // only supported on Nightly at the moment, so only check for SuppressedError if
+  // they're supported.
+  if (AppConstants.ENABLE_EXPLICIT_RESOURCE_MANAGEMENT) {
+    info("Check that preview works in a script with `using` keyword");
+
+    const onPaused = waitForPaused(dbg);
+    dbg.commands.scriptCommand.execute(
+      `
+      {
+        using erm = {
+          [Symbol.dispose]() {},
+          foo: 42
+        };
+        console.log(erm.foo);
+        debugger;
+      }`,
+      {}
+    );
+
+    await onPaused;
+    await assertPreviews(dbg, [
+      // assignment
+      { line: 3, column: 16, expression: "erm", result: "Object" },
+      { line: 7, column: 26, expression: "foo", result: "42" },
+    ]);
+    await resume(dbg);
+  }
+
+  await selectSource(dbg, "preview.js");
   await testHoveringInvalidTargetTokens(dbg);
 
   info(
@@ -101,7 +164,7 @@ add_task(async function () {
   );
   const nodes = popupEl.querySelectorAll(".preview-popup .node");
   const initialNodesLength = nodes.length;
-  nodes[1].querySelector(".arrow").click();
+  nodes[1].querySelector(".theme-twisty").click();
   await waitFor(
     () =>
       popupEl.querySelectorAll(".preview-popup .node").length >
@@ -142,10 +205,11 @@ async function testHoveringInvalidTargetTokens(dbg) {
   // Move the cursor to the top left corner to have a clean state
   resetCursorPositionToTopLeftCorner(dbg);
 
-  const inlinePreviewEl = findElementWithSelector(
-    dbg,
-    ".CodeMirror-code .CodeMirror-widget"
-  );
+  // Wait for all the updates to the document to complete to make all
+  // token elements have been rendered
+  await waitForDocumentLoadComplete(dbg);
+
+  const inlinePreviewEl = findElement(dbg, "inlinePreview");
   is(inlinePreviewEl.innerText, `myVar:"foo"`, "got expected inline preview");
 
   const racePromise = Promise.any([
@@ -158,11 +222,55 @@ async function testHoveringInvalidTargetTokens(dbg) {
   is(raceResult, "TIMEOUT", "No popup was displayed over the inline preview");
 
   await resume(dbg);
+
+  info("Test hovering element not in a line");
+  await getDebuggerSplitConsole(dbg);
+  const { hud } = dbg.toolbox.getPanel("webconsole");
+  evaluateExpressionInConsole(
+    hud,
+    `
+      a = 1;
+      debugger;
+      b = 2;`
+  );
+  await waitForPaused(dbg);
+  await dbg.toolbox.toggleSplitConsole();
+
+  resetCursorPositionToTopLeftCorner(dbg);
+
+  const racePromiseLines = Promise.any([
+    waitForElement(dbg, "previewPopup"),
+    wait(500).then(() => "TIMEOUT_LINES"),
+  ]);
+  // We don't want to use hoverToken, as it synthesize the event at the center of the element,
+  // which wouldn't reproduce the original issue we want to check
+  EventUtils.synthesizeMouse(
+    findElement(dbg, "CodeMirrorLines"),
+    0,
+    0,
+    {
+      type: "mousemove",
+    },
+    dbg.win
+  );
+  is(
+    await racePromiseLines,
+    "TIMEOUT_LINES",
+    "No popup was displayed over the content container element"
+  );
+
+  // Resume and select back the main JS file that is used by the other assertions
+  await resume(dbg);
+  await selectSource(dbg, "preview.js");
 }
 
 async function assertNoPreviews(dbg, expression, line, column) {
   // Move the cursor to the top left corner to have a clean state
   resetCursorPositionToTopLeftCorner(dbg);
+
+  // Wait for all the updates to the document to complete to make all
+  // token elements have been rendered
+  await waitForDocumentLoadComplete(dbg);
 
   // Hover the token
   const result = await Promise.race([
@@ -191,12 +299,13 @@ async function testMovingFromATokenToAnother(dbg) {
   invokeInTab("classPreview");
   await waitForPaused(dbg);
 
+  await scrollEditorIntoView(dbg, 50, 0);
+  // Wait for all the updates to the document to complete to make all
+  // token elements have been rendered
+  await waitForDocumentLoadComplete(dbg);
+
   info("Hover token `Foo` in `Foo.#privateStatic` expression");
-  const fooTokenEl = getTokenElAtLine(dbg, "Foo", 50, 44);
-  const cm = getCM(dbg);
-  const onScrolled = waitForScrolling(cm);
-  cm.scrollIntoView({ line: 49, ch: 0 }, 0);
-  await onScrolled;
+  const fooTokenEl = await getTokenElAtLine(dbg, "Foo", 50, 44);
   const { element: fooPopupEl } = await tryHoverToken(dbg, fooTokenEl, "popup");
   ok(!!fooPopupEl, "popup is displayed");
   ok(
@@ -210,7 +319,12 @@ async function testMovingFromATokenToAnother(dbg) {
   info(
     "Move mouse over the `#privateStatic` token in `Foo.#privateStatic` expression"
   );
-  const privateStaticTokenEl = getTokenElAtLine(dbg, "#privateStatic", 50, 48);
+  const privateStaticTokenEl = await getTokenElAtLine(
+    dbg,
+    "#privateStatic",
+    50,
+    48
+  );
 
   // The sequence of event to trigger the bug this is covering isn't easily reproducible
   // by firing a few chosen events (because of React async rendering), so we are going to

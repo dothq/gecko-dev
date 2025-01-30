@@ -64,7 +64,7 @@ static const nsPagesPerSheetInfo kSupportedPagesPerSheet[] = {
 inline void SanityCheckPagesPerSheetInfo() {
 #ifdef DEBUG
   // Sanity-checks:
-  MOZ_ASSERT(ArrayLength(kSupportedPagesPerSheet) > 0,
+  MOZ_ASSERT(std::size(kSupportedPagesPerSheet) > 0,
              "Should have at least one pages-per-sheet option.");
   MOZ_ASSERT(kSupportedPagesPerSheet[0].mNumPages == 1,
              "The 0th index is reserved for default 1-page-per-sheet entry");
@@ -266,7 +266,6 @@ void nsPageSequenceFrame::Reflow(nsPresContext* aPresContext,
   MOZ_ASSERT(aPresContext->IsRootPaginatedDocument(),
              "A Page Sequence is only for real pages");
   DO_GLOBAL_REFLOW_COUNT("nsPageSequenceFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aReflowOutput, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_FRAME_TRACE_REFLOW_IN("nsPageSequenceFrame::Reflow");
 
@@ -602,10 +601,10 @@ nsresult nsPageSequenceFrame::PrePrintNextSheet(nsITimerCallback* aCallback,
       }
 
       for (HTMLCanvasElement* canvas : Reversed(mCurrentCanvasList)) {
-        nsIntSize size = canvas->GetSize();
+        CSSIntSize size = canvas->GetSize();
 
-        RefPtr<DrawTarget> canvasTarget =
-            drawTarget->CreateSimilarDrawTarget(size, drawTarget->GetFormat());
+        RefPtr<DrawTarget> canvasTarget = drawTarget->CreateSimilarDrawTarget(
+            size.ToUnknownSize(), drawTarget->GetFormat());
         if (!canvasTarget) {
           continue;
         }

@@ -19,16 +19,15 @@ id_regex = re.compile(r"^[a-z0-9-]+$")
 feature_schema = Schema(
     {
         Match(id_regex): {
+            Required("group"): All(Text, Length(min=1)),
             Required("title"): All(Text, Length(min=1)),
             Required("description"): All(Text, Length(min=1)),
             Required("bug-numbers"): All(Length(min=1), [All(int, Range(min=1))]),
             Required("restart-required"): bool,
             Required("type"): "boolean",  # In the future this may include other types
             Optional("preference"): Text,
-            Optional("default-value"): Any(
-                bool, dict
-            ),  # the types of the keys here should match the value of `type`
-            Optional("is-public"): Any(bool, dict),
+            Optional("default-value-jexl"): Text,
+            Optional("is-public-jexl"): Text,
             Optional("description-links"): dict,
         },
     }
@@ -44,7 +43,7 @@ def main(output, *filenames):
     errors = False
     try:
         features = process_files(filenames)
-        json.dump(features, output, sort_keys=True)
+        json.dump(features, output)
     except ExceptionGroup as error_group:
         print(str(error_group))
         return EXIT_ERROR
@@ -149,8 +148,8 @@ def expand_feature(feature):
 
     if feature["type"] == "boolean":
         feature.setdefault("preference", "features.{}.enabled".format(feature["id"]))
-        # set default value to None so that we can test for perferences where we forgot to set the default value
-        feature.setdefault("defaultValue", None)
+        # set default value to None so that we can test for preferences where we forgot to set the default value
+        feature.setdefault("defaultValueJexl", None)
     elif "preference" not in feature:
         raise FeatureGateException(
             "Features of type {} must specify an explicit preference name".format(
@@ -158,58 +157,8 @@ def expand_feature(feature):
             )
         )
 
-    feature.setdefault("isPublic", False)
-
-    try:
-        for key in ["defaultValue", "isPublic"]:
-            feature[key] = process_configured_value(key, feature[key])
-    except FeatureGateException as e:
-        raise FeatureGateException(
-            "Error when processing feature {}: {}".format(feature["id"], e)
-        )
-
+    feature.setdefault("isPublicJexl", "false")
     return feature
-
-
-def process_configured_value(name, value):
-    if not isinstance(value, dict):
-        return {"default": value}
-
-    if "default" not in value:
-        raise FeatureGateException(
-            "Config for {} has no default: {}".format(name, value)
-        )
-
-    expected_keys = set(
-        {
-            "default",
-            "win",
-            "mac",
-            "linux",
-            "android",
-            "nightly",
-            "early_beta_or_earlier",
-            "beta",
-            "release",
-            "dev-edition",
-            "esr",
-            "thunderbird",
-        }
-    )
-
-    for key in value.keys():
-        parts = [p.strip() for p in key.split(",")]
-        for part in parts:
-            if part not in expected_keys:
-                raise FeatureGateException(
-                    "Unexpected target {}, expected any of {}".format(
-                        part, expected_keys
-                    )
-                )
-
-    # TODO Compute values at build time, so that it always returns only a single value.
-
-    return value
 
 
 if __name__ == "__main__":

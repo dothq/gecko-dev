@@ -28,22 +28,6 @@ const makeTestContent = (id, contentAdditions) => {
   };
 };
 
-async function openAboutWelcome(json) {
-  if (json) {
-    await setAboutWelcomeMultiStage(json);
-  }
-
-  let tab = await BrowserTestUtils.openNewForegroundTab(
-    gBrowser,
-    "about:welcome",
-    true
-  );
-  registerCleanupFunction(() => {
-    BrowserTestUtils.removeTab(tab);
-  });
-  return tab.linkedBrowser;
-}
-
 async function testAboutWelcomeLogoFor(logo = {}) {
   info(`Testing logo: ${JSON.stringify(logo)}`);
 
@@ -249,7 +233,7 @@ add_task(async function test_aboutwelcome_with_title_styles() {
     {
       "font-weight": "276",
       "font-size": "36px",
-      animation: "50s linear 0s infinite normal none running shine",
+      animation: "50s linear infinite shine",
       "letter-spacing": "normal",
     }
   );
@@ -334,46 +318,46 @@ add_task(async function test_aboutwelcome_dismiss_button() {
 /**
  * Test rendering a screen with the "split" position
  */
-// add_task(async function test_aboutwelcome_split_position() {
-//   const TEST_SPLIT_STEP = makeTestContent("TEST_SPLIT_STEP", {
-//     position: "split",
-//     hero_text: "hero test",
-//   });
+add_task(async function test_aboutwelcome_split_position() {
+  const TEST_SPLIT_STEP = makeTestContent("TEST_SPLIT_STEP", {
+    position: "split",
+    hero_text: "hero test",
+  });
 
-//   const TEST_SPLIT_JSON = JSON.stringify([TEST_SPLIT_STEP]);
-//   let browser = await openAboutWelcome(TEST_SPLIT_JSON);
+  const TEST_SPLIT_JSON = JSON.stringify([TEST_SPLIT_STEP]);
+  let browser = await openAboutWelcome(TEST_SPLIT_JSON);
 
-//   await test_screen_content(
-//     browser,
-//     "renders screen secondary section containing hero text",
-//     // Expected selectors:
-//     [`main.screen[pos="split"]`, `.section-secondary`, `.message-text h1`]
-//   );
+  await test_screen_content(
+    browser,
+    "renders screen secondary section containing hero text",
+    // Expected selectors:
+    [`main.screen[pos="split"]`, `.section-secondary`, `.message-text h1`]
+  );
 
-//   // Ensure secondary section has split template styling
-//   await test_element_styles(
-//     browser,
-//     "main.screen .section-secondary",
-//     // Expected styles:
-//     {
-//       display: "flex",
-//       margin: "auto 0px auto auto",
-//     }
-//   );
+  // Ensure secondary section has split template styling
+  await test_element_styles(
+    browser,
+    "main.screen .section-secondary",
+    // Expected styles:
+    {
+      display: "flex",
+      margin: "auto 0px auto auto",
+    }
+  );
 
-//   // Ensure secondary action has button styling
-//   await test_element_styles(
-//     browser,
-//     ".action-buttons .secondary-cta .secondary",
-//     // Expected styles:
-//     {
-//       // Override default text-link styles
-//       "background-color": "color(srgb 0.0823529 0.0784314 0.101961 / 0.07)",
-//       color: "rgb(21, 20, 26)",
-//     }
-//   );
-//   browser.closeBrowser();
-// });
+  // Ensure secondary action has button styling
+  await test_element_styles(
+    browser,
+    ".action-buttons .secondary-cta .secondary",
+    // Expected styles:
+    {
+      // Override default text-link styles
+      "background-color": "color(srgb 0.0823529 0.0784314 0.101961 / 0.07)",
+      color: "rgb(21, 20, 26)",
+    }
+  );
+  browser.closeBrowser();
+});
 
 /**
  * Test rendering a screen with a URL value and default color for backdrop
@@ -399,7 +383,7 @@ add_task(async function test_aboutwelcome_with_url_backdrop() {
     // Expected selectors:
     [`div.outer-wrapper.onboardingContainer[style*='${TEST_BACKDROP_URL}']`]
   );
-  await doExperimentCleanup();
+  doExperimentCleanup();
   browser.closeBrowser();
 });
 
@@ -428,7 +412,7 @@ add_task(async function test_aboutwelcome_with_color_backdrop() {
     // Expected selectors:
     [`div.outer-wrapper.onboardingContainer[style*='${TEST_BACKDROP_COLOR}']`]
   );
-  await doExperimentCleanup();
+  doExperimentCleanup();
   browser.closeBrowser();
 });
 
@@ -492,7 +476,7 @@ add_task(async function test_aboutwelcome_with_text_color_override() {
     }
   );
 
-  await doExperimentCleanup();
+  doExperimentCleanup();
   await SpecialPowers.popPrefEnv();
   browser.closeBrowser();
 });
@@ -569,7 +553,7 @@ add_task(async function test_aboutwelcome_with_progress_bar() {
     );
   });
 
-  await doExperimentCleanup();
+  doExperimentCleanup();
   browser.closeBrowser();
 });
 
@@ -611,7 +595,7 @@ add_task(async function test_aboutwelcome_history_updates_disabled() {
     "No entries added to the session's history stack with history updates disabled"
   );
 
-  await doExperimentCleanup();
+  doExperimentCleanup();
   browser.closeBrowser();
 });
 
@@ -718,7 +702,7 @@ add_task(async function test_aboutwelcome_start_screen_configured() {
     ok(false, "No telemetry sent");
   }
 
-  await doExperimentCleanup();
+  doExperimentCleanup();
   browser.closeBrowser();
   sandbox.restore();
 });
@@ -743,6 +727,231 @@ add_task(async function test_aboutwelcome_rdm_property() {
     ["main.TEST_NO_RDM[no-rdm]"]
   );
 
-  await doExperimentCleanup();
+  doExperimentCleanup();
+  browser.closeBrowser();
+});
+
+/**
+ * Test rendering the dismiss button on a reversed split layout screen
+ */
+add_task(async function test_aboutwelcome_reverse_dismiss() {
+  let screens = [
+    makeTestContent(`TEST_REVERSE_DISMISS`, {
+      reverse_split: true,
+      position: "split",
+      dismiss_button: { action: { dismiss: true } },
+    }),
+  ];
+
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+    featureId: "aboutwelcome",
+    value: { enabled: true, screens },
+  });
+
+  let browser = await openAboutWelcome();
+
+  await test_screen_content(
+    browser,
+    "render screen with 'reverse_split' attribute",
+    // Expected selectors:
+    ["main.TEST_REVERSE_DISMISS[reverse-split]"]
+  );
+
+  await test_screen_content(
+    browser,
+    "renders screen with dismiss button on secondary section",
+    // Expected selectors:
+    [".section-secondary .dismiss-button"]
+  );
+
+  // Click dismiss button
+  await onButtonClick(browser, "button.dismiss-button");
+
+  // Wait for about:home to load
+  await BrowserTestUtils.browserLoaded(browser, false, "about:home");
+  is(browser.currentURI.spec, "about:home", "about:home loaded");
+
+  doExperimentCleanup();
+  browser.closeBrowser();
+});
+
+/**
+ * Test rendering a screen with that uses fullscreen mode
+ */
+add_task(async function test_aboutwelcome_fullscreen_property() {
+  let screens = [makeTestContent(`TEST_FULLSCREEN`, { fullscreen: true })];
+
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+    featureId: "aboutwelcome",
+    value: { enabled: true, screens },
+  });
+
+  let browser = await openAboutWelcome();
+
+  await test_screen_content(
+    browser,
+    "render screen with 'fullscreen' attribute",
+    // Expected selectors:
+    ["main.TEST_FULLSCREEN[fullscreen]"]
+  );
+
+  doExperimentCleanup();
+  browser.closeBrowser();
+});
+
+/**
+ * Test rendering a split screen with that uses narrow mode
+ */
+add_task(async function test_aboutwelcome_narrow_property() {
+  const logo = JSON.stringify([
+    makeTestContent("TEST_LOGO_STEP", {
+      logo: {
+        height: "chrome://branding/content/icon64.png",
+        imageURL: "50px",
+      },
+    }),
+  ]);
+  let screens = [
+    makeTestContent(`TEST_FULLSCREEN`, {
+      narrow: true,
+      position: "split",
+      logo,
+    }),
+  ];
+
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+    featureId: "aboutwelcome",
+    value: { enabled: true, screens },
+  });
+
+  let browser = await openAboutWelcome();
+
+  await test_screen_content(
+    browser,
+    "render #multi-stage-message-root container with 'narrow' attribute",
+    // Expected selectors:
+    ["#multi-stage-message-root[narrow]"]
+  );
+
+  // Ensure elements get narrow styles
+  await test_element_styles(
+    browser,
+    ".section-main",
+    // Expected styles:
+    {
+      "margin-top": "0px",
+      width: "400px", // $split-section-width
+    }
+  );
+
+  await test_element_styles(
+    browser,
+    ".section-secondary",
+    // Expected styles:
+    {
+      height: "100px", // $small-secondary-section-height
+    }
+  );
+
+  await test_element_styles(
+    browser,
+    ".logo-container",
+    // Expected styles:
+    {
+      "text-align": "center",
+    }
+  );
+
+  doExperimentCleanup();
+  browser.closeBrowser();
+});
+
+/**
+ * Test configurability of single select picker icons styles
+ */
+add_task(async function test_aboutwelcome_single_select_icon_styles() {
+  let screens = [
+    makeTestContent(`TEST_SINGLE_SELECT_ICONS`, {
+      tiles: {
+        type: "single-select",
+        selected: "horizontal",
+        action: {
+          picker: "<event>",
+        },
+        data: [
+          {
+            icon: {
+              background: `center / contain no-repeat url("chrome://activity-stream/content/data/content/assets/fox-doodle-waving.gif")`,
+              width: "150px",
+              height: "100px",
+              marginInline: "10px",
+              borderRadius: "5px",
+            },
+            id: "test1",
+            label: {
+              raw: "test1 label",
+            },
+            action: {
+              type: "SET_PREF",
+              data: {
+                pref: {
+                  name: "test1.pref",
+                  value: true,
+                },
+              },
+            },
+          },
+          {
+            defaultValue: true,
+            icon: {
+              background: `center / contain no-repeat url("chrome://activity-stream/content/data/content/assets/heart.webp")`,
+              width: "150px",
+              height: "100px",
+              marginInline: "10px",
+              borderRadius: "5px",
+            },
+            id: "test2",
+            label: {
+              raw: "test2 label",
+            },
+            action: {
+              type: "SET_PREF",
+              data: {
+                pref: {
+                  name: "test2.pref",
+                  value: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    }),
+  ];
+
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+    featureId: "aboutwelcome",
+    value: { enabled: true, screens },
+  });
+
+  let browser = await openAboutWelcome();
+
+  await test_element_styles(
+    browser,
+    ".icon.test1",
+    // Expected styles:
+    {
+      "background-image":
+        'url("chrome://activity-stream/content/data/content/assets/fox-doodle-waving.gif")',
+      "background-repeat": "no-repeat",
+      "background-size": "contain",
+      width: "150px",
+      height: "100px",
+      "margin-inline": "10px",
+      "border-radius": "5px",
+    }
+  );
+
+  doExperimentCleanup();
   browser.closeBrowser();
 });

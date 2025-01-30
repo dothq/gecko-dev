@@ -5,9 +5,10 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "VideoEngine.h"
+
 #include "libwebrtcglue/SystemTime.h"
 #include "system_wrappers/include/clock.h"
-#include "video_engine/video_capture_factory.h"
+#include "video_engine/desktop_capture_impl.h"
 
 #ifdef MOZ_WIDGET_ANDROID
 #  include "mozilla/jni/Utils.h"
@@ -51,7 +52,7 @@ int32_t VideoEngine::CreateVideoCapture(const char* aDeviceUniqueIdUTF8) {
   MOZ_ASSERT(aDeviceUniqueIdUTF8);
 
   int32_t id = GenerateId();
-  LOG(("CaptureDeviceInfo.type=%s id=%d", mCaptureDevInfo.TypeName(), id));
+  LOG(("CaptureDeviceType=%s id=%d", EnumValueToString(mCaptureDevType), id));
 
   for (auto& it : mCaps) {
     if (it.second.VideoCapture() &&
@@ -63,10 +64,13 @@ int32_t VideoEngine::CreateVideoCapture(const char* aDeviceUniqueIdUTF8) {
     }
   }
 
-  CaptureEntry entry = {-1, nullptr};
+  CaptureEntry entry = {-1, nullptr, nullptr};
 
-  entry = CaptureEntry(id, mVideoCaptureFactory->CreateVideoCapture(
-                               id, aDeviceUniqueIdUTF8, mCaptureDevInfo.type));
+  VideoCaptureFactory::CreateVideoCaptureResult capturer =
+      mVideoCaptureFactory->CreateVideoCapture(id, aDeviceUniqueIdUTF8,
+                                               mCaptureDevType);
+  entry =
+      CaptureEntry(id, std::move(capturer.mCapturer), capturer.mDesktopImpl);
 
   mCaps.emplace(id, std::move(entry));
   mIdMap.emplace(id, id);
@@ -109,17 +113,17 @@ int VideoEngine::ReleaseVideoCapture(const int32_t aId) {
 }
 
 std::shared_ptr<webrtc::VideoCaptureModule::DeviceInfo>
-VideoEngine::GetOrCreateVideoCaptureDeviceInfo() {
+VideoEngine::GetOrCreateVideoCaptureDeviceInfo(
+    webrtc::VideoInputFeedBack* callBack) {
   LOG(("%s", __PRETTY_FUNCTION__));
   webrtc::Timestamp currentTime = webrtc::Timestamp::Micros(0);
 
-  const char* capDevTypeName =
-      CaptureDeviceInfo(mCaptureDevInfo.type).TypeName();
+  const char* capDevTypeName = EnumValueToString(mCaptureDevType);
 
   if (mDeviceInfo) {
     LOG(("Device cache available."));
     // Camera cache is invalidated by HW change detection elsewhere
-    if (mCaptureDevInfo.type == CaptureDeviceType::Camera) {
+    if (mCaptureDevType == CaptureDeviceType::Camera) {
       LOG(("returning cached CaptureDeviceInfo of type %s", capDevTypeName));
       return mDeviceInfo;
     }
@@ -143,7 +147,7 @@ VideoEngine::GetOrCreateVideoCaptureDeviceInfo() {
   LOG(("creating a new VideoCaptureDeviceInfo of type %s", capDevTypeName));
 
 #ifdef MOZ_WIDGET_ANDROID
-  if (mCaptureDevInfo.type == CaptureDeviceType::Camera) {
+  if (mCaptureDevType == CaptureDeviceType::Camera) {
     if (SetAndroidObjects()) {
       LOG(("VideoEngine::SetAndroidObjects Failed"));
       return mDeviceInfo;
@@ -151,8 +155,11 @@ VideoEngine::GetOrCreateVideoCaptureDeviceInfo() {
   }
 #endif
 
-  mDeviceInfo =
-      mVideoCaptureFactory->CreateDeviceInfo(mId, mCaptureDevInfo.type);
+  mDeviceInfo = mVideoCaptureFactory->CreateDeviceInfo(mId, mCaptureDevType);
+
+  if (mDeviceInfo && mCaptureDevType == CaptureDeviceType::Camera) {
+    mDeviceInfo->RegisterVideoInputFeedBack(callBack);
+  }
 
   LOG(("EXIT %s", __PRETTY_FUNCTION__));
   return mDeviceInfo;
@@ -172,12 +179,27 @@ already_AddRefed<VideoEngine> VideoEngine::Create(
 }
 
 VideoEngine::CaptureEntry::CaptureEntry(
-    int32_t aCapnum, rtc::scoped_refptr<webrtc::VideoCaptureModule> aCapture)
-    : mCapnum(aCapnum), mVideoCaptureModule(aCapture) {}
+    int32_t aCapnum, rtc::scoped_refptr<webrtc::VideoCaptureModule> aCapture,
+    webrtc::DesktopCaptureImpl* aDesktopImpl)
+    : mCapnum(aCapnum),
+      mVideoCaptureModule(std::move(aCapture)),
+      mDesktopImpl(aDesktopImpl) {}
 
 rtc::scoped_refptr<webrtc::VideoCaptureModule>
 VideoEngine::CaptureEntry::VideoCapture() {
   return mVideoCaptureModule;
+}
+
+mozilla::MediaEventSource<void>*
+VideoEngine::CaptureEntry::CaptureEndedEvent() {
+  if (!mDesktopImpl) {
+    return nullptr;
+  }
+#if !defined(WEBRTC_ANDROID) && !defined(WEBRTC_IOS)
+  return mDesktopImpl->CaptureEndedEvent();
+#else
+  return nullptr;
+#endif
 }
 
 int32_t VideoEngine::CaptureEntry::Capnum() const { return mCapnum; }
@@ -212,13 +234,13 @@ int32_t VideoEngine::GenerateId() {
 VideoEngine::VideoEngine(const CaptureDeviceType& aCaptureDeviceType,
                          RefPtr<VideoCaptureFactory> aVideoCaptureFactory)
     : mId(0),
-      mCaptureDevInfo(aCaptureDeviceType),
+      mCaptureDevType(aCaptureDeviceType),
       mVideoCaptureFactory(std::move(aVideoCaptureFactory)),
       mDeviceInfo(nullptr) {
   MOZ_ASSERT(mVideoCaptureFactory);
   LOG(("%s", __PRETTY_FUNCTION__));
   LOG(("Creating new VideoEngine with CaptureDeviceType %s",
-       mCaptureDevInfo.TypeName()));
+       EnumValueToString(mCaptureDevType)));
 }
 
 VideoEngine::~VideoEngine() {

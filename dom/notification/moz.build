@@ -20,9 +20,23 @@ EXPORTS.mozilla.dom += [
     "NotificationEvent.h",
 ]
 
+EXPORTS.mozilla.dom.notification += [
+    "IPCUtils.h",
+    "NotificationChild.h",
+    "NotificationParent.h",
+    "NotificationUtils.h",  # Exported for ContentParent for now
+]
+
 UNIFIED_SOURCES += [
     "Notification.cpp",
+    "NotificationChild.cpp",
     "NotificationEvent.cpp",
+    "NotificationParent.cpp",
+    "NotificationUtils.cpp",
+]
+
+IPDL_SOURCES += [
+    "PNotification.ipdl",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
@@ -38,11 +52,7 @@ XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
 MOCHITEST_MANIFESTS += ["test/mochitest/mochitest.toml"]
 MOCHITEST_CHROME_MANIFESTS += ["test/chrome/chrome.toml"]
 
-if CONFIG["MOZ_NEW_NOTIFICATION_STORE"]:
-    EXTRA_JS_MODULES += [
-        "new/NotificationDB.sys.mjs",
-    ]
-else:
-    EXTRA_JS_MODULES += [
-        "old/NotificationDB.sys.mjs",
-    ]
+EXTRA_JS_MODULES += [
+    "MemoryNotificationDB.sys.mjs",
+    "NotificationDB.sys.mjs",
+]

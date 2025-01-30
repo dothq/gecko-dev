@@ -139,7 +139,9 @@ class ChromeUtils {
                                             ErrorResult& aRv);
 
   static void GetPartitionKeyFromURL(dom::GlobalObject& aGlobal,
-                                     const nsAString& aURL,
+                                     const nsAString& aTopLevelUrl,
+                                     const nsAString& aSubresourceUrl,
+                                     const Optional<bool>& aForeignContext,
                                      nsAString& aPartitionKey,
                                      ErrorResult& aRv);
 
@@ -185,10 +187,30 @@ class ChromeUtils {
   static void ClearStyleSheetCacheByPrincipal(GlobalObject&,
                                               nsIPrincipal* aForPrincipal);
 
-  static void ClearStyleSheetCacheByBaseDomain(GlobalObject& aGlobal,
-                                               const nsACString& aBaseDomain);
+  static void ClearStyleSheetCacheBySite(
+      GlobalObject&, const nsACString& aSchemelessSite,
+      const dom::OriginAttributesPatternDictionary& aPattern);
 
   static void ClearStyleSheetCache(GlobalObject& aGlobal);
+
+  static void ClearMessagingLayerSecurityStateByPrincipal(
+      GlobalObject&, nsIPrincipal* aPrincipal, ErrorResult& aRv);
+
+  static void ClearMessagingLayerSecurityStateBySite(
+      GlobalObject& aGlobal, const nsACString& aSchemelessSite,
+      const dom::OriginAttributesPatternDictionary& aPattern, ErrorResult& aRv);
+
+  static void ClearMessagingLayerSecurityState(GlobalObject& aGlobal,
+                                               ErrorResult& aRv);
+
+  static void ClearScriptCacheByPrincipal(GlobalObject&,
+                                          nsIPrincipal* aForPrincipal);
+
+  static void ClearScriptCacheBySite(
+      GlobalObject& aGlobal, const nsACString& aSchemelessSite,
+      const dom::OriginAttributesPatternDictionary& aPattern);
+
+  static void ClearScriptCache(GlobalObject& aGlobal);
 
   static void SetPerfStatsCollectionMask(GlobalObject& aGlobal, uint64_t aMask);
 
@@ -239,9 +261,6 @@ class ChromeUtils {
                           JS::Handle<JSObject*> stack,
                           JS::MutableHandle<JSObject*> aRetVal,
                           ErrorResult& aRv);
-
-  static already_AddRefed<Promise> RequestIOActivity(GlobalObject& aGlobal,
-                                                     ErrorResult& aRv);
 
   static bool HasReportingHeaderForOrigin(GlobalObject& global,
                                           const nsAString& aOrigin,

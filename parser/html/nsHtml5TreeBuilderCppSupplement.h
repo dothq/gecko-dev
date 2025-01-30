@@ -13,6 +13,7 @@
 #include "mozilla/dom/FetchPriority.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/dom/ShadowRootBinding.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPrefs_dom.h"
@@ -42,6 +43,7 @@ nsHtml5TreeBuilder::nsHtml5TreeBuilder(nsHtml5OplessBuilder* aBuilder)
       quirks(false),
       forceNoQuirks(false),
       allowDeclarativeShadowRoots(false),
+      keepBuffer(false),
       mBuilder(aBuilder),
       mViewSource(nullptr),
       mOpSink(nullptr),
@@ -85,6 +87,7 @@ nsHtml5TreeBuilder::nsHtml5TreeBuilder(nsAHtml5TreeOpSink* aOpSink,
       quirks(false),
       forceNoQuirks(false),
       allowDeclarativeShadowRoots(false),
+      keepBuffer(false),
       mBuilder(nullptr),
       mViewSource(nullptr),
       mOpSink(aOpSink),
@@ -751,14 +754,15 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
     if (mBuilder) {
       nsHtml5TreeOperation::SetFormElement(
           static_cast<nsIContent*>(content),
-          static_cast<nsIContent*>(aFormElement));
+          static_cast<nsIContent*>(aFormElement),
+          static_cast<nsIContent*>(aIntendedParent));
     } else {
       nsHtml5TreeOperation* treeOp = mOpQueue.AppendElement(mozilla::fallible);
       if (MOZ_UNLIKELY(!treeOp)) {
         MarkAsBrokenAndRequestSuspensionWithoutBuilder(NS_ERROR_OUT_OF_MEMORY);
         return nullptr;
       }
-      opSetFormElement operation(content, aFormElement);
+      opSetFormElement operation(content, aFormElement, aIntendedParent);
       treeOp->Init(mozilla::AsVariant(operation));
     }
   }
@@ -1136,6 +1140,8 @@ void nsHtml5TreeBuilder::markMalformedIfScript(nsIContentHandle* aElement) {
 
 void nsHtml5TreeBuilder::start(bool fragment) {
   mCurrentHtmlScriptCannotDocumentWriteOrBlock = false;
+  mozilla::glean::parsing::svg_unusual_pcdata.AddToDenominator(1);
+
 #ifdef DEBUG
   mActive = true;
 #endif
@@ -1203,6 +1209,21 @@ void nsHtml5TreeBuilder::elementPushed(int32_t aNamespace, nsAtom* aName,
    * table elements shouldn't be used as surrogate parents for user experience
    * reasons.
    */
+
+  if (MOZ_UNLIKELY(isInSVGOddPCData)) {
+    // We are seeing an element that has children, which could not have child
+    // elements in HTML, i.e., is parsed as PCDATA in SVG but CDATA in HTML.
+    mozilla::glean::parsing::svg_unusual_pcdata.AddToNumerator(1);
+  }
+  if (MOZ_UNLIKELY(aNamespace == kNameSpaceID_SVG)) {
+    if ((aName == nsGkAtoms::style) || (aName == nsGkAtoms::xmp) ||
+        (aName == nsGkAtoms::iframe) || (aName == nsGkAtoms::noembed) ||
+        (aName == nsGkAtoms::noframes) || (aName == nsGkAtoms::noscript) ||
+        (aName == nsGkAtoms::script)) {
+      isInSVGOddPCData++;
+    }
+  }
+
   if (aNamespace != kNameSpaceID_XHTML) {
     return;
   }
@@ -1251,6 +1272,14 @@ void nsHtml5TreeBuilder::elementPopped(int32_t aNamespace, nsAtom* aName,
   NS_ASSERTION(aElement, "No element!");
   if (aNamespace == kNameSpaceID_MathML) {
     return;
+  }
+  if (MOZ_UNLIKELY(aNamespace == kNameSpaceID_SVG)) {
+    if ((aName == nsGkAtoms::style) || (aName == nsGkAtoms::xmp) ||
+        (aName == nsGkAtoms::iframe) || (aName == nsGkAtoms::noembed) ||
+        (aName == nsGkAtoms::noframes) || (aName == nsGkAtoms::noscript) ||
+        (aName == nsGkAtoms::script)) {
+      isInSVGOddPCData--;
+    }
   }
   // we now have only SVG and HTML
   if (aName == nsGkAtoms::script) {
@@ -1707,7 +1736,7 @@ void nsHtml5TreeBuilder::setDocumentFragmentForTemplate(
 nsIContentHandle* nsHtml5TreeBuilder::getShadowRootFromHost(
     nsIContentHandle* aHost, nsIContentHandle* aTemplateNode,
     nsHtml5String aShadowRootMode, bool aShadowRootIsClonable,
-    bool aShadowRootDelegatesFocus) {
+    bool aShadowRootIsSerializable, bool aShadowRootDelegatesFocus) {
   mozilla::dom::ShadowRootMode mode;
   if (aShadowRootMode.LowerCaseEqualsASCII("open")) {
     mode = mozilla::dom::ShadowRootMode::Open;
@@ -1720,7 +1749,7 @@ nsIContentHandle* nsHtml5TreeBuilder::getShadowRootFromHost(
   if (mBuilder) {
     nsIContent* root = nsContentUtils::AttachDeclarativeShadowRoot(
         static_cast<nsIContent*>(aHost), mode, aShadowRootIsClonable,
-        aShadowRootDelegatesFocus);
+        aShadowRootIsSerializable, aShadowRootDelegatesFocus);
     if (!root) {
       nsContentUtils::LogSimpleConsoleError(
           u"Failed to attach Declarative Shadow DOM."_ns, "DOM"_ns,
@@ -1736,9 +1765,9 @@ nsIContentHandle* nsHtml5TreeBuilder::getShadowRootFromHost(
     return nullptr;
   }
   nsIContentHandle* fragHandle = AllocateContentHandle();
-  opGetShadowRootFromHost operation(aHost, fragHandle, aTemplateNode, mode,
-                                    aShadowRootIsClonable,
-                                    aShadowRootDelegatesFocus);
+  opGetShadowRootFromHost operation(
+      aHost, fragHandle, aTemplateNode, mode, aShadowRootIsClonable,
+      aShadowRootIsSerializable, aShadowRootDelegatesFocus);
   treeOp->Init(mozilla::AsVariant(operation));
   return fragHandle;
 }

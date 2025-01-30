@@ -369,13 +369,6 @@ struct nsTArray_SafeElementAtHelper<mozilla::OwningNonNull<E>, Derived>
     : public nsTArray_SafeElementAtSmartPtrHelper<mozilla::OwningNonNull<E>,
                                                   Derived> {};
 
-// Servo bindings.
-extern "C" void Gecko_EnsureTArrayCapacity(void* aArray, size_t aCapacity,
-                                           size_t aElementSize);
-extern "C" void Gecko_ClearPODTArray(void* aArray, size_t aElementSize,
-                                     size_t aElementAlign);
-
-//
 // This class serves as a base class for nsTArray.  It shouldn't be used
 // directly.  It holds common implementation code that does not depend on the
 // element type of the nsTArray.
@@ -392,11 +385,6 @@ class nsTArray_base {
   // calls ShiftData.
   template <class E, class XAlloc>
   friend class nsTArray_Impl;
-
-  friend void Gecko_EnsureTArrayCapacity(void* aArray, size_t aCapacity,
-                                         size_t aElemSize);
-  friend void Gecko_ClearPODTArray(void* aTArray, size_t aElementSize,
-                                   size_t aElementAlign);
 
  protected:
   typedef nsTArrayHeader Header;
@@ -2379,9 +2367,10 @@ class nsTArray_Impl
     static_assert(std::is_move_constructible_v<value_type>);
 
     ::detail::CompareWrapper<Comparator, value_type> comp(aComp);
-    std::sort(begin(), end(), [&comp](const auto& left, const auto& right) {
-      return comp.LessThan(left, right);
-    });
+    std::sort(Elements(), Elements() + Length(),
+              [&comp](const auto& left, const auto& right) {
+                return comp.LessThan(left, right);
+              });
   }
 
   // A variation on the Sort method defined above that assumes that
@@ -2446,7 +2435,7 @@ class nsTArray_Impl
   template <class Item>
   void AssignRange(index_type aStart, size_type aCount, const Item* aValues) {
     AssignRangeAlgorithm<
-        std::is_trivially_copy_constructible_v<Item>,
+        std::is_trivially_copyable_v<Item>,
         std::is_same_v<Item, value_type>>::implementation(Elements(), aStart,
                                                           aCount, aValues);
   }
@@ -3291,11 +3280,14 @@ class nsTArrayView {
   const Span<element_type> mSpan;
 };
 
-template <typename Range, typename = std::enable_if_t<std::is_same_v<
-                              typename std::iterator_traits<
-                                  typename Range::iterator>::iterator_category,
-                              std::random_access_iterator_tag>>>
-auto RangeSize(const Range& aRange) {
+// NOTE(emilio): If changing the name of this or so, make sure to change
+// specializations too.
+template <typename Range,
+          typename = std::enable_if_t<std::is_same_v<
+              typename std::iterator_traits<typename std::remove_reference_t<
+                  Range>::iterator>::iterator_category,
+              std::random_access_iterator_tag>>>
+size_t RangeSizeEstimate(const Range& aRange) {
   // See https://en.cppreference.com/w/cpp/iterator/begin, section 'User-defined
   // overloads'.
   using std::begin;
@@ -3310,12 +3302,14 @@ auto RangeSize(const Range& aRange) {
  * convertible from the range's value type.
  */
 template <typename Array, typename Range>
-auto ToTArray(const Range& aRange) {
+auto ToTArray(Range&& aRange) {
   using std::begin;
   using std::end;
 
   Array res;
-  res.SetCapacity(RangeSize(aRange));
+  if (auto estimate = RangeSizeEstimate(aRange)) {
+    res.SetCapacity(estimate);
+  }
   std::copy(begin(aRange), end(aRange), MakeBackInserter(res));
   return res;
 }
@@ -3324,21 +3318,22 @@ auto ToTArray(const Range& aRange) {
  * Materialize a range as a nsTArray of its (decayed) value type.
  */
 template <typename Range>
-auto ToArray(const Range& aRange) {
-  return ToTArray<nsTArray<std::decay_t<
-      typename std::iterator_traits<typename Range::iterator>::value_type>>>(
-      aRange);
+auto ToArray(Range&& aRange) {
+  return ToTArray<nsTArray<std::decay_t<typename std::iterator_traits<
+      typename std::remove_reference_t<Range>::iterator>::value_type>>>(
+      std::forward<Range>(aRange));
 }
 
 /**
  * Appends all elements from a range to an array.
  */
 template <typename Array, typename Range>
-void AppendToArray(Array& aArray, const Range& aRange) {
+void AppendToArray(Array& aArray, Range&& aRange) {
   using std::begin;
   using std::end;
-
-  aArray.SetCapacity(aArray.Length() + RangeSize(aRange));
+  if (auto estimate = RangeSizeEstimate(aRange)) {
+    aArray.SetCapacity(aArray.Length() + estimate);
+  }
   std::copy(begin(aRange), end(aRange), MakeBackInserter(aArray));
 }
 

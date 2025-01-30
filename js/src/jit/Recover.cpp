@@ -6,6 +6,8 @@
 
 #include "jit/Recover.h"
 
+#include "mozilla/Casting.h"
+
 #include "jsmath.h"
 
 #include "builtin/Object.h"
@@ -17,9 +19,11 @@
 #include "jit/Ion.h"
 #include "jit/JitSpewer.h"
 #include "jit/JSJitFrameIter.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
 #include "jit/VMFunctions.h"
+#include "js/ScalarType.h"
 #include "util/DifferentialTesting.h"
 #include "vm/BigIntType.h"
 #include "vm/EqualityOperations.h"
@@ -477,12 +481,13 @@ bool MNot::writeRecoverData(CompactBufferWriter& writer) const {
 RNot::RNot(CompactBufferReader& reader) {}
 
 bool RNot::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue v(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<Value> value(cx);
+  if (!iter.readMaybeUnpackedBigInt(cx, &value)) {
+    return false;
+  }
 
-  result.setBoolean(!ToBoolean(v));
-
-  iter.storeInstructionResult(result);
+  bool result = !ToBoolean(value);
+  iter.storeInstructionResult(BooleanValue(result));
   return true;
 }
 
@@ -495,16 +500,15 @@ bool MBigIntAdd::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntAdd::RBigIntAdd(CompactBufferReader& reader) {}
 
 bool RBigIntAdd::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::AddValues(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::add(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -517,16 +521,15 @@ bool MBigIntSub::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntSub::RBigIntSub(CompactBufferReader& reader) {}
 
 bool RBigIntSub::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::SubValues(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::sub(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -539,16 +542,15 @@ bool MBigIntMul::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntMul::RBigIntMul(CompactBufferReader& reader) {}
 
 bool RBigIntMul::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::MulValues(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::mul(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -561,18 +563,17 @@ bool MBigIntDiv::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntDiv::RBigIntDiv(CompactBufferReader& reader) {}
 
 bool RBigIntDiv::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
-
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  MOZ_ASSERT(!rhs.toBigInt()->isZero(),
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
+  MOZ_ASSERT(!rhs->isZero(),
              "division by zero throws and therefore can't be recovered");
-  if (!js::DivValues(cx, &lhs, &rhs, &result)) {
+
+  BigInt* result = BigInt::div(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -585,18 +586,17 @@ bool MBigIntMod::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntMod::RBigIntMod(CompactBufferReader& reader) {}
 
 bool RBigIntMod::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
-
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  MOZ_ASSERT(!rhs.toBigInt()->isZero(),
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
+  MOZ_ASSERT(!rhs->isZero(),
              "division by zero throws and therefore can't be recovered");
-  if (!js::ModValues(cx, &lhs, &rhs, &result)) {
+
+  BigInt* result = BigInt::mod(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -609,18 +609,17 @@ bool MBigIntPow::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntPow::RBigIntPow(CompactBufferReader& reader) {}
 
 bool RBigIntPow::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
-
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  MOZ_ASSERT(!rhs.toBigInt()->isNegative(),
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
+  MOZ_ASSERT(!rhs->isNegative(),
              "negative exponent throws and therefore can't be recovered");
-  if (!js::PowValues(cx, &lhs, &rhs, &result)) {
+
+  BigInt* result = BigInt::pow(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -633,16 +632,15 @@ bool MBigIntBitAnd::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntBitAnd::RBigIntBitAnd(CompactBufferReader& reader) {}
 
 bool RBigIntBitAnd::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::BitAnd(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::bitAnd(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -655,16 +653,15 @@ bool MBigIntBitOr::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntBitOr::RBigIntBitOr(CompactBufferReader& reader) {}
 
 bool RBigIntBitOr::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::BitOr(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::bitOr(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -677,16 +674,15 @@ bool MBigIntBitXor::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntBitXor::RBigIntBitXor(CompactBufferReader& reader) {}
 
 bool RBigIntBitXor::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::BitXor(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::bitXor(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -699,16 +695,15 @@ bool MBigIntLsh::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntLsh::RBigIntLsh(CompactBufferReader& reader) {}
 
 bool RBigIntLsh::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::BitLsh(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::lsh(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -721,16 +716,15 @@ bool MBigIntRsh::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntRsh::RBigIntRsh(CompactBufferReader& reader) {}
 
 bool RBigIntRsh::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue lhs(cx, iter.read());
-  RootedValue rhs(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> lhs(cx, iter.readBigInt());
+  Rooted<BigInt*> rhs(cx, iter.readBigInt());
 
-  MOZ_ASSERT(lhs.isBigInt() && rhs.isBigInt());
-  if (!js::BitRsh(cx, &lhs, &rhs, &result)) {
+  BigInt* result = BigInt::rsh(cx, lhs, rhs);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -743,15 +737,14 @@ bool MBigIntIncrement::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntIncrement::RBigIntIncrement(CompactBufferReader& reader) {}
 
 bool RBigIntIncrement::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue operand(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> operand(cx, iter.readBigInt());
 
-  MOZ_ASSERT(operand.isBigInt());
-  if (!js::IncOperation(cx, operand, &result)) {
+  BigInt* result = BigInt::inc(cx, operand);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -764,15 +757,14 @@ bool MBigIntDecrement::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntDecrement::RBigIntDecrement(CompactBufferReader& reader) {}
 
 bool RBigIntDecrement::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue operand(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> operand(cx, iter.readBigInt());
 
-  MOZ_ASSERT(operand.isBigInt());
-  if (!js::DecOperation(cx, operand, &result)) {
+  BigInt* result = BigInt::dec(cx, operand);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -785,15 +777,14 @@ bool MBigIntNegate::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntNegate::RBigIntNegate(CompactBufferReader& reader) {}
 
 bool RBigIntNegate::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue operand(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> operand(cx, iter.readBigInt());
 
-  MOZ_ASSERT(operand.isBigInt());
-  if (!js::NegOperation(cx, &operand, &result)) {
+  BigInt* result = BigInt::neg(cx, operand);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
   return true;
 }
 
@@ -806,15 +797,379 @@ bool MBigIntBitNot::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntBitNot::RBigIntBitNot(CompactBufferReader& reader) {}
 
 bool RBigIntBitNot::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue operand(cx, iter.read());
-  RootedValue result(cx);
+  Rooted<BigInt*> operand(cx, iter.readBigInt());
 
-  MOZ_ASSERT(operand.isBigInt());
-  if (!js::BitNot(cx, &operand, &result)) {
+  BigInt* result = BigInt::bitNot(cx, operand);
+  if (!result) {
     return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(BigIntValue(result));
+  return true;
+}
+
+bool MBigIntToIntPtr::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntToIntPtr));
+  return true;
+}
+
+RBigIntToIntPtr::RBigIntToIntPtr(CompactBufferReader& reader) {}
+
+bool RBigIntToIntPtr::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Value input = iter.read();
+  MOZ_ASSERT(input.isBigInt());
+
+  iter.storeInstructionResult(input);
+  return true;
+}
+
+bool MIntPtrToBigInt::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_IntPtrToBigInt));
+  return true;
+}
+
+RIntPtrToBigInt::RIntPtrToBigInt(CompactBufferReader& reader) {}
+
+bool RIntPtrToBigInt::recover(JSContext* cx, SnapshotIterator& iter) const {
+  BigInt* input = iter.readBigInt(cx);
+  if (!input) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(input));
+  return true;
+}
+
+bool MBigIntPtrAdd::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrAdd));
+  return true;
+}
+
+RBigIntPtrAdd::RBigIntPtrAdd(CompactBufferReader& reader) {}
+
+bool RBigIntPtrAdd::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::add(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrSub::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrSub));
+  return true;
+}
+
+RBigIntPtrSub::RBigIntPtrSub(CompactBufferReader& reader) {}
+
+bool RBigIntPtrSub::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::sub(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrMul::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrMul));
+  return true;
+}
+
+RBigIntPtrMul::RBigIntPtrMul(CompactBufferReader& reader) {}
+
+bool RBigIntPtrMul::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::mul(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrDiv::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrDiv));
+  return true;
+}
+
+RBigIntPtrDiv::RBigIntPtrDiv(CompactBufferReader& reader) {}
+
+bool RBigIntPtrDiv::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::div(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrMod::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrMod));
+  return true;
+}
+
+RBigIntPtrMod::RBigIntPtrMod(CompactBufferReader& reader) {}
+
+bool RBigIntPtrMod::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::mod(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrPow::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrPow));
+  return true;
+}
+
+RBigIntPtrPow::RBigIntPtrPow(CompactBufferReader& reader) {}
+
+bool RBigIntPtrPow::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::pow(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrBitAnd::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrBitAnd));
+  return true;
+}
+
+RBigIntPtrBitAnd::RBigIntPtrBitAnd(CompactBufferReader& reader) {}
+
+bool RBigIntPtrBitAnd::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::bitAnd(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrBitOr::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrBitOr));
+  return true;
+}
+
+RBigIntPtrBitOr::RBigIntPtrBitOr(CompactBufferReader& reader) {}
+
+bool RBigIntPtrBitOr::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::bitOr(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrBitXor::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrBitXor));
+  return true;
+}
+
+RBigIntPtrBitXor::RBigIntPtrBitXor(CompactBufferReader& reader) {}
+
+bool RBigIntPtrBitXor::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::bitXor(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrLsh::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrLsh));
+  return true;
+}
+
+RBigIntPtrLsh::RBigIntPtrLsh(CompactBufferReader& reader) {}
+
+bool RBigIntPtrLsh::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::lsh(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrRsh::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrRsh));
+  return true;
+}
+
+RBigIntPtrRsh::RBigIntPtrRsh(CompactBufferReader& reader) {}
+
+bool RBigIntPtrRsh::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> lhs(cx, iter.readBigInt(cx));
+  if (!lhs) {
+    return false;
+  }
+
+  Rooted<BigInt*> rhs(cx, iter.readBigInt(cx));
+  if (!rhs) {
+    return false;
+  }
+
+  BigInt* result = BigInt::rsh(cx, lhs, rhs);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
+  return true;
+}
+
+bool MBigIntPtrBitNot::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_BigIntPtrBitNot));
+  return true;
+}
+
+RBigIntPtrBitNot::RBigIntPtrBitNot(CompactBufferReader& reader) {}
+
+bool RBigIntPtrBitNot::recover(JSContext* cx, SnapshotIterator& iter) const {
+  Rooted<BigInt*> operand(cx, iter.readBigInt(cx));
+  if (!operand) {
+    return false;
+  }
+
+  BigInt* result = BigInt::bitNot(cx, operand);
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
   return true;
 }
 
@@ -910,7 +1265,7 @@ bool RConcat::recover(JSContext* cx, SnapshotIterator& iter) const {
 RStringLength::RStringLength(CompactBufferReader& reader) {}
 
 bool RStringLength::recover(JSContext* cx, SnapshotIterator& iter) const {
-  JSString* string = iter.read().toString();
+  JSString* string = iter.readString();
 
   static_assert(JSString::MAX_LENGTH <= INT32_MAX,
                 "Can cast string length to int32_t");
@@ -953,7 +1308,7 @@ bool MFloor::writeRecoverData(CompactBufferWriter& writer) const {
 RFloor::RFloor(CompactBufferReader& reader) {}
 
 bool RFloor::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_floor_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -969,7 +1324,7 @@ bool MCeil::writeRecoverData(CompactBufferWriter& writer) const {
 RCeil::RCeil(CompactBufferReader& reader) {}
 
 bool RCeil::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_ceil_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -985,7 +1340,7 @@ bool MRound::writeRecoverData(CompactBufferWriter& writer) const {
 RRound::RRound(CompactBufferReader& reader) {}
 
 bool RRound::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_round_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -1001,7 +1356,7 @@ bool MTrunc::writeRecoverData(CompactBufferWriter& writer) const {
 RTrunc::RTrunc(CompactBufferReader& reader) {}
 
 bool RTrunc::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_trunc_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -1017,21 +1372,18 @@ bool MCharCodeAt::writeRecoverData(CompactBufferWriter& writer) const {
 RCharCodeAt::RCharCodeAt(CompactBufferReader& reader) {}
 
 bool RCharCodeAt::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedString string(cx, iter.read().toString());
-  int32_t index = iter.read().toInt32();
+  JSString* string = iter.readString();
 
-  RootedValue result(cx);
-  if (0 <= index && size_t(index) < string->length()) {
-    char16_t c;
-    if (!string->getChar(cx, index, &c)) {
-      return false;
-    }
-    result.setInt32(c);
-  } else {
-    result.setNaN();
+  // Int32 because |index| is computed from MBoundsCheck.
+  int32_t index = iter.readInt32();
+  MOZ_RELEASE_ASSERT(0 <= index && size_t(index) < string->length());
+
+  char16_t c;
+  if (!string->getChar(cx, index, &c)) {
+    return false;
   }
 
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(Int32Value(c));
   return true;
 }
 
@@ -1044,7 +1396,8 @@ bool MFromCharCode::writeRecoverData(CompactBufferWriter& writer) const {
 RFromCharCode::RFromCharCode(CompactBufferReader& reader) {}
 
 bool RFromCharCode::recover(JSContext* cx, SnapshotIterator& iter) const {
-  int32_t charCode = iter.read().toInt32();
+  // Number because |charCode| is computed from (recoverable) user input.
+  int32_t charCode = JS::ToInt32(iter.readNumber());
 
   JSString* str = StringFromCharCode(cx, charCode);
   if (!str) {
@@ -1068,7 +1421,8 @@ RFromCharCodeEmptyIfNegative::RFromCharCodeEmptyIfNegative(
 
 bool RFromCharCodeEmptyIfNegative::recover(JSContext* cx,
                                            SnapshotIterator& iter) const {
-  int32_t charCode = iter.read().toInt32();
+  // Int32 because |charCode| is computed from MCharCodeAtOrNegative.
+  int32_t charCode = iter.readInt32();
 
   JSString* str;
   if (charCode < 0) {
@@ -1093,8 +1447,8 @@ bool MPow::writeRecoverData(CompactBufferWriter& writer) const {
 RPow::RPow(CompactBufferReader& reader) {}
 
 bool RPow::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double base = iter.read().toNumber();
-  double power = iter.read().toNumber();
+  double base = iter.readNumber();
+  double power = iter.readNumber();
   double result = ecmaPow(base, power);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -1110,7 +1464,7 @@ bool MPowHalf::writeRecoverData(CompactBufferWriter& writer) const {
 RPowHalf::RPowHalf(CompactBufferReader& reader) {}
 
 bool RPowHalf::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double base = iter.read().toNumber();
+  double base = iter.readNumber();
   double power = 0.5;
   double result = ecmaPow(base, power);
 
@@ -1128,8 +1482,8 @@ bool MMinMax::writeRecoverData(CompactBufferWriter& writer) const {
 RMinMax::RMinMax(CompactBufferReader& reader) { isMax_ = reader.readByte(); }
 
 bool RMinMax::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double x = iter.read().toNumber();
-  double y = iter.read().toNumber();
+  double x = iter.readNumber();
+  double y = iter.readNumber();
 
   double result;
   if (isMax_) {
@@ -1151,7 +1505,7 @@ bool MAbs::writeRecoverData(CompactBufferWriter& writer) const {
 RAbs::RAbs(CompactBufferReader& reader) {}
 
 bool RAbs::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_abs_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -1170,7 +1524,7 @@ RSqrt::RSqrt(CompactBufferReader& reader) {
 }
 
 bool RSqrt::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_sqrt_impl(num);
 
   // MIRType::Float32 is a specialization embedding the fact that the result is
@@ -1192,8 +1546,8 @@ bool MAtan2::writeRecoverData(CompactBufferWriter& writer) const {
 RAtan2::RAtan2(CompactBufferReader& reader) {}
 
 bool RAtan2::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double y = iter.read().toNumber();
-  double x = iter.read().toNumber();
+  double y = iter.readNumber();
+  double x = iter.readNumber();
   double result = js::ecmaAtan2(y, x);
 
   iter.storeInstructionResult(DoubleValue(result));
@@ -1218,7 +1572,7 @@ bool RHypot::recover(JSContext* cx, SnapshotIterator& iter) const {
   }
 
   for (uint32_t i = 0; i < numOperands_; ++i) {
-    vec.infallibleAppend(iter.read());
+    vec.infallibleAppend(NumberValue(iter.readNumber()));
   }
 
   RootedValue result(cx);
@@ -1265,7 +1619,7 @@ bool MSign::writeRecoverData(CompactBufferWriter& writer) const {
 RSign::RSign(CompactBufferReader& reader) {}
 
 bool RSign::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::math_sign_impl(num);
 
   iter.storeInstructionResult(NumberValue(result));
@@ -1322,7 +1676,7 @@ RMathFunction::RMathFunction(CompactBufferReader& reader) {
 }
 
 bool RMathFunction::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
 
   double result;
   switch (function_) {
@@ -1431,8 +1785,8 @@ bool MStringSplit::writeRecoverData(CompactBufferWriter& writer) const {
 RStringSplit::RStringSplit(CompactBufferReader& reader) {}
 
 bool RStringSplit::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedString str(cx, iter.read().toString());
-  RootedString sep(cx, iter.read().toString());
+  RootedString str(cx, iter.readString());
+  RootedString sep(cx, iter.readString());
 
   JSObject* res = StringSplitString(cx, str, sep, INT32_MAX);
   if (!res) {
@@ -1452,7 +1806,7 @@ bool MNaNToZero::writeRecoverData(CompactBufferWriter& writer) const {
 RNaNToZero::RNaNToZero(CompactBufferReader& reader) {}
 
 bool RNaNToZero::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double v = iter.read().toNumber();
+  double v = iter.readNumber();
   if (std::isnan(v) || mozilla::IsNegativeZero(v)) {
     v = 0.0;
   }
@@ -1470,9 +1824,11 @@ bool MRegExpMatcher::writeRecoverData(CompactBufferWriter& writer) const {
 RRegExpMatcher::RRegExpMatcher(CompactBufferReader& reader) {}
 
 bool RRegExpMatcher::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject regexp(cx, &iter.read().toObject());
-  RootedString input(cx, iter.read().toString());
-  int32_t lastIndex = iter.read().toInt32();
+  RootedObject regexp(cx, iter.readObject());
+  RootedString input(cx, iter.readString());
+
+  // Int32 because |lastIndex| is computed from transpiled self-hosted call.
+  int32_t lastIndex = iter.readInt32();
 
   RootedValue result(cx);
   if (!RegExpMatcherRaw(cx, regexp, input, lastIndex, nullptr, &result)) {
@@ -1507,7 +1863,8 @@ bool MTypeOfName::writeRecoverData(CompactBufferWriter& writer) const {
 RTypeOfName::RTypeOfName(CompactBufferReader& reader) {}
 
 bool RTypeOfName::recover(JSContext* cx, SnapshotIterator& iter) const {
-  int32_t type = iter.read().toInt32();
+  // Int32 because |type| is computed from MTypeOf.
+  int32_t type = iter.readInt32();
   MOZ_ASSERT(JSTYPE_UNDEFINED <= type && type < JSTYPE_LIMIT);
 
   JSString* name = TypeName(JSType(type), *cx->runtime()->commonNames);
@@ -1548,8 +1905,24 @@ bool MToFloat32::writeRecoverData(CompactBufferWriter& writer) const {
 RToFloat32::RToFloat32(CompactBufferReader& reader) {}
 
 bool RToFloat32::recover(JSContext* cx, SnapshotIterator& iter) const {
-  double num = iter.read().toNumber();
+  double num = iter.readNumber();
   double result = js::RoundFloat32(num);
+
+  iter.storeInstructionResult(DoubleValue(result));
+  return true;
+}
+
+bool MToFloat16::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_ToFloat16));
+  return true;
+}
+
+RToFloat16::RToFloat16(CompactBufferReader& reader) {}
+
+bool RToFloat16::recover(JSContext* cx, SnapshotIterator& iter) const {
+  double num = iter.readNumber();
+  double result = js::RoundFloat16(num);
 
   iter.storeInstructionResult(DoubleValue(result));
   return true;
@@ -1588,7 +1961,7 @@ bool MNewObject::writeRecoverData(CompactBufferWriter& writer) const {
 RNewObject::RNewObject(CompactBufferReader& reader) {}
 
 bool RNewObject::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject templateObject(cx, &iter.read().toObject());
+  RootedObject templateObject(cx, iter.readObject());
 
   // See CodeGenerator::visitNewObjectVMCall.
   // Note that recover instructions are only used if mode == ObjectCreate.
@@ -1622,8 +1995,7 @@ RNewPlainObject::RNewPlainObject(CompactBufferReader& reader) {
 }
 
 bool RNewPlainObject::recover(JSContext* cx, SnapshotIterator& iter) const {
-  Rooted<SharedShape*> shape(cx,
-                             &iter.read().toGCCellPtr().as<Shape>().asShared());
+  Rooted<SharedShape*> shape(cx, &iter.readGCCellPtr().as<Shape>().asShared());
 
   // See CodeGenerator::visitNewPlainObject.
   JSObject* resultObject =
@@ -1676,7 +2048,7 @@ bool MNewTypedArray::writeRecoverData(CompactBufferWriter& writer) const {
 RNewTypedArray::RNewTypedArray(CompactBufferReader& reader) {}
 
 bool RNewTypedArray::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject templateObject(cx, &iter.read().toObject());
+  RootedObject templateObject(cx, iter.readObject());
 
   size_t length = templateObject.as<FixedLengthTypedArrayObject>()->length();
   MOZ_ASSERT(length <= INT32_MAX,
@@ -1704,7 +2076,7 @@ RNewArray::RNewArray(CompactBufferReader& reader) {
 }
 
 bool RNewArray::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject templateObject(cx, &iter.read().toObject());
+  RootedObject templateObject(cx, iter.readObject());
   Rooted<Shape*> shape(cx, templateObject->shape());
 
   ArrayObject* resultObject = NewArrayWithShape(cx, count_, shape);
@@ -1728,7 +2100,7 @@ RNewIterator::RNewIterator(CompactBufferReader& reader) {
 }
 
 bool RNewIterator::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject templateObject(cx, &iter.read().toObject());
+  RootedObject templateObject(cx, iter.readObject());
 
   JSObject* resultObject = nullptr;
   switch (MNewIterator::Type(type_)) {
@@ -1760,8 +2132,8 @@ bool MLambda::writeRecoverData(CompactBufferWriter& writer) const {
 RLambda::RLambda(CompactBufferReader& reader) {}
 
 bool RLambda::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject scopeChain(cx, &iter.read().toObject());
-  RootedFunction fun(cx, &iter.read().toObject().as<JSFunction>());
+  RootedObject scopeChain(cx, iter.readObject());
+  RootedFunction fun(cx, &iter.readObject()->as<JSFunction>());
 
   JSObject* resultObject = js::Lambda(cx, fun, scopeChain);
   if (!resultObject) {
@@ -1781,9 +2153,9 @@ bool MFunctionWithProto::writeRecoverData(CompactBufferWriter& writer) const {
 RFunctionWithProto::RFunctionWithProto(CompactBufferReader& reader) {}
 
 bool RFunctionWithProto::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject scopeChain(cx, &iter.read().toObject());
-  RootedObject prototype(cx, &iter.read().toObject());
-  RootedFunction fun(cx, &iter.read().toObject().as<JSFunction>());
+  RootedObject scopeChain(cx, iter.readObject());
+  RootedObject prototype(cx, iter.readObject());
+  RootedFunction fun(cx, &iter.readObject()->as<JSFunction>());
 
   JSObject* resultObject =
       js::FunWithProtoOperation(cx, fun, scopeChain, prototype);
@@ -1804,7 +2176,7 @@ bool MNewCallObject::writeRecoverData(CompactBufferWriter& writer) const {
 RNewCallObject::RNewCallObject(CompactBufferReader& reader) {}
 
 bool RNewCallObject::recover(JSContext* cx, SnapshotIterator& iter) const {
-  Rooted<CallObject*> templateObj(cx, &iter.read().toObject().as<CallObject>());
+  Rooted<CallObject*> templateObj(cx, &iter.readObject()->as<CallObject>());
 
   Rooted<SharedShape*> shape(cx, templateObj->sharedShape());
 
@@ -1832,7 +2204,7 @@ bool MObjectKeys::writeRecoverData(CompactBufferWriter& writer) const {
 RObjectKeys::RObjectKeys(CompactBufferReader& reader) {}
 
 bool RObjectKeys::recover(JSContext* cx, SnapshotIterator& iter) const {
-  Rooted<JSObject*> obj(cx, &iter.read().toObject());
+  Rooted<JSObject*> obj(cx, iter.readObject());
 
   JSObject* resultKeys = ObjectKeys(cx, obj);
   if (!resultKeys) {
@@ -1855,7 +2227,7 @@ RObjectState::RObjectState(CompactBufferReader& reader) {
 }
 
 bool RObjectState::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject object(cx, &iter.read().toObject());
+  RootedObject object(cx, iter.readObject());
   Handle<NativeObject*> nativeObject = object.as<NativeObject>();
   MOZ_ASSERT(!Watchtower::watchesPropertyModification(nativeObject));
   MOZ_ASSERT(nativeObject->slotSpan() == numSlots());
@@ -1881,8 +2253,10 @@ RArrayState::RArrayState(CompactBufferReader& reader) {
 }
 
 bool RArrayState::recover(JSContext* cx, SnapshotIterator& iter) const {
-  ArrayObject* object = &iter.read().toObject().as<ArrayObject>();
-  uint32_t initLength = iter.read().toInt32();
+  ArrayObject* object = &iter.readObject()->as<ArrayObject>();
+
+  // Int32 because |initLength| is computed from MConstant.
+  uint32_t initLength = iter.readInt32();
 
   MOZ_ASSERT(object->getDenseInitializedLength() == 0,
              "initDenseElement call below relies on this");
@@ -1900,37 +2274,6 @@ bool RArrayState::recover(JSContext* cx, SnapshotIterator& iter) const {
   }
 
   iter.storeInstructionResult(ObjectValue(*object));
-  return true;
-}
-
-bool MSetArrayLength::writeRecoverData(CompactBufferWriter& writer) const {
-  MOZ_ASSERT(canRecoverOnBailout());
-  // For simplicity, we capture directly the object instead of the elements
-  // pointer.
-  MOZ_ASSERT(elements()->type() != MIRType::Elements);
-  writer.writeUnsigned(uint32_t(RInstruction::Recover_SetArrayLength));
-  return true;
-}
-
-bool MSetArrayLength::canRecoverOnBailout() const {
-  return isRecoveredOnBailout();
-}
-
-RSetArrayLength::RSetArrayLength(CompactBufferReader& reader) {}
-
-bool RSetArrayLength::recover(JSContext* cx, SnapshotIterator& iter) const {
-  Rooted<ArrayObject*> obj(cx, &iter.read().toObject().as<ArrayObject>());
-  RootedValue len(cx, iter.read());
-
-  RootedId id(cx, NameToId(cx->names().length));
-  Rooted<PropertyDescriptor> desc(
-      cx, PropertyDescriptor::Data(len, JS::PropertyAttribute::Writable));
-  ObjectOpResult error;
-  if (!ArraySetLength(cx, obj, id, desc, error)) {
-    return false;
-  }
-
-  iter.storeInstructionResult(ObjectValue(*obj));
   return true;
 }
 
@@ -1966,9 +2309,9 @@ RStringReplace::RStringReplace(CompactBufferReader& reader) {
 }
 
 bool RStringReplace::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedString string(cx, iter.read().toString());
-  RootedString pattern(cx, iter.read().toString());
-  RootedString replace(cx, iter.read().toString());
+  RootedString string(cx, iter.readString());
+  RootedString pattern(cx, iter.readString());
+  RootedString replace(cx, iter.readString());
 
   JSString* result =
       isFlatReplacement_
@@ -1992,9 +2335,20 @@ bool MSubstr::writeRecoverData(CompactBufferWriter& writer) const {
 RSubstr::RSubstr(CompactBufferReader& reader) {}
 
 bool RSubstr::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedString str(cx, iter.read().toString());
-  int32_t begin = iter.read().toInt32();
-  int32_t length = iter.read().toInt32();
+  RootedString str(cx, iter.readString());
+
+  // Int32 because |begin| is computed from MStringTrimStartIndex, MConstant,
+  // or CallSubstringKernelResult.
+  int32_t begin = iter.readInt32();
+
+  // |length| is computed from MSub(truncated), MStringTrimEndIndex, or
+  // CallSubstringKernelResult. The current MSub inputs won't overflow, so when
+  // RSub recovers the MSub instruction, the input will be representable as an
+  // Int32. This is only true as long as RSub calls |js::SubOperation|, which in
+  // turn calls |JS::Value::setNumber|. We don't want to rely on this exact call
+  // sequence, so instead use |readNumber| here and then release-assert the
+  // number is exactly representable as an Int32.
+  int32_t length = mozilla::ReleaseAssertedCast<int32_t>(iter.readNumber());
 
   JSString* result = SubstringKernel(cx, str, begin, length);
   if (!result) {
@@ -2014,11 +2368,40 @@ bool MAtomicIsLockFree::writeRecoverData(CompactBufferWriter& writer) const {
 RAtomicIsLockFree::RAtomicIsLockFree(CompactBufferReader& reader) {}
 
 bool RAtomicIsLockFree::recover(JSContext* cx, SnapshotIterator& iter) const {
-  Value operand = iter.read();
-  MOZ_ASSERT(operand.isInt32());
+  double dsize = JS::ToInteger(iter.readNumber());
 
-  bool result = AtomicOperations::isLockfreeJS(operand.toInt32());
+  int32_t size;
+  bool result = mozilla::NumberEqualsInt32(dsize, &size) &&
+                AtomicOperations::isLockfreeJS(size);
   iter.storeInstructionResult(BooleanValue(result));
+  return true;
+}
+
+bool MInt64ToBigInt::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_Int64ToBigInt));
+  writer.writeByte(isSigned());
+  return true;
+}
+
+RInt64ToBigInt::RInt64ToBigInt(CompactBufferReader& reader) {
+  isSigned_ = bool(reader.readByte());
+}
+
+bool RInt64ToBigInt::recover(JSContext* cx, SnapshotIterator& iter) const {
+  int64_t n = iter.readInt64();
+
+  BigInt* result;
+  if (isSigned_) {
+    result = BigInt::createFromInt64(cx, n);
+  } else {
+    result = BigInt::createFromUint64(cx, uint64_t(n));
+  }
+  if (!result) {
+    return false;
+  }
+
+  iter.storeInstructionResult(JS::BigIntValue(result));
   return true;
 }
 
@@ -2031,10 +2414,12 @@ bool MBigIntAsIntN::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntAsIntN::RBigIntAsIntN(CompactBufferReader& reader) {}
 
 bool RBigIntAsIntN::recover(JSContext* cx, SnapshotIterator& iter) const {
-  int32_t bits = iter.read().toInt32();
-  RootedBigInt input(cx, iter.read().toBigInt());
-
+  // Int32 because |bits| is computed from MGuardInt32IsNonNegative.
+  int32_t bits = iter.readInt32();
   MOZ_ASSERT(bits >= 0);
+
+  RootedBigInt input(cx, iter.readBigInt());
+
   BigInt* result = BigInt::asIntN(cx, input, bits);
   if (!result) {
     return false;
@@ -2053,10 +2438,12 @@ bool MBigIntAsUintN::writeRecoverData(CompactBufferWriter& writer) const {
 RBigIntAsUintN::RBigIntAsUintN(CompactBufferReader& reader) {}
 
 bool RBigIntAsUintN::recover(JSContext* cx, SnapshotIterator& iter) const {
-  int32_t bits = iter.read().toInt32();
-  RootedBigInt input(cx, iter.read().toBigInt());
-
+  // Int32 because |bits| is computed from MGuardInt32IsNonNegative.
+  int32_t bits = iter.readInt32();
   MOZ_ASSERT(bits >= 0);
+
+  RootedBigInt input(cx, iter.readBigInt());
+
   BigInt* result = BigInt::asUintN(cx, input, bits);
   if (!result) {
     return false;
@@ -2077,7 +2464,7 @@ RCreateArgumentsObject::RCreateArgumentsObject(CompactBufferReader& reader) {}
 
 bool RCreateArgumentsObject::recover(JSContext* cx,
                                      SnapshotIterator& iter) const {
-  RootedObject callObject(cx, &iter.read().toObject());
+  RootedObject callObject(cx, iter.readObject());
   RootedObject result(
       cx, ArgumentsObject::createForIon(cx, iter.frame(), callObject));
   if (!result) {
@@ -2104,8 +2491,8 @@ RCreateInlinedArgumentsObject::RCreateInlinedArgumentsObject(
 
 bool RCreateInlinedArgumentsObject::recover(JSContext* cx,
                                             SnapshotIterator& iter) const {
-  RootedObject callObject(cx, &iter.read().toObject());
-  RootedFunction callee(cx, &iter.read().toObject().as<JSFunction>());
+  RootedObject callObject(cx, iter.readObject());
+  RootedFunction callee(cx, &iter.readObject()->as<JSFunction>());
 
   JS::RootedValueArray<ArgumentsObject::MaxInlinedArgs> argsArray(cx);
   for (uint32_t i = 0; i < numActuals_; i++) {
@@ -2136,7 +2523,8 @@ RRest::RRest(CompactBufferReader& reader) {
 bool RRest::recover(JSContext* cx, SnapshotIterator& iter) const {
   JitFrameLayout* frame = iter.frame();
 
-  uint32_t numActuals = iter.read().toInt32();
+  // Int32 because |numActuals| is computed from MArgumentsLength.
+  uint32_t numActuals = iter.readInt32();
   MOZ_ASSERT(numActuals == frame->numActualArgs());
 
   uint32_t numFormals = numFormals_;

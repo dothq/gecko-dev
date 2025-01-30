@@ -6,7 +6,7 @@
 
 import expect from 'expect';
 
-import {getTestState, setupTestBrowserHooks} from './mocha-utils.js';
+import {getTestState, launch, setupTestBrowserHooks} from './mocha-utils.js';
 
 describe('Browser specs', function () {
   setupTestBrowserHooks();
@@ -33,6 +33,17 @@ describe('Browser specs', function () {
         expect(userAgent).toContain('Gecko');
       }
     });
+    it('should include Browser name', async () => {
+      const {browser, isChrome} = await getTestState();
+
+      const userAgent = await browser.userAgent();
+      expect(userAgent.length).toBeGreaterThan(0);
+      if (isChrome) {
+        expect(userAgent).toContain('Chrome');
+      } else {
+        expect(userAgent).toContain('Firefox');
+      }
+    });
   });
 
   describe('Browser.target', function () {
@@ -57,12 +68,28 @@ describe('Browser specs', function () {
       });
 
       const browserWSEndpoint = browser.wsEndpoint();
-      const remoteBrowser = await puppeteer.connect({
+      using remoteBrowser = await puppeteer.connect({
         browserWSEndpoint,
         protocol: browser.protocol,
       });
       expect(remoteBrowser.process()).toBe(null);
-      await remoteBrowser.disconnect();
+    });
+    it('should keep connected after the last page is closed', async () => {
+      const {browser, close} = await launch({}, {createContext: false});
+      try {
+        const pages = await browser.pages();
+        await Promise.all(
+          pages.map(page => {
+            return page.close();
+          })
+        );
+        // Verify the browser is still connected.
+        expect(browser.connected).toBe(true);
+        // Verify the browser can open a new page.
+        await browser.newPage();
+      } finally {
+        await close();
+      }
     });
   });
 
@@ -73,7 +100,7 @@ describe('Browser specs', function () {
       });
 
       const browserWSEndpoint = browser.wsEndpoint();
-      const newBrowser = await puppeteer.connect({
+      using newBrowser = await puppeteer.connect({
         browserWSEndpoint,
         protocol: browser.protocol,
       });

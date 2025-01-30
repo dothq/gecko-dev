@@ -321,7 +321,7 @@ nsresult nsSiteSecurityService::SetHSTSState(
   nsAutoCString stateString;
   siteState.ToString(stateString);
   SSSLOG(("SSS: setting state for %s", hostname.get()));
-  bool isPrivate = aOriginAttributes.mPrivateBrowsingId > 0;
+  bool isPrivate = aOriginAttributes.IsPrivateBrowsing();
   nsIDataStorage::DataType storageType =
       isPrivate ? nsIDataStorage::DataType::Private
                 : nsIDataStorage::DataType::Persistent;
@@ -364,7 +364,7 @@ nsresult nsSiteSecurityService::SetHSTSState(
 // using the preloaded information.
 nsresult nsSiteSecurityService::MarkHostAsNotHSTS(
     const nsAutoCString& aHost, const OriginAttributes& aOriginAttributes) {
-  bool isPrivate = aOriginAttributes.mPrivateBrowsingId > 0;
+  bool isPrivate = aOriginAttributes.IsPrivateBrowsing();
   nsIDataStorage::DataType storageType =
       isPrivate ? nsIDataStorage::DataType::Private
                 : nsIDataStorage::DataType::Persistent;
@@ -492,7 +492,7 @@ nsresult nsSiteSecurityService::ResetStateInternal(
 
 void nsSiteSecurityService::ResetStateForExactDomain(
     const nsCString& aHostname, const OriginAttributes& aOriginAttributes) {
-  bool isPrivate = aOriginAttributes.mPrivateBrowsingId > 0;
+  bool isPrivate = aOriginAttributes.IsPrivateBrowsing();
   nsIDataStorage::DataType storageType =
       isPrivate ? nsIDataStorage::DataType::Private
                 : nsIDataStorage::DataType::Persistent;
@@ -610,7 +610,12 @@ static uint32_t ParseSSSHeaders(const nsCString& aHeader,
       SSSLOG(("SSS: found max-age directive"));
       foundMaxAge = true;
 
-      Tokenizer tokenizer(directive->mValue);
+      if (directive->mValue.isNothing()) {
+        SSSLOG(("SSS: max-age directive didn't include value"));
+        return nsISiteSecurityService::ERROR_INVALID_MAX_AGE;
+      }
+
+      Tokenizer tokenizer(*(directive->mValue));
       if (!tokenizer.ReadInteger(&maxAge)) {
         SSSLOG(("SSS: could not parse delta-seconds"));
         return nsISiteSecurityService::ERROR_INVALID_MAX_AGE;
@@ -631,9 +636,9 @@ static uint32_t ParseSSSHeaders(const nsCString& aHeader,
       SSSLOG(("SSS: found includeSubdomains directive"));
       foundIncludeSubdomains = true;
 
-      if (directive->mValue.Length() != 0) {
+      if (directive->mValue.isSome()) {
         SSSLOG(("SSS: includeSubdomains directive unexpectedly had value '%s'",
-                directive->mValue.get()));
+                directive->mValue->get()));
         return nsISiteSecurityService::ERROR_INVALID_INCLUDE_SUBDOMAINS;
       }
     } else {
@@ -859,7 +864,7 @@ nsresult nsSiteSecurityService::HostMatchesHSTSEntry(
   // Additionally, if it is a knockout entry, we want to stop looking for data
   // on the host, because the knockout entry indicates "we have no information
   // regarding the security status of this host".
-  bool isPrivate = aOriginAttributes.mPrivateBrowsingId > 0;
+  bool isPrivate = aOriginAttributes.IsPrivateBrowsing();
   nsIDataStorage::DataType storageType =
       isPrivate ? nsIDataStorage::DataType::Private
                 : nsIDataStorage::DataType::Persistent;

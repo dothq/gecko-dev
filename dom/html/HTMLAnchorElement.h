@@ -48,14 +48,14 @@ class HTMLAnchorElement final : public nsGenericHTMLElement,
 
   nsresult BindToTree(BindContext&, nsINode& aParent) override;
   void UnbindFromTree(UnbindContext&) override;
-  bool IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
+  bool IsHTMLFocusable(IsFocusableFlags, bool* aIsFocusable,
                        int32_t* aTabIndex) override;
 
   void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
   MOZ_CAN_RUN_SCRIPT
   nsresult PostHandleEvent(EventChainPostVisitor& aVisitor) override;
 
-  void GetLinkTarget(nsAString& aTarget) override;
+  void GetLinkTargetImpl(nsAString& aTarget) override;
   already_AddRefed<nsIURI> GetHrefURI() const override;
 
   void BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
@@ -68,11 +68,11 @@ class HTMLAnchorElement final : public nsGenericHTMLElement,
 
   // WebIDL API
 
-  void GetHref(nsAString& aValue) const {
+  void GetHref(nsACString& aValue) const {
     GetURIAttr(nsGkAtoms::href, nullptr, aValue);
   }
-  void SetHref(const nsAString& aValue, mozilla::ErrorResult& rv) {
-    SetHTMLAttr(nsGkAtoms::href, aValue, rv);
+  void SetHref(const nsACString& aValue, ErrorResult& aRv) {
+    SetHTMLAttr(nsGkAtoms::href, NS_ConvertUTF8toUTF16(aValue), aRv);
   }
   void GetTarget(nsAString& aValue) const;
   void SetTarget(const nsAString& aValue, mozilla::ErrorResult& rv) {
@@ -180,8 +180,6 @@ class HTMLAnchorElement final : public nsGenericHTMLElement,
   void SetShape(const nsAString& aValue, mozilla::ErrorResult& rv) {
     SetHTMLAttr(nsGkAtoms::shape, aValue, rv);
   }
-  void Stringify(nsAString& aResult) const { GetHref(aResult); }
-  void ToString(nsAString& aSource) const { GetHref(aSource); }
 
   void NodeInfoChanged(Document* aOldDoc) final {
     ClearHasPendingLinkUpdate();
@@ -190,6 +188,8 @@ class HTMLAnchorElement final : public nsGenericHTMLElement,
 
  protected:
   virtual ~HTMLAnchorElement();
+
+  void MaybeTryDNSPrefetch();
 
   JSObject* WrapNode(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
   RefPtr<nsDOMTokenList> mRelList;

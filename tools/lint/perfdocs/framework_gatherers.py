@@ -51,6 +51,38 @@ class FrameworkGatherer(object):
         self._task_list = {}
         self._task_match_pattern = re.compile(r"([\w\W]*/[pgo|opt]*)-([\w\W]*)")
 
+    def _build_section_with_header(self, title, content, header_type=None):
+        """
+        Adds a section to the documentation with the title as the type mentioned
+        and paragraph as content mentioned.
+        :param title: title of the section
+        :param content: content of section paragraph
+        :param header_type: type of the title heading
+        """
+        heading_map = {"H2": "*", "H3": "=", "H4": "-", "H5": "^"}
+        return [title, heading_map.get(header_type, "^") * len(title), content, ""]
+
+    def _get_metric_heading(self, metric, metrics_info):
+        """
+        Gets the heading of a specific metric.
+
+        :param str metric: The metric to search for.
+        :param dict metrics_info: The information of all the
+            metrics that were documented.
+        :return str: The heading to use for the given metric.
+        """
+        for metric_heading, metric_info in metrics_info.items():
+            if metric == metric_heading or any(
+                metric == alias for alias in metric_info.get("aliases", [])
+            ):
+                return metric_heading
+            if metric_info.get("matcher"):
+                match = re.search(metric_info["matcher"], metric)
+                if match:
+                    return metric_heading
+
+        raise Exception(f"Could not find a metric heading for `{metric}`")
+
     def get_task_match(self, task_name):
         return re.search(self._task_match_pattern, task_name)
 
@@ -85,16 +117,41 @@ class FrameworkGatherer(object):
         """
         raise NotImplementedError
 
-    def _build_section_with_header(self, title, content, header_type=None):
+    def build_metrics_documentation(self, yaml_content):
         """
-        Adds a section to the documentation with the title as the type mentioned
-        and paragraph as content mentioned.
-        :param title: title of the section
-        :param content: content of section paragraph
-        :param header_type: type of the title heading
+        Each framework that provides a page with descriptions about the
+        metrics it produces must implement this method. The metrics defined
+        for the framework can be found in the `yaml_content` variable.
+
+        The framework gatherer is expected to produce the full documentation
+        for all the metrics defined in the yaml_content at once. This is done
+        to allow differentiation between how metrics are displayed between
+        the different frameworks.
+
+        :param dict yaml_content: A dictionary of the YAML config file for
+            the specific framework.
+        :return list: A list of all the lines being added to the metrics
+            documentation.
         """
-        heading_map = {"H2": "*", "H3": "=", "H4": "-", "H5": "^"}
-        return [title, heading_map.get(header_type, "^") * len(title), content, ""]
+        raise NotImplementedError
+
+    def build_command_to_run_locally(self, framework_command, title):
+        """
+        Each framework has specifics to running it locally. This command
+        passes arguments to this function to ensure we can construct those
+        commands consistently, and return it so it can be in the mozilla source docs.
+
+        :param str framework_command: A string that has the framework specific
+            commands needed to run tests
+        :param str title: A string of the test name, added on after the framework
+            specific commands (see above framework_command param:)
+        :return str: Returns the command to run locally, this output is added to
+            the mozilla source docs, and is formatted
+        """
+        command_to_run_locally = "   * Command to Run Locally\n\n"
+        command_to_run_locally += "   .. code-block::\n\n"
+        command_to_run_locally += f"      ./mach {framework_command} {title}\n\n"
+        return command_to_run_locally
 
 
 class RaptorGatherer(FrameworkGatherer):
@@ -140,7 +197,7 @@ class RaptorGatherer(FrameworkGatherer):
 
     def _get_ci_tasks(self):
         for task in self._taskgraph.keys():
-            if type(self._taskgraph[task]) == dict:
+            if type(self._taskgraph[task]) is dict:
                 command = self._taskgraph[task]["task"]["payload"].get("command", [])
                 run_on_projects = self._taskgraph[task]["attributes"]["run_on_projects"]
             else:
@@ -167,7 +224,9 @@ class RaptorGatherer(FrameworkGatherer):
         :return list: the list of the tests
         """
         desc_exclusion = ["here", "manifest_relpath", "path", "relpath"]
-        test_manifest = TestManifest([str(manifest_path)], strict=False)
+        test_manifest = TestManifest(
+            [str(manifest_path)], strict=False, document=True, add_line_no=True
+        )
         test_list = test_manifest.active_tests(exists=False, disabled=False)
         subtests = {}
         for subtest in test_list:
@@ -178,12 +237,32 @@ class RaptorGatherer(FrameworkGatherer):
                 if key not in desc_exclusion:
                     description[key] = value
 
+            # Add searchfox link
+            key = list(test_manifest.source_documents.keys())[0]
+
+            if (
+                test_manifest.source_documents[key]
+                and subtest["name"] in test_manifest.source_documents[key].keys()
+            ):
+                description["link searchfox"] = (
+                    "https://searchfox.org/mozilla-central/source/"
+                    + pathlib.Path(manifest_path).as_posix()
+                    + "#"
+                    + test_manifest.source_documents[key][subtest["name"]]["lineno"]
+                )
+
             # Prepare alerting metrics for verification
             description["metrics"] = [
                 metric.strip()
                 for metric in description.get("alert_on", "").split(",")
                 if metric.strip() != ""
             ]
+            if (
+                description.get("gather_cpuTime", None)
+                or "cpuTime" in description.get("measure", [])
+                or suite_name in ["desktop", "interactive", "mobile"]
+            ):
+                description["metrics"].append("cpuTime")
 
             subtests[subtest["name"]] = description
             self._descriptions.setdefault(suite_name, []).append(description)
@@ -191,6 +270,21 @@ class RaptorGatherer(FrameworkGatherer):
         self._descriptions[suite_name].sort(key=lambda item: item["name"])
 
         return subtests
+
+    def _get_metric_heading(self, metric, metrics_info):
+        """
+        Finds, and returns the correct heading for a metric to target in a reference link.
+
+        :param str metric: The metric to search for.
+        :param dict metrics_info: The information of all the
+            metrics that were documented.
+        :return str: A formatted string containing the reference link to the
+            documented metric.
+        """
+        metric_heading = super(RaptorGatherer, self)._get_metric_heading(
+            metric, metrics_info
+        )
+        return f"`{metric} <raptor-metrics.html#{metric_heading.lower().replace(' ', '-')}>`__"
 
     def get_test_list(self):
         """
@@ -221,12 +315,13 @@ class RaptorGatherer(FrameworkGatherer):
 
         return self._test_list
 
-    def build_test_description(self, title, test_description="", suite_name=""):
+    def build_test_description(
+        self, title, test_description="", suite_name="", metrics_info=None
+    ):
         matcher = []
         browsers = [
             "firefox",
             "chrome",
-            "chromium",
             "refbrow",
             "fennec68",
             "geckoview",
@@ -252,6 +347,7 @@ class RaptorGatherer(FrameworkGatherer):
 
         result = f".. dropdown:: {title}\n"
         result += f"   :class-container: anchor-id-{title}-{suite_name[0]}\n\n"
+        result += self.build_command_to_run_locally("raptor -t", title)
 
         for idx, description in enumerate(matcher):
             if description["name"] != title:
@@ -272,10 +368,24 @@ class RaptorGatherer(FrameworkGatherer):
                     result += f"   * **{sub_title}**: `<{description[key]}>`__\n"
                 elif key == "secondary_url":
                     result += f"   * **{sub_title}**: `<{description[key]}>`__\n"
+                elif key == "link searchfox":
+                    result += f"   * **{sub_title}**: `<{description[key]}>`__\n"
                 elif key in ["playback_pageset_manifest"]:
                     result += (
                         f"   * **{sub_title}**: "
                         f"{description[key].replace('{subtest}', description['name'])}\n"
+                    )
+                elif key == "alert_on":
+                    result += (
+                        f"   * **{sub_title}**: "
+                        + ", ".join(
+                            self._get_metric_heading(metric.strip(), metrics_info)
+                            for metric in description[key]
+                            .replace("\n", " ")
+                            .replace(",", " ")
+                            .split()
+                        )
+                        + "\n"
                     )
                 else:
                     if "\n" in description[key]:
@@ -298,9 +408,11 @@ class RaptorGatherer(FrameworkGatherer):
                     for task in self._task_list[title][platform]:
                         values = [task["test_name"]]
                         values += [
-                            "\u2705"
-                            if match_run_on_projects(x, task["run_on_projects"])
-                            else "\u274C"
+                            (
+                                "\u2705"
+                                if match_run_on_projects(x, task["run_on_projects"])
+                                else "\u274C"
+                            )
                             for x in BRANCHES
                         ]
                         table.add_row(values)
@@ -312,6 +424,40 @@ class RaptorGatherer(FrameworkGatherer):
         return self._build_section_with_header(
             title.capitalize(), content, header_type="H4"
         )
+
+    def build_metrics_documentation(self, parsed_metrics):
+        metrics_documentation = []
+        for metric, metric_info in sorted(
+            parsed_metrics.items(), key=lambda item: item[0]
+        ):
+            metric_content = metric_info["description"] + "\n\n"
+
+            metric_content += (
+                f"  * **Aliases**: {', '.join(sorted(metric_info['aliases']))}\n"
+            )
+            if metric_info.get("location", None):
+                metric_content += "  * **Tests using it**:\n"
+
+                for suite, tests in sorted(
+                    metric_info["location"].items(), key=lambda item: item[0]
+                ):
+                    metric_content += f"     * **{suite.capitalize()}**: "
+
+                    test_links = []
+                    for test in sorted(tests):
+                        test_links.append(
+                            f"`{test} <raptor.html#{test}-{suite.lower()[0]}>`__"
+                        )
+
+                    metric_content += ", ".join(test_links) + "\n"
+
+            metrics_documentation.extend(
+                self._build_section_with_header(
+                    metric, metric_content, header_type="H3"
+                )
+            )
+
+        return metrics_documentation
 
 
 class MozperftestGatherer(FrameworkGatherer):
@@ -331,7 +477,7 @@ class MozperftestGatherer(FrameworkGatherer):
             }
         """
         for path in list(pathlib.Path(self.workspace_dir).rglob("perftest.toml")):
-            if "obj-" in str(path):
+            if "obj-" in str(path) or "objdir-" in str(path):
                 continue
             suite_name = str(path.parent).replace(str(self.workspace_dir), "")
 
@@ -346,17 +492,19 @@ class MozperftestGatherer(FrameworkGatherer):
 
             # Get the tests from perftest.toml
             test_manifest = TestManifest([str(path)], strict=False)
-            test_list = test_manifest.active_tests(exists=False, disabled=False)
+            test_list = test_manifest.active_tests(exists=False, disabled=True)
             for test in test_list:
                 si = ScriptInfo(test["path"])
-                self.script_infos[si["name"]] = si
+                self.script_infos[si["name"].replace(".", "")] = si
                 self._test_list.setdefault(suite_name.replace("\\", "/"), {}).update(
-                    {si["name"]: {"path": str(path)}}
+                    {si["name"].replace(".", ""): {"path": str(path)}}
                 )
 
         return self._test_list
 
-    def build_test_description(self, title, test_description="", suite_name=""):
+    def build_test_description(
+        self, title, test_description="", suite_name="", metrics_info=None
+    ):
         return [str(self.script_infos[title])]
 
     def build_suite_section(self, title, content):
@@ -373,7 +521,7 @@ class TalosGatherer(FrameworkGatherer):
         for task_name in self._taskgraph.keys():
             task = self._taskgraph[task_name]
 
-            if type(task) == dict:
+            if type(task) is dict:
                 is_talos = task["task"]["extra"].get("suite", [])
                 command = task["task"]["payload"].get("command", [])
                 run_on_projects = task["attributes"]["run_on_projects"]
@@ -413,9 +561,12 @@ class TalosGatherer(FrameworkGatherer):
 
         return self._test_list
 
-    def build_test_description(self, title, test_description="", suite_name=""):
+    def build_test_description(
+        self, title, test_description="", suite_name="", metrics_info=None
+    ):
         result = f".. dropdown:: {title}\n"
         result += f"   :class-container: anchor-id-{title}\n\n"
+        result += self.build_command_to_run_locally("talos-test -a", title)
 
         yml_descriptions = [s.strip() for s in test_description.split("- ") if s]
         for description in yml_descriptions:
@@ -454,11 +605,6 @@ class TalosGatherer(FrameworkGatherer):
                             value[k] = str(v).replace("\\", r"/")
                 result += r"   * " + key + r": " + str(value) + r"\n"
 
-        # Command
-        result += "   * Command\n\n"
-        result += "   .. code-block::\n\n"
-        result += f"      ./mach talos-test -a {title}\n\n"
-
         if self._task_list.get(title, []):
             result += "   * **Test Task**:\n\n"
             for platform in sorted(self._task_list[title]):
@@ -475,9 +621,11 @@ class TalosGatherer(FrameworkGatherer):
                 for task in self._task_list[title][platform]:
                     values = [task["test_name"]]
                     values += [
-                        "\u2705"
-                        if match_run_on_projects(x, task["run_on_projects"])
-                        else "\u274C"
+                        (
+                            "\u2705"
+                            if match_run_on_projects(x, task["run_on_projects"])
+                            else "\u274C"
+                        )
                         for x in BRANCHES
                     ]
                     table.add_row(values)
@@ -498,7 +646,7 @@ class AwsyGatherer(FrameworkGatherer):
         for task_name in self._taskgraph.keys():
             task = self._taskgraph[task_name]
 
-            if type(task) == dict:
+            if type(task) is dict:
                 awsy_test = task["task"]["extra"].get("suite", [])
                 run_on_projects = task["attributes"]["run_on_projects"]
             else:
@@ -533,10 +681,15 @@ class AwsyGatherer(FrameworkGatherer):
             title.capitalize(), content, header_type="H4"
         )
 
-    def build_test_description(self, title, test_description="", suite_name=""):
+    def build_test_description(
+        self, title, test_description="", suite_name="", metrics_info=None
+    ):
         dropdown_suite_name = suite_name.replace(" ", "-")
         result = f".. dropdown:: {title} ({test_description})\n"
         result += f"   :class-container: anchor-id-{title}-{dropdown_suite_name}\n\n"
+        result += self.build_command_to_run_locally(
+            "awsy-test", "" if title == "tp6" else f"--{title}"
+        )
 
         awsy_data = read_yaml(self._yaml_path)["suites"]["Awsy tests"]
         if "owner" in awsy_data.keys():

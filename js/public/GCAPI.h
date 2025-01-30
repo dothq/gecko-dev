@@ -28,13 +28,14 @@ namespace js {
 namespace gc {
 class GCRuntime;
 }  // namespace gc
-class JS_PUBLIC_API SliceBudget;
 namespace gcstats {
 struct Statistics;
 }  // namespace gcstats
 }  // namespace js
 
 namespace JS {
+
+class JS_PUBLIC_API SliceBudget;
 
 // Options used when starting a GC.
 enum class GCOptions : uint32_t {
@@ -262,14 +263,6 @@ typedef enum JSGCParamKey {
   JSGC_MIN_EMPTY_CHUNK_COUNT = 21,
 
   /**
-   * We never keep more than this many unused chunks in the free chunk pool.
-   *
-   * Pref: javascript.options.mem.gc_max_empty_chunk_count
-   * Default: MaxEmptyChunkCount
-   */
-  JSGC_MAX_EMPTY_CHUNK_COUNT = 22,
-
-  /**
    * Whether compacting GC is enabled.
    *
    * Pref: javascript.options.mem.gc_compacting
@@ -440,15 +433,9 @@ typedef enum JSGCParamKey {
   JSGC_URGENT_THRESHOLD_MB = 48,
 
   /**
-   * Set the number of threads to use for parallel marking, or zero to use the
-   * default.
-   *
-   * The actual number used is capped to the number of available helper threads.
-   *
-   * This is provided for testing purposes.
+   * Get the number of threads used for parallel marking.
    *
    * Pref: None.
-   * Default: 0 (no effect).
    */
   JSGC_MARKING_THREAD_COUNT = 49,
 
@@ -459,6 +446,54 @@ typedef enum JSGCParamKey {
    * Default: ParallelMarkingThresholdMB
    */
   JSGC_PARALLEL_MARKING_THRESHOLD_MB = 50,
+
+  /**
+   * Whether the semispace nursery is enabled.
+   *
+   * Pref: javascript.options.mem.gc_experimental_semispace_nursery
+   * Default: SemispaceNurseryEnabled
+   */
+  JSGC_SEMISPACE_NURSERY_ENABLED = 51,
+
+  /**
+   * Set the maximum number of threads to use for parallel marking, if enabled.
+   *
+   * The actual number used is calculated based on the number of available
+   * helper threads and can be found by getting the JSGC_MARKING_THREAD_COUNT
+   * parameter.
+   *
+   * Pref: javascript.options.mem.gc_max_parallel_marking_threads
+   * Default: 2.
+   */
+  JSGC_MAX_MARKING_THREADS = 52,
+
+  /**
+   * Whether to automatically generate missing allocation sites so data about
+   * them can be gathered.
+   *
+   * Pref: None, this is an internal engine feature.
+   * Default: false.
+   */
+  JSGC_GENERATE_MISSING_ALLOC_SITES = 53,
+
+  /**
+   * A number that is incremented every GC slice.
+   */
+  JSGC_SLICE_NUMBER = 54,
+
+  /**
+   * Whether the nursery is enabled.
+   *
+   * Pref: javascript.options.mem.gc_generational
+   * Default: true
+   */
+  JSGC_NURSERY_ENABLED = 55,
+
+  /*
+   * Whether we are in high frequency GC mode, where the time between
+   * collections is less than that specified by JSGC_HIGH_FREQUENCY_TIME_LIMIT.
+   */
+  JSGC_HIGH_FREQUENCY_MODE = 56,
 } JSGCParamKey;
 
 /*
@@ -476,12 +511,12 @@ typedef void (*JSTraceDataOp)(JSTracer* trc, void* data);
  * While tracing this should check the budget and return false if it has been
  * exceeded. When passed an unlimited budget it should always return true.
  */
-typedef bool (*JSGrayRootsTracer)(JSTracer* trc, js::SliceBudget& budget,
+typedef bool (*JSGrayRootsTracer)(JSTracer* trc, JS::SliceBudget& budget,
                                   void* data);
 
 typedef enum JSGCStatus { JSGC_BEGIN, JSGC_END } JSGCStatus;
 
-typedef void (*JSObjectsTenuredCallback)(JSContext* cx, void* data);
+typedef void (*JSObjectsTenuredCallback)(JS::GCContext* gcx, void* data);
 
 typedef enum JSFinalizeStatus {
   /**
@@ -749,7 +784,7 @@ extern JS_PUBLIC_API void NonIncrementalGC(JSContext* cx, JS::GCOptions options,
 extern JS_PUBLIC_API void StartIncrementalGC(JSContext* cx,
                                              JS::GCOptions options,
                                              GCReason reason,
-                                             const js::SliceBudget& budget);
+                                             const JS::SliceBudget& budget);
 
 /**
  * Perform a slice of an ongoing incremental collection. When this function
@@ -760,7 +795,7 @@ extern JS_PUBLIC_API void StartIncrementalGC(JSContext* cx,
  *       shorter than the requested interval.
  */
 extern JS_PUBLIC_API void IncrementalGCSlice(JSContext* cx, GCReason reason,
-                                             const js::SliceBudget& budget);
+                                             const JS::SliceBudget& budget);
 
 /**
  * Return whether an incremental GC has work to do on the foreground thread and
@@ -928,7 +963,7 @@ typedef void (*DoCycleCollectionCallback)(JSContext* cx);
 extern JS_PUBLIC_API DoCycleCollectionCallback
 SetDoCycleCollectionCallback(JSContext* cx, DoCycleCollectionCallback callback);
 
-using CreateSliceBudgetCallback = js::SliceBudget (*)(JS::GCReason reason,
+using CreateSliceBudgetCallback = JS::SliceBudget (*)(JS::GCReason reason,
                                                       int64_t millis);
 
 /**
@@ -941,14 +976,6 @@ using CreateSliceBudgetCallback = js::SliceBudget (*)(JS::GCReason reason,
  */
 extern JS_PUBLIC_API void SetCreateGCSliceBudgetCallback(
     JSContext* cx, CreateSliceBudgetCallback cb);
-
-/**
- * Incremental GC defaults to enabled, but may be disabled for testing or in
- * embeddings that have not yet implemented barriers on their native classes.
- * There is not currently a way to re-enable incremental GC once it has been
- * disabled on the runtime.
- */
-extern JS_PUBLIC_API void DisableIncrementalGC(JSContext* cx);
 
 /**
  * Returns true if incremental GC is enabled. Simply having incremental GC
@@ -1344,33 +1371,36 @@ namespace gc {
 extern JS_PUBLIC_API JSObject* NewMemoryInfoObject(JSContext* cx);
 
 /*
- * Run the finalizer of a nursery-allocated JSObject that is known to be dead.
+ * Get the GCContext for the current context.
  *
- * This is a dangerous operation - only use this if you know what you're doing!
- *
- * This is used by the browser to implement nursery-allocated wrapper cached
- * wrappers.
+ * This is here to allow the browser to call finalizers for dead nursery
+ * objects. This is a dangerous operation - only use this if you know what
+ * you're doing!
  */
-extern JS_PUBLIC_API void FinalizeDeadNurseryObject(JSContext* cx,
-                                                    JSObject* obj);
+extern JS_PUBLIC_API JS::GCContext* GetGCContext(JSContext* cx);
 
 } /* namespace gc */
 } /* namespace js */
 
 #ifdef JS_GC_ZEAL
 
-#  define JS_DEFAULT_ZEAL_FREQ 100
+namespace JS {
 
-extern JS_PUBLIC_API void JS_GetGCZealBits(JSContext* cx, uint32_t* zealBits,
-                                           uint32_t* frequency,
-                                           uint32_t* nextScheduled);
+static constexpr uint32_t ShellDefaultGCZealFrequency = 100;
+static constexpr uint32_t BrowserDefaultGCZealFrequency = 5000;
 
-extern JS_PUBLIC_API void JS_SetGCZeal(JSContext* cx, uint8_t zeal,
-                                       uint32_t frequency);
+extern JS_PUBLIC_API void GetGCZealBits(JSContext* cx, uint32_t* zealBits,
+                                        uint32_t* frequency,
+                                        uint32_t* nextScheduled);
 
-extern JS_PUBLIC_API void JS_UnsetGCZeal(JSContext* cx, uint8_t zeal);
+extern JS_PUBLIC_API void SetGCZeal(JSContext* cx, uint8_t zeal,
+                                    uint32_t frequency);
 
-extern JS_PUBLIC_API void JS_ScheduleGC(JSContext* cx, uint32_t count);
+extern JS_PUBLIC_API void UnsetGCZeal(JSContext* cx, uint8_t zeal);
+
+extern JS_PUBLIC_API void ScheduleGC(JSContext* cx, uint32_t count);
+
+}  // namespace JS
 
 #endif
 

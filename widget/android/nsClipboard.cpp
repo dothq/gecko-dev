@@ -76,7 +76,7 @@ nsresult nsClipboard::GetTextFromTransferable(nsITransferable* aTransferable,
 
 NS_IMETHODIMP
 nsClipboard::SetNativeClipboardData(nsITransferable* aTransferable,
-                                    int32_t aWhichClipboard) {
+                                    ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(aTransferable);
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
@@ -92,14 +92,16 @@ nsClipboard::SetNativeClipboardData(nsITransferable* aTransferable,
     return rv;
   }
 
+  bool isPrivate = aTransferable->GetIsPrivateData();
+
   if (!html.IsEmpty() &&
       java::Clipboard::SetHTML(java::GeckoAppShell::GetApplicationContext(),
-                               text, html)) {
+                               text, html, isPrivate)) {
     return NS_OK;
   }
   if (!text.IsEmpty() &&
       java::Clipboard::SetText(java::GeckoAppShell::GetApplicationContext(),
-                               text)) {
+                               text, isPrivate)) {
     return NS_OK;
   }
 
@@ -108,7 +110,7 @@ nsClipboard::SetNativeClipboardData(nsITransferable* aTransferable,
 
 NS_IMETHODIMP
 nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable,
-                                    int32_t aWhichClipboard) {
+                                    ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(aTransferable);
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
@@ -164,10 +166,10 @@ nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable,
     }
   }
 
-  return NS_ERROR_FAILURE;
+  return NS_OK;
 }
 
-nsresult nsClipboard::EmptyNativeClipboardData(int32_t aWhichClipboard) {
+nsresult nsClipboard::EmptyNativeClipboardData(ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
 
@@ -181,7 +183,7 @@ nsresult nsClipboard::EmptyNativeClipboardData(int32_t aWhichClipboard) {
 }
 
 mozilla::Result<int32_t, nsresult>
-nsClipboard::GetNativeClipboardSequenceNumber(int32_t aWhichClipboard) {
+nsClipboard::GetNativeClipboardSequenceNumber(ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
 
@@ -195,7 +197,7 @@ nsClipboard::GetNativeClipboardSequenceNumber(int32_t aWhichClipboard) {
 
 mozilla::Result<bool, nsresult>
 nsClipboard::HasNativeClipboardDataMatchingFlavors(
-    const nsTArray<nsCString>& aFlavorList, int32_t aWhichClipboard) {
+    const nsTArray<nsCString>& aFlavorList, ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
 

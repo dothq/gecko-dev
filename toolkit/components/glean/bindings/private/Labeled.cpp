@@ -31,9 +31,15 @@ already_AddRefed<GleanMetric> GleanLabeled::NamedGetter(const nsAString& aName,
 
   auto mirrorId = ScalarIdForMetric(mId);
   if (mirrorId) {
-    GetLabeledMirrorLock().apply([&](auto& lock) {
+    GetLabeledMirrorLock().apply([&](const auto& lock) {
       auto tuple = std::make_tuple<Telemetry::ScalarID, nsString>(
           mirrorId.extract(), nsString(aName));
+      lock.ref()->InsertOrUpdate(submetricId, std::move(tuple));
+    });
+  } else if (auto mirrorHgramId = HistogramIdForMetric(mId)) {
+    GetLabeledDistributionMirrorLock().apply([&](const auto& lock) {
+      auto tuple = std::make_tuple<Telemetry::HistogramID, nsCString>(
+          mirrorHgramId.extract(), nsCString(label));
       lock.ref()->InsertOrUpdate(submetricId, std::move(tuple));
     });
   }

@@ -17,6 +17,8 @@ class MacIOSurface;
 namespace mozilla {
 namespace layers {
 
+class GpuFence;
+
 /**
  * A TextureHost for shared MacIOSurface
  *
@@ -34,9 +36,10 @@ class MacIOSurfaceTextureHostOGL : public TextureHost {
   gfx::SurfaceFormat GetFormat() const override;
   gfx::SurfaceFormat GetReadFormat() const override;
 
-  already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override {
+  already_AddRefed<gfx::DataSourceSurface> GetAsSurface(
+      gfx::DataSourceSurface* aSurface) override {
     RefPtr<gfx::SourceSurface> surf =
-        CreateSourceSurfaceFromMacIOSurface(GetMacIOSurface());
+        CreateSourceSurfaceFromMacIOSurface(GetMacIOSurface(), aSurface);
     return surf->GetDataSurface();
   }
 
@@ -76,6 +79,7 @@ class MacIOSurfaceTextureHostOGL : public TextureHost {
  protected:
   RefPtr<GLTextureSource> mTextureSource;
   RefPtr<MacIOSurface> mSurface;
+  RefPtr<GpuFence> mGpuFence;
 };
 
 }  // namespace layers

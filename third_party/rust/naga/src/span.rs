@@ -11,6 +11,7 @@ pub struct Span {
 
 impl Span {
     pub const UNDEFINED: Self = Self { start: 0, end: 0 };
+
     /// Creates a new `Span` from a range of byte indices
     ///
     /// Note: end is exclusive, it doesn't belong to the `Span`
@@ -72,8 +73,8 @@ impl Span {
     pub fn location(&self, source: &str) -> SourceLocation {
         let prefix = &source[..self.start as usize];
         let line_number = prefix.matches('\n').count() as u32 + 1;
-        let line_start = prefix.rfind('\n').map(|pos| pos + 1).unwrap_or(0);
-        let line_position = source[line_start..self.start as usize].chars().count() as u32 + 1;
+        let line_start = prefix.rfind('\n').map(|pos| pos + 1).unwrap_or(0) as u32;
+        let line_position = self.start - line_start + 1;
 
         SourceLocation {
             line_number,
@@ -104,16 +105,17 @@ impl std::ops::Index<Span> for str {
 
 /// A human-readable representation for a span, tailored for text source.
 ///
-/// Corresponds to the positional members of [`GPUCompilationMessage`][gcm] from
-/// the WebGPU specification, except that `offset` and `length` are in bytes
-/// (UTF-8 code units), instead of UTF-16 code units.
+/// Roughly corresponds to the positional members of [`GPUCompilationMessage`][gcm] from
+/// the WebGPU specification, except
+/// - `offset` and `length` are in bytes (UTF-8 code units), instead of UTF-16 code units.
+/// - `line_position` is in bytes (UTF-8 code units), instead of UTF-16 code units.
 ///
 /// [gcm]: https://www.w3.org/TR/webgpu/#gpucompilationmessage
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SourceLocation {
     /// 1-based line number.
     pub line_number: u32,
-    /// 1-based column of the start of this span
+    /// 1-based column in code units (in bytes) of the start of the span.
     pub line_position: u32,
     /// 0-based Offset in code units (in bytes) of the start of the span.
     pub offset: u32,
@@ -135,7 +137,7 @@ impl<E> fmt::Display for WithSpan<E>
 where
     E: fmt::Display,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
@@ -237,7 +239,7 @@ impl<E> WithSpan<E> {
         Some(self.spans[0].0.location(source))
     }
 
-    fn diagnostic(&self) -> codespan_reporting::diagnostic::Diagnostic<()>
+    pub(crate) fn diagnostic(&self) -> codespan_reporting::diagnostic::Diagnostic<()>
     where
         E: Error,
     {
@@ -303,7 +305,7 @@ impl<E> WithSpan<E> {
         use term::termcolor::NoColor;
 
         let files = files::SimpleFile::new(path, source);
-        let config = codespan_reporting::term::Config::default();
+        let config = term::Config::default();
         let mut writer = NoColor::new(Vec::new());
         term::emit(&mut writer, &config, &files, &self.diagnostic()).expect("cannot write error");
         String::from_utf8(writer.into_inner()).unwrap()

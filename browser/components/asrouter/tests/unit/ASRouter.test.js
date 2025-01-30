@@ -48,9 +48,9 @@ describe("ASRouter", () => {
   let fakeAttributionCode;
   let fakeTargetingContext;
   let FakeToolbarBadgeHub;
-  let FakeToolbarPanelHub;
   let FakeMomentsPageHub;
   let ASRouterTargeting;
+  let gBrowser;
   let screenImpressions;
 
   function setMessageProviderPref(value) {
@@ -151,7 +151,6 @@ describe("ASRouter", () => {
           cfr: "",
           "message-groups": "",
           "messaging-experiments": "",
-          "whats-new-panel": "",
         },
         totalBookmarksCount: {},
         firefoxVersion: 80,
@@ -159,7 +158,6 @@ describe("ASRouter", () => {
         needsUpdate: {},
         hasPinnedTabs: false,
         hasAccessedFxAPanel: false,
-        isWhatsNewPanelEnabled: true,
         userPrefs: {
           cfrFeatures: true,
           cfrAddons: true,
@@ -172,6 +170,14 @@ describe("ASRouter", () => {
         scoreThreshold: 5000,
         isChinaRepack: false,
         userId: "adsf",
+      },
+    };
+    gBrowser = {
+      selectedBrowser: {
+        constructor: { name: "MozBrowser" },
+        get ownerGlobal() {
+          return { gBrowser };
+        },
       },
     };
 
@@ -203,12 +209,6 @@ describe("ASRouter", () => {
       writeAttributionFile: () => Promise.resolve(),
       getCachedAttributionData: sinon.stub(),
     };
-    FakeToolbarPanelHub = {
-      init: sandbox.stub(),
-      uninit: sandbox.stub(),
-      forceShowMessage: sandbox.stub(),
-      enableToolbarButton: sandbox.stub(),
-    };
     FakeToolbarBadgeHub = {
       init: sandbox.stub(),
       uninit: sandbox.stub(),
@@ -237,7 +237,7 @@ describe("ASRouter", () => {
       return features;
     }, {});
     globals.set({
-      // Testing framework doesn't know how to `defineLazyModuleGetters` so we're
+      // Testing framework doesn't know how to `defineESModuleGetters` so we're
       // importing these modules into the global scope ourselves.
       GroupsConfigurationProvider: { getMessages: () => Promise.resolve([]) },
       ASRouterPreferences,
@@ -245,14 +245,13 @@ describe("ASRouter", () => {
       ASRouterTargeting,
       ASRouterTriggerListeners,
       QueryCache,
-      gBrowser: { selectedBrowser: {} },
+      gBrowser,
       gURLBar: {},
       isSeparateAboutWelcome: true,
       AttributionCode: fakeAttributionCode,
       PanelTestProvider,
       MacAttribution: { applicationPath: "" },
       ToolbarBadgeHub: FakeToolbarBadgeHub,
-      ToolbarPanelHub: FakeToolbarPanelHub,
       MomentsPageHub: FakeMomentsPageHub,
       KintoHttpClient: class {
         bucket() {
@@ -354,7 +353,6 @@ describe("ASRouter", () => {
       // ASRouter init called in `beforeEach` block above
 
       assert.calledOnce(FakeToolbarBadgeHub.init);
-      assert.calledOnce(FakeToolbarPanelHub.init);
       assert.calledOnce(FakeMomentsPageHub.init);
 
       assert.calledWithExactly(
@@ -366,15 +364,6 @@ describe("ASRouter", () => {
           blockMessageById: Router.blockMessageById,
           sendTelemetry: Router.sendTelemetry,
           unblockMessageById: Router.unblockMessageById,
-        }
-      );
-
-      assert.calledWithExactly(
-        FakeToolbarPanelHub.init,
-        Router.waitForInitialized,
-        {
-          getMessages: Router.handleMessageRequest,
-          sendTelemetry: Router.sendTelemetry,
         }
       );
 
@@ -508,9 +497,9 @@ describe("ASRouter", () => {
       );
     });
     describe("lazily loading local test providers", () => {
-      afterEach(() => {
-        Router.uninit();
-      });
+      let justIdAndContent = ({ id, content }) => ({ id, content });
+      afterEach(() => Router.uninit());
+
       it("should add the local test providers on init if devtools are enabled", async () => {
         sandbox.stub(ASRouterPreferences, "devtoolsEnabled").get(() => true);
 
@@ -524,6 +513,38 @@ describe("ASRouter", () => {
         await createRouterAndInit();
 
         assert.notProperty(Router._localProviders, "PanelTestProvider");
+      });
+      it("should flatten experiment translated messages from local test providers if devtools are enabled...", async () => {
+        sandbox.stub(ASRouterPreferences, "devtoolsEnabled").get(() => true);
+
+        await createRouterAndInit();
+
+        assert.property(Router._localProviders, "PanelTestProvider");
+
+        expect(
+          Router.state.messages.map(justIdAndContent)
+        ).to.deep.include.members([
+          { id: "experimentL10n", content: { text: "UniqueText" } },
+        ]);
+      });
+      it("...but not if devtools are disabled", async () => {
+        sandbox.stub(ASRouterPreferences, "devtoolsEnabled").get(() => false);
+
+        await createRouterAndInit();
+
+        assert.notProperty(Router._localProviders, "PanelTestProvider");
+
+        let justIdAndContentMessages =
+          Router.state.messages.map(justIdAndContent);
+        expect(justIdAndContentMessages).not.to.deep.include.members([
+          { id: "experimentL10n", content: { text: "UniqueText" } },
+        ]);
+        expect(justIdAndContentMessages).to.deep.include.members([
+          {
+            id: "experimentL10n",
+            content: { text: { $l10n: { text: "UniqueText" } } },
+          },
+        ]);
       });
     });
   });
@@ -541,7 +562,7 @@ describe("ASRouter", () => {
         Router.onPrefChange
       );
     });
-    it("should send a AS_ROUTER_TARGETING_UPDATE message", async () => {
+    it("should call clearChildMessages (does nothing, see bug 1899028)", async () => {
       const messageTargeted = {
         id: "1",
         campaign: "foocampaign",
@@ -678,25 +699,10 @@ describe("ASRouter", () => {
       sandbox.stub(CFRPageActions, "addRecommendation");
       browser = {};
     });
-    it("should route whatsnew_panel_message message to the right hub", () => {
-      Router.routeCFRMessage(
-        { template: "whatsnew_panel_message" },
-        browser,
-        "",
-        true
-      );
-
-      assert.calledOnce(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(CFRPageActions.addRecommendation);
-      assert.notCalled(CFRPageActions.forceRecommendation);
-      assert.notCalled(FakeMomentsPageHub.executeAction);
-    });
     it("should route moments messages to the right hub", () => {
       Router.routeCFRMessage({ template: "update_action" }, browser, "", true);
 
       assert.calledOnce(FakeMomentsPageHub.executeAction);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
@@ -705,7 +711,6 @@ describe("ASRouter", () => {
       Router.routeCFRMessage({ template: "toolbar_badge" }, browser);
 
       assert.calledOnce(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -721,7 +726,6 @@ describe("ASRouter", () => {
       assert.calledOnce(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
     it("should route cfr_doorhanger message to the right hub force = false", () => {
@@ -733,7 +737,6 @@ describe("ASRouter", () => {
       );
 
       assert.calledOnce(CFRPageActions.addRecommendation);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -742,7 +745,6 @@ describe("ASRouter", () => {
       Router.routeCFRMessage({ template: "cfr_doorhanger" }, browser, {}, true);
 
       assert.calledOnce(CFRPageActions.forceRecommendation);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -759,7 +761,6 @@ describe("ASRouter", () => {
       const { args } = CFRPageActions.addRecommendation.firstCall;
       // Host should be null
       assert.isNull(args[1]);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -773,7 +774,6 @@ describe("ASRouter", () => {
       );
 
       assert.calledOnce(CFRPageActions.forceRecommendation);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -786,7 +786,6 @@ describe("ASRouter", () => {
         true
       );
 
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
@@ -961,7 +960,6 @@ describe("ASRouter", () => {
           type: "local",
           enabled: true,
           messages: [
-            "whatsnew_panel_message",
             "cfr_doorhanger",
             "toolbar_badge",
             "update_action",
@@ -993,14 +991,13 @@ describe("ASRouter", () => {
         .rejects("fake error");
       await createRouterAndInit();
       assert.calledWith(initParams.dispatchCFRAction, {
+        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
         data: {
           action: "asrouter_undesired_event",
+          message_id: "n/a",
           event: "ASR_RS_ERROR",
           event_context: "remotey-settingsy",
-          message_id: "n/a",
         },
-        meta: { from: "ActivityStream:Content", to: "ActivityStream:Main" },
-        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
       });
     });
     it("should dispatch undesired event if RemoteSettings returns no messages", async () => {
@@ -1008,14 +1005,13 @@ describe("ASRouter", () => {
         .stub(MessageLoaderUtils, "_getRemoteSettingsMessages")
         .resolves([]);
       assert.calledWith(initParams.dispatchCFRAction, {
+        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
         data: {
           action: "asrouter_undesired_event",
+          message_id: "n/a",
           event: "ASR_RS_NO_MESSAGES",
           event_context: "remotey-settingsy",
-          message_id: "n/a",
         },
-        meta: { from: "ActivityStream:Content", to: "ActivityStream:Main" },
-        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
       });
     });
     it("should download the attachment if RemoteSettings returns some messages", async () => {
@@ -1056,14 +1052,13 @@ describe("ASRouter", () => {
       await createRouterAndInit([provider]);
 
       assert.calledWith(initParams.dispatchCFRAction, {
+        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
         data: {
           action: "asrouter_undesired_event",
+          message_id: "n/a",
           event: "ASR_RS_NO_MESSAGES",
           event_context: "ms-language-packs",
-          message_id: "n/a",
         },
-        meta: { from: "ActivityStream:Content", to: "ActivityStream:Main" },
-        type: "AS_ROUTER_TELEMETRY_USER_EVENT",
       });
     });
   });
@@ -1271,43 +1266,6 @@ describe("ASRouter", () => {
         "messageImpressions",
         Router.state.messageImpressions
       );
-    });
-    it("should return all unblocked messages that match the template, trigger if returnAll=true", async () => {
-      const message1 = {
-        provider: "whats_new",
-        id: "1",
-        template: "whatsnew_panel_message",
-        trigger: { id: "whatsNewPanelOpened" },
-        groups: ["whats_new"],
-      };
-      const message2 = {
-        provider: "whats_new",
-        id: "2",
-        template: "whatsnew_panel_message",
-        trigger: { id: "whatsNewPanelOpened" },
-        groups: ["whats_new"],
-      };
-      const message3 = {
-        provider: "whats_new",
-        id: "3",
-        template: "badge",
-        groups: ["whats_new"],
-      };
-      ASRouterTargeting.findMatchingMessage.callsFake(() => [
-        message2,
-        message1,
-      ]);
-      await Router.setState({
-        messages: [message3, message2, message1],
-        providers: [{ id: "whats_new" }],
-      });
-      const result = await Router.handleMessageRequest({
-        template: "whatsnew_panel_message",
-        triggerId: "whatsNewPanelOpened",
-        returnAll: true,
-      });
-
-      assert.deepEqual(result, [message2, message1]);
     });
     it("should forward trigger param info", async () => {
       const trigger = {
@@ -1521,12 +1479,12 @@ describe("ASRouter", () => {
       assert.isEmpty(Router.state.messages.filter(Router.isUnblockedMessage));
     });
     it("should be able to add multiple items to the messageBlockList", async () => {
-      await await Router.blockMessageById(FAKE_BUNDLE.map(b => b.id));
+      await Router.blockMessageById(FAKE_BUNDLE.map(b => b.id));
       assert.isTrue(Router.state.messageBlockList.includes(FAKE_BUNDLE[0].id));
       assert.isTrue(Router.state.messageBlockList.includes(FAKE_BUNDLE[1].id));
     });
     it("should save the messageBlockList", async () => {
-      await await Router.blockMessageById(FAKE_BUNDLE.map(b => b.id));
+      await Router.blockMessageById(FAKE_BUNDLE.map(b => b.id));
       assert.calledWithExactly(Router._storage.set, "messageBlockList", [
         FAKE_BUNDLE[0].id,
         FAKE_BUNDLE[1].id,
@@ -1671,7 +1629,7 @@ describe("ASRouter", () => {
 
       await Router.sendTriggerMessage({
         tabId: 0,
-        browser: {},
+        browser: gBrowser.selectedBrowser,
         id: "firstRun",
       });
 
@@ -1681,7 +1639,7 @@ describe("ASRouter", () => {
         {
           id: "firstRun",
           param: undefined,
-          context: undefined,
+          context: { browserIsSelected: true },
         }
       );
     });
@@ -1752,7 +1710,7 @@ describe("ASRouter", () => {
         },
       ];
       sandbox.stub(Router, "handleMessageRequest").resolves(messages);
-      sandbox.spy(Services.telemetry, "recordEvent");
+      sandbox.spy(Glean.messagingExperiments.reachCfr, "record");
 
       await Router.sendTriggerMessage({
         tabId: 0,
@@ -1760,7 +1718,7 @@ describe("ASRouter", () => {
         id: "foo",
       });
 
-      assert.calledTwice(Services.telemetry.recordEvent);
+      assert.calledTwice(Glean.messagingExperiments.reachCfr.record);
     });
     it("should not record the Reach event if it's already sent", async () => {
       let messages = [
@@ -1775,14 +1733,14 @@ describe("ASRouter", () => {
         },
       ];
       sandbox.stub(Router, "handleMessageRequest").resolves(messages);
-      sandbox.spy(Services.telemetry, "recordEvent");
+      sandbox.spy(Glean.messagingExperiments.reachCfr, "record");
 
       await Router.sendTriggerMessage({
         tabId: 0,
         browser: {},
         id: "foo",
       });
-      assert.notCalled(Services.telemetry.recordEvent);
+      assert.notCalled(Glean.messagingExperiments.reachCfr.record);
     });
     it("should record the Exposure event for each valid feature", async () => {
       ["cfr_doorhanger", "update_action", "infobar", "spotlight"].forEach(
@@ -1851,33 +1809,6 @@ describe("ASRouter", () => {
         setAttributionString,
         "foo%3DFOO!%26bar%3DBAR%253F"
       );
-    });
-  });
-
-  describe("#forceWNPanel", () => {
-    let browser = {
-      ownerGlobal: {
-        document: new Document(),
-        PanelUI: {
-          showSubView: sinon.stub(),
-          panel: {
-            setAttribute: sinon.stub(),
-          },
-        },
-      },
-    };
-    let fakePanel = {
-      setAttribute: sinon.stub(),
-    };
-    sinon
-      .stub(browser.ownerGlobal.document, "getElementById")
-      .returns(fakePanel);
-
-    it("should call enableToolbarButton", async () => {
-      await Router.forceWNPanel(browser);
-      assert.calledOnce(FakeToolbarPanelHub.enableToolbarButton);
-      assert.calledOnce(browser.ownerGlobal.PanelUI.showSubView);
-      assert.calledWith(fakePanel.setAttribute, "noautohide", true);
     });
   });
 

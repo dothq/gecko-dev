@@ -259,6 +259,17 @@ class ToolboxToolbar extends Component {
         onKeyDown: event => {
           onKeyDown(event);
         },
+        onContextMenu: event => {
+          const menu = command.getContextMenu();
+          if (!menu) {
+            return;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+
+          menu.popup(event.screenX, event.screenY, window.parent.document);
+        },
       });
     });
 
@@ -320,6 +331,10 @@ class ToolboxToolbar extends Component {
       errorCount = "99+";
     }
 
+    const errorIconTooltip = this.props.toolbox.isSplitConsoleEnabled()
+      ? this.props.L10N.getStr("toolbox.errorCountButton.tooltip")
+      : this.props.L10N.getStr("toolbox.errorCountButtonConsoleTab.tooltip");
+
     return button(
       {
         id,
@@ -330,9 +345,7 @@ class ToolboxToolbar extends Component {
           }
         },
         title:
-          this.props.currentToolId !== "webconsole"
-            ? this.props.L10N.getStr("toolbox.errorCountButton.tooltip")
-            : null,
+          this.props.currentToolId !== "webconsole" ? errorIconTooltip : null,
       },
       errorCount
     );
@@ -355,8 +368,8 @@ class ToolboxToolbar extends Component {
 
     const items = [];
     toolbox.frameMap.forEach(frame => {
-      const label = toolbox.target.isWebExtension
-        ? toolbox.target.getExtensionPathName(frame.url)
+      const label = toolbox.commands.descriptorFront.isWebExtensionDescriptor
+        ? toolbox.getExtensionPathName(frame.url)
         : getUnicodeUrl(frame.url);
 
       const item = MenuItem({

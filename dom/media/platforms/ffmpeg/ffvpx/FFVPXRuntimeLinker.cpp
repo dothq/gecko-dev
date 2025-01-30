@@ -7,20 +7,18 @@
 #include "FFVPXRuntimeLinker.h"
 #include "FFmpegLibWrapper.h"
 #include "FFmpegLog.h"
-#include "BinaryPath.h"
 #include "mozilla/FileUtils.h"
+#include "mozilla/ToString.h"
 #include "nsLocalFile.h"
-#include "prmem.h"
+#include "nsXPCOMPrivate.h"
 #include "prlink.h"
-#ifdef XP_WIN
-#  include <windows.h>
-#endif
 
 namespace mozilla {
 
 template <int V>
 class FFmpegDecoderModule {
  public:
+  static void Init(FFmpegLibWrapper*);
   static already_AddRefed<PlatformDecoderModule> Create(FFmpegLibWrapper*);
 };
 
@@ -84,29 +82,37 @@ bool FFVPXRuntimeLinker::Init() {
   sFFVPXLib.LinkVAAPILibs();
 #endif
 
+#ifdef XP_WIN
+  PathString path =
+      GetLibraryFilePathname(LXUL_DLL, (PRFuncPtr)&FFVPXRuntimeLinker::Init);
+#else
+  PathString path =
+      GetLibraryFilePathname(XUL_DLL, (PRFuncPtr)&FFVPXRuntimeLinker::Init);
+#endif
+  if (path.IsEmpty()) {
+    return false;
+  }
   nsCOMPtr<nsIFile> libFile;
-  if (NS_FAILED(mozilla::BinaryPath::GetFile(getter_AddRefs(libFile)))) {
+  if (NS_FAILED(NS_NewPathStringLocalFile(path, getter_AddRefs(libFile)))) {
     return false;
   }
 
-#ifdef XP_DARWIN
-  if (!XRE_IsParentProcess() &&
-      (XRE_GetChildProcBinPathType(XRE_GetProcessType()) ==
-       BinPathType::PluginContainer)) {
-    // On macOS, PluginContainer processes have their binary in a
-    // plugin-container.app/Content/MacOS/ directory.
-    nsCOMPtr<nsIFile> parentDir1, parentDir2;
-    if (NS_FAILED(libFile->GetParent(getter_AddRefs(parentDir1)))) {
-      return false;
-    }
-    if (NS_FAILED(parentDir1->GetParent(getter_AddRefs(parentDir2)))) {
-      return false;
-    }
-    if (NS_FAILED(parentDir2->GetParent(getter_AddRefs(libFile)))) {
-      return false;
-    }
-  }
+  if (getenv("MOZ_RUN_GTEST")
+#ifdef FUZZING
+      || getenv("FUZZER")
 #endif
+  ) {
+    // The condition above is the same as in
+    // xpcom/glue/standalone/nsXPCOMGlue.cpp. This means we can't reach here
+    // without the gtest libxul being loaded. In turn, that means the path to
+    // libxul leads to a subdirectory of where the libmozav* libraries are, so
+    // we get the parent.
+    nsCOMPtr<nsIFile> parent;
+    if (NS_FAILED(libFile->GetParent(getter_AddRefs(parent)))) {
+      return false;
+    }
+    libFile = parent;
+  }
 
   if (NS_FAILED(libFile->SetNativeLeafName(MOZ_DLL_PREFIX
                                            "mozavutil" MOZ_DLL_SUFFIX ""_ns))) {
@@ -120,9 +126,10 @@ bool FFVPXRuntimeLinker::Init() {
   }
   sFFVPXLib.mAVCodecLib = MozAVLink(libFile);
   FFmpegLibWrapper::LinkResult res = sFFVPXLib.Link();
-  FFMPEGP_LOG("Link result: %s", FFmpegLibWrapper::LinkResultToString(res));
+  FFMPEGP_LOG("Link result: %s", ToString(res).c_str());
   if (res == FFmpegLibWrapper::LinkResult::Success) {
     sLinkStatus = LinkStatus_SUCCEEDED;
+    FFmpegDecoderModule<FFVPX_VERSION>::Init(&sFFVPXLib);
     return true;
   }
   return false;

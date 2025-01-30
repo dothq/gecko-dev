@@ -509,6 +509,11 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
   void NotifyInputData(const AudioDataValue* aBuffer, size_t aFrames,
                        TrackRate aRate, uint32_t aChannels,
                        uint32_t aAlreadyBuffered) override;
+  /* Called on the main thread after an AudioCallbackDriver has attempted an
+   * operation to set aRequestedParams on the cubeb stream. */
+  void NotifySetRequestedInputProcessingParamsResult(
+      AudioCallbackDriver* aDriver, int aGeneration,
+      Result<cubeb_input_processing_params, int>&& aResult) override;
   /* Called every time there are changes to input/output audio devices like
    * plug/unplug etc. This can be called on any thread, and posts a message to
    * the main thread so that it can post a message to the graph thread. */
@@ -571,7 +576,12 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
   void SetMaxOutputChannelCount(uint32_t aMaxChannelCount);
 
   double AudioOutputLatency();
-
+  /* Return whether the clock for the audio output device used for the AEC
+   * reverse stream might drift from the clock for this MediaTrackGraph. */
+  bool OutputForAECMightDrift() {
+    AssertOnGraphThread();
+    return mOutputDeviceForAEC != PrimaryOutputDeviceID();
+  }
   /**
    * The audio input channel count for a MediaTrackGraph is the max of all the
    * channel counts requested by the listeners. The max channel count is
@@ -775,10 +785,6 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
    * at this time.  This is behind mStateComputedTime during processing.
    */
   GraphTime mProcessedTime = 0;
-  /**
-   * The end of the current iteration. Only access on the graph thread.
-   */
-  GraphTime mIterationEndTime = 0;
   /**
    * The graph should stop processing at this time.
    */
@@ -1115,12 +1121,14 @@ class MediaTrackGraphImpl : public MediaTrackGraph,
   const float mGlobalVolume;
 
 #ifdef DEBUG
+ protected:
   /**
    * Used to assert when AppendMessage() runs control messages synchronously.
    */
   bool mCanRunMessagesSynchronously;
 #endif
 
+ private:
   /**
    * The graph's main-thread observable graph time.
    * Updated by the stable state runnable after each iteration.

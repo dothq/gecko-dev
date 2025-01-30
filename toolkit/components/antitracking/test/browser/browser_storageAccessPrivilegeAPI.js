@@ -105,6 +105,7 @@ add_setup(async function () {
       ["privacy.trackingprotection.annotate_channels", true],
       // Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
       ["network.cookie.sameSite.laxByDefault", false],
+      ["network.cookie.CHIPS.enabled", true],
     ],
   });
 
@@ -273,7 +274,7 @@ add_task(async function test_privilege_api_with_dFPI() {
     await noStorageAccessInitially();
 
     is(document.cookie, "", "No cookies for me");
-    document.cookie = "name=partitioned";
+    document.cookie = "name=partitioned; SameSite=None; Secure; Partitioned;";
     is(
       document.cookie,
       "name=partitioned",
@@ -322,9 +323,17 @@ add_task(async function test_privilege_api_with_dFPI() {
   await runScriptInSubFrame(browser, "test", async _ => {
     await hasStorageAccessInitially();
 
-    is(document.cookie, "", "No unpartitioned cookies");
+    is(
+      document.cookie,
+      "name=partitioned",
+      "partitioned cookies should be available"
+    );
     document.cookie = "name=unpartitioned";
-    is(document.cookie, "name=unpartitioned", "Successfully set cookies.");
+    is(
+      document.cookie,
+      "name=partitioned; name=unpartitioned",
+      "Successfully set cookies. Both partitioned and unpartitioned cookies should be available"
+    );
   });
 
   // Insert another third-party content iframe and check if it has storage access.
@@ -334,7 +343,7 @@ add_task(async function test_privilege_api_with_dFPI() {
 
     is(
       document.cookie,
-      "name=unpartitioned",
+      "name=partitioned; name=unpartitioned",
       "Some cookies for unpartitioned context"
     );
   });
@@ -346,7 +355,7 @@ add_task(async function test_privilege_api_with_dFPI() {
     await noStorageAccessInitially();
 
     is(document.cookie, "", "No cookies for me");
-    document.cookie = "name=value";
+    document.cookie = "name=value; SameSite=None; Secure; Partitioned;";
     is(document.cookie, "name=value", "Setting cookie to partitioned context.");
   });
 

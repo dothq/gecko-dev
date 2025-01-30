@@ -449,10 +449,10 @@ p12U_ReadPKCS12File(SECItem *uniPwp, char *in_file, PK11SlotInfo *slot,
 
     /* revert the option setting */
     if (forceUnicode != pk12uForceUnicode) {
-        rv = NSS_OptionSet(__NSS_PKCS12_DECODE_FORCE_UNICODE, pk12uForceUnicode);
-        if (rv != SECSuccess) {
+        if (SECSuccess != NSS_OptionSet(__NSS_PKCS12_DECODE_FORCE_UNICODE, pk12uForceUnicode)) {
             SECU_PrintError(progName, "PKCS12 decoding failed to set option");
             pk12uErrno = PK12UERR_DECODEVERIFY;
+            rv = SECFailure;
         }
     }
     /* rv has been set at this point */
@@ -819,7 +819,7 @@ P12U_ListPKCS12File(char *in_file, PK11SlotInfo *slot,
                     } else if (SECU_PrintSignedData(stdout, dip->der,
                                                     (dip->hasKey) ? "(has private key)"
                                                                   : "",
-                                                    0, (SECU_PPFunc)SECU_PrintCertificate) !=
+                                                    0, SECU_PrintCertificate) !=
                                0) {
                         SECU_PrintError(progName, "PKCS12 print cert bag failed");
                     }
@@ -942,24 +942,14 @@ PKCS12U_MapHashFromString(char *hashString)
     }
     /* make sure it's a hashing oid */
     if (HASH_GetHashTypeByOidTag(hashAlg) == HASH_AlgNULL) {
-        return SEC_OID_UNKNOWN;
+        /* allow HMAC here. HMAC implies PKCS 5 v2 pba */
+        SECOidTag baseHashAlg = HASH_GetHashOidTagByHMACOidTag(hashAlg);
+        if (baseHashAlg == SEC_OID_UNKNOWN) {
+            /* not an hmac either, reject the entry */
+            return SEC_OID_UNKNOWN;
+        }
     }
     return hashAlg;
-}
-
-static void
-p12u_EnableAllCiphers()
-{
-    SEC_PKCS12EnableCipher(PKCS12_RC4_40, 1);
-    SEC_PKCS12EnableCipher(PKCS12_RC4_128, 1);
-    SEC_PKCS12EnableCipher(PKCS12_RC2_CBC_40, 1);
-    SEC_PKCS12EnableCipher(PKCS12_RC2_CBC_128, 1);
-    SEC_PKCS12EnableCipher(PKCS12_DES_56, 1);
-    SEC_PKCS12EnableCipher(PKCS12_DES_EDE3_168, 1);
-    SEC_PKCS12EnableCipher(PKCS12_AES_CBC_128, 1);
-    SEC_PKCS12EnableCipher(PKCS12_AES_CBC_192, 1);
-    SEC_PKCS12EnableCipher(PKCS12_AES_CBC_256, 1);
-    SEC_PKCS12SetPreferredCipher(PKCS12_AES_CBC_256, 1);
 }
 
 static PRUintn
@@ -983,7 +973,8 @@ P12U_Init(char *dir, char *dbprefix, PRBool listonly)
     PORT_SetUCS2_ASCIIConversionFunction(p12u_ucs2_ascii_conversion_function);
     /* use the defaults for UCS4-UTF8 and UCS2-UTF8 */
 
-    p12u_EnableAllCiphers();
+    /* ciphers are already enabled by default, allow policy to work */
+    /* p12u_EnableAllCiphers(); */
 
     return 0;
 }
@@ -1148,7 +1139,7 @@ main(int argc, char **argv)
 
         cipher = PKCS12U_MapCipherFromString(cipherString, keyLen);
         /* We only want encryption PBE's. make sure we don't have
-	 * any MAC pbes */
+         * any MAC pbes */
         if (cipher == SEC_OID_UNKNOWN) {
             PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
             SECU_PrintError(progName, "Algorithm: \"%s\"", cipherString);
@@ -1165,7 +1156,7 @@ main(int argc, char **argv)
         } else {
             certCipher = PKCS12U_MapCipherFromString(cipherString, certKeyLen);
             /* If the user requested a cipher and we didn't find it, then
-	     * don't just silently not encrypt. */
+             * don't just silently not encrypt. */
             if (certCipher == SEC_OID_UNKNOWN) {
                 PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
                 SECU_PrintError(progName, "Algorithm: \"%s\"", cipherString);
@@ -1173,6 +1164,10 @@ main(int argc, char **argv)
                 goto done;
             }
         }
+    }
+    /* in FIPS mode default to encoding with pkcs5v2 for the MAC */
+    if (PK11_IsFIPS()) {
+        hash = SEC_OID_HMAC_SHA256;
     }
     if (pk12util.options[opt_Mac].activated) {
         char *hashString = pk12util.options[opt_Mac].arg;

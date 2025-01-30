@@ -60,6 +60,7 @@ DevToolsModules(
     "extend.js",
     "flags.js",
     "generate-uuid.js",
+    "highlighters.mjs",
     "indentation.js",
     "indexed-db.js",
     "l10n.js",
@@ -71,7 +72,7 @@ DevToolsModules(
     "system.js",
     "ThreadSafeDevToolsUtils.js",
     "throttle.js",
-    "validate-breakpoint.jsm",
+    "validate-breakpoint.sys.mjs",
 )
 
 with Files("**"):

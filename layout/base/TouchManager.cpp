@@ -10,10 +10,12 @@
 #include "Units.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_test.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/EventTarget.h"
+#include "mozilla/dom/PointerEventHandler.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "nsIContent.h"
 #include "nsIFrame.h"
@@ -30,6 +32,7 @@ StaticAutoPtr<nsTHashMap<nsUint32HashKey, TouchManager::TouchInfo>>
 layers::LayersId TouchManager::sCaptureTouchLayersId;
 TimeStamp TouchManager::sSingleTouchStartTimeStamp;
 LayoutDeviceIntPoint TouchManager::sSingleTouchStartPoint;
+bool TouchManager::sPrecedingTouchPointerDownConsumedByContent = false;
 
 /*static*/
 void TouchManager::InitializeStatics() {
@@ -271,7 +274,11 @@ bool TouchManager::PreHandleEvent(WidgetEvent* aEvent, nsEventStatus* aStatus,
         // event, all subsequent touch events will use the same layers id.
         sCaptureTouchLayersId = aEvent->mLayersId;
         sSingleTouchStartTimeStamp = aEvent->mTimeStamp;
-        sSingleTouchStartPoint = aEvent->AsTouchEvent()->mTouches[0]->mRefPoint;
+        sSingleTouchStartPoint = touchEvent->mTouches[0]->mRefPoint;
+        const PointerInfo* pointerInfo = PointerEventHandler::GetPointerInfo(
+            touchEvent->mTouches[0]->Identifier());
+        sPrecedingTouchPointerDownConsumedByContent =
+            pointerInfo && pointerInfo->mPreventMouseEventByContent;
       } else {
         touchEvent->mLayersId = sCaptureTouchLayersId;
         sSingleTouchStartTimeStamp = TimeStamp();
@@ -583,6 +590,11 @@ bool TouchManager::IsSingleTapEndToDoDefault(
   NS_WARNING_ASSERTION(aTouchEndEvent->mTouches[0]->mChanged,
                        "The single tap end should be changed");
   return true;
+}
+
+/* static */
+bool TouchManager::IsPrecedingTouchPointerDownConsumedByContent() {
+  return sPrecedingTouchPointerDownConsumedByContent;
 }
 
 }  // namespace mozilla

@@ -204,44 +204,20 @@ async function insertBookmark(bookmark) {
 }
 
 function setFaviconForBookmark(bookmark) {
-  let faviconURI;
-  let nullPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
-
-  switch (bookmark.Favicon.protocol) {
-    case "data:":
-      // data urls must first call replaceFaviconDataFromDataURL, using a
-      // fake URL. Later, it's needed to call setAndFetchFaviconForPage
-      // with the same URL.
-      faviconURI = Services.io.newURI("fake-favicon-uri:" + bookmark.URL.href);
-
-      lazy.PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-        faviconURI,
-        bookmark.Favicon.href,
-        0 /* max expiration length */,
-        nullPrincipal
-      );
-      break;
-
-    case "http:":
-    case "https:":
-      faviconURI = Services.io.newURI(bookmark.Favicon.href);
-      break;
-
-    default:
-      lazy.log.error(
-        `Bad URL given for favicon on bookmark "${bookmark.Title}"`
-      );
-      return;
+  if (bookmark.Favicon.protocol != "data:") {
+    lazy.log.error(
+      `Pass a valid data: URI for favicon on bookmark "${bookmark.Title}", instead of "${bookmark.Favicon.URI.spec}"`
+    );
+    return;
   }
 
-  lazy.PlacesUtils.favicons.setAndFetchFaviconForPage(
-    Services.io.newURI(bookmark.URL.href),
-    faviconURI,
-    false /* forceReload */,
-    lazy.PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-    null,
-    nullPrincipal
-  );
+  lazy.PlacesUtils.favicons
+    .setFaviconForPage(
+      bookmark.URL.URI,
+      Services.io.newURI("fake-favicon-uri:" + bookmark.URL.href),
+      bookmark.Favicon.URI
+    )
+    .catch(lazy.log.error);
 }
 
 // Cache of folder names to guids to be used by the getParentGuid

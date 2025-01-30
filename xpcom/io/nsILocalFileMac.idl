@@ -176,7 +176,7 @@ interface nsILocalFileMac : nsIFile
      *
      * @return Whether or not the extended attribute is present.
      */
-    bool hasXAttr(in ACString aAttrName);
+    boolean hasXAttr(in ACString aAttrName);
 
     /**
      * Get the value of the extended attribute.
@@ -206,7 +206,7 @@ interface nsILocalFileMac : nsIFile
 %{C++
 extern "C"
 {
-NS_EXPORT nsresult NS_NewLocalFileWithFSRef(const FSRef* aFSRef, bool aFollowSymlinks, nsILocalFileMac** result);
-NS_EXPORT nsresult NS_NewLocalFileWithCFURL(const CFURLRef aURL, bool aFollowSymlinks, nsILocalFileMac** result);
+NS_EXPORT nsresult NS_NewLocalFileWithFSRef(const FSRef* aFSRef, nsILocalFileMac** result);
+NS_EXPORT nsresult NS_NewLocalFileWithCFURL(const CFURLRef aURL, nsILocalFileMac** result);
 }
 %}

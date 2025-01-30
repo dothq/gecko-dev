@@ -14,6 +14,7 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
+/** @type {Lazy} */
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -234,7 +235,7 @@ class NoCloneSpreadArgs {
 const LISTENERS = Symbol("listeners");
 const ONCE_MAP = Symbol("onceMap");
 
-class EventEmitter {
+export class EventEmitter {
   constructor() {
     this[LISTENERS] = new Map();
     this[ONCE_MAP] = new WeakMap();
@@ -353,7 +354,7 @@ class EventEmitter {
  * that inherits from this class, the derived class is instantiated
  * once for each extension that uses the API.
  */
-class ExtensionAPI extends EventEmitter {
+export class ExtensionAPI extends EventEmitter {
   constructor(extension) {
     super();
 
@@ -388,7 +389,7 @@ class ExtensionAPI extends EventEmitter {
 
   /**
    * @param {string} _id
-   * @param {Record<string, JSONValue>} _manifest
+   * @param {object} _manifest
    */
   static onUpdate(_id, _manifest) {}
 }
@@ -468,7 +469,7 @@ class ExtensionAPIPersistent extends ExtensionAPI {
  *
  * @abstract
  */
-class BaseContext {
+export class BaseContext {
   /** @type {boolean} */
   isTopContext;
   /** @type {string} */
@@ -489,6 +490,7 @@ class BaseContext {
     this.messageManager = null;
     this.contentWindow = null;
     this.innerWindowID = 0;
+    this.browserId = 0;
 
     // These two properties are assigned in ContentScriptContextChild subclass
     // to keep a copy of the content script sandbox Error and Promise globals
@@ -553,10 +555,7 @@ class BaseContext {
    * Opens a conduit linked to this context, populating related address fields.
    * Only available in child contexts with an associated contentWindow.
    *
-   * @param {object} subject
-   * @param {ConduitAddress} address
-   * @returns {import("ConduitsChild.sys.mjs").PointConduit}
-   * @type {ConduitOpen}
+   * @type {ConduitGen}
    */
   openConduit(subject, address) {
     let wgc = this.contentWindow.windowGlobalChild;
@@ -580,6 +579,7 @@ class BaseContext {
       );
     }
 
+    this.browserId = contentWindow.browsingContext?.browserId;
     this.innerWindowID = getInnerWindowID(contentWindow);
     this.messageManager = contentWindow.docShell.messageManager;
 
@@ -614,7 +614,7 @@ class BaseContext {
   // All child contexts must implement logActivity.  This is handled if the child
   // context subclasses ExtensionBaseContextChild.  ProxyContextParent overrides
   // this with a noop for parent contexts.
-  logActivity() {
+  logActivity(_type, _name, _data) {
     throw new Error(`Not implemented for ${this.envType}`);
   }
 
@@ -746,23 +746,42 @@ class BaseContext {
         // TODO(Bug 1810582): change the error associated to the innerWindowID to also
         // include a full stack from the original error.
         if (!this.isProxyContextParent && this.contentWindow) {
-          Services.console.logMessage(
-            new ScriptError(
-              message,
-              fileName,
-              null,
-              lineNumber,
-              columnNumber,
-              Ci.nsIScriptError.errorFlag,
-              "content javascript",
-              this.innerWindowID
-            )
-          );
+          this.logConsoleScriptError({
+            message,
+            fileName,
+            lineNumber,
+            columnNumber,
+          });
         }
         // Also report the original error object (because it also includes
         // the full error stack).
         Cu.reportError(e);
       }
+    }
+  }
+
+  logConsoleScriptError({
+    message,
+    fileName,
+    lineNumber,
+    columnNumber,
+    flags = Ci.nsIScriptError.errorFlag,
+    innerWindowID = this.innerWindowID,
+  }) {
+    if (innerWindowID) {
+      Services.console.logMessage(
+        new ScriptError(
+          message,
+          fileName,
+          lineNumber,
+          columnNumber,
+          flags,
+          "content javascript",
+          innerWindowID
+        )
+      );
+    } else {
+      Cu.reportError(new Error(message));
     }
   }
 
@@ -822,7 +841,7 @@ class BaseContext {
    * exception error.
    *
    * @param {Error|object} error
-   * @param {SavedFrame?} [caller]
+   * @param {nsIStackFrame?} [caller]
    * @returns {Error}
    */
   normalizeError(error, caller) {
@@ -864,7 +883,7 @@ class BaseContext {
    *
    * @param {object} error An object with a `message` property. May
    *     optionally be an `Error` object belonging to the target scope.
-   * @param {SavedFrame?} caller
+   * @param {nsIStackFrame?} caller
    *        The optional caller frame which triggered this callback, to be used
    *        in error reporting.
    * @param {Function} callback The callback to call.
@@ -885,7 +904,7 @@ class BaseContext {
   /**
    * Captures the most recent stack frame which belongs to the extension.
    *
-   * @returns {SavedFrame?}
+   * @returns {nsIStackFrame?}
    */
   getCaller() {
     return ChromeUtils.getCallerLocation(this.principal);
@@ -1037,7 +1056,7 @@ class BaseContext {
  *
  * @interface
  */
-class SchemaAPIInterface {
+export class SchemaAPIInterface {
   /**
    * Calls this as a function that returns its return value.
    *
@@ -1483,7 +1502,7 @@ class SchemaAPIManager extends EventEmitter {
    *     "addon" - An addon process.
    *     "content" - A content process.
    *     "devtools" - A devtools process.
-   * @param {import("Schemas.sys.mjs").SchemaRoot} [schema]
+   * @param {import("Schemas.sys.mjs").SchemaInject} [schema]
    */
   constructor(processType, schema) {
     super();
@@ -1771,10 +1790,15 @@ class SchemaAPIManager extends EventEmitter {
     this._checkLoadModule(module, name);
 
     module.asyncLoaded = ChromeUtils.compileScript(module.url).then(script => {
-      this.initGlobal();
-      script.executeInGlobal(this.global);
+      // In some rare cases, loadModule() may have been called since we started
+      // the async compileScript call. In that case, return the result that we
+      // already got from loadModule.
+      if (!module.loaded) {
+        this.initGlobal();
+        script.executeInGlobal(this.global);
 
-      module.loaded = true;
+        module.loaded = true;
+      }
 
       return this.global[name];
     });
@@ -1843,9 +1867,6 @@ class SchemaAPIManager extends EventEmitter {
     if (!module) {
       throw new Error(`Module '${name}' does not exist`);
     }
-    if (module.asyncLoaded) {
-      throw new Error(`Module '${name}' currently being lazily loaded`);
-    }
     if (this.global && this.global[name]) {
       throw new Error(
         `Module '${name}' conflicts with existing global property`
@@ -1879,10 +1900,14 @@ class SchemaAPIManager extends EventEmitter {
       ExtensionAPI,
       ExtensionAPIPersistent,
       ExtensionCommon,
+      FileReader,
+      Glean,
+      GleanPings,
       IOUtils,
       MatchGlob,
       MatchPattern,
       MatchPatternSet,
+      OffscreenCanvas,
       PathUtils,
       Services,
       StructuredCloneHolder,
@@ -2023,10 +2048,14 @@ export function LocaleData(data) {
   this.locales = data.locales || new Map();
   this.warnedMissingKeys = new Set();
 
-  // Map(locale-name -> Map(message-key -> localized-string))
-  //
-  // Contains a key for each loaded locale, each of which is a
-  // Map of message keys to their localized strings.
+  /**
+   * Map(locale-name -> Map(message-key -> localized-string))
+   *
+   * Contains a key for each loaded locale, each of which is a
+   * Map of message keys to their localized strings.
+   *
+   * @type {Map<string, Map<string, string>>}
+   */
   this.messages = data.messages || new Map();
 
   if (data.builtinMessages) {
@@ -2877,15 +2906,28 @@ class EventManager {
         listener.added = true;
 
         recordStartupData = false;
-        this.remove.set(callback, () => {
-          EventManager.clearPersistentListener(
-            extension,
-            module,
-            event,
-            uneval(args),
-            listener.primeId
-          );
-        });
+
+        // Do not clear the persistent listener for a non-persistent backgrond
+        // context on removeListener calls got after the background context
+        // was fully started. The persistent listener can instead be cleared
+        // by not re-registering it on the next background context startup.
+        //
+        // This check prevents that for listeners that were already persisted
+        // and primed (a separate one below prevents it for new listeners).
+        //
+        // TODO Bug 1899767: do not reprime if the listener has been
+        // unregistered.
+        if (extension.persistentBackground) {
+          this.remove.set(callback, () => {
+            EventManager.clearPersistentListener(
+              extension,
+              module,
+              event,
+              uneval(args),
+              listener.primeId
+            );
+          });
+        }
       }
     }
 
@@ -2901,15 +2943,28 @@ class EventManager {
     if (recordStartupData) {
       const [, , , /* _module */ /* _event */ /* _key */ primeId] =
         EventManager.savePersistentListener(extension, module, event, args);
-      this.remove.set(callback, () => {
-        EventManager.clearPersistentListener(
-          extension,
-          module,
-          event,
-          uneval(args),
-          primeId
-        );
-      });
+
+      // Do not clear the persistent listener for a non-persistent backgrond
+      // context on removeListener calls got after the background context
+      // was fully started. The persistent listener can instead be cleared
+      // by not re-registering it on the next background context startup.
+      //
+      // This check prevents that for new listeners that were not already persisted
+      // and primed.
+      //
+      // TODO Bug 1899767: do not reprime if the listener has been
+      // unregistered.
+      if (extension.persistentBackground) {
+        this.remove.set(callback, () => {
+          EventManager.clearPersistentListener(
+            extension,
+            module,
+            event,
+            uneval(args),
+            primeId
+          );
+        });
+      }
     }
   }
 
@@ -2978,7 +3033,6 @@ function ignoreEvent(context, name) {
       scriptError.init(
         msg,
         frame.filename,
-        null,
         frame.lineNumber,
         frame.columnNumber,
         Ci.nsIScriptError.warningFlag,

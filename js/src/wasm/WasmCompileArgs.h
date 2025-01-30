@@ -46,6 +46,17 @@ enum class Tier {
   Serialized = Optimized
 };
 
+static constexpr const char* ToString(Tier tier) {
+  switch (tier) {
+    case wasm::Tier::Baseline:
+      return "baseline";
+    case wasm::Tier::Optimized:
+      return "optimized";
+    default:
+      return "unknown";
+  }
+}
+
 // Iterator over tiers present in a tiered data structure.
 
 class Tiers {
@@ -69,18 +80,49 @@ class Tiers {
   Tier* end() { return t_ + n_; }
 };
 
+struct BuiltinModuleIds {
+  BuiltinModuleIds() = default;
+
+  bool selfTest = false;
+  bool intGemm = false;
+  bool jsString = false;
+  bool jsStringConstants = false;
+  SharedChars jsStringConstantsNamespace;
+
+  bool hasNone() const {
+    return !selfTest && !intGemm && !jsString && !jsStringConstants;
+  }
+};
+
 // Describes per-compilation settings that are controlled by an options bag
 // passed to compilation and validation functions. (Nonstandard extension
 // available under prefs.)
 
 struct FeatureOptions {
-  FeatureOptions() : isBuiltinModule(false), jsStringBuiltins(false) {}
+  FeatureOptions()
+      : disableOptimizingCompiler(false),
+        isBuiltinModule(false),
+        jsStringBuiltins(false),
+        jsStringConstants(false),
+        requireExnref(false) {}
+
+  // Whether we should try to disable our optimizing compiler. Only available
+  // with `IsSimdPrivilegedContext`.
+  bool disableOptimizingCompiler;
 
   // Enables builtin module opcodes, only set in WasmBuiltinModule.cpp.
   bool isBuiltinModule;
+
   // Enable JS String builtins for this module, only available if the feature
   // is also enabled.
   bool jsStringBuiltins;
+  // Enable imported string constants for this module, only available if the
+  // feature is also enabled.
+  bool jsStringConstants;
+  SharedChars jsStringConstantsNamespace;
+
+  // Enable exnref support.
+  bool requireExnref;
 
   // Parse the compile options bag.
   [[nodiscard]] bool init(JSContext* cx, HandleValue val);
@@ -96,11 +138,13 @@ struct FeatureArgs {
 #undef WASM_FEATURE
             sharedMemory(Shareable::False),
         simd(false),
-        isBuiltinModule(false) {
+        isBuiltinModule(false),
+        builtinModules() {
   }
   FeatureArgs(const FeatureArgs&) = default;
   FeatureArgs& operator=(const FeatureArgs&) = default;
   FeatureArgs(FeatureArgs&&) = default;
+  FeatureArgs& operator=(FeatureArgs&&) = default;
 
   static FeatureArgs build(JSContext* cx, const FeatureOptions& options);
   static FeatureArgs allEnabled() {
@@ -131,7 +175,10 @@ struct FeatureArgs {
 enum class FeatureUsage : uint8_t {
   None = 0x0,
   LegacyExceptions = 0x1,
+  ReturnCall = 0x2,
 };
+
+using FeatureUsageVector = Vector<FeatureUsage, 0, SystemAllocPolicy>;
 
 void SetUseCountersForFeatureUsage(JSContext* cx, JSObject* object,
                                    FeatureUsage usage);
@@ -179,6 +226,8 @@ struct CompileArgs : ShareableBase<CompileArgs> {
   //   errors.
   // - the 'buildForAsmJS' one, which uses the appropriate configuration for
   //   legacy asm.js code.
+  // - the 'buildForValidation' one, which takes just the features to enable
+  //   and sets the compilers to a null state.
   // - one that gives complete access to underlying fields.
   //
   // You should use the factory functions in general, unless you have a very
@@ -193,9 +242,10 @@ struct CompileArgs : ShareableBase<CompileArgs> {
                                           ScriptedCaller&& scriptedCaller,
                                           const FeatureOptions& options,
                                           bool reportOOM = false);
+  static SharedCompileArgs buildForValidation(const FeatureArgs& args);
 
-  explicit CompileArgs(ScriptedCaller&& scriptedCaller)
-      : scriptedCaller(std::move(scriptedCaller)),
+  explicit CompileArgs()
+      : scriptedCaller(),
         baselineEnabled(false),
         ionEnabled(false),
         debugEnabled(false),
@@ -241,7 +291,7 @@ struct CompilerEnvironment {
   CompilerEnvironment(CompileMode mode, Tier tier, DebugEnabled debugEnabled);
 
   // Compute any remaining compilation parameters.
-  void computeParameters(Decoder& d);
+  void computeParameters(const ModuleMetadata& moduleMeta);
 
   // Compute any remaining compilation parameters.  Only use this method if
   // the CompilerEnvironment was created with values for mode, tier, and
@@ -252,6 +302,18 @@ struct CompilerEnvironment {
   CompileMode mode() const {
     MOZ_ASSERT(isComputed());
     return mode_;
+  }
+  CompileState initialState() const {
+    switch (mode()) {
+      case CompileMode::Once:
+        return CompileState::Once;
+      case CompileMode::EagerTiering:
+        return CompileState::EagerTier1;
+      case CompileMode::LazyTiering:
+        return CompileState::LazyTier1;
+      default:
+        MOZ_CRASH();
+    }
   }
   Tier tier() const {
     MOZ_ASSERT(isComputed());

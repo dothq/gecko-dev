@@ -381,10 +381,6 @@ HTMLFieldSetElement* HTMLElement::GetFieldSetInternal() const {
 
 bool HTMLElement::CanBeDisabled() const { return IsFormAssociatedElement(); }
 
-bool HTMLElement::DoesReadOnlyApply() const {
-  return IsFormAssociatedElement();
-}
-
 void HTMLElement::UpdateDisabledState(bool aNotify) {
   bool oldState = IsDisabled();
   nsGenericHTMLFormElement::UpdateDisabledState(aNotify);
@@ -433,6 +429,14 @@ ElementInternals* HTMLElement::GetElementInternals() const {
   }
 
   return data->GetElementInternals();
+}
+
+nsIFormControl* HTMLElement::GetAsFormControl() {
+  return GetElementInternals();
+}
+
+const nsIFormControl* HTMLElement::GetAsFormControl() const {
+  return GetElementInternals();
 }
 
 void HTMLElement::UpdateBarredFromConstraintValidation() {

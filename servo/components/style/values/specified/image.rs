@@ -28,8 +28,6 @@ use crate::values::specified::{Number, NumberOrPercentage, Percentage};
 use crate::Atom;
 use cssparser::{Delimiter, Parser, Token};
 use selectors::parser::SelectorParseErrorKind;
-#[cfg(feature = "servo")]
-use servo_url::ServoUrl;
 use std::cmp::Ordering;
 use std::fmt::{self, Write};
 use style_traits::{CssType, CssWriter, KeywordsCollectFn, ParseError};
@@ -121,6 +119,7 @@ fn cross_fade_enabled() -> bool {
 fn cross_fade_enabled() -> bool {
     false
 }
+
 
 impl SpecifiedValueInfo for Gradient {
     const SUPPORTED_TYPES: u8 = CssType::GRADIENT;
@@ -241,7 +240,7 @@ impl Image {
         let function = input.expect_function()?.clone();
         input.parse_nested_block(|input| {
             Ok(match_ignore_ascii_case! { &function,
-                #[cfg(feature = "servo-layout-2013")]
+                #[cfg(feature = "servo")]
                 "paint" => Self::PaintWorklet(PaintWorklet::parse_args(context, input)?),
                 "cross-fade" if cross_fade_enabled() => Self::CrossFade(Box::new(CrossFade::parse_args(context, input, cors_mode, flags)?)),
                 #[cfg(feature = "gecko")]
@@ -256,7 +255,7 @@ impl Image {
     /// Creates an already specified image value from an already resolved URL
     /// for insertion in the cascade.
     #[cfg(feature = "servo")]
-    pub fn for_cascade(url: ServoUrl) -> Self {
+    pub fn for_cascade(url: ::servo_arc::Arc<::url::Url>) -> Self {
         use crate::values::CssUrl;
         generic::Image::Url(CssUrl::for_cascade(url))
     }
@@ -555,36 +554,24 @@ impl Gradient {
             Side(S),
         }
 
-        impl LineDirection {
-            fn from_points(first: Point, second: Point) -> Self {
-                let h_ord = first.horizontal.partial_cmp(&second.horizontal);
-                let v_ord = first.vertical.partial_cmp(&second.vertical);
-                let (h, v) = match (h_ord, v_ord) {
-                    (Some(h), Some(v)) => (h, v),
-                    _ => return LineDirection::Vertical(Y::Bottom),
-                };
-                match (h, v) {
-                    (Ordering::Less, Ordering::Less) => LineDirection::Corner(X::Right, Y::Bottom),
-                    (Ordering::Less, Ordering::Equal) => LineDirection::Horizontal(X::Right),
-                    (Ordering::Less, Ordering::Greater) => LineDirection::Corner(X::Right, Y::Top),
-                    (Ordering::Equal, Ordering::Greater) => LineDirection::Vertical(Y::Top),
-                    (Ordering::Equal, Ordering::Equal) | (Ordering::Equal, Ordering::Less) => {
-                        LineDirection::Vertical(Y::Bottom)
-                    },
-                    (Ordering::Greater, Ordering::Less) => {
-                        LineDirection::Corner(X::Left, Y::Bottom)
-                    },
-                    (Ordering::Greater, Ordering::Equal) => LineDirection::Horizontal(X::Left),
-                    (Ordering::Greater, Ordering::Greater) => {
-                        LineDirection::Corner(X::Left, Y::Top)
-                    },
-                }
-            }
-        }
-
-        impl From<Point> for Position {
-            fn from(point: Point) -> Self {
-                Self::new(point.horizontal.into(), point.vertical.into())
+        fn line_direction_from_points(first: Point, second: Point) -> LineDirection {
+            let h_ord = first.horizontal.partial_cmp(&second.horizontal);
+            let v_ord = first.vertical.partial_cmp(&second.vertical);
+            let (h, v) = match (h_ord, v_ord) {
+                (Some(h), Some(v)) => (h, v),
+                _ => return LineDirection::Vertical(Y::Bottom),
+            };
+            match (h, v) {
+                (Ordering::Less, Ordering::Less) => LineDirection::Corner(X::Right, Y::Bottom),
+                (Ordering::Less, Ordering::Equal) => LineDirection::Horizontal(X::Right),
+                (Ordering::Less, Ordering::Greater) => LineDirection::Corner(X::Right, Y::Top),
+                (Ordering::Equal, Ordering::Greater) => LineDirection::Vertical(Y::Top),
+                (Ordering::Equal, Ordering::Equal) | (Ordering::Equal, Ordering::Less) => {
+                    LineDirection::Vertical(Y::Bottom)
+                },
+                (Ordering::Greater, Ordering::Less) => LineDirection::Corner(X::Left, Y::Bottom),
+                (Ordering::Greater, Ordering::Equal) => LineDirection::Horizontal(X::Left),
+                (Ordering::Greater, Ordering::Greater) => LineDirection::Corner(X::Left, Y::Top),
             }
         }
 
@@ -602,9 +589,9 @@ impl Gradient {
             }
         }
 
-        impl<S: Side> From<Component<S>> for NumberOrPercentage {
-            fn from(component: Component<S>) -> Self {
-                match component {
+        impl<S: Side> Into<NumberOrPercentage> for Component<S> {
+            fn into(self) -> NumberOrPercentage {
+                match self {
                     Component::Center => NumberOrPercentage::Percentage(Percentage::new(0.5)),
                     Component::Number(number) => number,
                     Component::Side(side) => {
@@ -619,9 +606,9 @@ impl Gradient {
             }
         }
 
-        impl<S: Side> From<Component<S>> for PositionComponent<S> {
-            fn from(component: Component<S>) -> Self {
-                match component {
+        impl<S: Side> Into<PositionComponent<S>> for Component<S> {
+            fn into(self) -> PositionComponent<S> {
+                match self {
                     Component::Center => PositionComponent::Center,
                     Component::Number(NumberOrPercentage::Number(number)) => {
                         PositionComponent::Length(Length::from_px(number.value).into())
@@ -636,10 +623,7 @@ impl Gradient {
 
         impl<S: Copy + Side> Component<S> {
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                match (
-                    NumberOrPercentage::from(*self),
-                    NumberOrPercentage::from(*other),
-                ) {
+                match ((*self).into(), (*other).into()) {
                     (NumberOrPercentage::Percentage(a), NumberOrPercentage::Percentage(b)) => {
                         a.get().partial_cmp(&b.get())
                     },
@@ -660,7 +644,7 @@ impl Gradient {
                 input.expect_comma()?;
                 let second = Point::parse(context, input)?;
 
-                let direction = LineDirection::from_points(first, second);
+                let direction = line_direction_from_points(first, second);
                 let items = Gradient::parse_webkit_gradient_stops(context, input, false)?;
 
                 generic::Gradient::Linear {
@@ -689,7 +673,7 @@ impl Gradient {
 
                 let rad = Circle::Radius(NonNegative(Length::from_px(radius.value)));
                 let shape = generic::EndingShape::Circle(rad);
-                let position: Position = point.into();
+                let position = Position::new(point.horizontal.into(), point.vertical.into());
                 let items = Gradient::parse_webkit_gradient_stops(context, input, reverse_stops)?;
 
                 generic::Gradient::Radial {
@@ -1323,6 +1307,7 @@ impl PaintWorklet {
 #[repr(u8)]
 pub enum ImageRendering {
     Auto,
+    #[cfg(feature = "gecko")]
     Smooth,
     #[parse(aliases = "-moz-crisp-edges")]
     CrispEdges,
@@ -1335,6 +1320,8 @@ pub enum ImageRendering {
     //     as crisp-edges and smooth respectively, and authors must not use
     //     them.
     //
+    #[cfg(feature = "gecko")]
     Optimizespeed,
+    #[cfg(feature = "gecko")]
     Optimizequality,
 }

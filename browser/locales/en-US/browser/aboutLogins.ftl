@@ -90,7 +90,6 @@ login-intro-description2 = All passwords you save to { -brand-product-name } are
 login-intro-instructions-fxa2 = Create or sign in to your account on the device where your logins are saved.
 login-intro-instructions-fxa-settings = Go to Settings > Sync > Turn on syncing… Select the Logins and passwords checkbox.
 login-intro-instructions-fxa-passwords-help = Visit <a data-l10n-name="passwords-help-link">passwords support</a> for more help.
-about-logins-intro-browser-only-import = If your logins are saved in another browser, you can <a data-l10n-name="import-link">import them into { -brand-product-name }</a>
 about-logins-intro-import3 = Select the plus sign button above to add a password now. You can also <a data-l10n-name="import-browser-link">import passwords from another browser</a> or <a data-l10n-name="import-file-link">from a file</a>.
 
 ## Login
@@ -115,6 +114,8 @@ login-item-copied-username-button-text = Copied!
 login-item-password-label = Password
 login-item-password-reveal-checkbox =
   .aria-label = Show password
+login-item-password-conceal-checkbox =
+  .aria-label = Hide password
 login-item-copy-password-button-text = Copy
 login-item-copied-password-button-text = Copied!
 about-logins-login-item-save-changes-button = Save
@@ -139,6 +140,14 @@ about-logins-os-auth-dialog-caption = { -brand-full-name }
 ## The macOS strings are preceded by the operating system with "Firefox is trying to "
 ## and includes subtitle of "Enter password for the user "xxx" to allow this." These
 ## notes are only valid for English. Please test in your respected locale.
+
+# The macOS strings are preceded by the operating system with "Firefox is trying to ".
+# This message can be seen when attempting to disable osauth in about:preferences.
+about-logins-os-auth-dialog-message=
+  { PLATFORM() ->
+    [macos] change the settings for passwords
+    *[other] { -brand-short-name } is trying to change the settings for passwords. Use your device sign in to allow this.
+  }
 
 # This message can be seen when attempting to edit a login in about:logins on Windows.
 about-logins-edit-login-os-auth-dialog-message2-win = To edit your password, enter your Windows login credentials. This helps protect the security of your accounts.

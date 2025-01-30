@@ -17,7 +17,6 @@ EXPORTS.mozilla.ipc += [
     "BackgroundStarterParent.h",
     "BackgroundUtils.h",
     "BigBuffer.h",
-    "BrowserProcessSubThread.h",
     "ByteBuf.h",
     "ByteBufUtils.h",
     "CrashReporterClient.h",
@@ -34,7 +33,7 @@ EXPORTS.mozilla.ipc += [
     "IdleSchedulerChild.h",
     "IdleSchedulerParent.h",
     "InputStreamUtils.h",
-    "IOThreadChild.h",
+    "IOThread.h",
     "IPCCore.h",
     "IPCForwards.h",
     "IPCStreamUtils.h",
@@ -54,10 +53,12 @@ EXPORTS.mozilla.ipc += [
     "ProtocolUtils.h",
     "RandomAccessStreamUtils.h",
     "RawShmem.h",
+    "RustMessageUtils.h",
     "ScopedPort.h",
     "SerializedStructuredCloneBuffer.h",
     "SharedMemory.h",
-    "SharedMemoryBasic.h",
+    "SharedMemoryHandle.h",
+    "SharedMemoryMapping.h",
     "Shmem.h",
     "ShmemMessageUtils.h",
     "SideVariant.h",
@@ -79,14 +80,7 @@ EXPORTS.mozilla.ipc += [
 ]
 
 if CONFIG["OS_ARCH"] == "WINNT":
-    SOURCES += [
-        "SharedMemory_windows.cpp",
-        "WindowsMessageLoop.cpp",
-    ]
-else:
-    UNIFIED_SOURCES += [
-        "SharedMemory_posix.cpp",
-    ]
+    SOURCES += ["WindowsMessageLoop.cpp"]
 
 if CONFIG["OS_ARCH"] == "WINNT":
     SOURCES += [
@@ -114,13 +108,20 @@ else:
         "CrossProcessSemaphore_posix.cpp",
     ]
 
+# TODO change to UNIFIED_SOURCES when old shared memory impl removed
 if CONFIG["OS_ARCH"] == "Darwin":
-    EXPORTS.mozilla.ipc += ["SharedMemoryBasic_mach.h"]
-    SOURCES += [
-        "SharedMemoryBasic_mach.mm",
-    ]
+    SOURCES += ["SharedMemory_mach.cpp"]
+    SOURCES += ["SharedMemoryPlatform_mach.cpp"]
+elif CONFIG["OS_ARCH"] == "WINNT":
+    SOURCES += ["SharedMemory_windows.cpp"]
+    SOURCES += ["SharedMemoryPlatform_windows.cpp"]
+elif CONFIG["OS_TARGET"] == "Android":
+    SOURCES += ["SharedMemory_android.cpp"]
+    SOURCES += ["SharedMemoryPlatform_android.cpp"]
 else:
-    EXPORTS.mozilla.ipc += ["SharedMemoryBasic_chromium.h"]
+    SOURCES += ["SharedMemory_posix.cpp"]
+    SOURCES += ["SharedMemoryPlatform_posix.cpp"]
+
 
 if CONFIG["OS_ARCH"] == "Linux":
     UNIFIED_SOURCES += [
@@ -153,6 +154,14 @@ if CONFIG["OS_ARCH"] != "WINNT":
         "FileDescriptorShuffle.cpp",
     ]
 
+if CONFIG["TARGET_OS"] == "iOS":
+    EXPORTS.mozilla.ipc += [
+        "ExtensionKitUtils.h",
+    ]
+    UNIFIED_SOURCES += [
+        "ExtensionKitUtils.mm",
+    ]
+
 EXPORTS.ipc += [
     "EnumSerializer.h",
     "IPCMessageUtils.h",
@@ -163,7 +172,6 @@ UNIFIED_SOURCES += [
     "BackgroundImpl.cpp",
     "BackgroundUtils.cpp",
     "BigBuffer.cpp",
-    "BrowserProcessSubThread.cpp",
     "CrashReporterClient.cpp",
     "CrashReporterHost.cpp",
     "DataPipe.cpp",
@@ -173,9 +181,9 @@ UNIFIED_SOURCES += [
     "IdleSchedulerChild.cpp",
     "IdleSchedulerParent.cpp",
     "InputStreamUtils.cpp",
+    "IOThread.cpp",
     "IPCMessageUtilsSpecializations.cpp",
     "IPCStreamUtils.cpp",
-    "LaunchError.cpp",
     "MessageChannel.cpp",
     "MessageLink.cpp",
     "MessagePump.cpp",
@@ -207,6 +215,9 @@ UNIFIED_SOURCES += [
 SOURCES += [
     "BackgroundChildImpl.cpp",
     "BackgroundParentImpl.cpp",
+    # TODO move to UNIFIED_SOURCES when old shared memory impl is removed
+    "SharedMemoryHandle.cpp",
+    "SharedMemoryMapping.cpp",
 ]
 
 if CONFIG["OS_ARCH"] == "Darwin":
@@ -233,8 +244,8 @@ LOCAL_INCLUDES += [
     "/dom/indexedDB",
     "/dom/storage",
     "/netwerk/base",
+    "/third_party/abseil-cpp",
     "/third_party/libwebrtc",
-    "/third_party/libwebrtc/third_party/abseil-cpp",
     "/tools/fuzzing/ipc",
     "/xpcom/build",
 ]
@@ -284,8 +295,10 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
 
-if CONFIG["OS_ARCH"] == "Darwin":
+if CONFIG["TARGET_OS"] == "OSX":
     OS_LIBS += ["bsm"]  # for audit_token_to_pid
+elif CONFIG["TARGET_OS"] == "iOS":
+    OS_LIBS += ["-framework BrowserEngineKit"]
 
 for var in (
     "MOZ_CHILD_PROCESS_NAME",

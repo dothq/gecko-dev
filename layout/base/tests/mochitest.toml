@@ -2,12 +2,15 @@
 prefs = [
   "formhelper.autozoom.force-disable.test-only=true",
   "gfx.font_loader.delay=0",
+  "ui.dragThresholdX=4", # Bug 1873142
+  "ui.dragThresholdY=4", # Bug 1873142
 ]
 support-files = [
   "Ahem.ttf",
   "file_bug842853.html",
   "file_bug842853.sjs",
   "selection-utils.js",
+  "!/gfx/layers/apz/test/mochitest/apz_test_native_event_utils.js",
   "!/gfx/layers/apz/test/mochitest/apz_test_utils.js",
 ]
 
@@ -177,8 +180,6 @@ support-files = [
   "bug977003_inner_2.html",
   "bug977003_inner_3.html",
   "bug977003_inner_4.html",
-  "bug977003_inner_5.html",
-  "bug977003_inner_6.html",
 ]
 
 ["test_bug990340.html"]
@@ -239,6 +240,8 @@ support-files = ["bug1448730.html"]
 ["test_caret_browsing_around_form_controls.html"]
 skip-if = ["os == 'android'"]
 
+["test_caretPositionFromPoint_insertAnonymousContent.html"]
+
 ["test_dynamic_toolbar_max_height.html"]
 support-files = ["file_dynamic_toolbar_max_height.html"]
 
@@ -246,7 +249,10 @@ support-files = ["file_dynamic_toolbar_max_height.html"]
 
 ["test_emulate_color_scheme.html"]
 
+["test_emulate_forced_colors.html"]
+
 ["test_event_target_radius.html"]
+support-files = ["helper_bug1733509.html"]
 skip-if = ["xorigin"] # JavaScript error: resource://specialpowers/SpecialPowersChild.sys.mjs, line 73: SecurityError: Permission denied to access property "windowUtils" on cross-origin object
 
 ["test_frame_reconstruction_body_table.html"]
@@ -268,6 +274,9 @@ support-files = [
 ]
 
 ["test_getClientRects_emptytext.html"]
+
+["test_interactive_widget.html"]
+run-if = ["os == 'android'"]
 
 ["test_mozPaintCount.html"]
 skip-if = ["os == 'android'"] # android: Requires plugin support
@@ -501,6 +510,8 @@ support-files = [
   "bug1670531-3.html",
   "bug1670531-3-ref.html",
   "bug1670531-4.html",
+  "bug1893673.html",
+  "bug1893673-ref.html",
   "collapse-selection-into-editing-host-during-blur-of-input.html",
   "collapse-selection-into-editing-host-during-blur-of-input-ref.html",
   "image_rgrg-256x256.png",
@@ -558,6 +569,8 @@ support-files = [
   "bug1518339-2-ref.html",
   "bug1529492-1.html",
   "bug1529492-1-ref.html",
+  "bug1896051.html",
+  "bug1896051-ref.html",
   "chrome/blue-32x32.png",
 ]
 
@@ -581,6 +594,9 @@ support-files = [
   "file_synthmousemove.html",
 ]
 
+["test_synthmousemove_after_dnd.html"]
+skip-if = ["os == 'android'"] # Bug 1909020
+
 ["test_transformed_scrolling_repaints.html"]
 
 ["test_transformed_scrolling_repaints_2.html"]
@@ -591,6 +607,9 @@ support-files = [
   "transformed_scrolling_repaints_3_window.html",
   "transformed_scrolling_repaints_3_window_frame.html",
 ]
+
+["test_viewport_units_with_dynamic_toolbar.html"]
+support-files = ["file_viewport_units_with_dynamic_toolbar.html"]
 
 ["test_zoom_restore_bfcache.html"]
 support-files = ["file_zoom_restore_bfcache.html"]

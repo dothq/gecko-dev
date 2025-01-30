@@ -7,11 +7,17 @@
 #ifndef mozilla_PseudoStyleType_h
 #define mozilla_PseudoStyleType_h
 
+#include "mozilla/RefPtr.h"
+#include "nsAtom.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
 
 namespace mozilla {
+namespace dom {
+class Element;
+}  // namespace dom
 
 // The kind of pseudo-style that we have. This can be:
 //
@@ -107,6 +113,57 @@ class PseudoStyle final {
     return aType >= Type::WrapperAnonBoxesStart &&
            aType < Type::WrapperAnonBoxesEnd;
   }
+
+  static bool IsNamedViewTransitionPseudoElement(Type aType) {
+    return aType == Type::viewTransitionGroup ||
+           aType == Type::viewTransitionImagePair ||
+           aType == Type::viewTransitionOld || aType == Type::viewTransitionNew;
+  }
+
+  static bool IsViewTransitionPseudoElement(Type aType) {
+    return aType == Type::viewTransition ||
+           IsNamedViewTransitionPseudoElement(aType);
+  }
+};
+
+/*
+ * The psuedo style request is used to get the pseudo style of an element. This
+ * include a pseudo style type and an identidier which is used for functional
+ * pseudo style.
+ */
+struct PseudoStyleRequest {
+  PseudoStyleRequest() = default;
+  PseudoStyleRequest(PseudoStyleRequest&&) = default;
+  PseudoStyleRequest(const PseudoStyleRequest&) = default;
+  PseudoStyleRequest& operator=(PseudoStyleRequest&&) = default;
+  PseudoStyleRequest& operator=(const PseudoStyleRequest&) = default;
+
+  explicit PseudoStyleRequest(PseudoStyleType aType) : mType(aType) {}
+  PseudoStyleRequest(PseudoStyleType aType, nsAtom* aIdentifier)
+      : mType(aType), mIdentifier(aIdentifier) {}
+
+  bool operator==(const PseudoStyleRequest& aOther) const {
+    return mType == aOther.mType && mIdentifier == aOther.mIdentifier;
+  }
+
+  bool IsNotPseudo() const { return mType == PseudoStyleType::NotPseudo; }
+  bool IsPseudoElementOrNotPseudo() const {
+    return IsNotPseudo() || PseudoStyle::IsPseudoElement(mType);
+  }
+
+  static PseudoStyleRequest NotPseudo() { return PseudoStyleRequest(); }
+  static PseudoStyleRequest Before() {
+    return PseudoStyleRequest(PseudoStyleType::before);
+  }
+  static PseudoStyleRequest After() {
+    return PseudoStyleRequest(PseudoStyleType::after);
+  }
+  static PseudoStyleRequest Marker() {
+    return PseudoStyleRequest(PseudoStyleType::marker);
+  }
+
+  PseudoStyleType mType = PseudoStyleType::NotPseudo;
+  RefPtr<nsAtom> mIdentifier;
 };
 
 }  // namespace mozilla

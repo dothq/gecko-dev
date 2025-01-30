@@ -138,7 +138,7 @@ So for a Histogram that records timing samples like this:
 ```
   "GC_MS": {
     "record_in_processes": ["main", "content"],
-    "products": ["firefox", "geckoview_streaming"],
+    "products": ["firefox"],
     "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org", "jcoppeard@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
@@ -259,7 +259,7 @@ So for a Histogram with artisinal samples like:
 ```
   "CHECKERBOARD_SEVERITY": {
     "record_in_processes": ["main", "content", "gpu"],
-    "products": ["firefox", "fennec", "geckoview_streaming"],
+    "products": ["firefox"],
     "alert_emails": ["gfx-telemetry-alerts@mozilla.com", "botond@mozilla.com"],
     "bug_numbers": [1238040, 1539309, 1584109],
     "releaseChannelCollection": "opt-out",
@@ -326,7 +326,7 @@ For example, for a Histogram of kind `categorical` like:
 ```
   "AVIF_DECODE_RESULT": {
     "record_in_processes": ["main", "content"],
-    "products": ["firefox", "geckoview_streaming"],
+    "products": ["firefox"],
     "alert_emails": ["cchang@mozilla.com", "jbauman@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
@@ -379,10 +379,6 @@ avif:
       - jbauman@mozilla.com
     expires: never
 ```
-
-**N.B:** Glean Labels have a strict regex.
-You may have to transform some categories to
-`snake_case` so that they're safe for the data pipeline.
 
 **GIFFT:** This type of collection is mirrorable back to Firefox Telemetry via the
 [Glean Interface For Firefox Telemetry][gifft].
@@ -527,10 +523,6 @@ urlbar:
     ...
 ```
 
-**N.B:** Glean Labels have a strict regex.
-You may have to transform some categories to
-`snake_case` so that they're safe for the data pipeline.
-
 **GIFFT:** This type of collection is mirrorable back to Firefox Telemetry via the
 [Glean Interface For Firefox Telemetry][gifft].
 See [the guide][gifft] for instructions.
@@ -560,7 +552,7 @@ gfx.display:
       - gfx-telemetry-alerts@mozilla.com
       - ktaeleman@mozilla.com
     products:
-      - 'geckoview_streaming'
+      - 'firefox'
     record_in_processes:
       - 'main'
     release_channel_collection: opt-out
@@ -600,12 +592,66 @@ This is a restriction that favours correctness over friendliness,
 which we may revisit if enough use cases require it.
 Please [contact us][glean-matrix] if you'd like us to do so.
 
-#### Keyed Scalars of `kind: uint` that you call `scalarSet` on - Ask on #glean:mozilla.org for assistance
+#### Keyed Scalars of `kind: uint` that you call `scalarSet` on - Use Glean's `labeled_quantity`
 
-Glean doesn't currently have a good metric type for keyed quantities.
-Please [reach out to us][glean-matrix] to explain your use-case.
-We will help you either work within what Glean currently affords or
-[design a new metric type for you][new-metric-type].
+Distinct from counts which are partial sums,
+Keyed Scalars of `kind: uint` that you _set_ could contain just about anything.
+For these cases, you should use
+[Glean's `labeled_quantity` metric type][labeled-quantity-metric].
+
+For a such a quantitative Keyed Scalar like:
+
+```yaml
+normandy:
+  recipe_freshness:
+    bug_numbers:
+      - 1530508
+    description: >
+      For each recipe ID seen by the Normandy client, its last_modified.
+    expires: "never"
+    keyed: true
+    kind: uint
+    notification_emails:
+      - product-delivery@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+      - 'fennec'
+    record_in_processes:
+      - main
+```
+
+You would migrate it to a `labeled_quantity` like:
+
+```yaml
+  recipe_freshness:
+    type: labeled_quantity
+    description: >
+      For each recipe ID seen by the Normandy client, its last_modified.
+      This metric was generated to correspond to the Legacy Telemetry
+      scalar normandy.recipe_freshness.
+    bugs:
+      - https://bugzil.la/1530508
+    data_reviews:
+      - https://bugzil.la/1530508
+    notification_emails:
+      - product-delivery@mozilla.com
+    expires: never
+    unit: revision id
+    telemetry_mirror: NORMANDY_RECIPE_FRESHNESS
+```
+
+Note the required `unit` property.
+
+**GIFFT:** This type of collection is mirrorable back to Firefox Telemetry via the
+[Glean Interface For Firefox Telemetry][gifft].
+See [the guide][gifft] for instructions.
+
+**IPC Note:** Due to `set` not being a [commutative operation][ipc-docs], using `labeled_quantity`
+on non-parent processes is forbidden.
+This is a restriction that favours correctness over friendliness,
+which we may revisit if enough use cases require it.
+Please [contact us][glean-matrix] if you'd like us to do so.
 
 ### Scalars of `kind: uint` that you call `scalarSetMaximum` or some combination of operations on - Ask on #glean:mozilla.org for assistance
 
@@ -811,10 +857,6 @@ devtools.tool:
     expires: never
 ```
 
-**N.B:** Glean Labels have a strict regex.
-You may have to transform some categories to
-`snake_case` so that they're safe for the data pipeline.
-
 **GIFFT:** This type of collection is mirrorable back to Firefox Telemetry via the
 [Glean Interface For Firefox Telemetry][gifft].
 See [the guide][gifft] for instructions.
@@ -894,6 +936,7 @@ work within what Glean currently affords or
 [datetime-metric]: https://mozilla.github.io/glean/book/reference/metrics/datetime.html
 [event-metric]: https://mozilla.github.io/glean/book/reference/metrics/event.html
 [custom-distribution-metric]: https://mozilla.github.io/glean/book/reference/metrics/custom_distribution.html
+[labeled-quantity-metric]: https://mozilla.github.io/glean/book/reference/metrics/labeled_quantity.html
 [quantity-metric]: https://mozilla.github.io/glean/book/reference/metrics/quantity.html
 [rate-metric]: https://mozilla.github.io/glean/book/reference/metrics/rate.html
 [ipc-dev-doc]: ../dev/ipc.md

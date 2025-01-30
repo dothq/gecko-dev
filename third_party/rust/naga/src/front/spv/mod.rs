@@ -36,6 +36,7 @@ mod null;
 use convert::*;
 pub use error::Error;
 use function::*;
+use indexmap::IndexSet;
 
 use crate::{
     arena::{Arena, Handle, UniqueArena},
@@ -63,6 +64,7 @@ pub const SUPPORTED_CAPABILITIES: &[spirv::Capability] = &[
     spirv::Capability::Int8,
     spirv::Capability::Int16,
     spirv::Capability::Int64,
+    spirv::Capability::Int64Atomics,
     spirv::Capability::Float16,
     spirv::Capability::Float64,
     spirv::Capability::Geometry,
@@ -196,7 +198,7 @@ struct Decoration {
     location: Option<spirv::Word>,
     desc_set: Option<spirv::Word>,
     desc_index: Option<spirv::Word>,
-    specialization: Option<spirv::Word>,
+    specialization_constant_id: Option<spirv::Word>,
     storage_buffer: bool,
     offset: Option<spirv::Word>,
     array_stride: Option<NonZeroU32>,
@@ -214,11 +216,6 @@ impl Decoration {
             Some(ref name) => name.as_str(),
             None => "?",
         }
-    }
-
-    fn specialization(&self) -> crate::Override {
-        self.specialization
-            .map_or(crate::Override::None, crate::Override::ByNameOrId)
     }
 
     const fn resource_binding(&self) -> Option<crate::ResourceBinding> {
@@ -284,8 +281,23 @@ struct LookupType {
 }
 
 #[derive(Debug)]
+enum Constant {
+    Constant(Handle<crate::Constant>),
+    Override(Handle<crate::Override>),
+}
+
+impl Constant {
+    const fn to_expr(&self) -> crate::Expression {
+        match *self {
+            Self::Constant(c) => crate::Expression::Constant(c),
+            Self::Override(o) => crate::Expression::Override(o),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct LookupConstant {
-    handle: Handle<crate::Constant>,
+    inner: Constant,
     type_id: spirv::Word,
 }
 
@@ -303,14 +315,14 @@ struct LookupVariable {
     type_id: spirv::Word,
 }
 
-/// Information about SPIR-V result ids, stored in `Parser::lookup_expression`.
+/// Information about SPIR-V result ids, stored in `Frontend::lookup_expression`.
 #[derive(Clone, Debug)]
 struct LookupExpression {
     /// The `Expression` constructed for this result.
     ///
     /// Note that, while a SPIR-V result id can be used in any block dominated
     /// by its definition, a Naga `Expression` is only in scope for the rest of
-    /// its subtree. `Parser::get_expr_handle` takes care of spilling the result
+    /// its subtree. `Frontend::get_expr_handle` takes care of spilling the result
     /// to a `LocalVariable` which can then be used anywhere.
     handle: Handle<crate::Expression>,
 
@@ -466,7 +478,8 @@ enum MergeBlockInformation {
 ///   definition, whereas Naga expressions are scoped to the rest of their
 ///   subtree. This means that discovering an expression use later in the
 ///   function retroactively requires us to have spilled that expression into a
-///   local variable back before we left its scope.
+///   local variable back before we left its scope. (The docs for
+///   [`Frontend::get_expr_handle`] explain this in more detail.)
 ///
 /// - We translate SPIR-V OpPhi expressions as Naga local variables in which we
 ///   store the appropriate value before jumping to the OpPhi's block.
@@ -529,23 +542,58 @@ struct BlockContext<'function> {
     /// The first element is always the function's top-level block.
     bodies: Vec<Body>,
 
+    /// The module we're building.
+    module: &'function mut crate::Module,
+
     /// Id of the function currently being processed
     function_id: spirv::Word,
     /// Expression arena of the function currently being processed
     expressions: &'function mut Arena<crate::Expression>,
     /// Local variables arena of the function currently being processed
     local_arena: &'function mut Arena<crate::LocalVariable>,
-    /// Constants arena of the module being processed
-    const_arena: &'function mut Arena<crate::Constant>,
-    const_expressions: &'function mut Arena<crate::Expression>,
-    /// Type arena of the module being processed
-    type_arena: &'function UniqueArena<crate::Type>,
-    /// Global arena of the module being processed
-    global_arena: &'function Arena<crate::GlobalVariable>,
     /// Arguments of the function currently being processed
     arguments: &'function [crate::FunctionArgument],
     /// Metadata about the usage of function parameters as sampling objects
     parameter_sampling: &'function mut [image::SamplingFlags],
+}
+
+impl BlockContext<'_> {
+    /// Descend into the expression with the given handle, locating a contained
+    /// global variable.
+    ///
+    /// If the expression doesn't actually refer to something in a global
+    /// variable, we can't upgrade its type in a way that Naga validation would
+    /// pass, so reject the input instead.
+    ///
+    /// This is used to track atomic upgrades.
+    fn get_contained_global_variable(
+        &self,
+        mut handle: Handle<crate::Expression>,
+    ) -> Result<Handle<crate::GlobalVariable>, Error> {
+        log::debug!("\t\tlocating global variable in {handle:?}");
+        loop {
+            match self.expressions[handle] {
+                crate::Expression::Access { base, index: _ } => {
+                    handle = base;
+                    log::debug!("\t\t  access {handle:?}");
+                }
+                crate::Expression::AccessIndex { base, index: _ } => {
+                    handle = base;
+                    log::debug!("\t\t  access index {handle:?}");
+                }
+                crate::Expression::GlobalVariable(h) => {
+                    log::debug!("\t\t  found {h:?}");
+                    return Ok(h);
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+        Err(Error::AtomicUpgradeError(
+            crate::front::atomic_upgrade::Error::GlobalVariableMissing,
+        ))
+    }
 }
 
 enum SignAnchor {
@@ -564,10 +612,15 @@ pub struct Frontend<I> {
     future_member_decor: FastHashMap<(spirv::Word, MemberIndex), Decoration>,
     lookup_member: FastHashMap<(Handle<crate::Type>, MemberIndex), LookupMember>,
     handle_sampling: FastHashMap<Handle<crate::GlobalVariable>, image::SamplingFlags>,
+    /// The set of all global variables accessed by [`Atomic`] statements we've
+    /// generated, so we can upgrade the types of their operands.
+    ///
+    /// [`Atomic`]: crate::Statement::Atomic
+    upgrade_atomics: IndexSet<Handle<crate::GlobalVariable>>,
+
     lookup_type: FastHashMap<spirv::Word, LookupType>,
     lookup_void_type: Option<spirv::Word>,
     lookup_storage_buffer_types: FastHashMap<Handle<crate::Type>, crate::StorageAccess>,
-    // Lookup for samplers and sampled images, storing flags on how they are used.
     lookup_constant: FastHashMap<spirv::Word, LookupConstant>,
     lookup_variable: FastHashMap<spirv::Word, LookupVariable>,
     lookup_expression: FastHashMap<spirv::Word, LookupExpression>,
@@ -620,6 +673,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             future_member_decor: FastHashMap::default(),
             handle_sampling: FastHashMap::default(),
             lookup_member: FastHashMap::default(),
+            upgrade_atomics: Default::default(),
             lookup_type: FastHashMap::default(),
             lookup_void_type: None,
             lookup_storage_buffer_types: FastHashMap::default(),
@@ -757,7 +811,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                 dec.matrix_major = Some(Majority::Row);
             }
             spirv::Decoration::SpecId => {
-                dec.specialization = Some(self.next()?);
+                dec.specialization_constant_id = Some(self.next()?);
             }
             other => {
                 log::warn!("Unknown decoration {:?}", other);
@@ -769,20 +823,76 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         Ok(())
     }
 
-    /// Return the Naga `Expression` for a given SPIR-V result `id`.
+    /// Return the Naga [`Expression`] to use in `body_idx` to refer to the SPIR-V result `id`.
     ///
-    /// `lookup` must be the `LookupExpression` for `id`.
+    /// Ideally, we would just have a map from each SPIR-V instruction id to the
+    /// [`Handle`] for the Naga [`Expression`] we generated for it.
+    /// Unfortunately, SPIR-V and Naga IR are different enough that such a
+    /// straightforward relationship isn't possible.
     ///
-    /// SPIR-V result ids can be used by any block dominated by the id's
-    /// definition, but Naga `Expressions` are only in scope for the remainder
-    /// of their `Statement` subtree. This means that the `Expression` generated
-    /// for `id` may no longer be in scope. In such cases, this function takes
-    /// care of spilling the value of `id` to a `LocalVariable` which can then
-    /// be used anywhere. The SPIR-V domination rule ensures that the
-    /// `LocalVariable` has been initialized before it is used.
+    /// In SPIR-V, an instruction's result id can be used by any instruction
+    /// dominated by that instruction. In Naga, an [`Expression`] is only in
+    /// scope for the remainder of its [`Block`]. In pseudocode:
     ///
-    /// The `body_idx` argument should be the index of the `Body` that hopes to
-    /// use `id`'s `Expression`.
+    /// ```ignore
+    ///     loop {
+    ///         a = f();
+    ///         g(a);
+    ///         break;
+    ///     }
+    ///     h(a);
+    /// ```
+    ///
+    /// Suppose the calls to `f`, `g`, and `h` are SPIR-V instructions. In
+    /// SPIR-V, both the `g` and `h` instructions are allowed to refer to `a`,
+    /// because the loop body, including `f`, dominates both of them.
+    ///
+    /// But if `a` is a Naga [`Expression`], its scope ends at the end of the
+    /// block it's evaluated in: the loop body. Thus, while the [`Expression`]
+    /// we generate for `g` can refer to `a`, the one we generate for `h`
+    /// cannot.
+    ///
+    /// Instead, the SPIR-V front end must generate Naga IR like this:
+    ///
+    /// ```ignore
+    ///     var temp; // INTRODUCED
+    ///     loop {
+    ///         a = f();
+    ///         g(a);
+    ///         temp = a; // INTRODUCED
+    ///     }
+    ///     h(temp); // ADJUSTED
+    /// ```
+    ///
+    /// In other words, where `a` is in scope, [`Expression`]s can refer to it
+    /// directly; but once it is out of scope, we need to spill it to a
+    /// temporary and refer to that instead.
+    ///
+    /// Given a SPIR-V expression `id` and the index `body_idx` of the [body]
+    /// that wants to refer to it:
+    ///
+    /// - If the Naga [`Expression`] we generated for `id` is in scope in
+    ///   `body_idx`, then we simply return its `Handle<Expression>`.
+    ///
+    /// - Otherwise, introduce a new [`LocalVariable`], and add an entry to
+    ///   [`BlockContext::phis`] to arrange for `id`'s value to be spilled to
+    ///   it. Then emit a fresh [`Load`] of that temporary variable for use in
+    ///   `body_idx`'s block, and return its `Handle`.
+    ///
+    /// The SPIR-V domination rule ensures that the introduced [`LocalVariable`]
+    /// will always have been initialized before it is used.
+    ///
+    /// `lookup` must be the [`LookupExpression`] for `id`.
+    ///
+    /// `body_idx` argument must be the index of the [`Body`] that hopes to use
+    /// `id`'s [`Expression`].
+    ///
+    /// [`Expression`]: crate::Expression
+    /// [`Handle`]: crate::Handle
+    /// [`Block`]: crate::Block
+    /// [body]: BlockContext::bodies
+    /// [`LocalVariable`]: crate::LocalVariable
+    /// [`Load`]: crate::Expression::Load
     fn get_expr_handle(
         &self,
         id: spirv::Word,
@@ -929,7 +1039,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
 
         let result_lookup_ty = self.lookup_type.lookup(result_type_id)?;
-        let kind = ctx.type_arena[result_lookup_ty.handle]
+        let kind = ctx.module.types[result_lookup_ty.handle]
             .inner
             .scalar_kind()
             .unwrap();
@@ -995,7 +1105,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             SignAnchor::Operand => p1_lexp.type_id,
         };
         let expected_lookup_ty = self.lookup_type.lookup(expected_type_id)?;
-        let kind = ctx.type_arena[expected_lookup_ty.handle]
+        let kind = ctx.module.types[expected_lookup_ty.handle]
             .inner
             .scalar_kind()
             .unwrap();
@@ -1063,14 +1173,14 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
         let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
         let p1_lookup_ty = self.lookup_type.lookup(p1_lexp.type_id)?;
-        let p1_kind = ctx.type_arena[p1_lookup_ty.handle]
+        let p1_kind = ctx.module.types[p1_lookup_ty.handle]
             .inner
             .scalar_kind()
             .unwrap();
         let p2_lexp = self.lookup_expression.lookup(p2_id)?;
         let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx);
         let p2_lookup_ty = self.lookup_type.lookup(p2_lexp.type_id)?;
-        let p2_kind = ctx.type_arena[p2_lookup_ty.handle]
+        let p2_kind = ctx.module.types[p2_lookup_ty.handle]
             .inner
             .scalar_kind()
             .unwrap();
@@ -1219,6 +1329,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             crate::TypeInner::Array { size, .. } => {
                 let size = match size {
                     crate::ArraySize::Constant(size) => size.get(),
+                    crate::ArraySize::Pending(_) => {
+                        unreachable!();
+                    }
                     // A runtime sized array is not a composite type
                     crate::ArraySize::Dynamic => {
                         return Err(Error::InvalidAccessType(root_type_id))
@@ -1269,6 +1382,109 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             },
             span,
         ))
+    }
+
+    /// Return the Naga [`Expression`] for `pointer_id`, and its referent [`Type`].
+    ///
+    /// Return a [`Handle`] for a Naga [`Expression`] that holds the value of
+    /// the SPIR-V instruction `pointer_id`, along with the [`Type`] to which it
+    /// is a pointer.
+    ///
+    /// This may entail spilling `pointer_id`'s value to a temporary:
+    /// see [`get_expr_handle`]'s documentation.
+    ///
+    /// [`Expression`]: crate::Expression
+    /// [`Type`]: crate::Type
+    /// [`Handle`]: crate::Handle
+    /// [`get_expr_handle`]: Frontend::get_expr_handle
+    fn get_exp_and_base_ty_handles(
+        &self,
+        pointer_id: spirv::Word,
+        ctx: &mut BlockContext,
+        emitter: &mut crate::proc::Emitter,
+        block: &mut crate::Block,
+        body_idx: usize,
+    ) -> Result<(Handle<crate::Expression>, Handle<crate::Type>), Error> {
+        log::trace!("\t\t\tlooking up pointer expr {:?}", pointer_id);
+        let p_lexp_handle;
+        let p_lexp_ty_id;
+        {
+            let lexp = self.lookup_expression.lookup(pointer_id)?;
+            p_lexp_handle = self.get_expr_handle(pointer_id, lexp, ctx, emitter, block, body_idx);
+            p_lexp_ty_id = lexp.type_id;
+        };
+
+        log::trace!("\t\t\tlooking up pointer type {pointer_id:?}");
+        let p_ty = self.lookup_type.lookup(p_lexp_ty_id)?;
+        let p_ty_base_id = p_ty.base_id.ok_or(Error::InvalidAccessType(p_lexp_ty_id))?;
+
+        log::trace!("\t\t\tlooking up pointer base type {p_ty_base_id:?} of {p_ty:?}");
+        let p_base_ty = self.lookup_type.lookup(p_ty_base_id)?;
+
+        Ok((p_lexp_handle, p_base_ty.handle))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_atomic_expr_with_value(
+        &mut self,
+        inst: Instruction,
+        emitter: &mut crate::proc::Emitter,
+        ctx: &mut BlockContext,
+        block: &mut crate::Block,
+        block_id: spirv::Word,
+        body_idx: usize,
+        atomic_function: crate::AtomicFunction,
+    ) -> Result<(), Error> {
+        inst.expect(7)?;
+        let start = self.data_offset;
+        let result_type_id = self.next()?;
+        let result_id = self.next()?;
+        let pointer_id = self.next()?;
+        let _scope_id = self.next()?;
+        let _memory_semantics_id = self.next()?;
+        let value_id = self.next()?;
+        let span = self.span_from_with_op(start);
+
+        let (p_lexp_handle, p_base_ty_handle) =
+            self.get_exp_and_base_ty_handles(pointer_id, ctx, emitter, block, body_idx)?;
+
+        log::trace!("\t\t\tlooking up value expr {value_id:?}");
+        let v_lexp_handle = self.lookup_expression.lookup(value_id)?.handle;
+
+        block.extend(emitter.finish(ctx.expressions));
+        // Create an expression for our result
+        let r_lexp_handle = {
+            let expr = crate::Expression::AtomicResult {
+                ty: p_base_ty_handle,
+                comparison: false,
+            };
+            let handle = ctx.expressions.append(expr, span);
+            self.lookup_expression.insert(
+                result_id,
+                LookupExpression {
+                    handle,
+                    type_id: result_type_id,
+                    block_id,
+                },
+            );
+            handle
+        };
+        emitter.start(ctx.expressions);
+
+        // Create a statement for the op itself
+        let stmt = crate::Statement::Atomic {
+            pointer: p_lexp_handle,
+            fun: atomic_function,
+            value: v_lexp_handle,
+            result: Some(r_lexp_handle),
+        };
+        block.push(stmt, span);
+
+        // Store any associated global variables so we can upgrade their types later
+        self.upgrade_atomics
+            .insert(ctx.get_contained_global_variable(p_lexp_handle)?);
+
+        Ok(())
     }
 
     /// Add the next SPIR-V block's contents to `block_ctx`.
@@ -1393,10 +1609,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         inst.expect(5)?;
                         let init_id = self.next()?;
                         let lconst = self.lookup_constant.lookup(init_id)?;
-                        Some(
-                            ctx.expressions
-                                .append(crate::Expression::Constant(lconst.handle), span),
-                        )
+                        Some(ctx.expressions.append(lconst.inner.to_expr(), span))
                     } else {
                         None
                     };
@@ -1412,7 +1625,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let var_handle = ctx.local_arena.append(
                         crate::LocalVariable {
                             name,
-                            ty: match ctx.type_arena[lookup_ty.handle].inner {
+                            ty: match ctx.module.types[lookup_ty.handle].inner {
                                 crate::TypeInner::Pointer { base, .. } => base,
                                 _ => lookup_ty.handle,
                             },
@@ -1507,7 +1720,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         // This can happen only through `BindingArray`, since
                         // that's the only case where one can obtain a pointer
                         // to an image / sampler, and so let's match on that:
-                        let dereference = match ctx.type_arena[lty.handle].inner {
+                        let dereference = match ctx.module.types[lty.handle].inner {
                             crate::TypeInner::BindingArray { .. } => false,
                             _ => true,
                         };
@@ -1534,7 +1747,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         let index_maybe = match *index_expr_data {
                             crate::Expression::Constant(const_handle) => Some(
                                 ctx.gctx()
-                                    .eval_expr_to_u32(ctx.const_arena[const_handle].init)
+                                    .eval_expr_to_u32(ctx.module.constants[const_handle].init)
                                     .map_err(|_| {
                                         Error::InvalidAccess(crate::Expression::Constant(
                                             const_handle,
@@ -1546,7 +1759,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
 
                         log::trace!("\t\t\tlooking up type {:?}", acex.type_id);
                         let type_lookup = self.lookup_type.lookup(acex.type_id)?;
-                        let ty = &ctx.type_arena[type_lookup.handle];
+                        let ty = &ctx.module.types[type_lookup.handle];
                         acex = match ty.inner {
                             // can only index a struct with a constant
                             crate::TypeInner::Struct { ref members, .. } => {
@@ -1578,7 +1791,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                         debug_assert!(acex.load_override.is_none());
                                         let sub_type_lookup =
                                             self.lookup_type.lookup(lookup_member.type_id)?;
-                                        Some(match ctx.type_arena[sub_type_lookup.handle].inner {
+                                        Some(match ctx.module.types[sub_type_lookup.handle].inner {
                                             // load it transposed, to match column major expectations
                                             crate::TypeInner::Matrix { .. } => {
                                                 let loaded = ctx.expressions.append(
@@ -1727,7 +1940,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let index_handle = get_expr_handle!(index_id, index_lexp);
                     let index_type = self.lookup_type.lookup(index_lexp.type_id)?.handle;
 
-                    let num_components = match ctx.type_arena[root_type_lookup.handle].inner {
+                    let num_components = match ctx.module.types[root_type_lookup.handle].inner {
                         crate::TypeInner::Vector { size, .. } => size as u32,
                         _ => return Err(Error::InvalidVectorType(root_type_lookup.handle)),
                     };
@@ -1806,7 +2019,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let index_handle = get_expr_handle!(index_id, index_lexp);
                     let index_type = self.lookup_type.lookup(index_lexp.type_id)?.handle;
 
-                    let num_components = match ctx.type_arena[root_type_lookup.handle].inner {
+                    let num_components = match ctx.module.types[root_type_lookup.handle].inner {
                         crate::TypeInner::Vector { size, .. } => size as u32,
                         _ => return Err(Error::InvalidVectorType(root_type_lookup.handle)),
                     };
@@ -1877,7 +2090,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         let index = self.next()?;
                         log::trace!("\t\t\tlooking up type {:?}", lexp.type_id);
                         let type_lookup = self.lookup_type.lookup(lexp.type_id)?;
-                        let type_id = match ctx.type_arena[type_lookup.handle].inner {
+                        let type_id = match ctx.module.types[type_lookup.handle].inner {
                             crate::TypeInner::Struct { .. } => {
                                 self.lookup_member
                                     .get(&(type_lookup.handle, index))
@@ -1937,7 +2150,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         result_type_id,
                         object_handle,
                         &selections,
-                        ctx.type_arena,
+                        &ctx.module.types,
                         ctx.expressions,
                         span,
                     )?;
@@ -1966,7 +2179,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     }
                     let ty = self.lookup_type.lookup(result_type_id)?.handle;
                     let first = components[0];
-                    let expr = match ctx.type_arena[ty].inner {
+                    let expr = match ctx.module.types[ty].inner {
                         // this is an optimization to detect the splat
                         crate::TypeInner::Vector { size, .. }
                             if components.len() == size as usize
@@ -1999,7 +2212,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let base_lexp = self.lookup_expression.lookup(pointer_id)?;
                     let base_handle = get_expr_handle!(pointer_id, base_lexp);
                     let type_lookup = self.lookup_type.lookup(base_lexp.type_id)?;
-                    let handle = match ctx.type_arena[type_lookup.handle].inner {
+                    let handle = match ctx.module.types[type_lookup.handle].inner {
                         crate::TypeInner::Image { .. } | crate::TypeInner::Sampler { .. } => {
                             base_handle
                         }
@@ -2145,7 +2358,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     );
 
                     let result_ty = self.lookup_type.lookup(result_type_id)?;
-                    let inner = &ctx.type_arena[result_ty.handle].inner;
+                    let inner = &ctx.module.types[result_ty.handle].inner;
                     let kind = inner.scalar_kind().unwrap();
                     let size = inner.size(ctx.gctx()) as u8;
 
@@ -2373,11 +2586,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let count_handle = get_expr_handle!(count_id, count_lexp);
                     let count_lookup_ty = self.lookup_type.lookup(count_lexp.type_id)?;
 
-                    let offset_kind = ctx.type_arena[offset_lookup_ty.handle]
+                    let offset_kind = ctx.module.types[offset_lookup_ty.handle]
                         .inner
                         .scalar_kind()
                         .unwrap();
-                    let count_kind = ctx.type_arena[count_lookup_ty.handle]
+                    let count_kind = ctx.module.types[count_lookup_ty.handle]
                         .inner
                         .scalar_kind()
                         .unwrap();
@@ -2441,11 +2654,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let count_handle = get_expr_handle!(count_id, count_lexp);
                     let count_lookup_ty = self.lookup_type.lookup(count_lexp.type_id)?;
 
-                    let offset_kind = ctx.type_arena[offset_lookup_ty.handle]
+                    let offset_kind = ctx.module.types[offset_lookup_ty.handle]
                         .inner
                         .scalar_kind()
                         .unwrap();
-                    let count_kind = ctx.type_arena[count_lookup_ty.handle]
+                    let count_kind = ctx.module.types[count_lookup_ty.handle]
                         .inner
                         .scalar_kind()
                         .unwrap();
@@ -2735,14 +2948,14 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let v1_lexp = self.lookup_expression.lookup(v1_id)?;
                     let v1_lty = self.lookup_type.lookup(v1_lexp.type_id)?;
                     let v1_handle = get_expr_handle!(v1_id, v1_lexp);
-                    let n1 = match ctx.type_arena[v1_lty.handle].inner {
+                    let n1 = match ctx.module.types[v1_lty.handle].inner {
                         crate::TypeInner::Vector { size, .. } => size as u32,
                         _ => return Err(Error::InvalidInnerType(v1_lexp.type_id)),
                     };
                     let v2_lexp = self.lookup_expression.lookup(v2_id)?;
                     let v2_lty = self.lookup_type.lookup(v2_lexp.type_id)?;
                     let v2_handle = get_expr_handle!(v2_id, v2_lexp);
-                    let n2 = match ctx.type_arena[v2_lty.handle].inner {
+                    let n2 = match ctx.module.types[v2_lty.handle].inner {
                         crate::TypeInner::Vector { size, .. } => size as u32,
                         _ => return Err(Error::InvalidInnerType(v2_lexp.type_id)),
                     };
@@ -2830,7 +3043,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
 
                     let value_lexp = self.lookup_expression.lookup(value_id)?;
                     let ty_lookup = self.lookup_type.lookup(result_type_id)?;
-                    let scalar = match ctx.type_arena[ty_lookup.handle].inner {
+                    let scalar = match ctx.module.types[ty_lookup.handle].inner {
                         crate::TypeInner::Scalar(scalar)
                         | crate::TypeInner::Vector { scalar, .. }
                         | crate::TypeInner::Matrix { scalar, .. } => scalar,
@@ -2977,8 +3190,8 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         Glo::UnpackHalf2x16 => Mf::Unpack2x16float,
                         Glo::UnpackUnorm2x16 => Mf::Unpack2x16unorm,
                         Glo::UnpackSnorm2x16 => Mf::Unpack2x16snorm,
-                        Glo::FindILsb => Mf::FindLsb,
-                        Glo::FindUMsb | Glo::FindSMsb => Mf::FindMsb,
+                        Glo::FindILsb => Mf::FirstTrailingBit,
+                        Glo::FindUMsb | Glo::FindSMsb => Mf::FirstLeadingBit,
                         // TODO: https://github.com/gfx-rs/naga/issues/2526
                         Glo::Modf | Glo::Frexp => return Err(Error::UnsupportedExtInst(inst_id)),
                         Glo::IMix
@@ -3356,7 +3569,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let selector_lexp = &self.lookup_expression[&selector];
                     let selector_lty = self.lookup_type.lookup(selector_lexp.type_id)?;
                     let selector_handle = get_expr_handle!(selector, selector_lexp);
-                    let selector = match ctx.type_arena[selector_lty.handle].inner {
+                    let selector = match ctx.module.types[selector_lty.handle].inner {
                         crate::TypeInner::Scalar(crate::Scalar {
                             kind: crate::ScalarKind::Uint,
                             width: _,
@@ -3411,7 +3624,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                             .insert(target, (case_body_idx, vec![literal as i32]));
                     }
 
-                    // Loop trough the collected target blocks creating a new case for each
+                    // Loop through the collected target blocks creating a new case for each
                     // literal pointing to it, only one case will have the true body and all the
                     // others will be empty fallthrough so that they all execute the same body
                     // without duplicating code.
@@ -3650,9 +3863,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let exec_scope_const = self.lookup_constant.lookup(exec_scope_id)?;
                     let semantics_const = self.lookup_constant.lookup(semantics_id)?;
 
-                    let exec_scope = resolve_constant(ctx.gctx(), exec_scope_const.handle)
+                    let exec_scope = resolve_constant(ctx.gctx(), &exec_scope_const.inner)
                         .ok_or(Error::InvalidBarrierScope(exec_scope_id))?;
-                    let semantics = resolve_constant(ctx.gctx(), semantics_const.handle)
+                    let semantics = resolve_constant(ctx.gctx(), &semantics_const.inner)
                         .ok_or(Error::InvalidBarrierMemorySemantics(semantics_id))?;
 
                     if exec_scope == spirv::Scope::Workgroup as u32 {
@@ -3692,7 +3905,506 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         },
                     );
                 }
-                _ => return Err(Error::UnsupportedInstruction(self.state, inst.op)),
+                Op::GroupNonUniformBallot => {
+                    inst.expect(5)?;
+                    block.extend(emitter.finish(ctx.expressions));
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let exec_scope_id = self.next()?;
+                    let predicate_id = self.next()?;
+
+                    let exec_scope_const = self.lookup_constant.lookup(exec_scope_id)?;
+                    let _exec_scope = resolve_constant(ctx.gctx(), &exec_scope_const.inner)
+                        .filter(|exec_scope| *exec_scope == spirv::Scope::Subgroup as u32)
+                        .ok_or(Error::InvalidBarrierScope(exec_scope_id))?;
+
+                    let predicate = if self
+                        .lookup_constant
+                        .lookup(predicate_id)
+                        .ok()
+                        .filter(|predicate_const| match predicate_const.inner {
+                            Constant::Constant(constant) => matches!(
+                                ctx.gctx().global_expressions[ctx.gctx().constants[constant].init],
+                                crate::Expression::Literal(crate::Literal::Bool(true)),
+                            ),
+                            Constant::Override(_) => false,
+                        })
+                        .is_some()
+                    {
+                        None
+                    } else {
+                        let predicate_lookup = self.lookup_expression.lookup(predicate_id)?;
+                        let predicate_handle = get_expr_handle!(predicate_id, predicate_lookup);
+                        Some(predicate_handle)
+                    };
+
+                    let result_handle = ctx
+                        .expressions
+                        .append(crate::Expression::SubgroupBallotResult, span);
+                    self.lookup_expression.insert(
+                        result_id,
+                        LookupExpression {
+                            handle: result_handle,
+                            type_id: result_type_id,
+                            block_id,
+                        },
+                    );
+
+                    block.push(
+                        crate::Statement::SubgroupBallot {
+                            result: result_handle,
+                            predicate,
+                        },
+                        span,
+                    );
+                    emitter.start(ctx.expressions);
+                }
+                Op::GroupNonUniformAll
+                | Op::GroupNonUniformAny
+                | Op::GroupNonUniformIAdd
+                | Op::GroupNonUniformFAdd
+                | Op::GroupNonUniformIMul
+                | Op::GroupNonUniformFMul
+                | Op::GroupNonUniformSMax
+                | Op::GroupNonUniformUMax
+                | Op::GroupNonUniformFMax
+                | Op::GroupNonUniformSMin
+                | Op::GroupNonUniformUMin
+                | Op::GroupNonUniformFMin
+                | Op::GroupNonUniformBitwiseAnd
+                | Op::GroupNonUniformBitwiseOr
+                | Op::GroupNonUniformBitwiseXor
+                | Op::GroupNonUniformLogicalAnd
+                | Op::GroupNonUniformLogicalOr
+                | Op::GroupNonUniformLogicalXor => {
+                    block.extend(emitter.finish(ctx.expressions));
+                    inst.expect(
+                        if matches!(inst.op, Op::GroupNonUniformAll | Op::GroupNonUniformAny) {
+                            5
+                        } else {
+                            6
+                        },
+                    )?;
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let exec_scope_id = self.next()?;
+                    let collective_op_id = match inst.op {
+                        Op::GroupNonUniformAll | Op::GroupNonUniformAny => {
+                            crate::CollectiveOperation::Reduce
+                        }
+                        _ => {
+                            let group_op_id = self.next()?;
+                            match spirv::GroupOperation::from_u32(group_op_id) {
+                                Some(spirv::GroupOperation::Reduce) => {
+                                    crate::CollectiveOperation::Reduce
+                                }
+                                Some(spirv::GroupOperation::InclusiveScan) => {
+                                    crate::CollectiveOperation::InclusiveScan
+                                }
+                                Some(spirv::GroupOperation::ExclusiveScan) => {
+                                    crate::CollectiveOperation::ExclusiveScan
+                                }
+                                _ => return Err(Error::UnsupportedGroupOperation(group_op_id)),
+                            }
+                        }
+                    };
+                    let argument_id = self.next()?;
+
+                    let argument_lookup = self.lookup_expression.lookup(argument_id)?;
+                    let argument_handle = get_expr_handle!(argument_id, argument_lookup);
+
+                    let exec_scope_const = self.lookup_constant.lookup(exec_scope_id)?;
+                    let _exec_scope = resolve_constant(ctx.gctx(), &exec_scope_const.inner)
+                        .filter(|exec_scope| *exec_scope == spirv::Scope::Subgroup as u32)
+                        .ok_or(Error::InvalidBarrierScope(exec_scope_id))?;
+
+                    let op_id = match inst.op {
+                        Op::GroupNonUniformAll => crate::SubgroupOperation::All,
+                        Op::GroupNonUniformAny => crate::SubgroupOperation::Any,
+                        Op::GroupNonUniformIAdd | Op::GroupNonUniformFAdd => {
+                            crate::SubgroupOperation::Add
+                        }
+                        Op::GroupNonUniformIMul | Op::GroupNonUniformFMul => {
+                            crate::SubgroupOperation::Mul
+                        }
+                        Op::GroupNonUniformSMax
+                        | Op::GroupNonUniformUMax
+                        | Op::GroupNonUniformFMax => crate::SubgroupOperation::Max,
+                        Op::GroupNonUniformSMin
+                        | Op::GroupNonUniformUMin
+                        | Op::GroupNonUniformFMin => crate::SubgroupOperation::Min,
+                        Op::GroupNonUniformBitwiseAnd | Op::GroupNonUniformLogicalAnd => {
+                            crate::SubgroupOperation::And
+                        }
+                        Op::GroupNonUniformBitwiseOr | Op::GroupNonUniformLogicalOr => {
+                            crate::SubgroupOperation::Or
+                        }
+                        Op::GroupNonUniformBitwiseXor | Op::GroupNonUniformLogicalXor => {
+                            crate::SubgroupOperation::Xor
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let result_type = self.lookup_type.lookup(result_type_id)?;
+
+                    let result_handle = ctx.expressions.append(
+                        crate::Expression::SubgroupOperationResult {
+                            ty: result_type.handle,
+                        },
+                        span,
+                    );
+                    self.lookup_expression.insert(
+                        result_id,
+                        LookupExpression {
+                            handle: result_handle,
+                            type_id: result_type_id,
+                            block_id,
+                        },
+                    );
+
+                    block.push(
+                        crate::Statement::SubgroupCollectiveOperation {
+                            result: result_handle,
+                            op: op_id,
+                            collective_op: collective_op_id,
+                            argument: argument_handle,
+                        },
+                        span,
+                    );
+                    emitter.start(ctx.expressions);
+                }
+                Op::GroupNonUniformBroadcastFirst
+                | Op::GroupNonUniformBroadcast
+                | Op::GroupNonUniformShuffle
+                | Op::GroupNonUniformShuffleDown
+                | Op::GroupNonUniformShuffleUp
+                | Op::GroupNonUniformShuffleXor => {
+                    inst.expect(if matches!(inst.op, Op::GroupNonUniformBroadcastFirst) {
+                        5
+                    } else {
+                        6
+                    })?;
+                    block.extend(emitter.finish(ctx.expressions));
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let exec_scope_id = self.next()?;
+                    let argument_id = self.next()?;
+
+                    let argument_lookup = self.lookup_expression.lookup(argument_id)?;
+                    let argument_handle = get_expr_handle!(argument_id, argument_lookup);
+
+                    let exec_scope_const = self.lookup_constant.lookup(exec_scope_id)?;
+                    let _exec_scope = resolve_constant(ctx.gctx(), &exec_scope_const.inner)
+                        .filter(|exec_scope| *exec_scope == spirv::Scope::Subgroup as u32)
+                        .ok_or(Error::InvalidBarrierScope(exec_scope_id))?;
+
+                    let mode = if matches!(inst.op, Op::GroupNonUniformBroadcastFirst) {
+                        crate::GatherMode::BroadcastFirst
+                    } else {
+                        let index_id = self.next()?;
+                        let index_lookup = self.lookup_expression.lookup(index_id)?;
+                        let index_handle = get_expr_handle!(index_id, index_lookup);
+                        match inst.op {
+                            Op::GroupNonUniformBroadcast => {
+                                crate::GatherMode::Broadcast(index_handle)
+                            }
+                            Op::GroupNonUniformShuffle => crate::GatherMode::Shuffle(index_handle),
+                            Op::GroupNonUniformShuffleDown => {
+                                crate::GatherMode::ShuffleDown(index_handle)
+                            }
+                            Op::GroupNonUniformShuffleUp => {
+                                crate::GatherMode::ShuffleUp(index_handle)
+                            }
+                            Op::GroupNonUniformShuffleXor => {
+                                crate::GatherMode::ShuffleXor(index_handle)
+                            }
+                            _ => unreachable!(),
+                        }
+                    };
+
+                    let result_type = self.lookup_type.lookup(result_type_id)?;
+
+                    let result_handle = ctx.expressions.append(
+                        crate::Expression::SubgroupOperationResult {
+                            ty: result_type.handle,
+                        },
+                        span,
+                    );
+                    self.lookup_expression.insert(
+                        result_id,
+                        LookupExpression {
+                            handle: result_handle,
+                            type_id: result_type_id,
+                            block_id,
+                        },
+                    );
+
+                    block.push(
+                        crate::Statement::SubgroupGather {
+                            result: result_handle,
+                            mode,
+                            argument: argument_handle,
+                        },
+                        span,
+                    );
+                    emitter.start(ctx.expressions);
+                }
+                Op::AtomicLoad => {
+                    inst.expect(6)?;
+                    let start = self.data_offset;
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let pointer_id = self.next()?;
+                    let _scope_id = self.next()?;
+                    let _memory_semantics_id = self.next()?;
+                    let span = self.span_from_with_op(start);
+
+                    log::trace!("\t\t\tlooking up expr {:?}", pointer_id);
+                    let p_lexp_handle =
+                        get_expr_handle!(pointer_id, self.lookup_expression.lookup(pointer_id)?);
+
+                    // Create an expression for our result
+                    let expr = crate::Expression::Load {
+                        pointer: p_lexp_handle,
+                    };
+                    let handle = ctx.expressions.append(expr, span);
+                    self.lookup_expression.insert(
+                        result_id,
+                        LookupExpression {
+                            handle,
+                            type_id: result_type_id,
+                            block_id,
+                        },
+                    );
+
+                    // Store any associated global variables so we can upgrade their types later
+                    self.upgrade_atomics
+                        .insert(ctx.get_contained_global_variable(p_lexp_handle)?);
+                }
+                Op::AtomicStore => {
+                    inst.expect(5)?;
+                    let start = self.data_offset;
+                    let pointer_id = self.next()?;
+                    let _scope_id = self.next()?;
+                    let _memory_semantics_id = self.next()?;
+                    let value_id = self.next()?;
+                    let span = self.span_from_with_op(start);
+
+                    log::trace!("\t\t\tlooking up pointer expr {:?}", pointer_id);
+                    let p_lexp_handle =
+                        get_expr_handle!(pointer_id, self.lookup_expression.lookup(pointer_id)?);
+
+                    log::trace!("\t\t\tlooking up value expr {:?}", pointer_id);
+                    let v_lexp_handle =
+                        get_expr_handle!(value_id, self.lookup_expression.lookup(value_id)?);
+
+                    block.extend(emitter.finish(ctx.expressions));
+                    // Create a statement for the op itself
+                    let stmt = crate::Statement::Store {
+                        pointer: p_lexp_handle,
+                        value: v_lexp_handle,
+                    };
+                    block.push(stmt, span);
+                    emitter.start(ctx.expressions);
+
+                    // Store any associated global variables so we can upgrade their types later
+                    self.upgrade_atomics
+                        .insert(ctx.get_contained_global_variable(p_lexp_handle)?);
+                }
+                Op::AtomicIIncrement | Op::AtomicIDecrement => {
+                    inst.expect(6)?;
+                    let start = self.data_offset;
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let pointer_id = self.next()?;
+                    let _scope_id = self.next()?;
+                    let _memory_semantics_id = self.next()?;
+                    let span = self.span_from_with_op(start);
+
+                    let (p_exp_h, p_base_ty_h) = self.get_exp_and_base_ty_handles(
+                        pointer_id,
+                        ctx,
+                        &mut emitter,
+                        &mut block,
+                        body_idx,
+                    )?;
+
+                    block.extend(emitter.finish(ctx.expressions));
+                    // Create an expression for our result
+                    let r_lexp_handle = {
+                        let expr = crate::Expression::AtomicResult {
+                            ty: p_base_ty_h,
+                            comparison: false,
+                        };
+                        let handle = ctx.expressions.append(expr, span);
+                        self.lookup_expression.insert(
+                            result_id,
+                            LookupExpression {
+                                handle,
+                                type_id: result_type_id,
+                                block_id,
+                            },
+                        );
+                        handle
+                    };
+                    emitter.start(ctx.expressions);
+
+                    // Create a literal "1" to use as our value
+                    let one_lexp_handle = make_index_literal(
+                        ctx,
+                        1,
+                        &mut block,
+                        &mut emitter,
+                        p_base_ty_h,
+                        result_type_id,
+                        span,
+                    )?;
+
+                    // Create a statement for the op itself
+                    let stmt = crate::Statement::Atomic {
+                        pointer: p_exp_h,
+                        fun: match inst.op {
+                            Op::AtomicIIncrement => crate::AtomicFunction::Add,
+                            _ => crate::AtomicFunction::Subtract,
+                        },
+                        value: one_lexp_handle,
+                        result: Some(r_lexp_handle),
+                    };
+                    block.push(stmt, span);
+
+                    // Store any associated global variables so we can upgrade their types later
+                    self.upgrade_atomics
+                        .insert(ctx.get_contained_global_variable(p_exp_h)?);
+                }
+                Op::AtomicCompareExchange => {
+                    inst.expect(9)?;
+
+                    let start = self.data_offset;
+                    let span = self.span_from_with_op(start);
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let pointer_id = self.next()?;
+                    let _memory_scope_id = self.next()?;
+                    let _equal_memory_semantics_id = self.next()?;
+                    let _unequal_memory_semantics_id = self.next()?;
+                    let value_id = self.next()?;
+                    let comparator_id = self.next()?;
+
+                    let (p_exp_h, p_base_ty_h) = self.get_exp_and_base_ty_handles(
+                        pointer_id,
+                        ctx,
+                        &mut emitter,
+                        &mut block,
+                        body_idx,
+                    )?;
+
+                    log::trace!("\t\t\tlooking up value expr {:?}", value_id);
+                    let v_lexp_handle =
+                        get_expr_handle!(value_id, self.lookup_expression.lookup(value_id)?);
+
+                    log::trace!("\t\t\tlooking up comparator expr {:?}", value_id);
+                    let c_lexp_handle = get_expr_handle!(
+                        comparator_id,
+                        self.lookup_expression.lookup(comparator_id)?
+                    );
+
+                    // We know from the SPIR-V spec that the result type must be an integer
+                    // scalar, and we'll need the type itself to get a handle to the atomic
+                    // result struct.
+                    let crate::TypeInner::Scalar(scalar) = ctx.module.types[p_base_ty_h].inner
+                    else {
+                        return Err(
+                            crate::front::atomic_upgrade::Error::CompareExchangeNonScalarBaseType
+                                .into(),
+                        );
+                    };
+
+                    // Get a handle to the atomic result struct type.
+                    let atomic_result_struct_ty_h = ctx.module.generate_predeclared_type(
+                        crate::PredeclaredType::AtomicCompareExchangeWeakResult(scalar),
+                    );
+
+                    block.extend(emitter.finish(ctx.expressions));
+
+                    // Create an expression for our atomic result
+                    let atomic_lexp_handle = {
+                        let expr = crate::Expression::AtomicResult {
+                            ty: atomic_result_struct_ty_h,
+                            comparison: true,
+                        };
+                        ctx.expressions.append(expr, span)
+                    };
+
+                    // Create an dot accessor to extract the value from the
+                    // result struct __atomic_compare_exchange_result<T> and use that
+                    // as the expression for the result_id
+                    {
+                        let expr = crate::Expression::AccessIndex {
+                            base: atomic_lexp_handle,
+                            index: 0,
+                        };
+                        let handle = ctx.expressions.append(expr, span);
+                        // Use this dot accessor as the result id's expression
+                        let _ = self.lookup_expression.insert(
+                            result_id,
+                            LookupExpression {
+                                handle,
+                                type_id: result_type_id,
+                                block_id,
+                            },
+                        );
+                    }
+
+                    emitter.start(ctx.expressions);
+
+                    // Create a statement for the op itself
+                    let stmt = crate::Statement::Atomic {
+                        pointer: p_exp_h,
+                        fun: crate::AtomicFunction::Exchange {
+                            compare: Some(c_lexp_handle),
+                        },
+                        value: v_lexp_handle,
+                        result: Some(atomic_lexp_handle),
+                    };
+                    block.push(stmt, span);
+
+                    // Store any associated global variables so we can upgrade their types later
+                    self.upgrade_atomics
+                        .insert(ctx.get_contained_global_variable(p_exp_h)?);
+                }
+                Op::AtomicExchange
+                | Op::AtomicIAdd
+                | Op::AtomicISub
+                | Op::AtomicSMin
+                | Op::AtomicUMin
+                | Op::AtomicSMax
+                | Op::AtomicUMax
+                | Op::AtomicAnd
+                | Op::AtomicOr
+                | Op::AtomicXor => self.parse_atomic_expr_with_value(
+                    inst,
+                    &mut emitter,
+                    ctx,
+                    &mut block,
+                    block_id,
+                    body_idx,
+                    match inst.op {
+                        Op::AtomicExchange => crate::AtomicFunction::Exchange { compare: None },
+                        Op::AtomicIAdd => crate::AtomicFunction::Add,
+                        Op::AtomicISub => crate::AtomicFunction::Subtract,
+                        Op::AtomicSMin => crate::AtomicFunction::Min,
+                        Op::AtomicUMin => crate::AtomicFunction::Min,
+                        Op::AtomicSMax => crate::AtomicFunction::Max,
+                        Op::AtomicUMax => crate::AtomicFunction::Max,
+                        Op::AtomicAnd => crate::AtomicFunction::And,
+                        Op::AtomicOr => crate::AtomicFunction::InclusiveOr,
+                        _ => crate::AtomicFunction::ExclusiveOr,
+                    },
+                )?,
+
+                _ => {
+                    return Err(Error::UnsupportedInstruction(self.state, inst.op));
+                }
             }
         };
 
@@ -3713,6 +4425,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         &mut self,
         globals: &Arena<crate::GlobalVariable>,
         constants: &Arena<crate::Constant>,
+        overrides: &Arena<crate::Override>,
     ) -> Arena<crate::Expression> {
         let mut expressions = Arena::new();
         #[allow(clippy::panic)]
@@ -3737,8 +4450,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         }
         // register constants
         for (&id, con) in self.lookup_constant.iter() {
-            let span = constants.get_span(con.handle);
-            let handle = expressions.append(crate::Expression::Constant(con.handle), span);
+            let (expr, span) = match con.inner {
+                Constant::Constant(c) => (crate::Expression::Constant(c), constants.get_span(c)),
+                Constant::Override(o) => (crate::Expression::Override(o), overrides.get_span(o)),
+            };
+            let handle = expressions.append(expr, span);
             self.lookup_expression.insert(
                 id,
                 LookupExpression {
@@ -3812,7 +4528,10 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                 | S::Store { .. }
                 | S::ImageStore { .. }
                 | S::Atomic { .. }
-                | S::RayQuery { .. } => {}
+                | S::RayQuery { .. }
+                | S::SubgroupBallot { .. }
+                | S::SubgroupCollectiveOperation { .. }
+                | S::SubgroupGather { .. } => {}
                 S::Call {
                     function: ref mut callee,
                     ref arguments,
@@ -3944,10 +4663,16 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                 Op::TypeSampledImage => self.parse_type_sampled_image(inst),
                 Op::TypeSampler => self.parse_type_sampler(inst, &mut module),
                 Op::Constant | Op::SpecConstant => self.parse_constant(inst, &mut module),
-                Op::ConstantComposite => self.parse_composite_constant(inst, &mut module),
+                Op::ConstantComposite | Op::SpecConstantComposite => {
+                    self.parse_composite_constant(inst, &mut module)
+                }
                 Op::ConstantNull | Op::Undef => self.parse_null_constant(inst, &mut module),
-                Op::ConstantTrue => self.parse_bool_constant(inst, true, &mut module),
-                Op::ConstantFalse => self.parse_bool_constant(inst, false, &mut module),
+                Op::ConstantTrue | Op::SpecConstantTrue => {
+                    self.parse_bool_constant(inst, true, &mut module)
+                }
+                Op::ConstantFalse | Op::SpecConstantFalse => {
+                    self.parse_bool_constant(inst, false, &mut module)
+                }
                 Op::Variable => self.parse_global_variable(inst, &mut module),
                 Op::Function => {
                     self.switch(ModuleState::Function, inst.op)?;
@@ -3958,9 +4683,14 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             }?;
         }
 
+        if !self.upgrade_atomics.is_empty() {
+            log::info!("Upgrading atomic pointers...");
+            module.upgrade_atomics(mem::take(&mut self.upgrade_atomics))?;
+        }
+
         // Do entry point specific processing after all functions are parsed so that we can
         // cull unused problematic builtins of gl_PerVertex.
-        for (ep, fun_id) in core::mem::take(&mut self.deferred_entry_points) {
+        for (ep, fun_id) in mem::take(&mut self.deferred_entry_points) {
             self.process_entry_point(&mut module, ep, fun_id)?;
         }
 
@@ -4105,8 +4835,8 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             .lookup_entry_point
             .get_mut(&ep_id)
             .ok_or(Error::InvalidId(ep_id))?;
-        let mode = spirv::ExecutionMode::from_u32(mode_id)
-            .ok_or(Error::UnsupportedExecutionMode(mode_id))?;
+        let mode =
+            ExecutionMode::from_u32(mode_id).ok_or(Error::UnsupportedExecutionMode(mode_id))?;
 
         match mode {
             ExecutionMode::EarlyFragmentTests => {
@@ -4504,9 +5234,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let length_id = self.next()?;
         let length_const = self.lookup_constant.lookup(length_id)?;
 
-        let size = resolve_constant(module.to_ctx(), length_const.handle)
+        let size = resolve_constant(module.to_ctx(), &length_const.inner)
             .and_then(NonZeroU32::new)
-            .ok_or(Error::InvalidArraySize(length_const.handle))?;
+            .ok_or(Error::InvalidArraySize(length_id))?;
 
         let decor = self.future_decor.remove(&id).unwrap_or_default();
         let base = self.lookup_type.lookup(type_id)?.handle;
@@ -4919,29 +5649,13 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             _ => return Err(Error::UnsupportedType(type_lookup.handle)),
         };
 
-        let decor = self.future_decor.remove(&id).unwrap_or_default();
-
         let span = self.span_from_with_op(start);
 
         let init = module
-            .const_expressions
+            .global_expressions
             .append(crate::Expression::Literal(literal), span);
-        self.lookup_constant.insert(
-            id,
-            LookupConstant {
-                handle: module.constants.append(
-                    crate::Constant {
-                        r#override: decor.specialization(),
-                        name: decor.name,
-                        ty,
-                        init,
-                    },
-                    span,
-                ),
-                type_id,
-            },
-        );
-        Ok(())
+
+        self.insert_parsed_constant(module, id, type_id, ty, init, span)
     }
 
     fn parse_composite_constant(
@@ -4965,34 +5679,18 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             let span = self.span_from_with_op(start);
             let constant = self.lookup_constant.lookup(component_id)?;
             let expr = module
-                .const_expressions
-                .append(crate::Expression::Constant(constant.handle), span);
+                .global_expressions
+                .append(constant.inner.to_expr(), span);
             components.push(expr);
         }
-
-        let decor = self.future_decor.remove(&id).unwrap_or_default();
 
         let span = self.span_from_with_op(start);
 
         let init = module
-            .const_expressions
+            .global_expressions
             .append(crate::Expression::Compose { ty, components }, span);
-        self.lookup_constant.insert(
-            id,
-            LookupConstant {
-                handle: module.constants.append(
-                    crate::Constant {
-                        r#override: decor.specialization(),
-                        name: decor.name,
-                        ty,
-                        init,
-                    },
-                    span,
-                ),
-                type_id,
-            },
-        );
-        Ok(())
+
+        self.insert_parsed_constant(module, id, type_id, ty, init, span)
     }
 
     fn parse_null_constant(
@@ -5010,23 +5708,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let type_lookup = self.lookup_type.lookup(type_id)?;
         let ty = type_lookup.handle;
 
-        let decor = self.future_decor.remove(&id).unwrap_or_default();
-
         let init = module
-            .const_expressions
+            .global_expressions
             .append(crate::Expression::ZeroValue(ty), span);
-        let handle = module.constants.append(
-            crate::Constant {
-                r#override: decor.specialization(),
-                name: decor.name,
-                ty,
-                init,
-            },
-            span,
-        );
-        self.lookup_constant
-            .insert(id, LookupConstant { handle, type_id });
-        Ok(())
+
+        self.insert_parsed_constant(module, id, type_id, ty, init, span)
     }
 
     fn parse_bool_constant(
@@ -5045,27 +5731,44 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let type_lookup = self.lookup_type.lookup(type_id)?;
         let ty = type_lookup.handle;
 
-        let decor = self.future_decor.remove(&id).unwrap_or_default();
-
-        let init = module.const_expressions.append(
+        let init = module.global_expressions.append(
             crate::Expression::Literal(crate::Literal::Bool(value)),
             span,
         );
-        self.lookup_constant.insert(
-            id,
-            LookupConstant {
-                handle: module.constants.append(
-                    crate::Constant {
-                        r#override: decor.specialization(),
-                        name: decor.name,
-                        ty,
-                        init,
-                    },
-                    span,
-                ),
-                type_id,
-            },
-        );
+
+        self.insert_parsed_constant(module, id, type_id, ty, init, span)
+    }
+
+    fn insert_parsed_constant(
+        &mut self,
+        module: &mut crate::Module,
+        id: u32,
+        type_id: u32,
+        ty: Handle<crate::Type>,
+        init: Handle<crate::Expression>,
+        span: crate::Span,
+    ) -> Result<(), Error> {
+        let decor = self.future_decor.remove(&id).unwrap_or_default();
+
+        let inner = if let Some(id) = decor.specialization_constant_id {
+            let o = crate::Override {
+                name: decor.name,
+                id: Some(id.try_into().map_err(|_| Error::SpecIdTooHigh(id))?),
+                ty,
+                init: Some(init),
+            };
+            Constant::Override(module.overrides.append(o, span))
+        } else {
+            let c = crate::Constant {
+                name: decor.name,
+                ty,
+                init,
+            };
+            Constant::Constant(module.constants.append(c, span))
+        };
+
+        self.lookup_constant
+            .insert(id, LookupConstant { inner, type_id });
         Ok(())
     }
 
@@ -5087,8 +5790,8 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             let span = self.span_from_with_op(start);
             let lconst = self.lookup_constant.lookup(init_id)?;
             let expr = module
-                .const_expressions
-                .append(crate::Expression::Constant(lconst.handle), span);
+                .global_expressions
+                .append(lconst.inner.to_expr(), span);
             Some(expr)
         } else {
             None
@@ -5209,7 +5912,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         match null::generate_default_built_in(
                             Some(built_in),
                             ty,
-                            &mut module.const_expressions,
+                            &mut module.global_expressions,
                             span,
                         ) {
                             Ok(handle) => Some(handle),
@@ -5231,14 +5934,14 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                 let handle = null::generate_default_built_in(
                                     built_in,
                                     member.ty,
-                                    &mut module.const_expressions,
+                                    &mut module.global_expressions,
                                     span,
                                 )?;
                                 components.push(handle);
                             }
                             Some(
                                 module
-                                    .const_expressions
+                                    .global_expressions
                                     .append(crate::Expression::Compose { ty, components }, span),
                             )
                         }
@@ -5290,7 +5993,7 @@ fn make_index_literal(
 ) -> Result<Handle<crate::Expression>, Error> {
     block.extend(emitter.finish(ctx.expressions));
 
-    let literal = match ctx.type_arena[index_type].inner.scalar_kind() {
+    let literal = match ctx.module.types[index_type].inner.scalar_kind() {
         Some(crate::ScalarKind::Uint) => crate::Literal::U32(index),
         Some(crate::ScalarKind::Sint) => crate::Literal::I32(index as i32),
         _ => return Err(Error::InvalidIndexType(index_type_id)),
@@ -5303,11 +6006,12 @@ fn make_index_literal(
     Ok(expr)
 }
 
-fn resolve_constant(
-    gctx: crate::proc::GlobalCtx,
-    constant: Handle<crate::Constant>,
-) -> Option<u32> {
-    match gctx.const_expressions[gctx.constants[constant].init] {
+fn resolve_constant(gctx: crate::proc::GlobalCtx, constant: &Constant) -> Option<u32> {
+    let constant = match *constant {
+        Constant::Constant(constant) => constant,
+        Constant::Override(_) => return None,
+    };
+    match gctx.global_expressions[gctx.constants[constant].init] {
         crate::Expression::Literal(crate::Literal::U32(id)) => Some(id),
         crate::Expression::Literal(crate::Literal::I32(id)) => Some(id as u32),
         _ => None,

@@ -155,14 +155,48 @@ class TextInputDelegateTest : BaseSessionTest() {
             ic.commitText(text, newCursorPosition)
             return
         }
+        // InputConnection.commitText might not dispatch composition event if no composition.
+        // So we look both input event and compositionend event for the completion.
         val promise = mainSession.evaluatePromiseJS(
             when (id) {
-                "#designmode" -> "new Promise(r => document.querySelector('$id').contentDocument.addEventListener('compositionend', r, { once: true }))"
-                else -> "new Promise(r => document.querySelector('$id').addEventListener('compositionend', r, { once: true }))"
+                "#designmode" -> """(function() {
+                      const doc = document.querySelector('$id').contentDocument;
+                      const p1 = new Promise(r => doc.addEventListener('compositionend', r, { once: true }));
+                      const p2 = new Promise(
+                          r => doc.addEventListener('input',
+                              function handler(e) {
+                                if (!e.isComposing) {
+                                  r();
+                                  doc.removeEventListener('input', handler);
+                                }
+                              }));
+                      return Promise.any([p1, p2]);
+                    })()
+                """.trimIndent()
+                else -> """(function() {
+                      const element = document.querySelector('$id');
+                      const p1 = new Promise(r => element.addEventListener('compositionend', r, { once: true }));
+                      const p2 = new Promise(
+                          r => element.addEventListener('input',
+                              function handler(e) {
+                                if (!e.isComposing) {
+                                  r();
+                                  element.removeEventListener('input', handler);
+                                }
+                              }));
+                      return Promise.any([p1, p2]);
+                    })()
+                """.trimIndent()
             },
         )
         ic.commitText(text, newCursorPosition)
         promise.value
+
+        // In Gecko, commit text always set caret position to the end of committed text.
+        // So if the newCursorPosition isn't 1, Gecko may notify new position after committing text.
+        if (newCursorPosition != 1) {
+            mainSession.waitForJS("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        }
     }
 
     private fun deleteSurroundingText(ic: InputConnection, before: Int, after: Int) {
@@ -193,6 +227,13 @@ class TextInputDelegateTest : BaseSessionTest() {
         promise.value
     }
 
+    private fun pressKeyNoWait(ic: InputConnection, keyCode: Int) {
+        val time = SystemClock.uptimeMillis()
+        val keyEvent = KeyEvent(time, time, KeyEvent.ACTION_DOWN, keyCode, 0)
+        ic.sendKeyEvent(keyEvent)
+        ic.sendKeyEvent(KeyEvent.changeAction(keyEvent, KeyEvent.ACTION_UP))
+    }
+
     private fun pressKey(ic: InputConnection, keyCode: Int) {
         val promise = mainSession.evaluatePromiseJS(
             when (id) {
@@ -200,10 +241,7 @@ class TextInputDelegateTest : BaseSessionTest() {
                 else -> "new Promise(r => document.querySelector('$id').addEventListener('keyup', r, { once: true }))"
             },
         )
-        val time = SystemClock.uptimeMillis()
-        val keyEvent = KeyEvent(time, time, KeyEvent.ACTION_DOWN, keyCode, 0)
-        ic.sendKeyEvent(keyEvent)
-        ic.sendKeyEvent(KeyEvent.changeAction(keyEvent, KeyEvent.ACTION_UP))
+        pressKeyNoWait(ic, keyCode)
         promise.value
     }
 
@@ -373,6 +411,49 @@ class TextInputDelegateTest : BaseSessionTest() {
             override fun hideSoftInput(session: GeckoSession) {
             }
         })
+    }
+
+    @Test fun restartInput_disableEnable() {
+        assumeThat("input only", id, equalTo("#input"))
+
+        mainSession.textInput.view = View(InstrumentationRegistry.getInstrumentation().targetContext)
+        mainSession.loadTestPath(FORMS_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        mainSession.evaluateJS(
+            """
+            document.querySelector('#tel1').value = "123-45"
+            document.querySelector('#tel1').focus()
+            """.trimIndent(),
+        )
+        mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+
+        val ic = mainSession.textInput.onCreateInputConnection(EditorInfo())!!
+
+        mainSession.delegateDuringNextWait(object : TextInputDelegate {
+            @AssertCalled(count = 0)
+            override fun hideSoftInput(session: GeckoSession) {
+            }
+        })
+
+        var promise = mainSession.evaluatePromiseJS(
+            """
+            new Promise(r =>
+                document.querySelector('#tel1').addEventListener('input', e => {
+                    const element = document.querySelector('#tel1');
+                    element.setAttribute('disabled', 'disabled');
+                    element.value = "123-456";
+                    element.removeAttribute('disabled');
+                    element.focus();
+                    window.setTimeout(r, 100);
+                }, { once: true }));
+            """.trimIndent(),
+        )
+
+        pressKeyNoWait(ic, KeyEvent.KEYCODE_0)
+        promise.value
+
+        assertThat("hideSoftInput isn't called", true, equalTo(true))
     }
 
     private fun getText(ic: InputConnection) =
@@ -680,6 +761,7 @@ class TextInputDelegateTest : BaseSessionTest() {
 
     @WithDisplay(width = 512, height = 512)
     // Child process updates require having a display.
+    @Ignore("Failing frequently, see: https://bugzilla.mozilla.org/show_bug.cgi?id=1741790")
     @Test
     fun inputConnection_selectionByArrowKey() {
         setupContent("")
@@ -1265,6 +1347,48 @@ class TextInputDelegateTest : BaseSessionTest() {
     @WithDisplay(width = 512, height = 512)
     // Child process updates require having a display.
     @Test
+    fun editorInfo_autocorrect() {
+        // design mode is always on.
+        assumeThat("Not in designmode", id, not(equalTo("#designmode")))
+
+        sessionRule.setPrefsUntilTestEnd(mapOf("dom.forms.autocorrect" to true))
+
+        mainSession.textInput.view = View(InstrumentationRegistry.getInstrumentation().targetContext)
+
+        mainSession.loadTestPath(INPUTS_PATH)
+        mainSession.waitForPageStop()
+
+        textContent = ""
+        val values = listOf("on", "off")
+        for (autocorrect in values) {
+            mainSession.evaluateJS(
+                """
+                document.querySelector('$id').setAttribute('autocorrect', '$autocorrect');
+                document.querySelector('$id').focus()""",
+            )
+            mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+
+            val editorInfo = EditorInfo()
+            mainSession.textInput.onCreateInputConnection(editorInfo)
+            assertThat(
+                "EditorInfo.inputType by $autocorrect",
+                editorInfo.inputType and InputType.TYPE_TEXT_FLAG_AUTO_CORRECT,
+                equalTo(
+                    when (autocorrect) {
+                        "on" -> InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
+                        else -> 0
+                    },
+                ),
+            )
+
+            mainSession.evaluateJS("document.querySelector('$id').blur()")
+            mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+        }
+    }
+
+    @WithDisplay(width = 512, height = 512)
+    // Child process updates require having a display.
+    @Test
     fun bug1613804_finishComposingText() {
         mainSession.textInput.view = View(InstrumentationRegistry.getInstrumentation().targetContext)
 
@@ -1296,14 +1420,40 @@ class TextInputDelegateTest : BaseSessionTest() {
         setupContent("")
         val ic = mainSession.textInput.onCreateInputConnection(EditorInfo())!!
 
+        val promise = mainSession.evaluatePromiseJS(
+            when (id) {
+                "#designmode" -> """
+                      new Promise(
+                          r => document.querySelector('$id').contentDocument.addEventListener('keyup', function handler(e) {
+                                if (e.key == "c") {
+                                  r();
+                                  document.querySelector('$id').contentDocument.removeEventListener('keyup', handler);
+                                }
+                              }))
+                """.trimIndent()
+
+                else -> """
+                      new Promise(
+                          r => document.querySelector('$id').addEventListener('keyup', function handler(e) {
+                                if (e.key == "c") {
+                                  r();
+                                  document.querySelector('$id').removeEventListener('keyup', handler);
+                                }
+                              }))
+                """.trimIndent()
+            },
+        )
+
         // Emulate GBoard's InputConnection API calls
         ic.beginBatchEdit()
-        ic.commitText("( ", 1)
-        ic.commitText(")", -1)
+        ic.commitText("ab", 1)
+        ic.commitText("c", -1)
         ic.endBatchEdit()
+
+        promise.value
         processChildEvents()
 
-        assertText("commit ()", ic, "( )")
+        assertText("committed text is \"abc\"", ic, "abc")
     }
 
     // Bug 1593683 - Cursor is jumping when using the arrow keys in input field on GBoard

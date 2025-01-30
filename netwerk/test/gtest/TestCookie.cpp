@@ -25,7 +25,9 @@
 #include "mozilla/Unused.h"
 #include "mozilla/net/CookieJarSettings.h"
 #include "Cookie.h"
+#include "CookieParser.h"
 #include "nsIURI.h"
+#include "nsIConsoleReportCollector.h"
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -35,42 +37,11 @@ static NS_DEFINE_CID(kPrefServiceCID, NS_PREFSERVICE_CID);
 
 // various pref strings
 static const char kCookiesPermissions[] = "network.cookie.cookieBehavior";
-static const char kPrefCookieQuotaPerHost[] = "network.cookie.quotaPerHost";
 static const char kCookiesMaxPerHost[] = "network.cookie.maxPerHost";
 
-#define OFFSET_ONE_WEEK int64_t(604800) * PR_USEC_PER_SEC
-#define OFFSET_ONE_DAY int64_t(86400) * PR_USEC_PER_SEC
-
-// Set server time or expiry time
-void SetTime(PRTime offsetTime, nsAutoCString& serverString,
-             nsAutoCString& cookieString, bool expiry) {
-  char timeStringPreset[40];
-  PRTime CurrentTime = PR_Now();
-  PRTime SetCookieTime = CurrentTime + offsetTime;
-  PRTime SetExpiryTime;
-  if (expiry) {
-    SetExpiryTime = SetCookieTime - OFFSET_ONE_DAY;
-  } else {
-    SetExpiryTime = SetCookieTime + OFFSET_ONE_DAY;
-  }
-
-  // Set server time string
-  PRExplodedTime explodedTime;
-  PR_ExplodeTime(SetCookieTime, PR_GMTParameters, &explodedTime);
-  PR_FormatTimeUSEnglish(timeStringPreset, 40, "%c GMT", &explodedTime);
-  serverString.Assign(timeStringPreset);
-
-  // Set cookie string
-  PR_ExplodeTime(SetExpiryTime, PR_GMTParameters, &explodedTime);
-  PR_FormatTimeUSEnglish(timeStringPreset, 40, "%c GMT", &explodedTime);
-  cookieString.ReplaceLiteral(
-      0, strlen("test=expiry; expires=") + strlen(timeStringPreset) + 1,
-      "test=expiry; expires=");
-  cookieString.Append(timeStringPreset);
-}
-
 void SetACookieInternal(nsICookieService* aCookieService, const char* aSpec,
-                        const char* aCookieString, bool aAllowed) {
+                        const nsTArray<const char*>& aCookieStrings,
+                        bool aAllowed) {
   nsCOMPtr<nsIURI> uri;
   NS_NewURI(getter_AddRefs(uri), aSpec);
 
@@ -95,24 +66,35 @@ void SetACookieInternal(nsICookieService* aCookieService, const char* aSpec,
                                       /* shouldResistFingerprinting */ false)
           : CookieJarSettings::GetBlockingAll(
                 /* shouldResistFingerprinting */ false);
-  MOZ_ASSERT(cookieJarSettings);
+  MOZ_RELEASE_ASSERT(cookieJarSettings);
 
   nsCOMPtr<nsILoadInfo> loadInfo = dummyChannel->LoadInfo();
   loadInfo->SetCookieJarSettings(cookieJarSettings);
 
-  nsresult rv = aCookieService->SetCookieStringFromHttp(
-      uri, nsDependentCString(aCookieString), dummyChannel);
-  EXPECT_NS_SUCCEEDED(rv);
+  for (const char* cookieString : aCookieStrings) {
+    nsresult rv = aCookieService->SetCookieStringFromHttp(
+        uri, nsDependentCString(cookieString), dummyChannel);
+    EXPECT_NS_SUCCEEDED(rv);
+  }
 }
 
 void SetACookieJarBlocked(nsICookieService* aCookieService, const char* aSpec,
                           const char* aCookieString) {
-  SetACookieInternal(aCookieService, aSpec, aCookieString, false);
+  nsTArray<const char*> cookieStrings;
+  cookieStrings.AppendElement(aCookieString);
+  SetACookieInternal(aCookieService, aSpec, cookieStrings, false);
 }
 
 void SetACookie(nsICookieService* aCookieService, const char* aSpec,
                 const char* aCookieString) {
-  SetACookieInternal(aCookieService, aSpec, aCookieString, true);
+  nsTArray<const char*> cookieStrings;
+  cookieStrings.AppendElement(aCookieString);
+  SetACookieInternal(aCookieService, aSpec, cookieStrings, true);
+}
+
+void SetACookie(nsICookieService* aCookieService, const char* aSpec,
+                const nsTArray<const char*>& aCookieStrings) {
+  SetACookieInternal(aCookieService, aSpec, aCookieStrings, true);
 }
 
 // The cookie string is returned via aCookie.
@@ -140,7 +122,7 @@ void GetACookieNoHttp(nsICookieService* aCookieService, const char* aSpec,
 
   RefPtr<BasePrincipal> principal =
       BasePrincipal::CreateContentPrincipal(uri, OriginAttributes());
-  MOZ_ASSERT(principal);
+  MOZ_RELEASE_ASSERT(principal);
 
   nsCOMPtr<mozilla::dom::Document> document;
   nsresult rv = NS_NewDOMDocument(getter_AddRefs(document),
@@ -153,7 +135,12 @@ void GetACookieNoHttp(nsICookieService* aCookieService, const char* aSpec,
                                   DocumentFlavorHTML);
   Unused << NS_WARN_IF(NS_FAILED(rv));
 
-  Unused << aCookieService->GetCookieStringFromDocument(document, aCookie);
+  nsAutoString cookie;
+  ErrorResult err;
+  document->GetCookie(cookie, err);
+  EXPECT_TRUE(!err.Failed());
+
+  CopyUTF16toUTF8(cookie, aCookie);
 }
 
 // some #defines for comparison rules
@@ -207,6 +194,9 @@ void InitPrefs(nsIPrefBranch* aPrefBranch) {
   Preferences::SetBool("network.cookieJarSettings.unblocked_for_testing", true);
   Preferences::SetBool("dom.securecontext.allowlist_onions", false);
   Preferences::SetBool("network.cookie.sameSite.schemeful", false);
+
+  // Disable a few security checks for document.cookie
+  Preferences::SetBool("dom.cookie.testing.enabled", true);
 }
 
 TEST(TestCookie, TestCookieMain)
@@ -381,10 +371,7 @@ TEST(TestCookie, TestCookieMain)
   GetACookie(cookieService, "http://path.net/foo/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
 
-  // bug 373228: make sure cookies with paths longer than 1024 bytes,
-  // and cookies with paths or names containing tabs, are rejected.
-  // the following cookie has a path > 1024 bytes explicitly specified in the
-  // cookie
+  // attributes with size > 1024 are ignored.
   SetACookie(
       cookieService, "http://path.net/",
       "test=path; "
@@ -423,12 +410,14 @@ TEST(TestCookie, TestCookieMain)
       "789012345678901234567890123456789012345678901234567890123456789012345678"
       "9012345678901234567890",
       cookie);
-  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test=path"));
+  GetACookie(cookieService, "http://path.net/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test=path"));
   // the following cookie has a path > 1024 bytes implicitly specified by the
   // uri path
   SetACookie(
       cookieService,
-      "http://path.net/"
+      "http://longpath.net/"
       "123456789012345678901234567890123456789012345678901234567890123456789012"
       "345678901234567890123456789012345678901234567890123456789012345678901234"
       "567890123456789012345678901234567890123456789012345678901234567890123456"
@@ -447,7 +436,7 @@ TEST(TestCookie, TestCookieMain)
       "test=path");
   GetACookie(
       cookieService,
-      "http://path.net/"
+      "http://longpath.net/"
       "123456789012345678901234567890123456789012345678901234567890123456789012"
       "345678901234567890123456789012345678901234567890123456789012345678901234"
       "567890123456789012345678901234567890123456789012345678901234567890123456"
@@ -466,20 +455,23 @@ TEST(TestCookie, TestCookieMain)
       cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
   // the following cookie includes a tab in the path
-  SetACookie(cookieService, "http://path.net/", "test=path; path=/foo\tbar/");
-  GetACookie(cookieService, "http://path.net/foo\tbar/", cookie);
+  SetACookie(cookieService, "http://pathwithtab.net/",
+             "test=path; path=/foo\tbar/");
+  GetACookie(cookieService, "http://pathwithtab.net/foo\tbar/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
   // the following cookie includes a tab in the name
-  SetACookie(cookieService, "http://path.net/", "test\ttabs=tab");
-  GetACookie(cookieService, "http://path.net/", cookie);
-  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+  SetACookie(cookieService, "http://pathwithtab.net/", "test\ttabs=tab");
+  GetACookie(cookieService, "http://pathwithtab.net/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test\ttabs=tab"));
   // the following cookie includes a tab in the value - allowed
-  SetACookie(cookieService, "http://path.net/", "test=tab\ttest");
-  GetACookie(cookieService, "http://path.net/", cookie);
-  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test=tab\ttest"));
-  SetACookie(cookieService, "http://path.net/", "test=tab\ttest; max-age=-1");
-  GetACookie(cookieService, "http://path.net/", cookie);
-  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+  SetACookie(cookieService, "http://pathwithtab.net/", "test=tab\ttest");
+  GetACookie(cookieService, "http://pathwithtab.net/", cookie);
+  EXPECT_TRUE(
+      CheckResult(cookie.get(), MUST_EQUAL, "test\ttabs=tab; test=tab\ttest"));
+  SetACookie(cookieService, "http://pathwithtab.net/",
+             "test=tab\ttest; max-age=-1");
+  GetACookie(cookieService, "http://pathwithtab.net/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test\ttabs=tab"));
 
   // *** expiry & deletion tests
   // XXX add server time str parsing tests here
@@ -553,9 +545,10 @@ TEST(TestCookie, TestCookieMain)
   // test the setting of multiple cookies, and test the order of precedence
   // (a later cookie overwriting an earlier one, in the same header string)
   SetACookie(cookieService, "http://multiple.cookies/",
-             "test=multiple; domain=.multiple.cookies \n test=different \n "
-             "test=same; domain=.multiple.cookies \n newtest=ciao \n "
-             "newtest=foo; max-age=-6 \n newtest=reincarnated");
+             nsTArray<const char*>{
+                 "test=multiple; domain=.multiple.cookies ", " test=different ",
+                 " test=same; domain=.multiple.cookies ", "newtest=ciao ",
+                 "newtest=foo; max-age=-6 ", " newtest=reincarnated"});
   GetACookie(cookieService, "http://multiple.cookies/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_NOT_CONTAIN, "test=multiple"));
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "test=different"));
@@ -568,7 +561,7 @@ TEST(TestCookie, TestCookieMain)
   GetACookie(cookieService, "http://multiple.cookies/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_NOT_CONTAIN, "test=same"));
   SetACookie(cookieService, "http://multiple.cookies/",
-             "\n test=different; max-age=0 \n");
+             nsTArray<const char*>{"", " test=different; max-age=0 ", ""});
   GetACookie(cookieService, "http://multiple.cookies/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_NOT_CONTAIN, "test=different"));
   SetACookie(cookieService, "http://multiple.cookies/",
@@ -589,13 +582,16 @@ TEST(TestCookie, TestCookieMain)
   GetACookie(cookieService, "http://parser.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
   SetACookie(cookieService, "http://parser.test/",
-             "test=\"fubar! = foo;bar\\\";\" parser; domain=.parser.test; "
-             "max-age=6\nfive; max-age=2.63,");
+             nsTArray<const char*>{
+                 "test=\"fubar! = foo;bar\\\";\" parser; domain=.parser.test; "
+                 "max-age=6",
+                 "five; max-age=2.63,"});
   GetACookie(cookieService, "http://parser.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, R"(test="fubar! = foo)"));
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "five"));
   SetACookie(cookieService, "http://parser.test/",
-             "test=kill; domain=.parser.test; max-age=0 \n five; max-age=0");
+             nsTArray<const char*>{"test=kill; domain=.parser.test; max-age=0 ",
+                                   " five; max-age=0"});
   GetACookie(cookieService, "http://parser.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
 
@@ -622,8 +618,10 @@ TEST(TestCookie, TestCookieMain)
   SetACookie(cookieService, "http://multi.path.tests/",
              "test1=path; path=/one/two/three");
   SetACookie(cookieService, "http://multi.path.tests/",
-             "test2=path; path=/one \n test3=path; path=/one/two/three/four \n "
-             "test4=path; path=/one/two \n test5=path; path=/one/two/");
+             nsTArray<const char*>{"test2=path; path=/one ",
+                                   " test3=path; path=/one/two/three/four ",
+                                   " test4=path; path=/one/two ",
+                                   " test5=path; path=/one/two/"});
   SetACookie(cookieService, "http://multi.path.tests/one/two/three/four/five/",
              "test6=path");
   SetACookie(cookieService,
@@ -767,7 +765,10 @@ TEST(TestCookie, TestCookieMain)
                                                  INT64_MAX,  // expiry time
                                                  &attrs,     // originAttributes
                                                  nsICookie::SAMESITE_NONE,
-                                                 nsICookie::SCHEME_HTTPS)));
+                                                 nsICookie::SCHEME_HTTPS,
+                                                 false,   // is partitioned
+                                                 nullptr  // operation ID
+                                                 )));
   EXPECT_TRUE(NS_SUCCEEDED(cookieMgr2->AddNative(
       "cookiemgr.test"_ns,             // domain
       "/foo"_ns,                       // path
@@ -778,7 +779,10 @@ TEST(TestCookie, TestCookieMain)
       true,                            // is session
       PR_Now() / PR_USEC_PER_SEC + 2,  // expiry time
       &attrs,                          // originAttributes
-      nsICookie::SAMESITE_NONE, nsICookie::SCHEME_HTTPS)));
+      nsICookie::SAMESITE_NONE, nsICookie::SCHEME_HTTPS,
+      false,   // is partitioned
+      nullptr  // operation ID
+      )));
   EXPECT_TRUE(NS_SUCCEEDED(cookieMgr2->AddNative("new.domain"_ns,  // domain
                                                  "/rabbit"_ns,     // path
                                                  "test3"_ns,       // name
@@ -789,7 +793,10 @@ TEST(TestCookie, TestCookieMain)
                                                  INT64_MAX,  // expiry time
                                                  &attrs,     // originAttributes
                                                  nsICookie::SAMESITE_NONE,
-                                                 nsICookie::SCHEME_HTTPS)));
+                                                 nsICookie::SCHEME_HTTPS,
+                                                 false,   // is partitioned
+                                                 nullptr  // operation ID
+                                                 )));
   // confirm using enumerator
   nsTArray<RefPtr<nsICookie>> cookies;
   EXPECT_NS_SUCCEEDED(cookieMgr->GetCookies(cookies));
@@ -1123,4 +1130,81 @@ TEST(TestCookie, BlockUnicode)
 
   EXPECT_NS_SUCCEEDED(cookieMgr->RemoveAll());
   Preferences::ClearUser("network.cookie.blockUnicode");
+}
+
+TEST(TestCookie, MaxAgeParser)
+{
+  nsCOMPtr<nsIURI> uri;
+  NS_NewURI(getter_AddRefs(uri), "https://maxage.net");
+
+  nsCOMPtr<nsIIOService> service = do_GetIOService();
+
+  nsCOMPtr<nsIChannel> channel;
+  Unused << service->NewChannelFromURI(
+      uri, nullptr, nsContentUtils::GetSystemPrincipal(),
+      nsContentUtils::GetSystemPrincipal(), 0, nsIContentPolicy::TYPE_DOCUMENT,
+      getter_AddRefs(channel));
+
+  nsCOMPtr<nsIConsoleReportCollector> crc = do_QueryInterface(channel);
+
+  CookieParser cp(crc, uri);
+
+  int64_t value;
+  EXPECT_FALSE(cp.ParseMaxAgeAttribute(""_ns, &value));
+
+  EXPECT_TRUE(cp.ParseMaxAgeAttribute("0"_ns, &value));
+  EXPECT_EQ(value, 0);
+
+  EXPECT_TRUE(cp.ParseMaxAgeAttribute("1"_ns, &value));
+  EXPECT_EQ(value, 1);
+
+  EXPECT_TRUE(cp.ParseMaxAgeAttribute("1234"_ns, &value));
+  EXPECT_EQ(value, 1234);
+
+  EXPECT_TRUE(cp.ParseMaxAgeAttribute("00000000000000001234"_ns, &value));
+  EXPECT_EQ(value, 1234);
+
+  EXPECT_TRUE(cp.ParseMaxAgeAttribute("-1234"_ns, &value));
+  EXPECT_EQ(value, INT64_MIN);
+
+  {
+    nsCString str;
+    for (int i = 0; i < 1024; ++i) {
+      str.Append("9");
+    }
+    EXPECT_TRUE(cp.ParseMaxAgeAttribute(str, &value));
+    EXPECT_EQ(value, INT64_MAX);
+  }
+
+  EXPECT_FALSE(cp.ParseMaxAgeAttribute("1234a"_ns, &value));
+  EXPECT_FALSE(cp.ParseMaxAgeAttribute("12a34"_ns, &value));
+  EXPECT_FALSE(cp.ParseMaxAgeAttribute("12🌊34"_ns, &value));
+
+  nsresult rv;
+  nsCOMPtr<nsICookieManager> cookieMgr =
+      do_GetService(NS_COOKIEMANAGER_CONTRACTID, &rv);
+  ASSERT_NS_SUCCEEDED(rv);
+
+  EXPECT_NS_SUCCEEDED(cookieMgr->RemoveAll());
+
+  nsCOMPtr<nsICookieService> cookieService =
+      do_GetService(kCookieServiceCID, &rv);
+  ASSERT_NS_SUCCEEDED(rv);
+
+  SetACookie(cookieService, "http://maxage.net/", "a=1; max-age=1234");
+
+  nsCString cookieStr;
+  GetACookie(cookieService, "http://maxage.net/", cookieStr);
+  EXPECT_TRUE(CheckResult(cookieStr.get(), MUST_EQUAL, "a=1"));
+
+  nsTArray<RefPtr<nsICookie>> cookies;
+  EXPECT_NS_SUCCEEDED(cookieMgr->GetCookies(cookies));
+  EXPECT_EQ(cookies.Length(), (uint64_t)1);
+
+  Cookie* cookie = static_cast<Cookie*>(cookies[0].get());
+  EXPECT_FALSE(cookie->IsSession());
+
+  SetACookie(cookieService, "http://maxage.net/", "a=1; max-age=-1");
+  GetACookie(cookieService, "http://maxage.net/", cookieStr);
+  EXPECT_TRUE(CheckResult(cookieStr.get(), MUST_EQUAL, ""));
 }

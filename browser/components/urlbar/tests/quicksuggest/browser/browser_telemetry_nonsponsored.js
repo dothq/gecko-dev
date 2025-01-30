@@ -7,13 +7,6 @@
 
 "use strict";
 
-ChromeUtils.defineESModuleGetters(this, {
-  CONTEXTUAL_SERVICES_PING_TYPES:
-    "resource:///modules/PartnerLinkAttribution.sys.mjs",
-});
-
-const { TELEMETRY_SCALARS } = UrlbarProviderQuickSuggest;
-
 const REMOTE_SETTINGS_RESULT = {
   id: 1,
   url: "https://example.com/nonsponsored",
@@ -42,14 +35,11 @@ add_setup(async function () {
   });
 });
 
-add_tasks_with_rust(async function nonsponsored() {
+add_task(async function nonsponsored() {
   let match_type = "firefox-suggest";
   let advertiser = REMOTE_SETTINGS_RESULT.advertiser.toLowerCase();
   let reporting_url = undefined;
-  let source = UrlbarPrefs.get("quicksuggest.rustEnabled")
-    ? "rust"
-    : "remote-settings";
-  let block_id = source == "rust" ? undefined : REMOTE_SETTINGS_RESULT.id;
+  let source = "rust";
 
   // Make sure `improve_suggest_experience_checked` is recorded correctly
   // depending on the value of the related pref.
@@ -67,26 +57,12 @@ add_tasks_with_rust(async function nonsponsored() {
       suggestion: REMOTE_SETTINGS_RESULT,
       // impression-only
       impressionOnly: {
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_NONSPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "impression_only",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
         ping: {
           type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
           payload: {
             source,
             match_type,
             position,
-            block_id,
             advertiser,
             reporting_url,
             suggested_index: -1,
@@ -98,20 +74,6 @@ add_tasks_with_rust(async function nonsponsored() {
       },
       // click
       click: {
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_NONSPONSORED]: position,
-          [TELEMETRY_SCALARS.CLICK_NONSPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "click",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
         pings: [
           {
             type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -119,7 +81,6 @@ add_tasks_with_rust(async function nonsponsored() {
               source,
               match_type,
               position,
-              block_id,
               advertiser,
               reporting_url,
               suggested_index: -1,
@@ -134,7 +95,6 @@ add_tasks_with_rust(async function nonsponsored() {
               source,
               match_type,
               position,
-              block_id,
               advertiser,
               reporting_url,
               suggested_index: -1,
@@ -148,20 +108,6 @@ add_tasks_with_rust(async function nonsponsored() {
         // dismiss
         {
           command: "dismiss",
-          scalars: {
-            [TELEMETRY_SCALARS.IMPRESSION_NONSPONSORED]: position,
-            [TELEMETRY_SCALARS.BLOCK_NONSPONSORED]: position,
-          },
-          event: {
-            category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-            method: "engagement",
-            object: "block",
-            extra: {
-              suggestion_type,
-              match_type,
-              position: position.toString(),
-            },
-          },
           pings: [
             {
               type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -169,7 +115,6 @@ add_tasks_with_rust(async function nonsponsored() {
                 source,
                 match_type,
                 position,
-                block_id,
                 advertiser,
                 reporting_url,
                 suggested_index: -1,
@@ -184,7 +129,6 @@ add_tasks_with_rust(async function nonsponsored() {
                 source,
                 match_type,
                 position,
-                block_id,
                 advertiser,
                 suggested_index: -1,
                 suggested_index_relative_to_group: true,
@@ -194,23 +138,9 @@ add_tasks_with_rust(async function nonsponsored() {
             },
           ],
         },
-        // help
+        // manage
         {
-          command: "help",
-          scalars: {
-            [TELEMETRY_SCALARS.IMPRESSION_NONSPONSORED]: position,
-            [TELEMETRY_SCALARS.HELP_NONSPONSORED]: position,
-          },
-          event: {
-            category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-            method: "engagement",
-            object: "help",
-            extra: {
-              suggestion_type,
-              match_type,
-              position: position.toString(),
-            },
-          },
+          command: "manage",
           pings: [
             {
               type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -218,7 +148,6 @@ add_tasks_with_rust(async function nonsponsored() {
                 source,
                 match_type,
                 position,
-                block_id,
                 advertiser,
                 reporting_url,
                 suggested_index: -1,

@@ -25,22 +25,12 @@ const CONTENT_BLOCKING_PREFS = [
   "privacy.fingerprintingProtection.pbmode",
 ];
 
-/*
- * Prefs that are unique to sanitizeOnShutdown and are not shared
- * with the deleteOnClose mechanism like privacy.clearOnShutdown.cookies, -cache and -offlineApps
- */
-const SANITIZE_ON_SHUTDOWN_PREFS_ONLY = [
-  "privacy.clearOnShutdown.history",
-  "privacy.clearOnShutdown.downloads",
-  "privacy.clearOnShutdown.sessions",
-  "privacy.clearOnShutdown.formdata",
-  "privacy.clearOnShutdown.siteSettings",
-];
-
 const PREF_OPT_OUT_STUDIES_ENABLED = "app.shield.optoutstudies.enabled";
 const PREF_NORMANDY_ENABLED = "app.normandy.enabled";
 
 const PREF_ADDON_RECOMMENDATIONS_ENABLED = "browser.discovery.enabled";
+const PREF_PRIVATE_ATTRIBUTION_ENABLED =
+  "dom.private-attribution.submission.enabled";
 
 const PREF_PASSWORD_GENERATION_AVAILABLE = "signon.generation.available";
 const { BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN } = Ci.nsICookieService;
@@ -60,11 +50,15 @@ ChromeUtils.defineLazyGetter(this, "AlertsServiceDND", function () {
   }
 });
 
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "OS_AUTH_ENABLED",
-  "signon.management.page.os-auth.enabled",
-  true
+ChromeUtils.defineLazyGetter(lazy, "AboutLoginsL10n", () => {
+  return new Localization(["branding/brand.ftl", "browser/aboutLogins.ftl"]);
+});
+
+XPCOMUtils.defineLazyServiceGetter(
+  lazy,
+  "gParentalControlsService",
+  "@mozilla.org/parental-controls-service;1",
+  "nsIParentalControlsService"
 );
 
 XPCOMUtils.defineLazyPreferenceGetter(
@@ -83,7 +77,36 @@ XPCOMUtils.defineLazyPreferenceGetter(
 
 ChromeUtils.defineESModuleGetters(this, {
   DoHConfigController: "resource:///modules/DoHConfig.sys.mjs",
+  Sanitizer: "resource:///modules/Sanitizer.sys.mjs",
 });
+
+const SANITIZE_ON_SHUTDOWN_MAPPINGS = {
+  history: "privacy.clearOnShutdown.history",
+  downloads: "privacy.clearOnShutdown.downloads",
+  formdata: "privacy.clearOnShutdown.formdata",
+  sessions: "privacy.clearOnShutdown.sessions",
+  siteSettings: "privacy.clearOnShutdown.siteSettings",
+  cookies: "privacy.clearOnShutdown.cookies",
+  cache: "privacy.clearOnShutdown.cache",
+  offlineApps: "privacy.clearOnShutdown.offlineApps",
+};
+
+/*
+ * Prefs that are unique to sanitizeOnShutdown and are not shared
+ * with the deleteOnClose mechanism like privacy.clearOnShutdown.cookies, -cache and -offlineApps
+ */
+const SANITIZE_ON_SHUTDOWN_PREFS_ONLY = [
+  "privacy.clearOnShutdown.history",
+  "privacy.clearOnShutdown.downloads",
+  "privacy.clearOnShutdown.sessions",
+  "privacy.clearOnShutdown.formdata",
+  "privacy.clearOnShutdown.siteSettings",
+];
+
+const SANITIZE_ON_SHUTDOWN_PREFS_ONLY_V2 = [
+  "privacy.clearOnShutdown_v2.historyFormDataAndDownloads",
+  "privacy.clearOnShutdown_v2.siteSettings",
+];
 
 Preferences.addAll([
   // Content blocking / Tracking Protection
@@ -148,13 +171,20 @@ Preferences.addAll([
   { id: "privacy.sanitize.sanitizeOnShutdown", type: "bool" },
   { id: "privacy.sanitize.timeSpan", type: "int" },
   { id: "privacy.clearOnShutdown.cookies", type: "bool" },
+  { id: "privacy.clearOnShutdown_v2.cookiesAndStorage", type: "bool" },
   { id: "privacy.clearOnShutdown.cache", type: "bool" },
+  { id: "privacy.clearOnShutdown_v2.cache", type: "bool" },
   { id: "privacy.clearOnShutdown.offlineApps", type: "bool" },
   { id: "privacy.clearOnShutdown.history", type: "bool" },
+  {
+    id: "privacy.clearOnShutdown_v2.historyFormDataAndDownloads",
+    type: "bool",
+  },
   { id: "privacy.clearOnShutdown.downloads", type: "bool" },
   { id: "privacy.clearOnShutdown.sessions", type: "bool" },
   { id: "privacy.clearOnShutdown.formdata", type: "bool" },
   { id: "privacy.clearOnShutdown.siteSettings", type: "bool" },
+  { id: "privacy.clearOnShutdown_v2.siteSettings", type: "bool" },
 
   // Do not track
   { id: "privacy.donottrackheader.enabled", type: "bool" },
@@ -250,6 +280,7 @@ if (AppConstants.MOZ_DATA_REPORTING) {
     { id: PREF_OPT_OUT_STUDIES_ENABLED, type: "bool" },
     { id: PREF_ADDON_RECOMMENDATIONS_ENABLED, type: "bool" },
     { id: PREF_UPLOAD_ENABLED, type: "bool" },
+    { id: "dom.private-attribution.submission.enabled", type: "bool" },
   ]);
 }
 // Privacy segmentation section
@@ -480,6 +511,15 @@ var gPrivacyPane = {
     let httpsOnlyExceptionButton = document.getElementById(
       "httpsOnlyExceptionButton"
     );
+    let httpsOnlyRadioEnabled = document.getElementById(
+      "httpsOnlyRadioEnabled"
+    );
+    let httpsOnlyRadioEnabledPBM = document.getElementById(
+      "httpsOnlyRadioEnabledPBM"
+    );
+    let httpsOnlyRadioDisabled = document.getElementById(
+      "httpsOnlyRadioDisabled"
+    );
 
     if (httpsOnlyOnPref) {
       httpsOnlyRadioGroup.value = "enabled";
@@ -501,6 +541,23 @@ var gPrivacyPane = {
     ) {
       httpsOnlyRadioGroup.disabled = true;
     }
+
+    document.l10n.setAttributes(
+      httpsOnlyRadioEnabled,
+      httpsFirstOnPref ? "httpsonly-radio-enabled2" : "httpsonly-radio-enabled"
+    );
+    document.l10n.setAttributes(
+      httpsOnlyRadioEnabledPBM,
+      httpsFirstOnPref
+        ? "httpsonly-radio-enabled-pbm2"
+        : "httpsonly-radio-enabled-pbm"
+    );
+    document.l10n.setAttributes(
+      httpsOnlyRadioDisabled,
+      httpsFirstOnPref
+        ? "httpsonly-radio-disabled2"
+        : "httpsonly-radio-disabled"
+    );
   },
 
   syncToHttpsOnlyPref() {
@@ -631,12 +688,9 @@ var gPrivacyPane = {
         customInput.hidden = true;
         Services.prefs.setStringPref("network.trr.uri", menu.value);
       }
-      Services.telemetry.recordEvent(
-        "security.doh.settings",
-        "provider_choice",
-        "value",
-        menu.value
-      );
+      Glean.securityDohSettings.providerChoiceValue.record({
+        value: menu.value,
+      });
 
       // Update other menu too.
       let otherMode = mode == "dohEnabled" ? "dohStrict" : "dohEnabled";
@@ -682,11 +736,14 @@ var gPrivacyPane = {
 
     function computeStatus() {
       let mode = Services.dns.currentTrrMode;
-      let confirmationState = Services.dns.currentTrrConfirmationState;
       if (
         mode == Ci.nsIDNSService.MODE_TRRFIRST ||
         mode == Ci.nsIDNSService.MODE_TRRONLY
       ) {
+        if (lazy.gParentalControlsService.parentalControlsEnabled) {
+          return "preferences-doh-status-not-active";
+        }
+        let confirmationState = Services.dns.currentTrrConfirmationState;
         switch (confirmationState) {
           case Ci.nsIDNSService.CONFIRM_TRYING_OK:
           case Ci.nsIDNSService.CONFIRM_OK:
@@ -702,7 +759,16 @@ var gPrivacyPane = {
 
     let errReason = "";
     let confirmationStatus = Services.dns.lastConfirmationStatus;
-    if (confirmationStatus != Cr.NS_OK) {
+    let mode = Services.dns.currentTrrMode;
+    if (
+      (mode == Ci.nsIDNSService.MODE_TRRFIRST ||
+        mode == Ci.nsIDNSService.MODE_TRRONLY) &&
+      lazy.gParentalControlsService.parentalControlsEnabled
+    ) {
+      errReason = Services.dns.getTRRSkipReasonName(
+        Ci.nsITRRSkipReason.TRR_PARENTAL_CONTROL
+      );
+    } else if (confirmationStatus != Cr.NS_OK) {
       errReason = ChromeUtils.getXPCOMErrorName(confirmationStatus);
     } else {
       errReason = Services.dns.getTRRSkipReasonName(
@@ -786,6 +852,29 @@ var gPrivacyPane = {
       Services.prefs.clearUserPref("doh-rollout.disable-heuristics");
     }
 
+    // Bug 1861285
+    // When the mode is set to 2 or 3, we need to check if network.trr.uri is a empty string.
+    // In this case, we need to update network.trr.uri to default to fallbackProviderURI.
+    // This occurs when the mode is previously set to 0 (Default Protection).
+    if (
+      value == Ci.nsIDNSService.MODE_TRRFIRST ||
+      value == Ci.nsIDNSService.MODE_TRRONLY
+    ) {
+      if (!Services.prefs.getStringPref("network.trr.uri")) {
+        Services.prefs.setStringPref(
+          "network.trr.uri",
+          DoHConfigController.currentConfig.fallbackProviderURI
+        );
+      }
+    }
+
+    // Bug 1900672
+    // When the mode is set to 5, clear the pref to ensure that
+    // network.trr.uri is set to fallbackProviderURIwhen the mode is set to 2 or 3 afterwards
+    if (value == Ci.nsIDNSService.MODE_TRROFF) {
+      Services.prefs.clearUserPref("network.trr.uri");
+    }
+
     gPrivacyPane.updateDoHStatus();
   },
 
@@ -793,8 +882,6 @@ var gPrivacyPane = {
    * Init DoH corresponding prefs
    */
   initDoH() {
-    Services.telemetry.setEventRecordingEnabled("security.doh.settings", true);
-
     setEventListener("dohDefaultArrow", "command", this.toggleExpansion);
     setEventListener("dohEnabledArrow", "command", this.toggleExpansion);
     setEventListener("dohStrictArrow", "command", this.toggleExpansion);
@@ -806,12 +893,9 @@ var gPrivacyPane = {
       ) {
         return;
       }
-      Services.telemetry.recordEvent(
-        "security.doh.settings",
-        "mode_changed",
-        "button",
-        e.target.id
-      );
+      Glean.securityDohSettings.modeChangedButton.record({
+        value: e.target.id,
+      });
     }
 
     setEventListener("dohDefaultRadio", "command", modeButtonPressed);
@@ -820,12 +904,9 @@ var gPrivacyPane = {
     setEventListener("dohOffRadio", "command", modeButtonPressed);
 
     function warnCheckboxClicked(e) {
-      Services.telemetry.recordEvent(
-        "security.doh.settings",
-        "warn_checkbox",
-        "checkbox",
-        `${e.target.checked}`
-      );
+      Glean.securityDohSettings.warnCheckboxCheckbox.record({
+        value: e.target.checked,
+      });
     }
 
     setEventListener("dohWarnCheckbox1", "command", warnCheckboxClicked);
@@ -908,10 +989,6 @@ var gPrivacyPane = {
     this.networkCookieBehaviorReadPrefs();
     this._initTrackingProtectionExtensionControl();
     this._initThirdPartyCertsToggle();
-
-    Services.telemetry.setEventRecordingEnabled("privacy.ui.fpp", true);
-
-    Services.telemetry.setEventRecordingEnabled("pwmgr", true);
 
     Preferences.get("privacy.trackingprotection.enabled").on(
       "change",
@@ -1034,6 +1111,7 @@ var gPrivacyPane = {
     this._initPasswordGenerationUI();
     this._initRelayIntegrationUI();
     this._initMasterPasswordUI();
+    this._initOSAuthentication();
 
     this.initListenersForExtensionControllingPasswordManager();
 
@@ -1165,15 +1243,11 @@ var gPrivacyPane = {
         "command",
         gPrivacyPane.updateSubmitHealthReport
       );
-      setEventListener(
-        "telemetryDataDeletionLearnMore",
-        "click",
-        gPrivacyPane.showDataDeletion
-      );
       if (AppConstants.MOZ_NORMANDY) {
         this.initOptOutStudyCheckbox();
       }
       this.initAddonRecommendationsCheckbox();
+      this.initPrivateAttributionCheckbox();
     }
 
     let signonBundle = document.getElementById("signonBundle");
@@ -1188,6 +1262,22 @@ var gPrivacyPane = {
     if (!PrivateBrowsingUtils.enabled) {
       document.getElementById("privateBrowsingAutoStart").hidden = true;
       document.querySelector("menuitem[value='dontremember']").hidden = true;
+    }
+
+    let privateBrowsingPref = Preferences.get(
+      "browser.privatebrowsing.autostart"
+    );
+
+    if (privateBrowsingPref.locked) {
+      // If permanent private browsing mode is locked to off,
+      // disable the "Never Remember History" option
+      document.querySelector("menuitem[value='dontremember']").disabled =
+        !privateBrowsingPref.value;
+
+      // If we're locked in permanent private browsing mode,
+      // disable the dropdown menu completely
+      document.getElementById("historyMode").disabled =
+        privateBrowsingPref.value;
     }
 
     /* init HTTPS-Only mode */
@@ -1459,12 +1549,10 @@ var gPrivacyPane = {
 
       // Hide all cookie options first, until we learn which one should be showing.
       document.querySelector(selector + " .all-cookies-option").hidden = true;
-      document.querySelector(
-        selector + " .unvisited-cookies-option"
-      ).hidden = true;
-      document.querySelector(
-        selector + " .cross-site-cookies-option"
-      ).hidden = true;
+      document.querySelector(selector + " .unvisited-cookies-option").hidden =
+        true;
+      document.querySelector(selector + " .cross-site-cookies-option").hidden =
+        true;
       document.querySelector(
         selector + " .third-party-tracking-cookies-option"
       ).hidden = true;
@@ -1480,24 +1568,20 @@ var gPrivacyPane = {
         // Note "cookieBehavior0", will result in no UI changes, so is not listed here.
         switch (item) {
           case "tp":
-            document.querySelector(
-              selector + " .trackers-option"
-            ).hidden = false;
+            document.querySelector(selector + " .trackers-option").hidden =
+              false;
             break;
           case "-tp":
-            document.querySelector(
-              selector + " .trackers-option"
-            ).hidden = true;
+            document.querySelector(selector + " .trackers-option").hidden =
+              true;
             break;
           case "tpPrivate":
-            document.querySelector(
-              selector + " .pb-trackers-option"
-            ).hidden = false;
+            document.querySelector(selector + " .pb-trackers-option").hidden =
+              false;
             break;
           case "-tpPrivate":
-            document.querySelector(
-              selector + " .pb-trackers-option"
-            ).hidden = true;
+            document.querySelector(selector + " .pb-trackers-option").hidden =
+              true;
             break;
           case "fp":
             document.querySelector(
@@ -1510,14 +1594,12 @@ var gPrivacyPane = {
             ).hidden = true;
             break;
           case "cm":
-            document.querySelector(
-              selector + " .cryptominers-option"
-            ).hidden = false;
+            document.querySelector(selector + " .cryptominers-option").hidden =
+              false;
             break;
           case "-cm":
-            document.querySelector(
-              selector + " .cryptominers-option"
-            ).hidden = true;
+            document.querySelector(selector + " .cryptominers-option").hidden =
+              true;
             break;
           case "stp":
             // Store social tracking cookies pref
@@ -1532,9 +1614,8 @@ var gPrivacyPane = {
             break;
           case "-stp":
             // Store social tracking cookies pref
-            document.querySelector(
-              selector + " .social-media-option"
-            ).hidden = true;
+            document.querySelector(selector + " .social-media-option").hidden =
+              true;
             break;
           case "cookieBehavior1":
             document.querySelector(
@@ -1542,9 +1623,8 @@ var gPrivacyPane = {
             ).hidden = false;
             break;
           case "cookieBehavior2":
-            document.querySelector(
-              selector + " .all-cookies-option"
-            ).hidden = false;
+            document.querySelector(selector + " .all-cookies-option").hidden =
+              false;
             break;
           case "cookieBehavior3":
             document.querySelector(
@@ -2074,12 +2154,31 @@ var gPrivacyPane = {
    * On loading the page, assigns the state to the deleteOnClose checkbox that fits the pref selection
    */
   initDeleteOnCloseBox() {
+    // Make sure to do the migration for the clear history dialog before implementing logic for delete on close
+    // This needs to be done to make sure the migration is done before any pref changes are made to avoid unintentionally
+    // overwriting prefs
+    Sanitizer.maybeMigratePrefs("clearOnShutdown");
+
     let deleteOnCloseBox = document.getElementById("deleteOnClose");
-    deleteOnCloseBox.checked =
-      (Preferences.get("privacy.sanitize.sanitizeOnShutdown").value &&
+
+    // We have to branch between the old clear on shutdown prefs and new prefs after the clear history revamp (Bug 1853996)
+    // Once the old dialog is deprecated, we can remove these branches.
+    let isCookiesAndStorageClearingOnShutdown;
+    if (useOldClearHistoryDialog) {
+      isCookiesAndStorageClearingOnShutdown =
+        Preferences.get("privacy.sanitize.sanitizeOnShutdown").value &&
         Preferences.get("privacy.clearOnShutdown.cookies").value &&
         Preferences.get("privacy.clearOnShutdown.cache").value &&
-        Preferences.get("privacy.clearOnShutdown.offlineApps").value) ||
+        Preferences.get("privacy.clearOnShutdown.offlineApps").value;
+    } else {
+      isCookiesAndStorageClearingOnShutdown =
+        Preferences.get("privacy.sanitize.sanitizeOnShutdown").value &&
+        Preferences.get("privacy.clearOnShutdown_v2.cookiesAndStorage").value &&
+        Preferences.get("privacy.clearOnShutdown_v2.cache").value;
+    }
+
+    deleteOnCloseBox.checked =
+      isCookiesAndStorageClearingOnShutdown ||
       Preferences.get("browser.privatebrowsing.autostart").value;
   },
 
@@ -2092,12 +2191,17 @@ var gPrivacyPane = {
     let sanitizeOnShutdownPref = Preferences.get(
       "privacy.sanitize.sanitizeOnShutdown"
     );
+
     // ClearOnClose cleaning categories
-    let cookiePref = Preferences.get("privacy.clearOnShutdown.cookies");
-    let cachePref = Preferences.get("privacy.clearOnShutdown.cache");
-    let offlineAppsPref = Preferences.get(
-      "privacy.clearOnShutdown.offlineApps"
-    );
+    let cookiePref = useOldClearHistoryDialog
+      ? Preferences.get("privacy.clearOnShutdown.cookies")
+      : Preferences.get("privacy.clearOnShutdown_v2.cookiesAndStorage");
+    let cachePref = useOldClearHistoryDialog
+      ? Preferences.get("privacy.clearOnShutdown.cache")
+      : Preferences.get("privacy.clearOnShutdown_v2.cache");
+    let offlineAppsPref = useOldClearHistoryDialog
+      ? Preferences.get("privacy.clearOnShutdown.offlineApps")
+      : Preferences.get("privacy.clearOnShutdown_v2.cookiesAndStorage");
 
     // Sync the cleaning prefs with the deleteOnClose box
     deleteOnCloseBox.addEventListener("command", () => {
@@ -2137,18 +2241,32 @@ var gPrivacyPane = {
    */
   _onSanitizePrefChangeSyncClearOnClose() {
     let deleteOnCloseBox = document.getElementById("deleteOnClose");
-    deleteOnCloseBox.checked =
-      Preferences.get("privacy.clearOnShutdown.cookies").value &&
-      Preferences.get("privacy.clearOnShutdown.cache").value &&
-      Preferences.get("privacy.clearOnShutdown.offlineApps").value &&
-      Preferences.get("privacy.sanitize.sanitizeOnShutdown").value;
+
+    // We have to branch between the old clear on shutdown prefs and new prefs after the clear history revamp (Bug 1853996)
+    // Once the old dialog is deprecated, we can remove these branches.
+    if (useOldClearHistoryDialog) {
+      deleteOnCloseBox.checked =
+        Preferences.get("privacy.sanitize.sanitizeOnShutdown").value &&
+        Preferences.get("privacy.clearOnShutdown.cookies").value &&
+        Preferences.get("privacy.clearOnShutdown.cache").value &&
+        Preferences.get("privacy.clearOnShutdown.offlineApps").value;
+    } else {
+      deleteOnCloseBox.checked =
+        Preferences.get("privacy.sanitize.sanitizeOnShutdown").value &&
+        Preferences.get("privacy.clearOnShutdown_v2.cookiesAndStorage").value &&
+        Preferences.get("privacy.clearOnShutdown_v2.cache").value;
+    }
   },
 
   /*
    * Unsets cleaning prefs that do not belong to DeleteOnClose
    */
   _resetCleaningPrefs() {
-    SANITIZE_ON_SHUTDOWN_PREFS_ONLY.forEach(
+    let sanitizeOnShutdownPrefsArray = useOldClearHistoryDialog
+      ? SANITIZE_ON_SHUTDOWN_PREFS_ONLY
+      : SANITIZE_ON_SHUTDOWN_PREFS_ONLY_V2;
+
+    return sanitizeOnShutdownPrefsArray.forEach(
       pref => (Preferences.get(pref).value = false)
     );
   },
@@ -2157,7 +2275,11 @@ var gPrivacyPane = {
    Checks if the user set cleaning prefs that do not belong to DeleteOnClose
    */
   _isCustomCleaningPrefPresent() {
-    return SANITIZE_ON_SHUTDOWN_PREFS_ONLY.some(
+    let sanitizeOnShutdownPrefsArray = useOldClearHistoryDialog
+      ? SANITIZE_ON_SHUTDOWN_PREFS_ONLY
+      : SANITIZE_ON_SHUTDOWN_PREFS_ONLY_V2;
+
+    return sanitizeOnShutdownPrefsArray.some(
       pref => Preferences.get(pref).value
     );
   },
@@ -2590,7 +2712,10 @@ var gPrivacyPane = {
   _updateFirefoxSuggestToggle(onInit = false) {
     let container = document.getElementById("firefoxSuggestPrivacyContainer");
 
-    if (UrlbarPrefs.get("quickSuggestEnabled")) {
+    if (
+      UrlbarPrefs.get("quickSuggestEnabled") &&
+      !UrlbarPrefs.get("quickSuggestHideSettingsUI")
+    ) {
       container.removeAttribute("hidden");
     } else if (!onInit) {
       container.setAttribute("hidden", "true");
@@ -2844,8 +2969,7 @@ var gPrivacyPane = {
     // OS reauthenticate functionality is not available on Linux yet (bug 1527745)
     if (
       !LoginHelper.isPrimaryPasswordSet() &&
-      OS_AUTH_ENABLED &&
-      OSKeyStore.canReauth()
+      LoginHelper.getOSAuthEnabled(LoginHelper.OS_AUTH_FOR_PASSWORDS_PREF)
     ) {
       // Uses primary-password-os-auth-dialog-message-win and
       // primary-password-os-auth-dialog-message-macosx via concatenation:
@@ -2887,10 +3011,22 @@ var gPrivacyPane = {
       "privacy.globalprivacycontrol.functionality.enabled",
       false
     );
-    document.getElementById("globalPrivacyControlBox").hidden =
-      !gpcEnabledPrefValue;
-    document.getElementById("doNotTrackBox").hidden = !gpcEnabledPrefValue;
-    document.getElementById("legacyDoNotTrackBox").hidden = gpcEnabledPrefValue;
+    let dntEnabledPrefValue = Services.prefs.getBoolPref(
+      "privacy.donottrackheader.enabled",
+      false
+    );
+    document.getElementById("doNotTrackBox").hidden = !dntEnabledPrefValue;
+    // We can't rely on the hidden attribute for groupboxes because the pane
+    // hiding/showing code can interfere (and fires after this).
+    if (gpcEnabledPrefValue) {
+      document
+        .getElementById("nonTechnicalPrivacyGroup")
+        .removeAttribute("style");
+    } else {
+      document
+        .getElementById("nonTechnicalPrivacyGroup")
+        .setAttribute("style", "display: none !important");
+    }
   },
 
   /**
@@ -2910,10 +3046,10 @@ var gPrivacyPane = {
     const checkbox = document.getElementById("relayIntegration");
     if (checkbox.checked) {
       FirefoxRelay.markAsAvailable();
-      FirefoxRelayTelemetry.recordRelayPrefEvent("enabled");
+      Glean.relayIntegration.enabledPrefChange.record();
     } else {
       FirefoxRelay.markAsDisabled();
-      FirefoxRelayTelemetry.recordRelayPrefEvent("disabled");
+      Glean.relayIntegration.disabledPrefChange.record();
     }
   },
 
@@ -2942,6 +3078,57 @@ var gPrivacyPane = {
     this._updateRelayIntegrationUI();
   },
 
+  async _toggleOSAuth() {
+    let osReauthCheckbox = document.getElementById("osReauthCheckbox");
+
+    const messageText = await lazy.AboutLoginsL10n.formatValue(
+      "about-logins-os-auth-dialog-message"
+    );
+    const captionText = await lazy.AboutLoginsL10n.formatValue(
+      "about-logins-os-auth-dialog-caption"
+    );
+    let win =
+      osReauthCheckbox.ownerGlobal.docShell.chromeEventHandler.ownerGlobal;
+
+    // Calling OSKeyStore.ensureLoggedIn() instead of LoginHelper.verifyOSAuth()
+    // since we want to authenticate user each time this stting is changed.
+    let isAuthorized = (
+      await OSKeyStore.ensureLoggedIn(messageText, captionText, win, false)
+    ).authenticated;
+    if (!isAuthorized) {
+      osReauthCheckbox.checked = !osReauthCheckbox.checked;
+      return;
+    }
+
+    // If osReauthCheckbox is checked enable osauth.
+    LoginHelper.setOSAuthEnabled(
+      LoginHelper.OS_AUTH_FOR_PASSWORDS_PREF,
+      osReauthCheckbox.checked
+    );
+  },
+
+  _initOSAuthentication() {
+    let osReauthCheckbox = document.getElementById("osReauthCheckbox");
+    if (
+      !OSKeyStore.canReauth() ||
+      Services.prefs.getBoolPref("security.nocertdb", false)
+    ) {
+      osReauthCheckbox.hidden = true;
+      return;
+    }
+
+    osReauthCheckbox.setAttribute(
+      "checked",
+      LoginHelper.getOSAuthEnabled(LoginHelper.OS_AUTH_FOR_PASSWORDS_PREF)
+    );
+
+    setEventListener(
+      "osReauthCheckbox",
+      "command",
+      gPrivacyPane._toggleOSAuth.bind(gPrivacyPane)
+    );
+  },
+
   /**
    * Shows the sites where the user has saved passwords and the associated login
    * information.
@@ -2949,7 +3136,7 @@ var gPrivacyPane = {
   showPasswords() {
     let loginManager = window.windowGlobalChild.getActor("LoginManager");
     loginManager.sendAsyncMessage("PasswordManager:OpenPreferences", {
-      entryPoint: "preferences",
+      entryPoint: "Preferences",
     });
   },
 
@@ -3195,21 +3382,11 @@ var gPrivacyPane = {
     gSubDialog.open("chrome://pippki/content/device_manager.xhtml");
   },
 
-  /**
-   * Displays the learn more health report page when a user opts out of data collection.
-   */
-  showDataDeletion() {
-    let url =
-      Services.urlFormatter.formatURLPref("app.support.baseURL") +
-      "telemetry-clientid";
-    window.open(url, "_blank");
-  },
-
   initDataCollection() {
     if (
       !AppConstants.MOZ_DATA_REPORTING &&
-      !NimbusFeatures.majorRelease2022.getVariable(
-        "feltPrivacyShowPreferencesSection"
+      !Services.prefs.getBoolPref(
+        "browser.privacySegmentation.preferences.show"
       )
     ) {
       // Nothing to control in the data collection section, remove it.
@@ -3236,16 +3413,19 @@ var gPrivacyPane = {
     // Section visibility
     let section = document.getElementById("privacySegmentationSection");
     let updatePrivacySegmentationSectionVisibilityState = () => {
-      section.hidden = !NimbusFeatures.majorRelease2022.getVariable(
-        "feltPrivacyShowPreferencesSection"
+      section.hidden = !Services.prefs.getBoolPref(
+        "browser.privacySegmentation.preferences.show"
       );
     };
 
-    NimbusFeatures.majorRelease2022.onUpdate(
+    Services.prefs.addObserver(
+      "browser.privacySegmentation.preferences.show",
       updatePrivacySegmentationSectionVisibilityState
     );
+
     window.addEventListener("unload", () => {
-      NimbusFeatures.majorRelease2022.offUpdate(
+      Services.prefs.removeObserver(
+        "browser.privacySegmentation.preferences.show",
         updatePrivacySegmentationSectionVisibilityState
       );
     });
@@ -3328,22 +3508,27 @@ var gPrivacyPane = {
     const allowedByPolicy = Services.policies.isAllowed("Shield");
     const checkbox = document.getElementById("optOutStudiesEnabled");
 
-    if (
-      allowedByPolicy &&
-      Services.prefs.getBoolPref(PREF_NORMANDY_ENABLED, false)
-    ) {
-      if (Services.prefs.getBoolPref(PREF_OPT_OUT_STUDIES_ENABLED, false)) {
-        checkbox.setAttribute("checked", "true");
+    function updateCheckbox() {
+      if (
+        allowedByPolicy &&
+        Services.prefs.getBoolPref(PREF_UPLOAD_ENABLED, false) &&
+        Services.prefs.getBoolPref(PREF_NORMANDY_ENABLED, false)
+      ) {
+        if (Services.prefs.getBoolPref(PREF_OPT_OUT_STUDIES_ENABLED, false)) {
+          checkbox.setAttribute("checked", "true");
+        } else {
+          checkbox.removeAttribute("checked");
+        }
+        checkbox.setAttribute("preference", PREF_OPT_OUT_STUDIES_ENABLED);
+        checkbox.removeAttribute("disabled");
       } else {
+        checkbox.removeAttribute("preference");
         checkbox.removeAttribute("checked");
+        checkbox.setAttribute("disabled", "true");
       }
-      checkbox.setAttribute("preference", PREF_OPT_OUT_STUDIES_ENABLED);
-      checkbox.removeAttribute("disabled");
-    } else {
-      checkbox.removeAttribute("preference");
-      checkbox.removeAttribute("checked");
-      checkbox.setAttribute("disabled", "true");
     }
+    Preferences.get(PREF_UPLOAD_ENABLED).on("change", updateCheckbox);
+    updateCheckbox();
   },
 
   initAddonRecommendationsCheckbox() {
@@ -3351,6 +3536,19 @@ var gPrivacyPane = {
     dataCollectionCheckboxHandler({
       checkbox: document.getElementById("addonRecommendationEnabled"),
       pref: PREF_ADDON_RECOMMENDATIONS_ENABLED,
+    });
+  },
+
+  initPrivateAttributionCheckbox() {
+    dataCollectionCheckboxHandler({
+      checkbox: document.getElementById("privateAttribution"),
+      pref: PREF_PRIVATE_ATTRIBUTION_ENABLED,
+      matchPref() {
+        return AppConstants.MOZ_TELEMETRY_REPORTING;
+      },
+      isDisabled() {
+        return !AppConstants.MOZ_TELEMETRY_REPORTING;
+      },
     });
   },
 

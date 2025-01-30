@@ -1,5 +1,5 @@
 ;
-; Copyright (c) 2024, Alliance for Open Media. All rights reserved
+; Copyright (c) 2024, Alliance for Open Media. All rights reserved.
 ;
 ; This source code is subject to the terms of the BSD 2 Clause License and
 ; the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -29,6 +29,7 @@
 .equ CONFIG_COLLECT_PARTITION_STATS, 0
 .equ CONFIG_COLLECT_RD_STATS, 0
 .equ CONFIG_CWG_C013, 0
+.equ CONFIG_CWG_E050, 0
 .equ CONFIG_DEBUG, 0
 .equ CONFIG_DENOISE, 1
 .equ CONFIG_DISABLE_FULL_PIXEL_SPLIT_8X8, 1
@@ -53,6 +54,7 @@
 .equ CONFIG_OUTPUT_FRAME_SIZE, 0
 .equ CONFIG_PARTITION_SEARCH_ORDER, 0
 .equ CONFIG_PIC, 1
+.equ CONFIG_QUANT_MATRIX, 1
 .equ CONFIG_RATECTRL_LOG, 0
 .equ CONFIG_RD_COMMAND, 0
 .equ CONFIG_RD_DEBUG, 0
@@ -62,8 +64,8 @@
 .equ CONFIG_SALIENCY_MAP, 0
 .equ CONFIG_SHARED, 0
 .equ CONFIG_SIZE_LIMIT, 0
-.equ CONFIG_SPATIAL_RESAMPLING, 1
 .equ CONFIG_SPEED_STATS, 0
+.equ CONFIG_SVT_AV1, 1
 .equ CONFIG_TFLITE, 0
 .equ CONFIG_THREE_PASS, 0
 .equ CONFIG_TUNE_BUTTERAUGLI, 0
@@ -87,6 +89,7 @@
 .equ HAVE_SSE4_2, 0
 .equ HAVE_SSSE3, 0
 .equ HAVE_SVE, 0
+.equ HAVE_SVE2, 0
 .equ HAVE_VSX, 0
 .equ HAVE_WXWIDGETS, 0
 .equ STATIC_LINK_JXL, 0

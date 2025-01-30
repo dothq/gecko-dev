@@ -12,14 +12,17 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
   nsLookAndFeel();
   virtual ~nsLookAndFeel();
 
-  void NativeInit() final;
+  void NativeInit() final { EnsureInit(); }
+  void RefreshImpl() final;
+  void EnsureInit();
+
   nsresult NativeGetColor(ColorID, ColorScheme, nscolor& aColor) override;
   nsresult NativeGetInt(IntID, int32_t& aResult) override;
   nsresult NativeGetFloat(FloatID, float& aResult) override;
   bool NativeGetFont(FontID aID, nsString& aFontName,
                      gfxFontStyle& aFontStyle) override;
 
-  virtual char16_t GetPasswordCharacterImpl() override {
+  char16_t GetPasswordCharacterImpl() override {
     // unicode value for the bullet character, used for password textfields.
     return 0x2022;
   }
@@ -28,16 +31,17 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     RecordAccessibilityTelemetry();
   }
 
+  nsresult GetKeyboardLayoutImpl(nsACString& aLayout) override;
+
   // Having a separate, static method allows us to rely on the same
   // chunk of telemetry logging code at initialization and when we
   // recieve an event that changes the value of our telemetry probe.
   static void RecordAccessibilityTelemetry();
 
  protected:
-  static bool SystemWantsDarkTheme();
-  static bool IsSystemOrientationRTL();
-  static nscolor ProcessSelectionBackground(nscolor aColor,
-                                            ColorScheme aScheme);
+  bool mInitialized = false;
+  bool mRtl = false;
+  int32_t mTitlebarHeight = 0;
 };
 
 #endif  // nsLookAndFeel_h_

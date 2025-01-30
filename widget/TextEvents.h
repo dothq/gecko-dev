@@ -25,6 +25,7 @@
 #include "mozilla/ipc/IPCForwards.h"
 #include "nsCOMPtr.h"
 #include "nsHashtablesFwd.h"
+#include "nsIFrame.h"
 #include "nsISelectionListener.h"
 #include "nsITransferable.h"
 #include "nsRect.h"
@@ -237,7 +238,7 @@ class WidgetKeyboardEvent final : public WidgetInputEvent {
     //       we don't have any bug reports that user cannot input proper
     //       character with Alt and/or Ctrl key.
     //       -- On macOS, IMEInputHandler::WillDispatchKeyboardEvent() clears
-    //       MODIFIER_ALT and MDOFIEIR_CONTROL of eKeyPress event only when
+    //       MODIFIER_ALT and MODIFIER_CONTROL of eKeyPress event only when
     //       TextInputHandler::InsertText() has been called for the event.
     //       I.e., they are cleared only when an editor has focus (even if IME
     //       is disabled in password field or by |ime-mode: disabled;|) because
@@ -1248,6 +1249,10 @@ class WidgetQueryContentEvent : public WidgetGUIEvent {
     bool mWidgetIsHit = false;
     // true if mContentRoot is focused editable content
     bool mIsEditableContent = false;
+    // Set to the element that a drop at the given coordinates would target
+    mozilla::dom::Element* mDropElement;
+    // Set to the frame that a drop at the given coordinates would target
+    nsIFrame* mDropFrame;
 
     Reply() = delete;
     explicit Reply(EventMessage aEventMessage) : mEventMessage(aEventMessage) {}
@@ -1442,13 +1447,8 @@ class WidgetSelectionEvent : public WidgetGUIEvent {
  ******************************************************************************/
 
 class InternalEditorInputEvent : public InternalUIEvent {
- private:
-  InternalEditorInputEvent()
-      : mData(VoidString()),
-        mInputType(EditorInputType::eUnknown),
-        mIsComposing(false) {}
-
  public:
+  InternalEditorInputEvent() = delete;
   virtual InternalEditorInputEvent* AsEditorInputEvent() override {
     return this;
   }
@@ -1457,9 +1457,7 @@ class InternalEditorInputEvent : public InternalUIEvent {
                            nsIWidget* aWidget = nullptr,
                            const WidgetEventTime* aTime = nullptr)
       : InternalUIEvent(aIsTrusted, aMessage, aWidget, eEditorInputEventClass,
-                        aTime),
-        mData(VoidString()),
-        mInputType(EditorInputType::eUnknown) {}
+                        aTime) {}
 
   virtual WidgetEvent* Duplicate() const override {
     MOZ_ASSERT(mClass == eEditorInputEventClass,
@@ -1472,13 +1470,13 @@ class InternalEditorInputEvent : public InternalUIEvent {
     return result;
   }
 
-  nsString mData;
+  nsString mData = VoidString();
   RefPtr<dom::DataTransfer> mDataTransfer;
   OwningNonNullStaticRangeArray mTargetRanges;
 
-  EditorInputType mInputType;
+  EditorInputType mInputType = EditorInputType::eUnknown;
 
-  bool mIsComposing;
+  bool mIsComposing = false;
 
   void AssignEditorInputEventData(const InternalEditorInputEvent& aEvent,
                                   bool aCopyTargets) {
@@ -1502,8 +1500,49 @@ class InternalEditorInputEvent : public InternalUIEvent {
 
  private:
   static const char16_t* const kInputTypeNames[];
-  typedef nsTHashMap<nsStringHashKey, EditorInputType> InputTypeHashtable;
+  using InputTypeHashtable = nsTHashMap<nsStringHashKey, EditorInputType>;
   static InputTypeHashtable* sInputTypeHashtable;
+};
+
+/******************************************************************************
+ * mozilla::InternalLegacyTextEvent
+ ******************************************************************************/
+
+class InternalLegacyTextEvent : public InternalUIEvent {
+ public:
+  InternalLegacyTextEvent() = delete;
+
+  virtual InternalLegacyTextEvent* AsLegacyTextEvent() override { return this; }
+
+  InternalLegacyTextEvent(bool aIsTrusted, EventMessage aMessage,
+                          nsIWidget* aWidget = nullptr,
+                          const WidgetEventTime* aTime = nullptr)
+      : InternalUIEvent(aIsTrusted, aMessage, aWidget, eLegacyTextEventClass,
+                        aTime) {}
+
+  virtual WidgetEvent* Duplicate() const override {
+    MOZ_ASSERT(mClass == eLegacyTextEventClass,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    InternalLegacyTextEvent* result =
+        new InternalLegacyTextEvent(false, mMessage, nullptr, this);
+    result->AssignLegacyTextEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
+  }
+
+  nsString mData;
+  RefPtr<dom::DataTransfer> mDataTransfer;
+  EditorInputType mInputType = EditorInputType::eUnknown;
+
+  void AssignLegacyTextEventData(const InternalLegacyTextEvent& aEvent,
+                                 bool aCopyTargets) {
+    AssignUIEventData(aEvent, aCopyTargets);
+
+    mData = aEvent.mData;
+    mDataTransfer = aEvent.mDataTransfer;
+    mInputType = aEvent.mInputType;
+  }
 };
 
 }  // namespace mozilla

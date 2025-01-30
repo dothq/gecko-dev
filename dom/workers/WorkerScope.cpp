@@ -48,6 +48,7 @@
 #include "mozilla/dom/ClientSource.h"
 #include "mozilla/dom/Clients.h"
 #include "mozilla/dom/Console.h"
+#include "mozilla/dom/CookieStore.h"
 #include "mozilla/dom/DOMMozPromiseRequestHolder.h"
 #include "mozilla/dom/DebuggerNotification.h"
 #include "mozilla/dom/DebuggerNotificationBinding.h"
@@ -68,6 +69,7 @@
 #include "mozilla/dom/WebTaskSchedulerWorker.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SerializedStackHolder.h"
+#include "mozilla/dom/ServiceWorker.h"
 #include "mozilla/dom/ServiceWorkerDescriptor.h"
 #include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/ServiceWorkerManager.h"
@@ -78,6 +80,9 @@
 #include "mozilla/dom/SimpleGlobalObject.h"
 #include "mozilla/dom/TimeoutHandler.h"
 #include "mozilla/dom/TestUtils.h"
+#include "mozilla/dom/TrustedTypeUtils.h"
+#include "mozilla/dom/TrustedTypesConstants.h"
+#include "mozilla/dom/WindowOrWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/WorkerDebuggerGlobalScopeBinding.h"
 #include "mozilla/dom/WorkerGlobalScopeBinding.h"
@@ -170,7 +175,8 @@ bool WorkerScriptTimeoutHandler::Call(const char* aExecutionReason) {
 
   JSContext* cx = aes.cx();
   JS::CompileOptions options(cx);
-  options.setFileAndLine(mFileName.get(), mLineNo).setNoScriptRval(true);
+  options.setFileAndLine(mCaller.FileName().get(), mCaller.mLine)
+      .setNoScriptRval(true);
   options.setIntroductionType("domTimer");
 
   JS::Rooted<JS::Value> unused(cx);
@@ -243,6 +249,10 @@ WorkerGlobalScopeBase::WorkerGlobalScopeBase(
     : mWorkerPrivate(aWorkerPrivate),
       mClientSource(std::move(aClientSource)),
       mSerialEventTarget(aWorkerPrivate->HybridEventTarget()) {
+  if (StaticPrefs::dom_workers_throttling_enabled() && XRE_IsContentProcess()) {
+    mTimeoutManager =
+        MakeUnique<dom::TimeoutManager>(*this, /* not used on workers */ 0);
+  }
   LOG(("WorkerGlobalScopeBase::WorkerGlobalScopeBase [%p]", this));
   MOZ_ASSERT(mWorkerPrivate);
 #ifdef DEBUG
@@ -293,8 +303,27 @@ StorageAccess WorkerGlobalScopeBase::GetStorageAccess() {
   return mWorkerPrivate->StorageAccess();
 }
 
+nsICookieJarSettings* WorkerGlobalScopeBase::GetCookieJarSettings() {
+  AssertIsOnWorkerThread();
+  return mWorkerPrivate->CookieJarSettings();
+}
+
+nsIURI* WorkerGlobalScopeBase::GetBaseURI() const {
+  return mWorkerPrivate->GetBaseURI();
+}
+
 Maybe<ClientInfo> WorkerGlobalScopeBase::GetClientInfo() const {
   return Some(mClientSource->Info());
+}
+
+Maybe<ClientState> WorkerGlobalScopeBase::GetClientState() const {
+  Result<ClientState, ErrorResult> res = mClientSource->SnapshotState();
+  if (res.isOk()) {
+    return Some(res.unwrap());
+  }
+
+  res.unwrapErr().SuppressException();
+  return Nothing();
 }
 
 Maybe<ServiceWorkerDescriptor> WorkerGlobalScopeBase::GetController() const {
@@ -468,6 +497,7 @@ already_AddRefed<CacheStorage> WorkerGlobalScope::GetCaches(ErrorResult& aRv) {
   if (!mCacheStorage) {
     mCacheStorage = CacheStorage::CreateOnWorker(cache::DEFAULT_NAMESPACE, this,
                                                  mWorkerPrivate, aRv);
+    mWorkerPrivate->NotifyStorageKeyUsed();
   }
 
   RefPtr<CacheStorage> ref = mCacheStorage;
@@ -571,18 +601,11 @@ void WorkerGlobalScope::ImportScripts(JSContext* aCx,
   }
 }
 
-int32_t WorkerGlobalScope::SetTimeout(JSContext* aCx, Function& aHandler,
-                                      const int32_t aTimeout,
-                                      const Sequence<JS::Value>& aArguments,
-                                      ErrorResult& aRv) {
+int32_t WorkerGlobalScope::SetTimeout(
+    JSContext* aCx, const FunctionOrTrustedScriptOrString& aHandler,
+    const int32_t aTimeout, const Sequence<JS::Value>& aArguments,
+    ErrorResult& aRv) {
   return SetTimeoutOrInterval(aCx, aHandler, aTimeout, aArguments, false, aRv);
-}
-
-int32_t WorkerGlobalScope::SetTimeout(JSContext* aCx, const nsAString& aHandler,
-                                      const int32_t aTimeout,
-                                      const Sequence<JS::Value>& /* unused */,
-                                      ErrorResult& aRv) {
-  return SetTimeoutOrInterval(aCx, aHandler, aTimeout, false, aRv);
 }
 
 void WorkerGlobalScope::ClearTimeout(int32_t aHandle) {
@@ -593,19 +616,11 @@ void WorkerGlobalScope::ClearTimeout(int32_t aHandle) {
   mWorkerPrivate->ClearTimeout(aHandle, Timeout::Reason::eTimeoutOrInterval);
 }
 
-int32_t WorkerGlobalScope::SetInterval(JSContext* aCx, Function& aHandler,
-                                       const int32_t aTimeout,
-                                       const Sequence<JS::Value>& aArguments,
-                                       ErrorResult& aRv) {
+int32_t WorkerGlobalScope::SetInterval(
+    JSContext* aCx, const FunctionOrTrustedScriptOrString& aHandler,
+    const int32_t aTimeout, const Sequence<JS::Value>& aArguments,
+    ErrorResult& aRv) {
   return SetTimeoutOrInterval(aCx, aHandler, aTimeout, aArguments, true, aRv);
-}
-
-int32_t WorkerGlobalScope::SetInterval(JSContext* aCx,
-                                       const nsAString& aHandler,
-                                       const int32_t aTimeout,
-                                       const Sequence<JS::Value>& /* unused */,
-                                       ErrorResult& aRv) {
-  return SetTimeoutOrInterval(aCx, aHandler, aTimeout, true, aRv);
 }
 
 void WorkerGlobalScope::ClearInterval(int32_t aHandle) {
@@ -617,47 +632,50 @@ void WorkerGlobalScope::ClearInterval(int32_t aHandle) {
 }
 
 int32_t WorkerGlobalScope::SetTimeoutOrInterval(
-    JSContext* aCx, Function& aHandler, const int32_t aTimeout,
-    const Sequence<JS::Value>& aArguments, bool aIsInterval, ErrorResult& aRv) {
+    JSContext* aCx, const FunctionOrTrustedScriptOrString& aHandler,
+    const int32_t aTimeout, const Sequence<JS::Value>& aArguments,
+    bool aIsInterval, ErrorResult& aRv) {
   AssertIsOnWorkerThread();
 
   DebuggerNotificationDispatch(
       this, aIsInterval ? DebuggerNotificationType::SetInterval
                         : DebuggerNotificationType::SetTimeout);
 
-  nsTArray<JS::Heap<JS::Value>> args;
-  if (!args.AppendElements(aArguments, fallible)) {
-    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+  if (aHandler.IsFunction()) {
+    nsTArray<JS::Heap<JS::Value>> args;
+    if (!args.AppendElements(aArguments, fallible)) {
+      aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+      return 0;
+    }
+    RefPtr<TimeoutHandler> handler = new CallbackTimeoutHandler(
+        aCx, this, &aHandler.GetAsFunction(), std::move(args));
+    return mWorkerPrivate->SetTimeout(aCx, handler, aTimeout, aIsInterval,
+                                      Timeout::Reason::eTimeoutOrInterval, aRv);
+  }
+
+  constexpr nsLiteralString sinkSetTimeout = u"WorkerGlobalScope setTimeout"_ns;
+  constexpr nsLiteralString sinkSetInterval =
+      u"WorkerGlobalScope setInterval"_ns;
+  Maybe<nsAutoString> compliantStringHolder;
+  nsCOMPtr<nsIGlobalObject> pinnedGlobal = this;
+  const nsAString* compliantString =
+      TrustedTypeUtils::GetTrustedTypesCompliantString(
+          aHandler, aIsInterval ? sinkSetInterval : sinkSetTimeout,
+          kTrustedTypesOnlySinkGroup, *pinnedGlobal, compliantStringHolder,
+          aRv);
+  if (aRv.Failed()) {
     return 0;
   }
 
-  RefPtr<TimeoutHandler> handler =
-      new CallbackTimeoutHandler(aCx, this, &aHandler, std::move(args));
-
-  return mWorkerPrivate->SetTimeout(aCx, handler, aTimeout, aIsInterval,
-                                    Timeout::Reason::eTimeoutOrInterval, aRv);
-}
-
-int32_t WorkerGlobalScope::SetTimeoutOrInterval(JSContext* aCx,
-                                                const nsAString& aHandler,
-                                                const int32_t aTimeout,
-                                                bool aIsInterval,
-                                                ErrorResult& aRv) {
-  AssertIsOnWorkerThread();
-
-  DebuggerNotificationDispatch(
-      this, aIsInterval ? DebuggerNotificationType::SetInterval
-                        : DebuggerNotificationType::SetTimeout);
-
   bool allowEval = false;
-  aRv =
-      CSPEvalChecker::CheckForWorker(aCx, mWorkerPrivate, aHandler, &allowEval);
+  aRv = CSPEvalChecker::CheckForWorker(aCx, mWorkerPrivate, *compliantString,
+                                       &allowEval);
   if (NS_WARN_IF(aRv.Failed()) || !allowEval) {
     return 0;
   }
 
   RefPtr<TimeoutHandler> handler =
-      new WorkerScriptTimeoutHandler(aCx, this, aHandler);
+      new WorkerScriptTimeoutHandler(aCx, this, *compliantString);
 
   return mWorkerPrivate->SetTimeout(aCx, handler, aTimeout, aIsInterval,
                                     Timeout::Reason::eTimeoutOrInterval, aRv);
@@ -721,7 +739,7 @@ void WorkerGlobalScope::GetJSTestingFunctions(
 }
 
 already_AddRefed<Promise> WorkerGlobalScope::Fetch(
-    const RequestOrUSVString& aInput, const RequestInit& aInit,
+    const RequestOrUTF8String& aInput, const RequestInit& aInit,
     CallerType aCallerType, ErrorResult& aRv) {
   return FetchRequest(this, aInput, aInit, aCallerType, aRv);
 }
@@ -735,25 +753,28 @@ already_AddRefed<IDBFactory> WorkerGlobalScope::GetIndexedDB(
   if (!indexedDB) {
     StorageAccess access = mWorkerPrivate->StorageAccess();
 
+    bool allowed = true;
     if (access == StorageAccess::eDeny) {
       NS_WARNING("IndexedDB is not allowed in this worker!");
-      aErrorResult = NS_ERROR_DOM_SECURITY_ERR;
-      return nullptr;
+      allowed = false;
     }
 
     if (ShouldPartitionStorage(access) &&
         !StoragePartitioningEnabled(access,
                                     mWorkerPrivate->CookieJarSettings())) {
       NS_WARNING("IndexedDB is not allowed in this worker!");
-      aErrorResult = NS_ERROR_DOM_SECURITY_ERR;
-      return nullptr;
+      allowed = false;
     }
 
-    const PrincipalInfo& principalInfo =
-        mWorkerPrivate->GetEffectiveStoragePrincipalInfo();
+    auto windowID = mWorkerPrivate->WindowID();
 
-    auto res = IDBFactory::CreateForWorker(this, principalInfo,
-                                           mWorkerPrivate->WindowID());
+    auto principalInfoPtr =
+        allowed ? MakeUnique<PrincipalInfo>(
+                      mWorkerPrivate->GetEffectiveStoragePrincipalInfo())
+                : nullptr;
+    auto res = IDBFactory::CreateForWorker(this, std::move(principalInfoPtr),
+                                           windowID);
+
     if (NS_WARN_IF(res.isErr())) {
       aErrorResult = res.unwrapErr();
       return nullptr;
@@ -762,6 +783,8 @@ already_AddRefed<IDBFactory> WorkerGlobalScope::GetIndexedDB(
     indexedDB = res.unwrap();
     mIndexedDB = indexedDB;
   }
+
+  mWorkerPrivate->NotifyStorageKeyUsed();
 
   return indexedDB.forget();
 }
@@ -821,6 +844,32 @@ WorkerGlobalScope::GetDebuggerNotificationType() const {
   return Some(EventCallbackDebuggerNotificationType::Global);
 }
 
+already_AddRefed<ServiceWorkerContainer>
+WorkerGlobalScope::GetServiceWorkerContainer() {
+  return RefPtr(Navigator())->ServiceWorker();
+}
+
+RefPtr<ServiceWorker> WorkerGlobalScope::GetOrCreateServiceWorker(
+    const ServiceWorkerDescriptor& aDescriptor) {
+  RefPtr<ServiceWorker> ref;
+  ForEachGlobalTeardownObserver(
+      [&](GlobalTeardownObserver* aObserver, bool* aDoneOut) {
+        RefPtr<ServiceWorker> sw = do_QueryObject(aObserver);
+        if (!sw || !sw->Descriptor().Matches(aDescriptor)) {
+          return;
+        }
+
+        ref = std::move(sw);
+        *aDoneOut = true;
+      });
+
+  if (!ref) {
+    ref = ServiceWorker::Create(this, aDescriptor);
+  }
+
+  return ref;
+}
+
 RefPtr<ServiceWorkerRegistration>
 WorkerGlobalScope::GetServiceWorkerRegistration(
     const ServiceWorkerRegistrationDescriptor& aDescriptor) const {
@@ -862,6 +911,16 @@ mozilla::dom::StorageManager* WorkerGlobalScope::GetStorageManager() {
 bool WorkerGlobalScope::IsEligibleForMessaging() {
   return mIsEligibleForMessaging;
 }
+
+void WorkerGlobalScope::ReportToConsole(
+    uint32_t aErrorFlags, const nsCString& aCategory,
+    nsContentUtils::PropertiesFile aFile, const nsCString& aMessageName,
+    const nsTArray<nsString>& aParams,
+    const mozilla::SourceLocation& aLocation) {
+  WorkerPrivate::ReportErrorToConsole(aErrorFlags, aCategory, aFile,
+                                      aMessageName, aParams, aLocation);
+}
+
 void WorkerGlobalScope::StorageAccessPermissionGranted() {
   // Reset the IndexedDB factory.
   mIndexedDB = nullptr;
@@ -944,7 +1003,7 @@ void DedicatedWorkerGlobalScope::Close() {
   mWorkerPrivate->CloseInternal();
 }
 
-int32_t DedicatedWorkerGlobalScope::RequestAnimationFrame(
+uint32_t DedicatedWorkerGlobalScope::RequestAnimationFrame(
     FrameRequestCallback& aCallback, ErrorResult& aError) {
   AssertIsOnWorkerThread();
 
@@ -980,7 +1039,7 @@ int32_t DedicatedWorkerGlobalScope::RequestAnimationFrame(
     }
   }
 
-  int32_t handle = 0;
+  uint32_t handle = 0;
   aError = mFrameRequestManager.Schedule(aCallback, &handle);
   if (!aError.Failed() && mDocumentVisible) {
     mVsyncChild->TryObserve();
@@ -988,7 +1047,7 @@ int32_t DedicatedWorkerGlobalScope::RequestAnimationFrame(
   return handle;
 }
 
-void DedicatedWorkerGlobalScope::CancelAnimationFrame(int32_t aHandle,
+void DedicatedWorkerGlobalScope::CancelAnimationFrame(uint32_t aHandle,
                                                       ErrorResult& aError) {
   AssertIsOnWorkerThread();
 
@@ -1092,7 +1151,8 @@ void SharedWorkerGlobalScope::Close() {
 }
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope,
-                                   mClients, mExtensionBrowser, mRegistration)
+                                   mClients, mExtensionBrowser, mRegistration,
+                                   mCookieStore)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerGlobalScope)
 NS_INTERFACE_MAP_END_INHERITING(WorkerGlobalScope)
 
@@ -1150,9 +1210,7 @@ namespace {
 
 class ReportFetchListenerWarningRunnable final : public Runnable {
   const nsCString mScope;
-  nsString mSourceSpec;
-  uint32_t mLine;
-  uint32_t mColumn;
+  mozilla::JSCallingLocation mCaller;
 
  public:
   explicit ReportFetchListenerWarningRunnable(const nsString& aScope)
@@ -1163,7 +1221,7 @@ class ReportFetchListenerWarningRunnable final : public Runnable {
     JSContext* cx = workerPrivate->GetJSContext();
     MOZ_ASSERT(cx);
 
-    nsJSUtils::GetCallingLocation(cx, mSourceSpec, &mLine, &mColumn);
+    mCaller = JSCallingLocation::Get(cx);
   }
 
   NS_IMETHOD
@@ -1172,7 +1230,8 @@ class ReportFetchListenerWarningRunnable final : public Runnable {
 
     ServiceWorkerManager::LocalizeAndReportToAllClients(
         mScope, "ServiceWorkerNoFetchHandler", nsTArray<nsString>{},
-        nsIScriptError::warningFlag, mSourceSpec, u""_ns, mLine, mColumn);
+        nsIScriptError::warningFlag, mCaller.FileName(), u""_ns, mCaller.mLine,
+        mCaller.mColumn);
 
     return NS_OK;
   }
@@ -1238,6 +1297,14 @@ ServiceWorkerGlobalScope::AcquireExtensionBrowser() {
   }
 
   return mExtensionBrowser.clonePtr();
+}
+
+already_AddRefed<CookieStore> ServiceWorkerGlobalScope::CookieStore() {
+  if (!mCookieStore) {
+    mCookieStore = CookieStore::Create(this);
+  }
+
+  return do_AddRef(mCookieStore);
 }
 
 bool WorkerDebuggerGlobalScope::WrapGlobalObject(
@@ -1338,11 +1405,9 @@ void WorkerDebuggerGlobalScope::SetImmediate(Function& aHandler,
 
 void WorkerDebuggerGlobalScope::ReportError(JSContext* aCx,
                                             const nsAString& aMessage) {
-  JS::AutoFilename chars;
-  uint32_t lineno = 0;
-  JS::DescribeScriptedCaller(aCx, &chars, &lineno);
-  nsString filename(NS_ConvertUTF8toUTF16(chars.get()));
-  mWorkerPrivate->ReportErrorToDebugger(filename, lineno, aMessage);
+  auto caller = JSCallingLocation::Get(aCx);
+  mWorkerPrivate->ReportErrorToDebugger(caller.FileName(), caller.mLine,
+                                        aMessage);
 }
 
 void WorkerDebuggerGlobalScope::RetrieveConsoleEvents(

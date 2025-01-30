@@ -3,16 +3,18 @@ http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
 
+const { TopSitesFeed, ContileIntegration } = ChromeUtils.importESModule(
+  "resource://activity-stream/lib/TopSitesFeed.sys.mjs"
+);
+
 ChromeUtils.defineESModuleGetters(this, {
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
   sinon: "resource://testing-common/Sinon.sys.mjs",
   SearchService: "resource://gre/modules/SearchService.sys.mjs",
-  TopSitesFeed: "resource://activity-stream/lib/TopSitesFeed.sys.mjs",
 });
 
 const SHOW_SPONSORED_PREF = "showSponsoredTopSites";
 const TOP_SITES_BLOCKED_SPONSORS_PREF = "browser.topsites.blockedSponsors";
-const CONTILE_CACHE_PREF = "browser.topsites.contile.cachedTiles";
 const CONTILE_CACHE_VALID_FOR_PREF = "browser.topsites.contile.cacheValidFor";
 const CONTILE_CACHE_LAST_FETCH_PREF = "browser.topsites.contile.lastFetch";
 const NIMBUS_VARIABLE_MAX_SPONSORED = "topSitesMaxSponsored";
@@ -47,6 +49,15 @@ let contileTile3 = {
   image_size: 200,
   impression_url: "https://impression_url.com",
 };
+let contileTile4 = {
+  id: 75899,
+  name: "Brand4",
+  url: "https://www.brand4.com",
+  click_url: "https://click_url.com",
+  image_url: "https://contile-images.jpg",
+  image_size: 200,
+  impression_url: "https://impression_url.com",
+};
 let mozSalesTile = [
   {
     label: "MozSales Title",
@@ -58,6 +69,11 @@ let mozSalesTile = [
 ];
 
 function getTopSitesFeedForTest(sandbox) {
+  sandbox.stub(ContileIntegration.prototype, "PersistentCache").returns({
+    set: sandbox.stub(),
+    get: sandbox.stub(),
+  });
+
   let feed = new TopSitesFeed();
   const storage = {
     init: sandbox.stub().resolves(),
@@ -155,7 +171,12 @@ add_task(async function test_set_contile_tile_to_oversold() {
   let feed = getTopSitesFeedForTest(sandbox);
 
   feed._telemetryUtility.setSponsoredTilesConfigured();
-  feed._telemetryUtility.setTiles([contileTile1, contileTile2, contileTile3]);
+  feed._telemetryUtility.setTiles([
+    contileTile1,
+    contileTile2,
+    contileTile3,
+    contileTile4,
+  ]);
 
   let mergedTiles = [
     {
@@ -170,12 +191,18 @@ add_task(async function test_set_contile_tile_to_oversold() {
       sponsored_position: 2,
       partner: "amp",
     },
+    {
+      url: "https://www.brand3.com",
+      label: "brand3",
+      sponsored_position: 3,
+      partner: "amp",
+    },
   ];
 
   feed._telemetryUtility.determineFilteredTilesAndSetToOversold(mergedTiles);
   feed._telemetryUtility.finalizeNewtabPingFields(mergedTiles);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -193,6 +220,12 @@ add_task(async function test_set_contile_tile_to_oversold() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
@@ -477,7 +510,12 @@ add_task(async function test_set_tiles_to_dismissed_then_updated() {
   feed._telemetryUtility.setSponsoredTilesConfigured();
 
   // Step 1:  Set initial tiles
-  feed._telemetryUtility.setTiles([contileTile1, contileTile2, contileTile3]);
+  feed._telemetryUtility.setTiles([
+    contileTile1,
+    contileTile2,
+    contileTile3,
+    contileTile4,
+  ]);
 
   // Step 2:  Set all tiles to dismissed
   feed._telemetryUtility.determineFilteredTilesAndSetToDismissed([]);
@@ -495,12 +533,18 @@ add_task(async function test_set_tiles_to_dismissed_then_updated() {
       sponsored_position: 2,
       partner: "amp",
     },
+    {
+      url: "https://www.brand3.com",
+      label: "brand3",
+      sponsored_position: 3,
+      partner: "amp",
+    },
   ];
 
   // Step 3:  Finalize with the updated list of tiles.
   feed._telemetryUtility.finalizeNewtabPingFields(updatedTiles);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -518,6 +562,12 @@ add_task(async function test_set_tiles_to_dismissed_then_updated() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: null,
+        display_fail_reason: "dismissed",
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "dismissed",
@@ -537,7 +587,12 @@ add_task(async function test_set_tile_positions_after_updated_list() {
   feed._telemetryUtility.setSponsoredTilesConfigured();
 
   // Step 1:  Set initial tiles
-  feed._telemetryUtility.setTiles([contileTile1, contileTile2, contileTile3]);
+  feed._telemetryUtility.setTiles([
+    contileTile1,
+    contileTile2,
+    contileTile3,
+    contileTile4,
+  ]);
 
   // Step 2:  Set 1 tile to oversold (brand3)
   let mergedTiles = [
@@ -551,6 +606,12 @@ add_task(async function test_set_tile_positions_after_updated_list() {
       url: "https://www.brand2.com",
       label: "brand2",
       sponsored_position: 2,
+      partner: "amp",
+    },
+    {
+      url: "https://www.brand3.com",
+      label: "brand3",
+      sponsored_position: 3,
       partner: "amp",
     },
   ];
@@ -570,10 +631,16 @@ add_task(async function test_set_tile_positions_after_updated_list() {
       sponsored_position: 2,
       partner: "amp",
     },
+    {
+      url: "https://www.brand3.com",
+      label: "brand3",
+      sponsored_position: 3,
+      partner: "amp",
+    },
   ];
   feed._telemetryUtility.finalizeNewtabPingFields(updatedTiles);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -591,6 +658,12 @@ add_task(async function test_set_tile_positions_after_updated_list() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
@@ -610,7 +683,12 @@ add_task(async function test_set_tile_positions_after_updated_list_all_tiles() {
   feed._telemetryUtility.setSponsoredTilesConfigured();
 
   // Step 1:  Set initial tiles
-  feed._telemetryUtility.setTiles([contileTile1, contileTile2, contileTile3]);
+  feed._telemetryUtility.setTiles([
+    contileTile1,
+    contileTile2,
+    contileTile3,
+    contileTile4,
+  ]);
 
   // Step 2:  Set 1 tile to oversold (brand3)
   let mergedTiles = [
@@ -624,6 +702,12 @@ add_task(async function test_set_tile_positions_after_updated_list_all_tiles() {
       url: "https://www.brand2.com",
       label: "brand2",
       sponsored_position: 2,
+      partner: "amp",
+    },
+    {
+      url: "https://www.brand3.com",
+      label: "brand3",
+      sponsored_position: 3,
       partner: "amp",
     },
   ];
@@ -643,10 +727,16 @@ add_task(async function test_set_tile_positions_after_updated_list_all_tiles() {
       sponsored_position: 2,
       partner: "amp",
     },
+    {
+      url: "https://www.replacement3.com",
+      label: "replacement3",
+      sponsored_position: 3,
+      partner: "amp",
+    },
   ];
   feed._telemetryUtility.finalizeNewtabPingFields(updatedTiles);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -664,6 +754,12 @@ add_task(async function test_set_tile_positions_after_updated_list_all_tiles() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
@@ -684,7 +780,12 @@ add_task(
     feed._telemetryUtility.setSponsoredTilesConfigured();
 
     // Step 1:  Set initial tiles
-    feed._telemetryUtility.setTiles([contileTile1, contileTile2, contileTile3]);
+    feed._telemetryUtility.setTiles([
+      contileTile1,
+      contileTile2,
+      contileTile3,
+      contileTile4,
+    ]);
 
     // Step 2:  Set 1 tile to oversold (brand3)
     let mergedTiles = [
@@ -698,6 +799,12 @@ add_task(
         url: "https://www.brand2.com",
         label: "brand2",
         sponsored_position: 2,
+        partner: "amp",
+      },
+      {
+        url: "https://www.brand3.com",
+        label: "brand3",
+        sponsored_position: 3,
         partner: "amp",
       },
     ];
@@ -717,10 +824,16 @@ add_task(
         sponsored_position: 2,
         partner: "amp",
       },
+      {
+        url: "https://www.brand3.com",
+        label: "brand3",
+        sponsored_position: 3,
+        partner: "amp",
+      },
     ];
     feed._telemetryUtility.finalizeNewtabPingFields(updatedTiles);
 
-    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
     let expectedResult = {
       sponsoredTilesReceived: [
@@ -738,6 +851,12 @@ add_task(
         },
         {
           advertiser: "brand3",
+          provider: "amp",
+          display_position: 3,
+          display_fail_reason: null,
+        },
+        {
+          advertiser: "brand4",
           provider: "amp",
           display_position: null,
           display_fail_reason: "oversold",
@@ -901,7 +1020,7 @@ add_task(async function test_all_tiles_displayed() {
 
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -961,18 +1080,25 @@ add_task(async function test_set_one_tile_display_fail_reason_to_oversold() {
             impression_url: "https://www.brand3-impression.com",
             name: "brand3",
           },
+          {
+            url: "https://www.brand4.com",
+            image_url: "images/brnad4-com.png",
+            click_url: "https://www.brand4-click.com",
+            impression_url: "https://www.brand4-impression.com",
+            name: "brand4",
+          },
         ],
       }),
   });
 
   const fetched = await feed._contile._fetchSites();
   Assert.ok(fetched);
-  Assert.equal(feed._contile.sites.length, 2);
+  Assert.equal(feed._contile.sites.length, 3);
 
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
   let expectedResult = {
     sponsoredTilesReceived: [
       {
@@ -989,6 +1115,12 @@ add_task(async function test_set_one_tile_display_fail_reason_to_oversold() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
@@ -1052,7 +1184,7 @@ add_task(async function test_set_one_tile_display_fail_reason_to_dismissed() {
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -1129,6 +1261,13 @@ add_task(
               impression_url: "https://www.brand4-impression.com",
               name: "brand4",
             },
+            {
+              url: "https://www.brand5.com",
+              image_url: "images/brand5-com.png",
+              click_url: "https://www.brand5-click.com",
+              impression_url: "https://www.brand5-impression.com",
+              name: "brand5",
+            },
           ],
         }),
     });
@@ -1140,12 +1279,12 @@ add_task(
 
     const fetched = await feed._contile._fetchSites();
     Assert.ok(fetched);
-    Assert.equal(feed._contile.sites.length, 2);
+    Assert.equal(feed._contile.sites.length, 3);
 
     await feed._readDefaults();
     await feed.getLinksWithDefaults(false);
 
-    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
     let expectedResult = {
       sponsoredTilesReceived: [
@@ -1169,6 +1308,12 @@ add_task(
         },
         {
           advertiser: "brand4",
+          provider: "amp",
+          display_position: 3,
+          display_fail_reason: null,
+        },
+        {
+          advertiser: "brand5",
           provider: "amp",
           display_position: null,
           display_fail_reason: "oversold",
@@ -1211,7 +1356,7 @@ add_task(
       },
     ];
 
-    Services.prefs.setStringPref(CONTILE_CACHE_PREF, JSON.stringify(tiles));
+    feed._contile.cache.get.returns({ contile: tiles });
     Services.prefs.setIntPref(CONTILE_CACHE_VALID_FOR_PREF, 60 * 15);
     Services.prefs.setIntPref(
       CONTILE_CACHE_LAST_FETCH_PREF,
@@ -1233,7 +1378,7 @@ add_task(
     await feed._readDefaults();
     await feed.getLinksWithDefaults(false);
 
-    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
     let expectedResult = {
       sponsoredTilesReceived: [
@@ -1297,6 +1442,13 @@ add_task(async function test_update_tile_count() {
             impression_url: "https://www.brand3-impression.com",
             name: "brand3",
           },
+          {
+            url: "https://www.brand4.com",
+            image_url: "images/brand4-com.png",
+            click_url: "https://www.brand4-click.com",
+            impression_url: "https://www.brand4-impression.com",
+            name: "brand4",
+          },
         ],
       }),
   });
@@ -1304,11 +1456,11 @@ add_task(async function test_update_tile_count() {
   // 1.  Initially the Nimbus pref is set to 2 tiles
   let fetched = await feed._contile._fetchSites();
   Assert.ok(fetched);
-  Assert.equal(feed._contile.sites.length, 2);
+  Assert.equal(feed._contile.sites.length, 3);
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -1327,6 +1479,12 @@ add_task(async function test_update_tile_count() {
       {
         advertiser: "brand3",
         provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
+        provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
       },
@@ -1344,7 +1502,7 @@ add_task(async function test_update_tile_count() {
   );
   setNimbusVariablesForNumTiles(nimbusPocketStub, 3);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   expectedResult = {
     sponsoredTilesReceived: [
@@ -1362,6 +1520,12 @@ add_task(async function test_update_tile_count() {
       },
       {
         advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
         provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
@@ -1401,6 +1565,12 @@ add_task(async function test_update_tile_count() {
         provider: "amp",
         display_position: 3,
         display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
+        provider: "amp",
+        display_position: null,
+        display_fail_reason: "oversold",
       },
     ],
   };
@@ -1442,9 +1612,16 @@ add_task(async function test_update_tile_count_sourced_from_cache() {
       impression_url: "https://www.brand3-impression.com",
       name: "brand3",
     },
+    {
+      url: "https://www.brand4.com",
+      image_url: "images/brand4-com.png",
+      click_url: "https://www.brand4-click.com",
+      impression_url: "https://www.brand4-impression.com",
+      name: "brand4",
+    },
   ];
 
-  Services.prefs.setStringPref(CONTILE_CACHE_PREF, JSON.stringify(tiles));
+  feed._contile.cache.get.returns({ contile: tiles });
   Services.prefs.setIntPref(CONTILE_CACHE_VALID_FOR_PREF, 60 * 15);
   Services.prefs.setIntPref(
     CONTILE_CACHE_LAST_FETCH_PREF,
@@ -1459,11 +1636,11 @@ add_task(async function test_update_tile_count_sourced_from_cache() {
   // Ensure ContileIntegration._fetchSites is working populate _sites and initilize TelemetryUtility
   let fetched = await feed._contile._fetchSites();
   Assert.ok(fetched);
-  Assert.equal(feed._contile.sites.length, 3);
+  Assert.equal(feed._contile.sites.length, 4);
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -1482,6 +1659,12 @@ add_task(async function test_update_tile_count_sourced_from_cache() {
       {
         advertiser: "brand3",
         provider: "amp",
+        display_position: 3,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
+        provider: "amp",
         display_position: null,
         display_fail_reason: "oversold",
       },
@@ -1499,12 +1682,12 @@ add_task(async function test_update_tile_count_sourced_from_cache() {
   );
   setNimbusVariablesForNumTiles(nimbusPocketStub, 3);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   // 3.  Confirm the new count is applied when data pulled from Contile, 3 tiles displayed
   fetched = await feed._contile._fetchSites();
   Assert.ok(fetched);
-  Assert.equal(feed._contile.sites.length, 3);
+  Assert.equal(feed._contile.sites.length, 4);
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
@@ -1529,6 +1712,12 @@ add_task(async function test_update_tile_count_sourced_from_cache() {
         provider: "amp",
         display_position: 3,
         display_fail_reason: null,
+      },
+      {
+        advertiser: "brand4",
+        provider: "amp",
+        display_position: null,
+        display_fail_reason: "oversold",
       },
     ],
   };
@@ -1595,7 +1784,7 @@ add_task(
     await feed._readDefaults();
     await feed.getLinksWithDefaults(false);
 
-    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
     let expectedResult = {
       sponsoredTilesReceived: [
@@ -1636,7 +1825,7 @@ add_task(
     await feed._readDefaults();
     await feed.getLinksWithDefaults(false);
 
-    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+    Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
     expectedResult = {
       sponsoredTilesReceived: [
@@ -1684,7 +1873,7 @@ add_task(async function test_sponsoredTilesReceived_not_set() {
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
   let expectedResult = { sponsoredTilesReceived: [] };
 
   Assert.equal(
@@ -1744,7 +1933,7 @@ add_task(async function test_telemetry_data_updates() {
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -1896,7 +2085,7 @@ add_task(async function test_reset_telemetry_data() {
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   let expectedResult = {
     sponsoredTilesReceived: [
@@ -1934,7 +2123,7 @@ add_task(async function test_reset_telemetry_data() {
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
 
   expectedResult = { sponsoredTilesReceived: [] };
   Assert.equal(
@@ -1982,17 +2171,24 @@ add_task(async function test_set_telemetry_for_moz_sales_tiles() {
             impression_url: "https://www.brand2-impression.com",
             name: "brand2",
           },
+          {
+            url: "https://www.brand3.com",
+            image_url: "images/brand3-com.png",
+            click_url: "https://www.brand3-click.com",
+            impression_url: "https://www.brand3-impression.com",
+            name: "brand2",
+          },
         ],
       }),
   });
   const fetched = await feed._contile._fetchSites();
   Assert.ok(fetched);
-  Assert.equal(feed._contile.sites.length, 2);
+  Assert.equal(feed._contile.sites.length, 3);
 
   await feed._readDefaults();
   await feed.getLinksWithDefaults(false);
 
-  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 2);
+  Assert.equal(Glean.topsites.sponsoredTilesConfigured.testGetValue(), 3);
   let expectedResult = {
     sponsoredTilesReceived: [
       {
@@ -2005,6 +2201,12 @@ add_task(async function test_set_telemetry_for_moz_sales_tiles() {
         advertiser: "brand2",
         provider: "amp",
         display_position: 2,
+        display_fail_reason: null,
+      },
+      {
+        advertiser: "brand3",
+        provider: "amp",
+        display_position: 3,
         display_fail_reason: null,
       },
       {

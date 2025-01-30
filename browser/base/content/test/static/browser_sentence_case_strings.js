@@ -43,7 +43,9 @@ let gLocalization = new Localization(["browser/newtab/asrouter.ftl"], true);
 async function* iterateSubviews(parentView) {
   let navButtons = Array.from(
     // Ensure that only enabled buttons are tested
-    parentView.querySelectorAll(".subviewbutton-nav:not([disabled])")
+    parentView.querySelectorAll(
+      ".subviewbutton-nav:not([disabled]):not([hidden])"
+    )
   );
   if (!navButtons) {
     return;
@@ -103,7 +105,7 @@ function checkSubheaders(view) {
 }
 
 async function checkUpdateBanner(view) {
-  let banner = view.querySelector("#appMenu-proton-update-banner");
+  let banner = view.querySelector("#appMenu-update-banner");
 
   const notifications = [
     "update-downloading",

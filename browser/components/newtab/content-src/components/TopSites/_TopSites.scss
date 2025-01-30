@@ -12,11 +12,33 @@ $default-icon-offset: 6px;
 $half-base-gutter: math.div($base-gutter, 2);
 $hover-transition-duration: 150ms;
 $letter-fallback-color: $white;
+$calculated-max-width-medium: $break-point-medium + $card-width;
+$calculated-max-width-large: $break-point-large + $card-width;
+$calculated-max-width-twice-large: $break-point-large + 2 * $card-width;
+$calculated-max-width-widest: $break-point-widest + $card-width;
+$calculated-max-width-twice-widest: $break-point-widest + 2 * $card-width;
 
 .top-sites-list {
   list-style: none;
   margin: 0 (-$half-base-gutter);
   padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+
+  .layout-variant-a &,
+  .layout-variant-b & {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    row-gap: var(--space-xlarge);
+
+    @media (min-width: $break-point-layout-variant) {
+      grid-template-columns: repeat(6, 1fr);
+    }
+
+    @media (min-width: $break-point-widest) {
+      grid-template-columns: repeat(8, 1fr);
+    }
+  }
 
   a {
     text-decoration: none;
@@ -25,6 +47,17 @@ $letter-fallback-color: $white;
   &:not(.dnd-active) {
     .top-site-outer:is(.active, :focus, :hover) {
       background: var(--newtab-element-hover-color);
+
+      // Bug 1908010 - This overwrites the design system color because of a
+      // know transparency issue with color-mix syntax when a wallpaper is set
+      .lightWallpaper &,
+      .darkWallpaper & {
+        background-color: var(--newtab-weather-background-color);
+
+        @media (prefers-contrast) {
+          background-color: var(--background-color-box);
+        }
+      }
     }
   }
 
@@ -46,33 +79,33 @@ $letter-fallback-color: $white;
     }
   }
 
-  @media (min-width: $break-point-medium) and (max-width: $break-point-medium + $card-width) {
+  @media (min-width: $break-point-medium) and (max-width: $calculated-max-width-medium) {
     :nth-child(4n+3) {
       @include context-menu-open-left;
     }
   }
 
   // Six columns
-  @media (min-width: $break-point-large) and (max-width: $break-point-large + 2 * $card-width) {
+  @media (min-width: $break-point-large) and (max-width: $calculated-max-width-twice-large) {
     :nth-child(6n) {
       @include context-menu-open-left;
     }
   }
 
-  @media (min-width: $break-point-large) and (max-width: $break-point-large + $card-width) {
+  @media (min-width: $break-point-large) and (max-width: $calculated-max-width-large) {
     :nth-child(6n+5) {
       @include context-menu-open-left;
     }
   }
 
   // Eight columns
-  @media (min-width: $break-point-widest) and (max-width: $break-point-widest + 2 * $card-width) {
+  @media (min-width: $break-point-widest) and (max-width: $calculated-max-width-twice-widest) {
     :nth-child(8n) {
       @include context-menu-open-left;
     }
   }
 
-  @media (min-width: $break-point-widest) and (max-width: $break-point-widest + $card-width) {
+  @media (min-width: $break-point-widest) and (max-width: $calculated-max-width-widest) {
     :nth-child(8n+7) {
       @include context-menu-open-left;
     }
@@ -85,6 +118,11 @@ $letter-fallback-color: $white;
   @media (min-width: $break-point-medium) {
     .hide-for-narrow {
       display: inline-block;
+
+      .layout-variant-a &,
+      .layout-variant-b & {
+        display: none;
+      }
     }
   }
 
@@ -97,6 +135,11 @@ $letter-fallback-color: $white;
   @media (min-width: $break-point-widest) {
     .hide-for-narrow {
       display: inline-block;
+
+      .layout-variant-a &,
+      .layout-variant-b & {
+        display: inline-block;
+      }
     }
   }
 }
@@ -107,6 +150,21 @@ $letter-fallback-color: $white;
   border-radius: 8px;
   display: inline-block;
   margin-block-end: 16px;
+
+  .layout-variant-a &,
+  .layout-variant-b & {
+    width:  calc(var(--size-item-large) * 3);
+
+    .tile {
+      width: calc(var(--size-item-large) * 2);
+      height: calc(var(--size-item-large) * 2);
+
+      .icon-wrapper {
+        width: var(--size-item-large);
+        height: var(--size-item-large);
+      }
+    }
+  }
 
   // container for context menu
   .top-site-inner {
@@ -126,12 +184,28 @@ $letter-fallback-color: $white;
     }
   }
 
+  // Contrast fix for users who have wallpapers set
+  &:not(:hover, :active, .active) {
+    @include wallpaper-contrast-fix;
+  }
+
+  // Necessary for when navigating by a keyboard, having the context
+  // menu open should display the "…" button. This style is a clone
+  // of the `:active` state for `.context-menu-button`
+  &.active {
+    .context-menu-button {
+      opacity: 1;
+      background-color: var(--newtab-button-active-background);
+    }
+  }
+
   .context-menu-button {
     background-image: url('chrome://global/skin/icons/more.svg');
+    background-color: var(--newtab-button-background);
     border: 0;
     border-radius: 4px;
     cursor: pointer;
-    fill: var(--newtab-text-primary-color);
+    fill: var(--newtab-button-text);
     -moz-context-properties: fill;
     height: 20px;
     width: 20px;
@@ -141,11 +215,21 @@ $letter-fallback-color: $white;
     top: -20px;
     transition: opacity 200ms;
 
-    &:is(:active, :focus) {
-      outline: 0;
+    // Contrast fix for users who have wallpapers set
+    @include wallpaper-contrast-fix;
+
+    &:hover {
+      background-color: var(--newtab-button-hover-background);
+
+      &:active {
+        background-color: var(--newtab-button-active-background);
+      }
+    }
+
+    &:focus-visible {
+      background-color: var(--newtab-button-focus-background);
+      border-color: var(--newtab-button-focus-border);
       opacity: 1;
-      background-color: var(--newtab-element-hover-color);
-      fill: var(--newtab-primary-action-background);
     }
   }
 
@@ -162,7 +246,7 @@ $letter-fallback-color: $white;
 
     // For letter fallback
     align-items: center;
-    color: var(--newtab-text-secondary-color);
+    color: var(--newtab-contextual-text-secondary-color);
     display: flex;
     font-size: 32px;
     font-weight: 200;
@@ -268,7 +352,7 @@ $letter-fallback-color: $white;
   }
 
   .title {
-    color: var(--newtab-text-primary-color);
+    color: var(--newtab-contextual-text-primary-color);
     padding-top: 8px;
     font: caption;
     text-align: center;
@@ -276,18 +360,11 @@ $letter-fallback-color: $white;
 
     .icon {
       margin-inline-end: 2px;
-      fill: var(--newtab-text-primary-color);
-    }
-
-    span {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      fill: currentColor;
     }
 
     .sponsored-label {
-      color: var(--newtab-text-secondary-color);
+      color: var(--newtab-contextual-text-secondary-color);
       font-size: 0.9em;
     }
 
@@ -622,6 +699,35 @@ $letter-fallback-color: $white;
   [type='checkbox']:checked:focus + label::before,
   [type='checkbox']:not(:checked):focus + label::before {
     border: 1px dotted var(--newtab-primary-action-background);
+  }
+}
+
+.top-sites-list {
+  .top-site-outer {
+    .top-site-button {
+      display: flex;
+      flex-direction: column;
+    }
+
+    span[dir='auto'] {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-height: 20px;
+    }
+
+    &:hover,
+    &:focus-within {
+      span[dir='auto'] {
+        overflow: unset;
+        text-overflow: clip;
+        white-space: normal;
+        text-wrap: wrap;
+        contain: size;
+        word-break: break-all;
+      }
+    }
   }
 }
 

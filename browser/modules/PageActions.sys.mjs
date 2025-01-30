@@ -437,7 +437,7 @@ export var PageActions = {
    */
   sendPlacedInUrlbarTrigger(buttonNode) {
     lazy.setTimeout(async () => {
-      await lazy.ASRouter.initialized;
+      await lazy.ASRouter.waitForInitialized;
       let win = buttonNode?.ownerGlobal;
       if (!win || buttonNode.hidden) {
         return;
@@ -1184,7 +1184,7 @@ PageActions._initBuiltInActions = function () {
         browserPageActions(buttonNode).bookmark.onShowingInPanel(buttonNode);
       },
       onCommand(event, buttonNode) {
-        browserPageActions(buttonNode).bookmark.onCommand(event, buttonNode);
+        browserPageActions(buttonNode).bookmark.onCommand(event);
       },
     },
   ];

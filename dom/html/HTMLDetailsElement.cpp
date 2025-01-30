@@ -10,6 +10,7 @@
 #include "mozilla/dom/HTMLSummaryElement.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "nsContentUtils.h"
 #include "nsTextNode.h"
 
@@ -42,32 +43,50 @@ void HTMLDetailsElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                       const nsAttrValue* aOldValue,
                                       nsIPrincipal* aMaybeScriptedPrincipal,
                                       bool aNotify) {
-  if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::open) {
-    bool wasOpen = !!aOldValue;
-    bool isOpen = !!aValue;
-    if (wasOpen != isOpen) {
-      auto stringForState = [](bool aOpen) {
-        return aOpen ? u"open"_ns : u"closed"_ns;
-      };
-      nsAutoString oldState;
-      if (mToggleEventDispatcher) {
-        oldState.Truncate();
-        static_cast<ToggleEvent*>(mToggleEventDispatcher->mEvent.get())
-            ->GetOldState(oldState);
-        mToggleEventDispatcher->Cancel();
-      } else {
-        oldState.Assign(stringForState(wasOpen));
+  if (aNameSpaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::open) {
+      bool wasOpen = !!aOldValue;
+      bool isOpen = !!aValue;
+      if (wasOpen != isOpen) {
+        auto stringForState = [](bool aOpen) {
+          return aOpen ? u"open"_ns : u"closed"_ns;
+        };
+        nsAutoString oldState;
+        if (mToggleEventDispatcher) {
+          oldState.Truncate();
+          static_cast<ToggleEvent*>(mToggleEventDispatcher->mEvent.get())
+              ->GetOldState(oldState);
+          mToggleEventDispatcher->Cancel();
+        } else {
+          oldState.Assign(stringForState(wasOpen));
+        }
+        RefPtr<ToggleEvent> toggleEvent = CreateToggleEvent(
+            u"toggle"_ns, oldState, stringForState(isOpen), Cancelable::eNo);
+        mToggleEventDispatcher =
+            new AsyncEventDispatcher(this, toggleEvent.forget());
+        mToggleEventDispatcher->PostDOMEvent();
+
+        if (isOpen) {
+          CloseOtherElementsIfNeeded();
+        }
       }
-      RefPtr<ToggleEvent> toggleEvent = CreateToggleEvent(
-          u"toggle"_ns, oldState, stringForState(isOpen), Cancelable::eNo);
-      mToggleEventDispatcher =
-          new AsyncEventDispatcher(this, toggleEvent.forget());
-      mToggleEventDispatcher->PostDOMEvent();
+    } else if (aName == nsGkAtoms::name) {
+      CloseElementIfNeeded();
     }
   }
 
   return nsGenericHTMLElement::AfterSetAttr(
       aNameSpaceID, aName, aValue, aOldValue, aMaybeScriptedPrincipal, aNotify);
+}
+
+nsresult HTMLDetailsElement::BindToTree(BindContext& aContext,
+                                        nsINode& aParent) {
+  nsresult rv = nsGenericHTMLElement::BindToTree(aContext, aParent);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  CloseElementIfNeeded();
+
+  return NS_OK;
 }
 
 void HTMLDetailsElement::SetupShadowTree() {
@@ -144,20 +163,108 @@ JSObject* HTMLDetailsElement::WrapNode(JSContext* aCx,
   return HTMLDetailsElement_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-void HTMLDetailsElement::HandleInvokeInternal(nsAtom* aAction,
+bool HTMLDetailsElement::IsValidInvokeAction(InvokeAction aAction) const {
+  return nsGenericHTMLElement::IsValidInvokeAction(aAction) ||
+         aAction == InvokeAction::Toggle || aAction == InvokeAction::Close ||
+         aAction == InvokeAction::Open;
+}
+
+bool HTMLDetailsElement::HandleInvokeInternal(Element* aInvoker,
+                                              InvokeAction aAction,
                                               ErrorResult& aRv) {
-  if (nsContentUtils::EqualsIgnoreASCIICase(aAction, nsGkAtoms::_auto) ||
-      nsContentUtils::EqualsIgnoreASCIICase(aAction, nsGkAtoms::toggle)) {
+  if (nsGenericHTMLElement::HandleInvokeInternal(aInvoker, aAction, aRv)) {
+    return true;
+  }
+
+  if (aAction == InvokeAction::Auto || aAction == InvokeAction::Toggle) {
     ToggleOpen();
-  } else if (nsContentUtils::EqualsIgnoreASCIICase(aAction, nsGkAtoms::close)) {
+    return true;
+  } else if (aAction == InvokeAction::Close) {
     if (Open()) {
       SetOpen(false, IgnoreErrors());
     }
-  } else if (nsContentUtils::EqualsIgnoreASCIICase(aAction, nsGkAtoms::open)) {
+    return true;
+  } else if (aAction == InvokeAction::Open) {
     if (!Open()) {
       SetOpen(true, IgnoreErrors());
     }
+    return true;
   }
+
+  return false;
+}
+
+void HTMLDetailsElement::CloseElementIfNeeded() {
+  if (!StaticPrefs::dom_details_group_enabled()) {
+    return;
+  }
+
+  if (!Open()) {
+    return;
+  }
+
+  if (!HasName()) {
+    return;
+  }
+
+  RefPtr<nsAtom> name = GetParsedAttr(nsGkAtoms::name)->GetAsAtom();
+
+  RefPtr<Document> doc = OwnerDoc();
+  bool oldFlag = doc->FireMutationEvents();
+  doc->SetFireMutationEvents(false);
+
+  nsINode* root = SubtreeRoot();
+  for (nsINode* cur = root; cur; cur = cur->GetNextNode(root)) {
+    if (!cur->HasName()) {
+      continue;
+    }
+    if (auto* other = HTMLDetailsElement::FromNode(cur)) {
+      if (other != this && other->Open() &&
+          other->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name, name,
+                             eCaseMatters)) {
+        SetOpen(false, IgnoreErrors());
+        break;
+      }
+    }
+  }
+
+  doc->SetFireMutationEvents(oldFlag);
+}
+
+void HTMLDetailsElement::CloseOtherElementsIfNeeded() {
+  if (!StaticPrefs::dom_details_group_enabled()) {
+    return;
+  }
+
+  MOZ_ASSERT(Open());
+
+  if (!HasName()) {
+    return;
+  }
+
+  RefPtr<nsAtom> name = GetParsedAttr(nsGkAtoms::name)->GetAsAtom();
+
+  RefPtr<Document> doc = OwnerDoc();
+  bool oldFlag = doc->FireMutationEvents();
+  doc->SetFireMutationEvents(false);
+
+  nsINode* root = SubtreeRoot();
+  for (nsINode* cur = root; cur; cur = cur->GetNextNode(root)) {
+    if (!cur->HasName()) {
+      continue;
+    }
+    if (auto* other = HTMLDetailsElement::FromNode(cur)) {
+      if (other != this && other->Open() &&
+          other->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name, name,
+                             eCaseMatters)) {
+        RefPtr<HTMLDetailsElement> otherDetails = other;
+        otherDetails->SetOpen(false, IgnoreErrors());
+        break;
+      }
+    }
+  }
+
+  doc->SetFireMutationEvents(oldFlag);
 }
 
 }  // namespace mozilla::dom

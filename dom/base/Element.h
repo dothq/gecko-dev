@@ -92,7 +92,6 @@ class nsIFrame;
 class nsIHTMLCollection;
 class nsIPrincipal;
 class nsIScreen;
-class nsIScrollableFrame;
 class nsIURI;
 class nsObjectLoadingContent;
 class nsPresContext;
@@ -110,6 +109,7 @@ class MappedDeclarationsBuilder;
 class EditorBase;
 class ErrorResult;
 class OOMReporter;
+class ScrollContainerFrame;
 class SMILAttr;
 struct MutationClosureData;
 class TextEditor;
@@ -120,6 +120,7 @@ namespace dom {
 struct CheckVisibilityOptions;
 struct CustomElementData;
 struct SetHTMLOptions;
+struct GetHTMLOptions;
 struct GetAnimationsOptions;
 struct ScrollIntoViewOptions;
 struct ScrollToOptions;
@@ -138,13 +139,12 @@ class PopoverData;
 class Promise;
 class Sanitizer;
 class ShadowRoot;
+class TrustedHTMLOrString;
 class UnrestrictedDoubleOrKeyframeAnimationOptions;
 template <typename T>
 class Optional;
 enum class CallerType : uint32_t;
 enum class ReferrerPolicy : uint8_t;
-typedef nsTHashMap<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>
-    IntersectionObserverList;
 }  // namespace dom
 }  // namespace mozilla
 
@@ -194,8 +194,12 @@ enum : uint32_t {
   // algorithm https://w3c.github.io/webappsec-csp/#is-element-nonceable.
   ELEMENT_PARSER_HAD_DUPLICATE_ATTR_ERROR = ELEMENT_FLAG_BIT(6),
 
+  // If this flag is set, this element is in
+  // Document::mContentIdentifiersForLCP.
+  ELEMENT_IN_CONTENT_IDENTIFIER_FOR_LCP = ELEMENT_FLAG_BIT(7),
+
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 7
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 8
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -211,6 +215,13 @@ class EventChainVisitor;
 class EventListenerManager;
 class EventStateManager;
 
+enum class ContentEditableState {
+  Inherit,
+  False,
+  True,
+  PlainTextOnly,
+};
+
 namespace dom {
 
 struct CustomElementDefinition;
@@ -221,6 +232,10 @@ class DOMRect;
 class DOMRectList;
 class Flex;
 class Grid;
+class OwningTrustedHTMLOrNullIsEmptyString;
+class TrustedHTML;
+class TrustedHTMLOrNullIsEmptyString;
+class TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString;
 
 // IID for the dom::Element interface
 #define NS_ELEMENT_IID                               \
@@ -252,12 +267,39 @@ class Grid;
     ExplicitlySetAttrElement(nsGkAtoms::attr, aElement); \
   }
 
+#define REFLECT_NULLABLE_ELEMENTS_ATTR(method, attr)                        \
+  void Get##method(bool* aUseCachedValue,                                   \
+                   Nullable<nsTArray<RefPtr<Element>>>& aElements) {        \
+    GetAttrAssociatedElements(nsGkAtoms::attr, aUseCachedValue, aElements); \
+  }                                                                         \
+                                                                            \
+  void Set##method(                                                         \
+      const Nullable<Sequence<OwningNonNull<Element>>>& aElements) {        \
+    ExplicitlySetAttrElements(nsGkAtoms::attr, aElements);                  \
+  }
+
+// TODO(keithamus): Reference the spec link once merged.
+// https://github.com/whatwg/html/pull/9841/files#diff-41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947dR86024
+enum class InvokeAction : uint8_t {
+  Invalid,
+  Custom,
+  Auto,
+  TogglePopover,
+  ShowPopover,
+  HidePopover,
+  ShowModal,
+  Toggle,
+  Close,
+  Open,
+};
+
 class Element : public FragmentOrElement {
  public:
 #ifdef MOZILLA_INTERNAL_API
   explicit Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
       : FragmentOrElement(std::move(aNodeInfo)),
-        mState(ElementState::READONLY | ElementState::DEFINED) {
+        mState(ElementState::READONLY | ElementState::DEFINED |
+               ElementState::LTR) {
     MOZ_ASSERT(mNodeInfo->NodeType() == ELEMENT_NODE,
                "Bad NodeType in aNodeInfo");
     SetIsElement();
@@ -292,6 +334,11 @@ class Element : public FragmentOrElement {
     return State().HasAtLeastOneOfStates(ElementState::DISABLED |
                                          ElementState::READONLY);
   }
+
+  /**
+   * Return true if this element has contenteditable="plaintext-only".
+   */
+  [[nodiscard]] inline bool IsContentEditablePlainTextOnly() const;
 
   virtual int32_t TabIndexDefault() { return -1; }
 
@@ -670,21 +717,28 @@ class Element : public FragmentOrElement {
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColIndex, aria_colindex)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColIndexText, aria_colindextext)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColSpan, aria_colspan)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaControlsElements, aria_controls)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaCurrent, aria_current)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaDescribedByElements, aria_describedby)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaDescription, aria_description)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaDetailsElements, aria_details)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaDisabled, aria_disabled)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaErrorMessageElements, aria_errormessage)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaExpanded, aria_expanded)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaFlowToElements, aria_flowto)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaHasPopup, aria_haspopup)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaHidden, aria_hidden)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaInvalid, aria_invalid)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaKeyShortcuts, aria_keyshortcuts)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLabel, aria_label)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaLabelledByElements, aria_labelledby)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLevel, aria_level)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLive, aria_live)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaModal, aria_modal)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaMultiLine, aria_multiline)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaMultiSelectable, aria_multiselectable)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaOrientation, aria_orientation)
+  REFLECT_NULLABLE_ELEMENTS_ATTR(AriaOwnsElements, aria_owns)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPlaceholder, aria_placeholder)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPosInSet, aria_posinset)
   REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPressed, aria_pressed)
@@ -710,8 +764,8 @@ class Element : public FragmentOrElement {
 
  public:
   MOZ_CAN_RUN_SCRIPT
-  nsIScrollableFrame* GetScrollFrame(nsIFrame** aFrame = nullptr,
-                                     FlushType aFlushType = FlushType::Layout);
+  ScrollContainerFrame* GetScrollContainerFrame(
+      nsIFrame** aFrame = nullptr, FlushType aFlushType = FlushType::Layout);
 
  private:
   // Style state computed from element's state and style locks.
@@ -1111,8 +1165,23 @@ class Element : public FragmentOrElement {
     return FindAttributeDependence(aAttribute, aMaps, N);
   }
 
-  MOZ_CAN_RUN_SCRIPT virtual void HandleInvokeInternal(nsAtom* aAction,
-                                                       ErrorResult& aRv) {}
+  virtual bool IsValidInvokeAction(InvokeAction aAction) const {
+    return aAction == InvokeAction::Auto;
+  }
+
+  /**
+   * Elements can provide their own default behaviours for "Invoke" (see
+   * invoketarget/invokeaction attributes).
+   * If the action is not recognised, they can choose to ignore it and `return
+   * false`. If an action is recognised then they should `return true` to
+   * indicate to sub-classes that this has been handled and no further steps
+   * should be run.
+   */
+  MOZ_CAN_RUN_SCRIPT virtual bool HandleInvokeInternal(Element* invoker,
+                                                       InvokeAction aAction,
+                                                       ErrorResult& aRv) {
+    return false;
+  }
 
  private:
   void DescribeAttribute(uint32_t index, nsAString& aOutDescription) const;
@@ -1120,6 +1189,10 @@ class Element : public FragmentOrElement {
   static bool FindAttributeDependence(const nsAtom* aAttribute,
                                       const MappedAttributeEntry* const aMaps[],
                                       uint32_t aMapCount);
+
+  bool HasSharedRoot(const Element* aElement) const;
+
+  Element* GetElementByIdInDocOrSubtree(nsAtom* aID) const;
 
  protected:
   inline bool GetAttr(const nsAtom* aName, DOMString& aResult) const {
@@ -1156,6 +1229,9 @@ class Element : public FragmentOrElement {
     // else DOMString comes pre-emptied.
     return false;
   }
+
+  // Note, this does not notify about the removal.
+  void ClearAttributes() { mAttrs.Clear(); }
 
   void GetTagName(nsAString& aTagName) const { aTagName = NodeName(); }
   void GetId(nsAString& aId) const { GetAttr(nsGkAtoms::id, aId); }
@@ -1200,6 +1276,22 @@ class Element : public FragmentOrElement {
                     ErrorResult& aError) {
     SetAttribute(aName, aValue, nullptr, aError);
   }
+
+  MOZ_CAN_RUN_SCRIPT void SetAttribute(
+      const nsAString& aName,
+      const TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString& aValue,
+      nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError);
+  MOZ_CAN_RUN_SCRIPT void SetAttributeNS(
+      const nsAString& aNamespaceURI, const nsAString& aLocalName,
+      const TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString& aValue,
+      nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError);
+  MOZ_CAN_RUN_SCRIPT void SetAttribute(
+      const nsAString& aName,
+      const TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString& aValue,
+      ErrorResult& aError) {
+    SetAttribute(aName, aValue, nullptr, aError);
+  }
+
   /**
    * This method creates a principal that subsumes this element's NodePrincipal
    * and which has flags set for elevated permissions that devtools needs to
@@ -1238,14 +1330,21 @@ class Element : public FragmentOrElement {
    * https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#attr-associated-element
    */
   Element* GetAttrAssociatedElement(nsAtom* aAttr) const;
+  void GetAttrAssociatedElements(
+      nsAtom* aAttr, bool* aUseCachedValue,
+      Nullable<nsTArray<RefPtr<Element>>>& aElements);
 
   /**
    * Sets an attribute element for the given attribute.
    * https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#explicitly-set-attr-element
    */
   void ExplicitlySetAttrElement(nsAtom* aAttr, Element* aElement);
+  void ExplicitlySetAttrElements(
+      nsAtom* aAttr,
+      const Nullable<Sequence<OwningNonNull<Element>>>& aElements);
 
   void ClearExplicitlySetAttrElement(nsAtom*);
+  void ClearExplicitlySetAttrElements(nsAtom*);
 
   /**
    * Gets the attribute element for the given attribute.
@@ -1256,6 +1355,16 @@ class Element : public FragmentOrElement {
    * attribute.
    */
   Element* GetExplicitlySetAttrElement(nsAtom* aAttr) const;
+
+  /**
+   * Gets the attribute elements for the given attribute. Unlike
+   * GetAttrAssociatedElements, this returns an uncached array of explicitly set
+   * elements without checking if they are a descendant of any of this element's
+   * shadow-including ancestors. It also does not attempt to retrieve elements
+   * using the ids set in the content attribute.
+   */
+  void GetExplicitlySetAttrElements(nsAtom* aAttr,
+                                    nsTArray<Element*>& aElements) const;
 
   PseudoStyleType GetPseudoElementType() const {
     nsresult rv = NS_OK;
@@ -1352,20 +1461,19 @@ class Element : public FragmentOrElement {
   enum class ShadowRootDeclarative : bool { No, Yes };
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  already_AddRefed<ShadowRoot> AttachShadow(
-      const ShadowRootInit& aInit, ErrorResult& aError,
-      ShadowRootDeclarative aNewShadowIsDeclarative =
-          ShadowRootDeclarative::No);
+  already_AddRefed<ShadowRoot> AttachShadow(const ShadowRootInit& aInit,
+                                            ErrorResult& aError);
   bool CanAttachShadowDOM() const;
 
   enum class DelegatesFocus : bool { No, Yes };
   enum class ShadowRootClonable : bool { No, Yes };
+  enum class ShadowRootSerializable : bool { No, Yes };
 
   already_AddRefed<ShadowRoot> AttachShadowWithoutNameChecks(
       ShadowRootMode aMode, DelegatesFocus = DelegatesFocus::No,
       SlotAssignmentMode aSlotAssignmentMode = SlotAssignmentMode::Named,
       ShadowRootClonable aClonable = ShadowRootClonable::No,
-      ShadowRootDeclarative aDeclarative = ShadowRootDeclarative::No);
+      ShadowRootSerializable aSerializable = ShadowRootSerializable::No);
 
   // Attach UA Shadow Root if it is not attached.
   enum class NotifyUAWidgetSetup : bool { No, Yes };
@@ -1499,6 +1607,8 @@ class Element : public FragmentOrElement {
     return CSSPixel::FromAppUnits(GetClientAreaRect().Width());
   }
 
+  MOZ_CAN_RUN_SCRIPT double CurrentCSSZoom();
+
   // This function will return the block size of first line box, no matter if
   // the box is 'block' or 'inline'. The return unit is pixel. If the element
   // can't get a primary frame, we will return be zero.
@@ -1526,23 +1636,41 @@ class Element : public FragmentOrElement {
   void GetAnimationsWithoutFlush(const GetAnimationsOptions& aOptions,
                                  nsTArray<RefPtr<Animation>>& aAnimations);
 
-  static void GetAnimationsUnsorted(Element* aElement,
-                                    PseudoStyleType aPseudoType,
-                                    nsTArray<RefPtr<Animation>>& aAnimations);
-
   void CloneAnimationsFrom(const Element& aOther);
 
   virtual void GetInnerHTML(nsAString& aInnerHTML, OOMReporter& aError);
-  virtual void SetInnerHTML(const nsAString& aInnerHTML,
-                            nsIPrincipal* aSubjectPrincipal,
-                            ErrorResult& aError);
-  void GetOuterHTML(nsAString& aOuterHTML);
-  void SetOuterHTML(const nsAString& aOuterHTML, ErrorResult& aError);
-  void InsertAdjacentHTML(const nsAString& aPosition, const nsAString& aText,
-                          ErrorResult& aError);
+
+  // https://html.spec.whatwg.org/#dom-parsing-and-serialization:dom-element-innerhtml
+  // @param aInnerHTML will always be of type `NullIsEmptyString`.
+  void GetInnerHTML(OwningTrustedHTMLOrNullIsEmptyString& aInnerHTML,
+                    OOMReporter& aError);
+
+  // https://html.spec.whatwg.org/#dom-parsing-and-serialization:dom-element-innerhtml
+  //
+  // May only run script if aInnerHTML is a string. If this behavior changes,
+  // callees might need adjusting.
+  MOZ_CAN_RUN_SCRIPT void SetInnerHTML(
+      const TrustedHTMLOrNullIsEmptyString& aInnerHTML,
+      nsIPrincipal* aSubjectPrincipal, ErrorResult& aError);
+
+  // Call this method only with trusted, i.e. non-attacker-controlled, strings.
+  virtual void SetInnerHTMLTrusted(const nsAString& aInnerHTML,
+                                   nsIPrincipal* aSubjectPrincipal,
+                                   ErrorResult& aError);
+
+  // @param aOuterHTML will always be of type `NullIsEmptyString`.
+  void GetOuterHTML(OwningTrustedHTMLOrNullIsEmptyString& aOuterHTML);
+
+  MOZ_CAN_RUN_SCRIPT void SetOuterHTML(
+      const TrustedHTMLOrNullIsEmptyString& aOuterHTML, ErrorResult& aError);
+
+  MOZ_CAN_RUN_SCRIPT void InsertAdjacentHTML(
+      const nsAString& aPosition,
+      const TrustedHTMLOrString& aTrustedHTMLOrString, ErrorResult& aError);
 
   void SetHTML(const nsAString& aInnerHTML, const SetHTMLOptions& aOptions,
                ErrorResult& aError);
+  void GetHTML(const GetHTMLOptions& aOptions, nsAString& aResult);
 
   //----------------------------------------
 
@@ -1669,6 +1797,8 @@ class Element : public FragmentOrElement {
 
   nsINode* GetScopeChainParent() const override;
 
+  JSObject* WrapNode(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
+
   /**
    * Locate a TextEditor rooted at this content node, if there is one.
    */
@@ -1775,6 +1905,12 @@ class Element : public FragmentOrElement {
 
   void GetImplementedPseudoElement(nsAString&) const;
 
+  /**
+   * Get the pseudo element for this pseudo request (i.e. PseudoStyleType and
+   * its function parameter, if any).
+   */
+  Element* GetPseudoElement(const PseudoStyleRequest&) const;
+
   ReferrerPolicy GetReferrerPolicyAsEnum() const;
   ReferrerPolicy ReferrerPolicyFromAttr(const nsAttrValue* aValue) const;
 
@@ -1787,12 +1923,6 @@ class Element : public FragmentOrElement {
   // Callback for destructor of dataset to ensure to null out our weak pointer
   // to it.
   void ClearDataset();
-
-  void RegisterIntersectionObserver(DOMIntersectionObserver* aObserver);
-  void UnregisterIntersectionObserver(DOMIntersectionObserver* aObserver);
-  void UnlinkIntersectionObservers();
-  bool UpdateIntersectionObservation(DOMIntersectionObserver* aObserver,
-                                     int32_t threshold);
 
   // A number of methods to cast to various XUL interfaces. They return a
   // pointer only if the element implements that interface.
@@ -2100,22 +2230,35 @@ class Element : public FragmentOrElement {
    */
   virtual already_AddRefed<nsIURI> GetHrefURI() const { return nullptr; }
 
+  // Step 2. of
+  // <https://html.spec.whatwg.org/multipage/semantics.html#get-an-element's-target>
+  //
+  // Sanitize targets that look like they contain dangling markup.
+  static void SanitizeLinkOrFormTarget(nsAString& aTarget);
+
   /**
+   * <https://html.spec.whatwg.org/multipage/semantics.html#get-an-element's-target>
+   * (Excluding <form>)
+   *
    * Get the target of this link element. Consumers should established that
    * this element is a link (probably using IsLink) before calling this
-   * function (or else why call it?)
+   * function (or else why call it?). This method neuters probably markup
+   * injection attempts.
    *
    * Note: for HTML this gets the value of the 'target' attribute; for XLink
    * this gets the value of the xlink:_moz_target attribute, or failing that,
    * the value of xlink:show, converted to a suitably equivalent named target
    * (e.g. _blank).
    */
-  virtual void GetLinkTarget(nsAString& aTarget);
+  void GetLinkTarget(nsAString& aTarget);
+
+  virtual void GetLinkTargetImpl(nsAString& aTarget);
 
   virtual bool Translate() const;
 
   MOZ_CAN_RUN_SCRIPT
-  virtual void SetHTMLUnsafe(const nsAString& aHTML);
+  virtual void SetHTMLUnsafe(const TrustedHTMLOrString& aHTML,
+                             ErrorResult& aError);
 
  protected:
   enum class ReparseAttributes { No, Yes };
@@ -2263,45 +2406,37 @@ inline mozilla::dom::Element* nsINode::GetNextElementSibling() const {
  * Macros to implement Clone(). _elementName is the class for which to implement
  * Clone.
  */
-#define NS_IMPL_ELEMENT_CLONE(_elementName)                         \
+#define NS_IMPL_ELEMENT_CLONE(_elementName, ...)                    \
   nsresult _elementName::Clone(mozilla::dom::NodeInfo* aNodeInfo,   \
                                nsINode** aResult) const {           \
     *aResult = nullptr;                                             \
-    RefPtr<mozilla::dom::NodeInfo> ni(aNodeInfo);                   \
-    auto* nim = ni->NodeInfoManager();                              \
-    RefPtr<_elementName> it = new (nim) _elementName(ni.forget());  \
+    RefPtr<_elementName> it = new (aNodeInfo->NodeInfoManager())    \
+        _elementName(do_AddRef(aNodeInfo), ##__VA_ARGS__);          \
     nsresult rv = const_cast<_elementName*>(this)->CopyInnerTo(it); \
     if (NS_SUCCEEDED(rv)) {                                         \
       it.forget(aResult);                                           \
     }                                                               \
-                                                                    \
     return rv;                                                      \
   }
 
-#define EXPAND(...) __VA_ARGS__
-#define NS_IMPL_ELEMENT_CLONE_WITH_INIT_HELPER(_elementName, extra_args_) \
-  nsresult _elementName::Clone(mozilla::dom::NodeInfo* aNodeInfo,         \
-                               nsINode** aResult) const {                 \
-    *aResult = nullptr;                                                   \
-    RefPtr<mozilla::dom::NodeInfo> ni(aNodeInfo);                         \
-    auto* nim = ni->NodeInfoManager();                                    \
-    RefPtr<_elementName> it =                                             \
-        new (nim) _elementName(ni.forget() EXPAND extra_args_);           \
-    nsresult rv = it->Init();                                             \
-    nsresult rv2 = const_cast<_elementName*>(this)->CopyInnerTo(it);      \
-    if (NS_FAILED(rv2)) {                                                 \
-      rv = rv2;                                                           \
-    }                                                                     \
-    if (NS_SUCCEEDED(rv)) {                                               \
-      it.forget(aResult);                                                 \
-    }                                                                     \
-                                                                          \
-    return rv;                                                            \
+#define NS_IMPL_ELEMENT_CLONE_WITH_INIT(_elementName, ...)           \
+  nsresult _elementName::Clone(mozilla::dom::NodeInfo* aNodeInfo,    \
+                               nsINode** aResult) const {            \
+    *aResult = nullptr;                                              \
+    RefPtr<_elementName> it = new (aNodeInfo->NodeInfoManager())     \
+        _elementName(do_AddRef(aNodeInfo), ##__VA_ARGS__);           \
+    nsresult rv = it->Init();                                        \
+    nsresult rv2 = const_cast<_elementName*>(this)->CopyInnerTo(it); \
+    if (NS_FAILED(rv2)) {                                            \
+      rv = rv2;                                                      \
+    }                                                                \
+    if (NS_SUCCEEDED(rv)) {                                          \
+      it.forget(aResult);                                            \
+    }                                                                \
+    return rv;                                                       \
   }
 
-#define NS_IMPL_ELEMENT_CLONE_WITH_INIT(_elementName) \
-  NS_IMPL_ELEMENT_CLONE_WITH_INIT_HELPER(_elementName, ())
 #define NS_IMPL_ELEMENT_CLONE_WITH_INIT_AND_PARSER(_elementName) \
-  NS_IMPL_ELEMENT_CLONE_WITH_INIT_HELPER(_elementName, (, NOT_FROM_PARSER))
+  NS_IMPL_ELEMENT_CLONE_WITH_INIT(_elementName, NOT_FROM_PARSER)
 
 #endif  // mozilla_dom_Element_h__

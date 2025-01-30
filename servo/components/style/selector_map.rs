@@ -5,12 +5,12 @@
 //! A data structure to efficiently index structs containing selectors by local
 //! name, ids and hash.
 
-use crate::applicable_declarations::ApplicableDeclarationList;
+use crate::applicable_declarations::{ApplicableDeclarationList, ScopeProximity};
 use crate::context::QuirksMode;
 use crate::dom::TElement;
 use crate::rule_tree::CascadeLevel;
 use crate::selector_parser::SelectorImpl;
-use crate::stylist::{CascadeData, ContainerConditionId, Rule, Stylist};
+use crate::stylist::{CascadeData, ContainerConditionId, Rule, ScopeConditionId, Stylist};
 use crate::AllocErr;
 use crate::{Atom, LocalName, Namespace, ShrinkIfNeeded, WeakAtom};
 use dom::ElementState;
@@ -330,16 +330,29 @@ impl SelectorMap<Rule> {
     ) where
         E: TElement,
     {
+        use selectors::matching::IncludeStartingStyle;
+
+        let include_starting_style =
+            matches!(matching_context.include_starting_style, IncludeStartingStyle::Yes);
         for rule in rules {
-            if !matches_selector(
-                &rule.selector,
-                0,
-                Some(&rule.hashes),
-                &element,
-                matching_context,
-            ) {
-                continue;
-            }
+            let scope_proximity = if rule.scope_condition_id == ScopeConditionId::none() {
+                if !matches_selector(
+                    &rule.selector,
+                    0,
+                    Some(&rule.hashes),
+                    &element,
+                    matching_context,
+                ) {
+                    continue;
+                }
+                ScopeProximity::infinity()
+            } else {
+                let result = cascade_data.find_scope_proximity_if_matching(rule, stylist, element, matching_context);
+                if result == ScopeProximity::infinity() {
+                    continue;
+                }
+                result
+            };
 
             if rule.container_condition_id != ContainerConditionId::none() {
                 if !cascade_data.container_condition_matches(
@@ -352,7 +365,22 @@ impl SelectorMap<Rule> {
                 }
             }
 
-            matching_rules.push(rule.to_applicable_declaration_block(cascade_level, cascade_data));
+            if rule.is_starting_style {
+                // Set this flag if there are any rules inside @starting-style. This flag is for
+                // optimization to avoid any redundant resolution of starting style if the author
+                // doesn't specify for this element.
+                matching_context.has_starting_style = true;
+
+                if !include_starting_style {
+                    continue;
+                }
+            }
+
+            matching_rules.push(rule.to_applicable_declaration_block(
+                cascade_level,
+                cascade_data,
+                scope_proximity,
+            ));
         }
     }
 }
@@ -422,10 +450,7 @@ impl<T: SelectorMapEntry> SelectorMap<T> {
 
         let bucket = {
             let mut disjoint_buckets = SmallVec::new();
-            let bucket = find_bucket(
-                entry.selector(),
-                &mut disjoint_buckets,
-            );
+            let bucket = find_bucket(entry.selector(), &mut disjoint_buckets);
 
             // See if inserting this selector in multiple entries in the
             // selector map would be worth it. Consider a case like:
@@ -706,11 +731,9 @@ fn specific_bucket_for<'a>(
         Component::Root => Bucket::Root,
         Component::ID(ref id) => Bucket::ID(id),
         Component::Class(ref class) => Bucket::Class(class),
-        Component::AttributeInNoNamespace { ref local_name, .. } => {
-            Bucket::Attribute {
-                name: local_name,
-                lower_name: local_name,
-            }
+        Component::AttributeInNoNamespace { ref local_name, .. } => Bucket::Attribute {
+            name: local_name,
+            lower_name: local_name,
         },
         Component::AttributeInNoNamespaceExists {
             ref local_name,
@@ -748,12 +771,8 @@ fn specific_bucket_for<'a>(
         //
         // So inserting `span` in the rule hash makes sense since we want to
         // match the slotted <span>.
-        Component::Slotted(ref selector) => {
-            find_bucket(selector.iter(), disjoint_buckets)
-        },
-        Component::Host(Some(ref selector)) => {
-            find_bucket(selector.iter(), disjoint_buckets)
-        },
+        Component::Slotted(ref selector) => find_bucket(selector.iter(), disjoint_buckets),
+        Component::Host(Some(ref selector)) => find_bucket(selector.iter(), disjoint_buckets),
         Component::Is(ref list) | Component::Where(ref list) => {
             if list.len() == 1 {
                 find_bucket(list.slice()[0].iter(), disjoint_buckets)

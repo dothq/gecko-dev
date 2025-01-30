@@ -9,14 +9,14 @@
 "use strict";
 
 add_task(async function () {
-  Services.prefs.setBoolPref("devtools.toolbox.splitconsoleEnabled", true);
+  Services.prefs.setBoolPref("devtools.toolbox.splitconsole.open", true);
 
   const dbg = await initDebugger("doc-windowless-workers.html");
 
   await waitForSource(dbg, "simple-worker.js");
   await selectSource(dbg, "simple-worker.js");
 
-  await altClickElement(dbg, "gutter", 4);
+  await altClickElement(dbg, "gutterElement", 4);
   await waitForBreakpoint(dbg, "simple-worker.js", 4);
 
   await getDebuggerSplitConsole(dbg);

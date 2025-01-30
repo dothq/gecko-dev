@@ -22,7 +22,8 @@ add_task(async function () {
   );
   const URL_IFRAME = buildURLWithContent(
     "example.org",
-    `<h1>example.org</h1>` + `<script>document.cookie = "hello=world";</script>`
+    `<h1>example.org</h1>` +
+      `<script>document.cookie = "hello=world; SameSite=None; Secure; Partitioned;";</script>`
   );
 
   // open tab
@@ -114,6 +115,12 @@ add_task(async function () {
     !isInTree(doc, ["cookies", "https://example.org"]),
     "host of iframe in previous document (example.org) is not in the tree anymore"
   );
+
+  // indexedDB is slightly more asynchronously fetched than the others
+  // and is emitted as a Resource to the frontend late. navigateTo isn't waiting for
+  // the full initialization of the storage panel on reload.
+  // To avoid exception when navigating back wait for indexed DB to be updated.
+  await waitUntil(() => isInTree(doc, ["indexedDB", "https://example.com"]));
 
   info("Navigate backward to test bfcache navigation");
   gBrowser.goBack();

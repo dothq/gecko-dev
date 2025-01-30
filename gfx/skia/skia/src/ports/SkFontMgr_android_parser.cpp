@@ -25,6 +25,8 @@
 
 #include <memory>
 
+using namespace skia_private;
+
 #define LMP_SYSTEM_FONTS_FILE "/system/etc/fonts.xml"
 #define OLD_SYSTEM_FONTS_FILE "/system/etc/system_fonts.xml"
 #define FALLBACK_FONTS_FILE "/system/etc/fallback_fonts.xml"
@@ -51,6 +53,13 @@
  *   /system/etc/fonts.xml
  *
  * If the 'familyset' 'version' attribute is 21 or higher the LMP parser is used, otherwise the JB.
+ *
+ * API 15 4.0.4_r2.1 system_fonts.xml, vendor_fonts.xml, fallback_fonts.xml (system+vendor) no lang.
+ * API 16 4.1.1_r1 fallback_fonts-xx-XX.xml are added. Use the xx list in order.
+ * API 17 4.2.2_r1.1 fallback_fonts-xx.xml are removed and 'lang' is added.
+ * API 21 5.0.0_r1.0.1 fonts.xml replaces the other files.
+ * API 29 10.0.0_r1 /product/etc/fonts_customization.xml with base /product/fonts is added.
+ * The NDK interface is added and reading the files directly is discouraged.
  */
 
 struct FamilyData;
@@ -153,7 +162,7 @@ static void trim_string(SkString* s) {
 }
 
 static void parse_space_separated_languages(const char* value, size_t valueLen,
-                                            SkTArray<SkLanguage, true>& languages)
+                                            TArray<SkLanguage, true>& languages)
 {
     size_t i = 0;
     while (true) {
@@ -189,10 +198,10 @@ static const TagHandler axisHandler = {
                         if (file.fVariationDesignPosition[j].axis == axisTag) {
                             axisTagIsValid = false;
                             SK_FONTCONFIGPARSER_WARNING("'%c%c%c%c' axis specified more than once",
-                                                        (axisTag >> 24) & 0xFF,
-                                                        (axisTag >> 16) & 0xFF,
-                                                        (axisTag >>  8) & 0xFF,
-                                                        (axisTag      ) & 0xFF);
+                                                        (char)((axisTag >> 24) & 0xFF),
+                                                        (char)((axisTag >> 16) & 0xFF),
+                                                        (char)((axisTag >>  8) & 0xFF),
+                                                        (char)((axisTag      ) & 0xFF));
                         }
                     }
                 } else {
@@ -436,7 +445,7 @@ static const TagHandler fileHandler = {
                             value);
                     }
 
-                } else if (MEMEQ("lang", name, nameLen)) {
+                } else if (MEMEQ("lang", name, nameLen)) { // JB MR1 (API level 17)
                     SkLanguage currentLanguage = SkLanguage(value, valueLen);
                     bool showWarning = false;
                     if (currentFamily.fLanguages.empty()) {

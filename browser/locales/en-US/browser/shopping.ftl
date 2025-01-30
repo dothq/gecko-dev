@@ -101,10 +101,10 @@ shopping-show-less-button = Show less
 
 shopping-settings-label =
   .label = Settings
-shopping-settings-recommendations-toggle =
-  .label = Show ads in Review Checker
-shopping-settings-recommendations-learn-more2 =
-  You’ll see occasional ads for relevant products. We only advertise products with reliable reviews. <a data-l10n-name="review-quality-url">Learn more</a>
+shopping-settings-recommendations-toggle2 =
+  .label = Show recommendations and sponsored content
+shopping-settings-recommendations-learn-more3 =
+  { -brand-product-name } doesn’t share your personal data, so these recommendations won’t follow you around the internet. <a data-l10n-name="review-quality-url">Learn more</a>
 shopping-settings-opt-out-button = Turn off Review Checker
 powered-by-fakespot = Review Checker is powered by <a data-l10n-name="fakespot-link">{ -fakespot-brand-full-name }</a>.
 
@@ -123,15 +123,13 @@ shopping-settings-auto-open-description-three-sites = When you view products on 
 #   $currentSite (String) - The current shopping page name
 shopping-settings-auto-open-description-single-site = When you view products on { $currentSite }
 
-shopping-settings-sidebar-enabled-state = Review Checker is <strong>On</strong>
-
 ## Strings for the adjusted rating component
 
 # "Adjusted rating" means a star rating that has been adjusted to include only
 # reliable reviews.
 shopping-adjusted-rating-label =
   .label = Adjusted rating
-shopping-adjusted-rating-unreliable-reviews = Unreliable reviews removed
+shopping-adjusted-rating-based-reliable-reviews = Based on reliable reviews
 
 ## Strings for the review reliability component
 
@@ -156,6 +154,10 @@ shopping-analysis-explainer-learn-more2 =
 #  $retailer (String) - capitalized name of the shopping website, for example, "Amazon".
 shopping-analysis-explainer-highlights-description =
   <strong>Highlights</strong> are from { $retailer } reviews within the last 80 days that we believe to be reliable.
+
+# Fallback for analysis highlights explainer if the retailer is ever unknown
+shopping-analysis-explainer-highlights-description-unknown-retailer =
+  <strong>Highlights</strong> are from reviews within the last 80 days that we believe to be reliable.
 
 shopping-analysis-explainer-review-grading-scale-reliable = Reliable reviews. We believe the reviews are likely from real customers who left honest, unbiased reviews.
 shopping-analysis-explainer-review-grading-scale-mixed = We believe there’s a mix of reliable and unreliable reviews.
@@ -183,7 +185,7 @@ shopping-unanalyzed-product-analyze-button = Check review quality
 
 more-to-consider-ad-label =
   .label = More to consider
-ad-by-fakespot = Ad by { -fakespot-brand-name }
+shopping-sponsored-label = Sponsored
 
 ## Shopping survey strings.
 
@@ -207,6 +209,19 @@ shopping-survey-submit-button-label = Submit
 shopping-survey-terms-link = Terms of use
 shopping-survey-thanks =
   .heading = Thanks for your feedback!
+
+## Shopping opted-out survey strings
+## Opt-out survey options are displayed as checkboxes and the user can select one or many.
+
+shopping-survey-opted-out-multiselect-label = Please let us know why you turned off Review Checker. Select multiple if needed.
+shopping-survey-thanks-title = Thanks for your feedback!
+
+shopping-survey-opted-out-hard-to-understand = It’s hard to understand
+shopping-survey-opted-out-too-slow = It’s too slow
+shopping-survey-opted-out-not-accurate = It’s not accurate
+shopping-survey-opted-out-not-helpful = It’s not helpful to me
+shopping-survey-opted-out-check-myself = I’d rather check reviews myself
+shopping-survey-opted-out-other = Other
 
 ## Shopping Feature Callout strings.
 ## "price tag" refers to the price tag icon displayed in the address bar to

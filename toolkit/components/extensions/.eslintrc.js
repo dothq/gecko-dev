@@ -5,24 +5,6 @@
 "use strict";
 
 module.exports = {
-  globals: {
-    // These are defined in the WebExtension script scopes by ExtensionCommon.sys.mjs
-    Cc: true,
-    Ci: true,
-    Cr: true,
-    Cu: true,
-    AppConstants: true,
-    ExtensionAPI: true,
-    ExtensionAPIPersistent: true,
-    ExtensionCommon: true,
-    ExtensionUtils: true,
-    extensions: true,
-    global: true,
-    require: false,
-    Services: true,
-    XPCOMUtils: true,
-  },
-
   rules: {
     // Rules from the mozilla plugin
     "mozilla/balanced-listeners": "error",
@@ -50,7 +32,7 @@ module.exports = {
     "no-unused-vars": [
       "error",
       {
-        args: "none",
+        argsIgnorePattern: "^_",
         vars: "all",
         varsIgnorePattern: "^console$",
       },
@@ -163,9 +145,6 @@ module.exports = {
     // single line of code to have only one easily predictable effect.
     "no-return-assign": "error",
 
-    // Don't warn about declaration of variables already declared in the outer scope.
-    "no-shadow": "off",
-
     // Allow use of synchronous methods (not a node environment).
     "no-sync": "off",
 
@@ -223,7 +202,7 @@ module.exports = {
         "no-unused-vars": [
           "error",
           {
-            args: "none",
+            argsIgnorePattern: "^_",
             vars: "local",
           },
         ],

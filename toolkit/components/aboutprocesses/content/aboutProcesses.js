@@ -519,9 +519,6 @@ var View = {
         case "socket":
           fluentName = "about-processes-socket-process";
           break;
-        case "remoteSandboxBroker":
-          fluentName = "about-processes-remote-sandbox-broker-process";
-          break;
         case "forkServer":
           fluentName = "about-processes-fork-server-process";
           break;
@@ -530,6 +527,9 @@ var View = {
           break;
         case "utility":
           fluentName = "about-processes-utility-process";
+          break;
+        case "inference":
+          fluentName = "about-processes-inference-process";
           break;
         // The following are probably not going to show up for users
         // but let's handle the case anyway to avoid heisenoranges
@@ -662,7 +662,7 @@ var View = {
     let killButton = cpuCell.nextSibling;
     killButton.className = "action-icon";
 
-    if (data.type.startsWith("web")) {
+    if (data.type != "browser") {
       // This type of process can be killed.
       if (this._killedRecently.some(kill => kill.pid && kill.pid == data.pid)) {
         // We're racing between the "kill" action and the visual refresh.
@@ -677,10 +677,10 @@ var View = {
       } else {
         // Otherwise, let's display the kill button.
         killButton.classList.add("close-icon");
-        document.l10n.setAttributes(
-          killButton,
-          "about-processes-shutdown-process"
-        );
+        let killButtonLabelId = data.type.startsWith("web")
+          ? "about-processes-shutdown-process"
+          : "about-processes-kill-process";
+        document.l10n.setAttributes(killButton, killButtonLabelId);
       }
     }
 
@@ -787,7 +787,7 @@ var View = {
     return isOpen;
   },
 
-  displayDOMWindowRow(data, parent) {
+  displayDOMWindowRow(data) {
     const cellCount = 2;
     let rowId = "w:" + data.outerWindowId;
     let row = this._getOrCreateRow(rowId, cellCount);
@@ -1110,7 +1110,7 @@ var Control = {
           // We've clicked on the extensions process, open or reuse window.
           let parentWin =
             window.docShell.browsingContext.embedderElement.ownerGlobal;
-          parentWin.BrowserOpenAddonsMgr();
+          parentWin.BrowserAddonUI.openAddonsMgr();
           return;
         }
         // Otherwise, proceed.
@@ -1124,7 +1124,7 @@ var Control = {
     // Visibility change:
     // - stop updating while the user isn't looking;
     // - resume updating when the user returns.
-    window.addEventListener("visibilitychange", event => {
+    window.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         this._updateDisplay(true);
       }
@@ -1461,6 +1461,10 @@ var Control = {
 
       // Discard tab contents and show that the process and all its contents are getting killed.
       row.classList.add("killing");
+
+      // Avoid continuing to show the tooltip when the button isn't visible.
+      target.removeAttribute("data-l10n-id");
+      target.removeAttribute("title");
       for (
         let childRow = row.nextSibling;
         childRow && !childRow.classList.contains("process");
@@ -1492,6 +1496,8 @@ var Control = {
       });
       View._killedRecently.push({ outerWindowId: row.win.outerWindowId });
       row.classList.add("killing");
+      target.removeAttribute("data-l10n-id");
+      target.removeAttribute("title");
 
       // If this was the only root window of the process, show that the process is also getting killed.
       if (row.previousSibling.classList.contains("process")) {
@@ -1510,6 +1516,9 @@ var Control = {
           // that the process is dying, this error will last only one refresh.
           View._killedRecently.push({ pid: parentRow.process.pid });
           parentRow.classList.add("killing");
+          let actionIcon = parentRow.querySelector(".action-item");
+          actionIcon.removeAttribute("data-l10n-id");
+          actionIcon.removeAttribute("title");
         }
       }
     }

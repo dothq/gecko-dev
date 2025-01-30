@@ -38,7 +38,7 @@ add_task(async function test_proxy_boolean_settings() {
     },
   });
 
-  checkUnlockedPref("network.proxy.socks_remote_dns", false);
+  checkUnlockedPref("network.proxy.socks5_remote_dns", false);
   checkUnlockedPref("signon.autologin.proxy", false);
 
   await setupPolicyEngineWithJson({
@@ -50,7 +50,7 @@ add_task(async function test_proxy_boolean_settings() {
     },
   });
 
-  checkUnlockedPref("network.proxy.socks_remote_dns", true);
+  checkUnlockedPref("network.proxy.socks5_remote_dns", true);
   checkUnlockedPref("signon.autologin.proxy", true);
 });
 
@@ -106,7 +106,8 @@ add_task(async function test_proxy_addresses() {
 
   checkProxyPref("http", "http.proxy.example.com", 10);
   checkProxyPref("ssl", "http.proxy.example.com", 10);
-  checkProxyPref("socks", "http.proxy.example.com", 10);
+  // SOCKS proxy should NOT be overwritten with UseHTTPProxyForAllProtocols
+  checkProxyPref("socks", "socks.proxy.example.com", 40);
 
   // Make sure the FTPProxy setting did nothing
   Assert.equal(

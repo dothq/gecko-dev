@@ -15,7 +15,7 @@ async function verifyPref(expectedValue) {
 
 async function run_test() {
   setupTestCommon(null);
-  standardInit();
+  await standardInit();
 
   let configFile = getUpdateDirFile(FILE_UPDATE_CONFIG_JSON);
 
@@ -70,5 +70,5 @@ async function run_test() {
   await UpdateUtils.setAppUpdateAutoEnabled(false);
   await verifyPref(false);
 
-  doTestFinish();
+  await doTestFinish();
 }

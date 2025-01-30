@@ -21,9 +21,11 @@ XPIDL_SOURCES += [
     "nsIHttpChannelInternal.idl",
     "nsIHttpHeaderVisitor.idl",
     "nsIHttpProtocolHandler.idl",
+    "nsINetworkErrorLogging.idl",
     "nsIObliviousHttp.idl",
     "nsIObliviousHttpChannel.idl",
     "nsIRaceCacheWithNetwork.idl",
+    "nsIReplacedHttpResponse.idl",
     "nsITlsHandshakeListener.idl",
     "nsIWellKnownOpportunisticUtils.idl",
 ]
@@ -74,6 +76,7 @@ EXPORTS.mozilla.net += [
     "ParentChannelListener.h",
     "PHttpChannelParams.h",
     "PSpdyPush.h",
+    "ReplacedHttpResponse.h",
     "SpeculativeTransaction.h",
     "TimingStruct.h",
 ]
@@ -160,6 +163,7 @@ UNIFIED_SOURCES += [
     "PendingTransactionInfo.cpp",
     "PendingTransactionQueue.cpp",
     "QuicSocketControl.cpp",
+    "ReplacedHttpResponse.cpp",
     "SpeculativeTransaction.cpp",
     "TlsHandshaker.cpp",
     "TLSTransportLayer.cpp",
@@ -170,6 +174,14 @@ UNIFIED_SOURCES += [
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     UNIFIED_SOURCES += [
         "HttpWinUtils.cpp",
+    ]
+
+if CONFIG["TARGET_OS"] == "OSX":
+    UNIFIED_SOURCES += [
+        "MicrosoftEntraSSOUtils.mm",
+    ]
+    OS_LIBS += [
+        "-framework AuthenticationServices",
     ]
 
 # These files cannot be built in unified mode because of OS X headers.
@@ -203,6 +215,8 @@ LOCAL_INCLUDES += [
     "/netwerk/url-classifier",
 ]
 
+DEFINES["MOZ_APP_UA_NAME"] = f'"{CONFIG["MOZ_APP_UA_NAME"]}"'
+
 if CONFIG["MOZ_AUTH_EXTENSION"]:
     LOCAL_INCLUDES += [
         "/extensions/auth",
@@ -210,6 +224,8 @@ if CONFIG["MOZ_AUTH_EXTENSION"]:
 
 EXTRA_JS_MODULES += [
     "HPKEConfigManager.sys.mjs",
+    "NetworkErrorLogging.sys.mjs",
+    "ObliviousHTTP.sys.mjs",
     "WellKnownOpportunisticUtils.sys.mjs",
 ]
 

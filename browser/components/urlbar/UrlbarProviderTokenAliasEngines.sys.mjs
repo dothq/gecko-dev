@@ -139,6 +139,7 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
           ...lazy.UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
             engine: [engine.name, UrlbarUtils.HIGHLIGHT.TYPED],
             keyword: [tokenAliases[0], UrlbarUtils.HIGHLIGHT.TYPED],
+            keywords: tokenAliases.join(", "),
             query: ["", UrlbarUtils.HIGHLIGHT.TYPED],
             icon: await engine.getIconURL(),
             providesSearchMode: true,
@@ -173,7 +174,7 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
   }
 
   async _getAutofillResult(queryContext) {
-    let lowerCaseSearchString = queryContext.searchString.toLowerCase();
+    let { lowerCaseSearchString } = queryContext;
 
     // The user is typing a specific engine. We should show a heuristic result.
     for (let { engine, tokenAliases } of this._engines) {
@@ -206,6 +207,7 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
               {
                 engine: [engine.name, UrlbarUtils.HIGHLIGHT.TYPED],
                 keyword: [aliasPreservingUserCase, UrlbarUtils.HIGHLIGHT.TYPED],
+                keywords: tokenAliases.join(", "),
                 query: ["", UrlbarUtils.HIGHLIGHT.TYPED],
                 icon: await engine.getIconURL(),
                 providesSearchMode: true,

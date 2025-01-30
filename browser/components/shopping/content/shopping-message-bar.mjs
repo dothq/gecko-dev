@@ -95,7 +95,8 @@ class ShoppingMessageBar extends MozLitElement {
   }
 
   staleWarningTemplate() {
-    return html`<message-bar>
+    return html`<div class="shopping-message-bar">
+      <span class="icon"></span>
       <article id="message-bar-container" aria-labelledby="header">
         <span
           data-l10n-id="shopping-message-bar-warning-stale-analysis-message-2"
@@ -107,12 +108,11 @@ class ShoppingMessageBar extends MozLitElement {
           @click=${this.onClickAnalysisButton}
         ></button>
       </article>
-    </message-bar>`;
+    </div>`;
   }
 
   genericErrorTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="warning"
       data-l10n-id="shopping-message-bar-generic-error"
     >
@@ -121,7 +121,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   notEnoughReviewsTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="warning"
       data-l10n-id="shopping-message-bar-warning-not-enough-reviews"
     >
@@ -130,7 +129,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   productNotAvailableTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="warning"
       data-l10n-id="shopping-message-bar-warning-product-not-available"
     >
@@ -146,7 +144,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   thanksForReportingTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="info"
       data-l10n-id="shopping-message-bar-thanks-for-reporting"
     >
@@ -155,7 +152,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   productNotAvailableReportedTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="warning"
       data-l10n-id="shopping-message-bar-warning-product-not-available-reported"
     >
@@ -163,11 +159,13 @@ class ShoppingMessageBar extends MozLitElement {
   }
 
   analysisInProgressTemplate() {
-    return html`<message-bar
+    return html`<div
+      class="shopping-message-bar analysis-in-progress"
       style=${styleMap({
         "--analysis-progress-pcent": `${this.progress}%`,
       })}
     >
+      <span class="icon"></span>
       <article
         id="message-bar-container"
         aria-labelledby="header"
@@ -184,15 +182,18 @@ class ShoppingMessageBar extends MozLitElement {
           data-l10n-id="shopping-message-bar-analysis-in-progress-message2"
         ></span>
       </article>
-    </message-bar>`;
+    </div>`;
   }
 
   reanalysisInProgressTemplate() {
-    return html`<message-bar
+    return html`<div
+      class="shopping-message-bar"
+      id="reanalysis-in-progress-message"
       style=${styleMap({
         "--analysis-progress-pcent": `${this.progress}%`,
       })}
     >
+      <span class="icon"></span>
       <article
         id="message-bar-container"
         aria-labelledby="header"
@@ -206,12 +207,11 @@ class ShoppingMessageBar extends MozLitElement {
           })}"
         ></span>
       </article>
-    </message-bar>`;
+    </div>`;
   }
 
   pageNotSupportedTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="warning"
       data-l10n-id="shopping-message-bar-page-not-supported"
     >
@@ -220,7 +220,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   thankYouForFeedbackTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading"
       type="success"
       dismissable
       data-l10n-id="shopping-survey-thanks"
@@ -230,7 +229,6 @@ class ShoppingMessageBar extends MozLitElement {
 
   keepClosedTemplate() {
     return html`<moz-message-bar
-      data-l10n-attrs="heading, message"
       type="info"
       data-l10n-id="shopping-message-bar-keep-closed-header"
     >

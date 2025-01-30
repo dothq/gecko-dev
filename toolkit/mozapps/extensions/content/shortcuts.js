@@ -72,6 +72,13 @@ ChromeUtils.defineESModuleGetters(this, {
     "F10",
     "F11",
     "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
   ];
   const functionKeys = new Set(_functionKeys);
   const validKeys = new Set([
@@ -283,7 +290,7 @@ ChromeUtils.defineESModuleGetters(this, {
     }
 
     return Object.entries(modifierMap)
-      .filter(([key, isDown]) => isDown)
+      .filter(([, isDown]) => isDown)
       .map(([key]) => key)
       .concat(getStringForEvent(e))
       .join("+");

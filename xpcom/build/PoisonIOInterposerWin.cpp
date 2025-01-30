@@ -116,7 +116,8 @@ typedef NTSTATUS(NTAPI* NtQueryFullAttributesFileFn)(
 // resolved with the first entry (best case), and 32 entries cover >95% of
 // cases, reducing the average `Filename()` cost by 5-10x.
 using HandleToFilenameCache = mozilla::SmallArrayLRUCache<HANDLE, nsString, 32>;
-static mozilla::UniquePtr<HandleToFilenameCache> sHandleToFilenameCache;
+MOZ_RUNINIT static mozilla::UniquePtr<HandleToFilenameCache>
+    sHandleToFilenameCache;
 
 /**
  * RAII class for timing the duration of an I/O call and reporting the result
@@ -127,8 +128,7 @@ class WinIOAutoObservation : public mozilla::IOInterposeObserver::Observation {
   WinIOAutoObservation(mozilla::IOInterposeObserver::Operation aOp,
                        HANDLE aFileHandle, const LARGE_INTEGER* aOffset)
       : mozilla::IOInterposeObserver::Observation(
-            aOp, sReference,
-            !mozilla::IsDebugFile(reinterpret_cast<intptr_t>(aFileHandle))),
+            aOp, sReference, !mozilla::IsDebugFile(aFileHandle)),
         mFileHandle(aFileHandle),
         mFileHandleType(GetFileType(aFileHandle)),
         mHasQueriedFilename(false) {
@@ -428,7 +428,7 @@ static NTSTATUS NTAPI InterposedNtQueryFullAttributesFile(
 /******************************** IO Poisoning ********************************/
 
 // Windows DLL interceptor
-static mozilla::WindowsDllInterceptor sNtDllInterceptor;
+MOZ_RUNINIT static mozilla::WindowsDllInterceptor sNtDllInterceptor;
 
 namespace mozilla {
 

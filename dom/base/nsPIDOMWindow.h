@@ -21,11 +21,6 @@
 #include "nsILoadInfo.h"
 #include "mozilla/MozPromise.h"
 
-// Only fired for inner windows.
-#define DOM_WINDOW_DESTROYED_TOPIC "dom-window-destroyed"
-#define DOM_WINDOW_FROZEN_TOPIC "dom-window-frozen"
-#define DOM_WINDOW_THAWED_TOPIC "dom-window-thawed"
-
 class nsGlobalWindowInner;
 class nsGlobalWindowOuter;
 class nsIArray;
@@ -56,6 +51,7 @@ class BrowsingContextGroup;
 class ClientInfo;
 class ClientState;
 class ContentFrameMessageManager;
+class CloseWatcherManager;
 class DocGroup;
 class Document;
 class Element;
@@ -251,6 +247,18 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
 
   /**
    * Call this to check whether some node (this window, its document,
+   * or content in that document) has a SMILTime* event listeners.
+   */
+  bool HasSMILTimeEventListeners() { return mMayHaveSMILTimeEventListener; }
+
+  /**
+   * Call this to indicate that some node (this window, its document,
+   * or content in that document) has a SMILTime* event listener.
+   */
+  void SetHasSMILTimeEventListeners() { mMayHaveSMILTimeEventListener = true; }
+
+  /**
+   * Call this to check whether some node (this window, its document,
    * or content in that document) has a beforeinput event listener.
    * Returing false may be wrong if some nodes have come from another document
    * with `Document.adoptNode`.
@@ -341,10 +349,6 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   bool IsPlayingAudio();
 
   bool IsDocumentLoaded() const;
-
-  mozilla::dom::TimeoutManager& TimeoutManager();
-
-  bool IsRunningTimeout();
 
   // To cache top inner-window if available after constructed for tab-wised
   // indexedDB counters.
@@ -566,7 +570,7 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
    * Indicates that the page in the window has been hidden. This is used to
    * reset the focus state.
    */
-  virtual void PageHidden() = 0;
+  virtual void PageHidden(bool aIsEnteringBFCacheInParent) = 0;
 
   /**
    * Instructs this window to asynchronously dispatch a hashchange event.  This
@@ -655,6 +659,8 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   };
   bool HasActiveWebTransports() { return mWebTransportCount > 0; }
 
+  mozilla::dom::CloseWatcherManager* EnsureCloseWatcherManager();
+
  protected:
   void CreatePerformanceObjectIfNeeded();
 
@@ -702,6 +708,7 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   bool mMayHaveMouseEnterLeaveEventListener;
   bool mMayHavePointerEnterLeaveEventListener;
   bool mMayHaveTransitionEventListener;
+  bool mMayHaveSMILTimeEventListener;
   // Only used for telemetry probes.  This may be wrong if some nodes have
   // come from another document with `Document.adoptNode`.
   bool mMayHaveBeforeInputEventListenerForTelemetry;
@@ -777,6 +784,9 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
    * workers.
    */
   uint32_t mWebTransportCount = 0;
+
+  // The CloseWatcherManager for this window.
+  RefPtr<mozilla::dom::CloseWatcherManager> mCloseWatcherManager;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindowInner, NS_PIDOMWINDOWINNER_IID)
@@ -1053,7 +1063,7 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
    * Indicates that the page in the window has been hidden. This is used to
    * reset the focus state.
    */
-  virtual void PageHidden() = 0;
+  virtual void PageHidden(bool aIsEnteringBFCacheInParent) = 0;
 
   /**
    * Return the window id of this window
@@ -1076,7 +1086,8 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
    *
    * Outer windows only.
    */
-  virtual nsresult OpenNoNavigate(const nsAString& aUrl, const nsAString& aName,
+  virtual nsresult OpenNoNavigate(const nsACString& aUrl,
+                                  const nsAString& aName,
                                   const nsAString& aOptions,
                                   mozilla::dom::BrowsingContext** _retval) = 0;
 
@@ -1108,13 +1119,12 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
   // aLoadState will be passed on through to the windowwatcher.
   // aForceNoOpener will act just like a "noopener" feature in aOptions except
   //                will not affect any other window features.
-  virtual nsresult Open(const nsAString& aUrl, const nsAString& aName,
+  virtual nsresult Open(const nsACString& aUrl, const nsAString& aName,
                         const nsAString& aOptions,
                         nsDocShellLoadState* aLoadState, bool aForceNoOpener,
                         mozilla::dom::BrowsingContext** _retval) = 0;
-  virtual nsresult OpenDialog(const nsAString& aUrl, const nsAString& aName,
-                              const nsAString& aOptions,
-                              nsISupports* aExtraArgument,
+  virtual nsresult OpenDialog(const nsACString& aUrl, const nsAString& aName,
+                              const nsAString& aOptions, nsIArray* aArguments,
                               mozilla::dom::BrowsingContext** _retval) = 0;
 
   virtual nsresult GetInnerWidth(double* aWidth) = 0;

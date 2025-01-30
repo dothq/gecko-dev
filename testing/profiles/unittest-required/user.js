@@ -83,7 +83,6 @@ user_pref("dom.ipc.reportProcessHangs", true); // process hang monitor
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
 user_pref("dom.min_background_timeout_value", 1000);
 user_pref("dom.popup_maximum", -1);
-user_pref("dom.block_multiple_popups", false);
 // Prevent connection to the push server for tests.
 user_pref("dom.push.connection.enabled", false);
 user_pref("dom.successive_dialog_time_limit", 0);
@@ -202,7 +201,12 @@ user_pref("toolkit.telemetry.firstShutdownPing.enabled", false);
 user_pref("toolkit.telemetry.newProfilePing.enabled", false);
 // We want to collect telemetry, but we don't want to send in the results.
 user_pref("toolkit.telemetry.server", "https://{server}/telemetry-dummy/");
+// Default Glean to "record but don't report" mode, and to never trigger
+// activity-based ping submission. Docs:
+// https://firefox-source-docs.mozilla.org/toolkit/components/glean/dev/preferences.html
 user_pref("telemetry.fog.test.localhost_port", -1);
+user_pref("telemetry.fog.test.activity_limit", -1);
+user_pref("telemetry.fog.test.inactivity_limit", -1);
 // Don't send the 'shutdown' ping using the pingsender on the first session using
 // the 'pingsender' process. Valgrind marks the process as leaky (e.g. see bug 1364068
 // for the 'new-profile' ping) but does not provide enough information
@@ -227,4 +231,7 @@ user_pref("security.data_uri.block_toplevel_data_uri_navigations", false);
 
 // We use data: to tell the Quitter extension to quit.
 user_pref("security.data_uri.block_toplevel_data_uri_navigations", false);
+
+// Turn off update
+user_pref("app.update.disabledForTesting", true);
 

@@ -7,12 +7,18 @@ const URI_LENGTH_MAX: usize = 65536;
 // https://searchfox.org/mozilla-central/rev/ea63a0888d406fae720cf24f4727d87569a8cab5/services/sync/modules/engines/tabs.js#8
 const TAB_ENTRIES_LIMIT: usize = 5;
 
+// How long we expect a remote command to live. After this time we assume it's
+// either been delivered or will not be.
+// Matches COMMAND_TTL in close_tabs.rs in fxa-client.
+const REMOTE_COMMAND_TTL_MS: u64 = 2 * 24 * 60 * 60 * 1000; // 48 hours.
+
 use crate::error::*;
 use crate::schema;
 use crate::sync::record::TabsRecord;
 use crate::DeviceType;
+use crate::{PendingCommand, RemoteCommand, Timestamp};
 use rusqlite::{
-    types::{FromSql, ToSql},
+    types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
     Connection, OpenFlags,
 };
 use serde_derive::{Deserialize, Serialize};
@@ -39,32 +45,22 @@ pub struct RemoteTab {
     pub inactive: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ClientRemoteTabs {
     // The fxa_device_id of the client. *Should not* come from the id in the `clients` collection,
     // because that may or may not be the fxa_device_id (currently, it will not be for desktop
     // records.)
     pub client_id: String,
     pub client_name: String,
-    #[serde(
-        default = "devicetype_default_deser",
-        skip_serializing_if = "devicetype_is_unknown"
-    )]
     pub device_type: DeviceType,
-    // serde default so we can read old rows that didn't persist this.
-    #[serde(default)]
     pub last_modified: i64,
     pub remote_tabs: Vec<RemoteTab>,
 }
 
-fn devicetype_default_deser() -> DeviceType {
-    // replace with `DeviceType::default_deser` once #4861 lands.
-    DeviceType::Unknown
-}
-
-// Unlike most other uses-cases, here we do allow serializing ::Unknown, but skip it.
-fn devicetype_is_unknown(val: &DeviceType) -> bool {
-    matches!(val, DeviceType::Unknown)
+pub(crate) enum DbConnection {
+    Created,
+    Open(Connection),
+    Closed,
 }
 
 // Tabs has unique requirements for storage:
@@ -82,7 +78,7 @@ fn devicetype_is_unknown(val: &DeviceType) -> bool {
 pub struct TabsStorage {
     local_tabs: RefCell<Option<Vec<RemoteTab>>>,
     db_path: PathBuf,
-    db_connection: Option<Connection>,
+    db_connection: DbConnection,
 }
 
 impl TabsStorage {
@@ -90,7 +86,18 @@ impl TabsStorage {
         Self {
             local_tabs: RefCell::default(),
             db_path: db_path.as_ref().to_path_buf(),
-            db_connection: None,
+            db_connection: DbConnection::Created,
+        }
+    }
+
+    pub fn close(&mut self) {
+        if let DbConnection::Open(conn) =
+            std::mem::replace(&mut self.db_connection, DbConnection::Closed)
+        {
+            if let Err(err) = conn.close() {
+                // Log the error, but continue with shutdown
+                log::error!("Failed to close the connection: {:?}", err);
+            }
         }
     }
 
@@ -103,8 +110,10 @@ impl TabsStorage {
 
     /// If a DB file exists, open and return it.
     pub fn open_if_exists(&mut self) -> Result<Option<&Connection>> {
-        if let Some(ref existing) = self.db_connection {
-            return Ok(Some(existing));
+        match self.db_connection {
+            DbConnection::Open(ref conn) => return Ok(Some(conn)),
+            DbConnection::Closed => return Ok(None),
+            DbConnection::Created => {}
         }
         let flags = OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI
@@ -115,12 +124,17 @@ impl TabsStorage {
             &crate::schema::TabsMigrationLogic,
         ) {
             Ok(conn) => {
-                self.db_connection = Some(conn);
-                Ok(self.db_connection.as_ref())
+                log::info!("tabs storage is opening an existing database");
+                self.db_connection = DbConnection::Open(conn);
+                match self.db_connection {
+                    DbConnection::Open(ref conn) => Ok(Some(conn)),
+                    _ => unreachable!("impossible value"),
+                }
             }
             Err(open_database::Error::SqlError(rusqlite::Error::SqliteFailure(code, _)))
                 if code.code == rusqlite::ErrorCode::CannotOpen =>
             {
+                log::info!("tabs storage could not open an existing database and hasn't been asked to create one");
                 Ok(None)
             }
             Err(e) => Err(e.into()),
@@ -129,8 +143,10 @@ impl TabsStorage {
 
     /// Open and return the DB, creating it if necessary.
     pub fn open_or_create(&mut self) -> Result<&Connection> {
-        if let Some(ref existing) = self.db_connection {
-            return Ok(existing);
+        match self.db_connection {
+            DbConnection::Open(ref conn) => return Ok(conn),
+            DbConnection::Closed => return Err(Error::UnexpectedConnectionState),
+            DbConnection::Created => {}
         }
         let flags = OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI
@@ -141,12 +157,18 @@ impl TabsStorage {
             flags,
             &crate::schema::TabsMigrationLogic,
         )?;
-        self.db_connection = Some(conn);
-        Ok(self.db_connection.as_ref().unwrap())
+        log::info!("tabs storage is creating a database connection");
+        self.db_connection = DbConnection::Open(conn);
+        match self.db_connection {
+            DbConnection::Open(ref conn) => Ok(conn),
+            _ => unreachable!("We just set to Open, this should be impossible."),
+        }
     }
 
     pub fn update_local_state(&mut self, local_state: Vec<RemoteTab>) {
+        let num_tabs = local_state.len();
         self.local_tabs.borrow_mut().replace(local_state);
+        log::info!("update_local_state has {num_tabs} tab entries");
     }
 
     // We try our best to fit as many tabs in a payload as possible, this includes
@@ -179,10 +201,16 @@ impl TabsStorage {
                 .collect();
             // Sort the tabs so when we trim tabs it's the oldest tabs
             sanitized_tabs.sort_by(|a, b| b.last_used.cmp(&a.last_used));
-            // If trimming the tab length failed for some reason, just return the untrimmed tabs
             trim_tabs_length(&mut sanitized_tabs, MAX_PAYLOAD_SIZE);
+            log::info!(
+                "prepare_local_tabs_for_upload found {} tabs",
+                sanitized_tabs.len()
+            );
             return Some(sanitized_tabs);
         }
+        // It's a less than ideal outcome if at startup (or any time) we are asked to
+        // sync tabs before the app has told us what the tabs are, so make noise.
+        log::warn!("prepare_local_tabs_for_upload - have no local tabs");
         None
     }
 
@@ -259,7 +287,70 @@ impl TabsStorage {
             };
             crts.push(crt);
         }
-        Some(crts)
+        // Filter out any tabs the user requested to be closed on other devices but those devices
+        // have not yet actually closed the tab, so we hide them from the user until such time
+        // Should we add a flag here to give the call an option of not doing this?
+        let filtered_crts = self.filter_pending_remote_tabs(crts);
+        Some(filtered_crts)
+    }
+
+    fn filter_pending_remote_tabs(&mut self, crts: Vec<ClientRemoteTabs>) -> Vec<ClientRemoteTabs> {
+        let conn = match self.open_if_exists() {
+            Err(e) => {
+                error_support::report_error!(
+                    "tabs-read-remote",
+                    "Failed to read remote tabs: {}",
+                    e
+                );
+                return crts;
+            }
+            Ok(None) => return crts,
+            Ok(Some(conn)) => conn,
+        };
+        let pending_tabs_result: Result<Vec<(String, String)>> = conn.query_rows_and_then_cached(
+            "SELECT device_id, url
+             FROM remote_tab_commands
+             WHERE command = :command_close_tab",
+            rusqlite::named_params! { ":command_close_tab": CommandKind::CloseTab },
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?, // device_id
+                    row.get::<_, String>(1)?, // url
+                ))
+            },
+        );
+        // Make a hash map of all urls per client_id that we potentially want to filter
+        let pending_closures = match pending_tabs_result {
+            Ok(pending_closures) => pending_closures.into_iter().fold(
+                HashMap::new(),
+                |mut acc: HashMap<String, Vec<String>>, (device_id, url)| {
+                    acc.entry(device_id).or_default().push(url);
+                    acc
+                },
+            ),
+            Err(e) => {
+                error_support::report_error!("tabs-read-remote", "Failed to read database: {}", e);
+                return crts;
+            }
+        };
+        // Check if any of the client records that were passed in have urls that the user closed
+        // This means that they requested to close those tabs but those devices have not yet got
+        // actually closed the tabs
+        let filtered_crts: Vec<ClientRemoteTabs> = crts
+            .into_iter()
+            .map(|mut crt| {
+                crt.remote_tabs.retain(|tab| {
+                    !pending_closures
+                        .get(&crt.client_id)
+                        // The top level in the url_history is the "active" tab, which we should use
+                        // TODO: probably not the best way to url check
+                        .map_or(false, |urls| urls.contains(&tab.url_history[0]))
+                });
+                crt
+            })
+            .collect();
+        // Return the filtered crts
+        filtered_crts
     }
 
     // Keep DB from growing infinitely since we only ask for records since our last sync
@@ -295,14 +386,12 @@ impl TabsStorage {
         }
         Ok(())
     }
-}
 
-impl TabsStorage {
     pub(crate) fn replace_remote_tabs(
         &mut self,
         // This is a tuple because we need to know what the server reports
         // as the last time a record was modified
-        new_remote_tabs: Vec<(TabsRecord, ServerTimestamp)>,
+        new_remote_tabs: &Vec<(TabsRecord, ServerTimestamp)>,
     ) -> Result<()> {
         let connection = self.open_or_create()?;
         let tx = connection.unchecked_transaction()?;
@@ -310,7 +399,7 @@ impl TabsStorage {
         // For tabs it's fine if we override the existing tabs for a remote
         // there can only ever be one record for each client
         for remote_tab in new_remote_tabs {
-            let record = remote_tab.0;
+            let record = &remote_tab.0;
             let last_modified = remote_tab.1;
             log::info!(
                 "inserting tab for device {}, last modified at {}",
@@ -373,26 +462,261 @@ impl TabsStorage {
     }
 }
 
-// Trim the amount of tabs in a list to fit the specified memory size
-fn trim_tabs_length(tabs: &mut Vec<RemoteTab>, payload_size_max_bytes: usize) {
-    // Ported from https://searchfox.org/mozilla-central/rev/84fb1c4511312a0b9187f647d90059e3a6dd27f8/services/sync/modules/util.sys.mjs#422
-    // See bug 535326 comment 8 for an explanation of the estimation
-    let max_serialized_size = (payload_size_max_bytes / 4) * 3 - 1500;
-    let size = compute_serialized_size(tabs);
-    if size > max_serialized_size {
-        // Estimate a little more than the direct fraction to maximize packing
-        let cutoff = (tabs.len() * max_serialized_size) / size;
-        tabs.truncate(cutoff);
+// Implementations related to storage of remotely closing remote tabs.
+// We should probably split this module!
+impl TabsStorage {
+    /// Store tabs that we requested to close on other devices but
+    /// not yet executed on target device, other calls like getAll()
+    /// will check against this table to filter out any urls
+    pub fn add_remote_tab_command(
+        &mut self,
+        device_id: &str,
+        command: &RemoteCommand,
+    ) -> Result<bool> {
+        self.add_remote_tab_command_at(device_id, command, Timestamp::now())
+    }
 
-        // Keep dropping off the last entry until the data fits.
-        while compute_serialized_size(tabs) > max_serialized_size {
-            tabs.pop();
+    pub fn add_remote_tab_command_at(
+        &mut self,
+        device_id: &str,
+        command: &RemoteCommand,
+        time_requested: Timestamp,
+    ) -> Result<bool> {
+        let connection = self.open_or_create()?;
+        let RemoteCommand::CloseTab { url } = command;
+        log::info!("Adding remote command for {device_id} at {time_requested}");
+        log::trace!("command is {command:?}");
+        // tx maybe not needed for single write?
+        let tx = connection.unchecked_transaction()?;
+        let changes = tx.execute_cached(
+            "INSERT OR IGNORE INTO remote_tab_commands
+                (device_id, command, url, time_requested, time_sent)
+            VALUES (:device_id, :command, :url, :time_requested, null)",
+            rusqlite::named_params! {
+                ":device_id": &device_id,
+                ":url": url,
+                ":time_requested": time_requested,
+                ":command": command.as_ref(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(changes != 0)
+    }
+
+    pub fn remove_remote_tab_command(
+        &mut self,
+        device_id: &str,
+        command: &RemoteCommand,
+    ) -> Result<bool> {
+        let connection = self.open_or_create()?;
+        let RemoteCommand::CloseTab { url } = command;
+        log::info!("removing remote tab close details: client={device_id}");
+        let tx = connection.unchecked_transaction()?;
+        let changes = tx.execute_cached(
+            "DELETE FROM remote_tab_commands
+             WHERE device_id = :device_id AND command = :command AND url = :url;",
+            rusqlite::named_params! {
+                ":device_id": &device_id,
+                ":url": url,
+                ":command": command.as_ref(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(changes != 0)
+    }
+
+    pub fn get_unsent_commands(&mut self) -> Result<Vec<PendingCommand>> {
+        self.do_get_pending_commands("WHERE time_sent IS NULL")
+    }
+
+    fn do_get_pending_commands(&mut self, where_clause: &str) -> Result<Vec<PendingCommand>> {
+        let Some(conn) = self.open_if_exists()? else {
+            return Ok(Vec::new());
+        };
+        let result = conn.query_rows_and_then_cached(
+            &format!(
+                "SELECT device_id, command, url, time_requested, time_sent
+                    FROM remote_tab_commands
+                    {where_clause}
+                    ORDER BY time_requested
+                    LIMIT 1000 -- sue me!"
+            ),
+            [],
+            |row| -> Result<_> {
+                // overly cautious I guess - ignore bad enum values rather than failing
+                let command = match row.get::<_, CommandKind>(1) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!(
+                            "do_get_pending_commands: ignoring error fetching command: {e:?}"
+                        );
+                        return Ok(None);
+                    }
+                };
+                Ok(Some(match command {
+                    CommandKind::CloseTab => PendingCommand {
+                        device_id: row.get::<_, String>(0)?,
+                        command: RemoteCommand::CloseTab {
+                            url: row.get::<_, String>(2)?,
+                        },
+                        time_requested: row.get::<_, Timestamp>(3)?,
+                        time_sent: row.get::<_, Option<Timestamp>>(4)?,
+                    },
+                }))
+            },
+        );
+        Ok(match result {
+            Ok(records) => records.into_iter().flatten().collect(),
+            Err(e) => {
+                error_support::report_error!("tabs-get_unsent", "Failed to read database: {}", e);
+                Vec::new()
+            }
+        })
+    }
+
+    pub fn set_pending_command_sent(&mut self, command: &PendingCommand) -> Result<bool> {
+        let connection = self.open_or_create()?;
+        let RemoteCommand::CloseTab { url } = &command.command;
+        log::info!("setting remote tab sent: client={}", command.device_id);
+        log::trace!("command: {command:?}");
+        let tx = connection.unchecked_transaction()?;
+        let ts = Timestamp::now();
+        let changes = tx.execute_cached(
+            "UPDATE remote_tab_commands
+             SET time_sent = :ts
+             WHERE device_id = :device_id AND command = :command AND url = :url;",
+            rusqlite::named_params! {
+                ":command": command.command.as_ref(),
+                ":device_id": &command.device_id,
+                ":url": url,
+                ":ts": &ts,
+            },
+        )?;
+        tx.commit()?;
+        Ok(changes != 0)
+    }
+
+    // Remove any pending tabs that are 24hrs older than the last time that client has synced
+    // Or that client's incoming tabs does not have those tabs anymore
+    pub fn remove_old_pending_closures(
+        &mut self,
+        // This is a tuple because we need to know what the server reports
+        // as the last time a record was modified
+        new_remote_tabs: &[(TabsRecord, ServerTimestamp)],
+    ) -> Result<()> {
+        // we need to load our map of client-id -> RemoteClient so we can use the
+        // fxa device ID and not the sync client id.
+        let remote_clients: HashMap<String, RemoteClient> = {
+            match self.get_meta::<String>(schema::REMOTE_CLIENTS_KEY)? {
+                None => HashMap::default(),
+                Some(json) => serde_json::from_str(&json).unwrap(),
+            }
+        };
+
+        let conn = self.open_or_create()?;
+        let tx = conn.unchecked_transaction()?;
+
+        // Insert new remote tabs into a temporary table
+        conn.execute(
+            "CREATE TEMP TABLE if not exists new_remote_tabs (device_id TEXT, url TEXT)",
+            [],
+        )?;
+        conn.execute("DELETE FROM new_remote_tabs", [])?; // Clear previous entries
+
+        for (record, _) in new_remote_tabs.iter() {
+            let fxa_id = remote_clients
+                .get(&record.id)
+                .and_then(|r| r.fxa_device_id.as_ref())
+                .unwrap_or(&record.id);
+            for tab in &record.tabs {
+                if let Some(url) = tab.url_history.first() {
+                    conn.execute(
+                        "INSERT INTO new_remote_tabs (device_id, url) VALUES (?, ?)",
+                        rusqlite::params![fxa_id, url],
+                    )?;
+                }
+            }
+        }
+
+        // Delete entries from pending closures that do not exist in the new remote tabs
+        let delete_sql = "
+         DELETE FROM remote_tab_commands
+         WHERE
+            (device_id IN (SELECT device_id from new_remote_tabs))
+         AND
+         (
+            url NOT IN (
+            SELECT url from new_remote_tabs
+            WHERE new_remote_tabs.device_id = device_id
+            AND :command_close_tab = remote_tab_commands.command)
+         )";
+        conn.execute(
+            delete_sql,
+            rusqlite::named_params! {
+                ":command_close_tab": CommandKind::CloseTab,
+            },
+        )?;
+
+        log::info!(
+            "deleted {} pending tab closures because they were not in the new tabs",
+            conn.changes()
+        );
+
+        // Anything that couldn't be removed above and is older than REMOTE_COMMAND_TTL_MS
+        // is assumed not closeable and we can remove it from the list
+        let sql = format!("
+            DELETE FROM remote_tab_commands
+            WHERE device_id IN (
+                SELECT guid FROM tabs
+            ) AND (SELECT last_modified FROM tabs WHERE guid = device_id) - time_requested >= {REMOTE_COMMAND_TTL_MS}
+        ");
+        tx.execute_cached(&sql, [])?;
+        log::info!("deleted {} records because they timed out", conn.changes());
+
+        // Commit changes and clean up temp
+        tx.commit()?;
+        conn.execute("DROP TABLE new_remote_tabs", [])?;
+        Ok(())
+    }
+}
+
+// Simple enum for the DB.
+#[derive(Debug, Copy, Clone)]
+#[repr(u8)]
+enum CommandKind {
+    CloseTab = 0,
+}
+
+impl AsRef<CommandKind> for RemoteCommand {
+    // Required method
+    fn as_ref(&self) -> &CommandKind {
+        match self {
+            RemoteCommand::CloseTab { .. } => &CommandKind::CloseTab,
         }
     }
 }
 
-fn compute_serialized_size(v: &Vec<RemoteTab>) -> usize {
-    serde_json::to_string(v).unwrap_or_default().len()
+impl FromSql for CommandKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(match value.as_i64()? {
+            0 => CommandKind::CloseTab,
+            _ => return Err(FromSqlError::InvalidType),
+        })
+    }
+}
+
+impl ToSql for CommandKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(*self as u8))
+    }
+}
+
+/// Trim the amount of tabs in a list to fit the specified memory size.
+/// If trimming the tab length fails for some reason, just return the untrimmed tabs.
+fn trim_tabs_length(tabs: &mut Vec<RemoteTab>, payload_size_max_bytes: usize) {
+    if let Some(count) = payload_support::try_fit_items(tabs, payload_size_max_bytes).as_some() {
+        tabs.truncate(count.get());
+    }
 }
 
 // Similar to places/utils.js
@@ -430,8 +754,19 @@ fn is_url_syncable(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use payload_support::compute_serialized_size;
+    use std::time::Duration;
+
     use super::*;
-    use crate::sync::record::TabsRecordTab;
+    use crate::{sync::record::TabsRecordTab, PendingCommand};
+
+    impl RemoteCommand {
+        fn close_tab(url: &str) -> Self {
+            RemoteCommand::CloseTab {
+                url: url.to_string(),
+            }
+        }
+    }
 
     #[test]
     fn test_is_url_syncable() {
@@ -445,6 +780,7 @@ mod tests {
 
     #[test]
     fn test_open_if_exists_no_file() {
+        env_logger::try_init().ok();
         let dir = tempfile::tempdir().unwrap();
         let db_name = dir.path().join("test_open_for_read_no_file.db");
         let mut storage = TabsStorage::new(db_name.clone());
@@ -458,6 +794,7 @@ mod tests {
 
     #[test]
     fn test_tabs_meta() {
+        env_logger::try_init().ok();
         let dir = tempfile::tempdir().unwrap();
         let db_name = dir.path().join("test_tabs_meta.db");
         let mut db = TabsStorage::new(db_name);
@@ -492,6 +829,7 @@ mod tests {
 
     #[test]
     fn test_prepare_local_tabs_for_upload() {
+        env_logger::try_init().ok();
         let mut storage = TabsStorage::new_with_mem_path("test_prepare_local_tabs_for_upload");
         assert_eq!(storage.prepare_local_tabs_for_upload(), None);
         storage.update_local_state(vec![
@@ -550,6 +888,7 @@ mod tests {
     }
     #[test]
     fn test_trimming_tab_title() {
+        env_logger::try_init().ok();
         let mut storage = TabsStorage::new_with_mem_path("test_prepare_local_tabs_for_upload");
         assert_eq!(storage.prepare_local_tabs_for_upload(), None);
         storage.update_local_state(vec![RemoteTab {
@@ -574,6 +913,7 @@ mod tests {
     }
     #[test]
     fn test_utf8_safe_title_trim() {
+        env_logger::try_init().ok();
         let mut storage = TabsStorage::new_with_mem_path("test_prepare_local_tabs_for_upload");
         assert_eq!(storage.prepare_local_tabs_for_upload(), None);
         storage.update_local_state(vec![
@@ -617,6 +957,7 @@ mod tests {
     }
     #[test]
     fn test_trim_tabs_length() {
+        env_logger::try_init().ok();
         let mut storage = TabsStorage::new_with_mem_path("test_prepare_local_tabs_for_upload");
         assert_eq!(storage.prepare_local_tabs_for_upload(), None);
         let mut too_many_tabs: Vec<RemoteTab> = Vec::new();
@@ -628,14 +969,14 @@ mod tests {
                 ..Default::default()
             });
         }
-        let tabs_mem_size = compute_serialized_size(&too_many_tabs);
+        let tabs_mem_size = compute_serialized_size(&too_many_tabs).unwrap();
         // ensure we are definitely over the payload limit
         assert!(tabs_mem_size > MAX_PAYLOAD_SIZE);
         // Add our over-the-limit tabs to the local state
         storage.update_local_state(too_many_tabs.clone());
         // prepare_local_tabs_for_upload did the trimming we needed to get under payload size
         let tabs_to_upload = &storage.prepare_local_tabs_for_upload().unwrap();
-        assert!(compute_serialized_size(tabs_to_upload) <= MAX_PAYLOAD_SIZE);
+        assert!(compute_serialized_size(tabs_to_upload).unwrap() <= MAX_PAYLOAD_SIZE);
     }
     // Helper struct to model what's stored in the DB
     struct TabsSQLRecord {
@@ -645,6 +986,7 @@ mod tests {
     }
     #[test]
     fn test_remove_stale_clients() {
+        env_logger::try_init().ok();
         let dir = tempfile::tempdir().unwrap();
         let db_name = dir.path().join("test_remove_stale_clients.db");
         let mut storage = TabsStorage::new(db_name);
@@ -706,5 +1048,553 @@ mod tests {
         assert_eq!(remote_tabs.len(), 1);
         // Assert the correct record is still being returned
         assert_eq!(remote_tabs[0].client_id, "device-1");
+    }
+
+    fn pending_url_command(device_id: &str, url: &str, ts: Timestamp) -> PendingCommand {
+        PendingCommand {
+            device_id: device_id.to_string(),
+            command: RemoteCommand::CloseTab {
+                url: url.to_string(),
+            },
+            time_requested: ts,
+            time_sent: None,
+        }
+    }
+
+    #[test]
+    fn test_add_pending_dupe_simple() {
+        env_logger::try_init().ok();
+        let mut storage = TabsStorage::new_with_mem_path("test_add_pending_dupe_simple");
+        let command = RemoteCommand::close_tab("https://example1.com");
+        // returns a bool to say if it's new or not.
+        assert!(storage
+            .add_remote_tab_command("device-1", &command)
+            .expect("should work"));
+        assert!(!storage
+            .add_remote_tab_command("device-1", &command)
+            .expect("should work"));
+        assert!(storage
+            .remove_remote_tab_command("device-1", &command)
+            .expect("should work"));
+        assert!(storage
+            .add_remote_tab_command("device-1", &command)
+            .expect("should work"));
+    }
+
+    #[test]
+    fn test_add_pending_remote_close() {
+        env_logger::try_init().ok();
+        let mut storage = TabsStorage::new_with_mem_path("test_add_pending_remote_close");
+        storage.open_or_create().unwrap();
+        assert!(storage.open_if_exists().unwrap().is_some());
+
+        let now = Timestamp::now();
+        let earliest = now.checked_sub(Duration::from_millis(1)).unwrap();
+        let later = now.checked_add(Duration::from_millis(1)).unwrap();
+        let latest = now.checked_add(Duration::from_millis(2)).unwrap();
+        // The tabs requested to to be closed. We'll insert them in the "wrong" order
+        // relative to their time-stamp.
+        storage
+            .add_remote_tab_command_at(
+                "device-1",
+                &RemoteCommand::close_tab("https://example1.com"),
+                latest,
+            )
+            .expect("should work");
+        storage
+            .add_remote_tab_command_at(
+                "device-1",
+                &RemoteCommand::close_tab("https://example2.com"),
+                earliest,
+            )
+            .expect("should work");
+        storage
+            .add_remote_tab_command_at(
+                "device-2",
+                &RemoteCommand::close_tab("https://example2.com"),
+                now,
+            )
+            .expect("should work");
+        storage
+            .add_remote_tab_command_at(
+                "device-2",
+                &RemoteCommand::close_tab("https://example3.com"),
+                later,
+            )
+            .expect("should work");
+
+        let got = storage.get_unsent_commands().unwrap();
+
+        assert_eq!(got.len(), 4);
+        assert_eq!(
+            got,
+            vec![
+                pending_url_command("device-1", "https://example2.com", earliest),
+                pending_url_command("device-2", "https://example2.com", now),
+                pending_url_command("device-2", "https://example3.com", later),
+                pending_url_command("device-1", "https://example1.com", latest),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remote_tabs_filters_pending_closures() {
+        env_logger::try_init().ok();
+        let mut storage =
+            TabsStorage::new_with_mem_path("test_remote_tabs_filters_pending_closures");
+        let records = vec![
+            TabsSQLRecord {
+                guid: "device-1".to_string(),
+                record: TabsRecord {
+                    id: "device-1".to_string(),
+                    client_name: "Device #1".to_string(),
+                    tabs: vec![TabsRecordTab {
+                        title: "the title".to_string(),
+                        url_history: vec!["https://mozilla.org/".to_string()],
+                        icon: Some("https://mozilla.org/icon".to_string()),
+                        last_used: 1711929600015, // 4/1/2024
+                        ..Default::default()
+                    }],
+                },
+                last_modified: 1711929600015, // 4/1/2024
+            },
+            TabsSQLRecord {
+                guid: "device-2".to_string(),
+                record: TabsRecord {
+                    id: "device-2".to_string(),
+                    client_name: "Another device".to_string(),
+                    tabs: vec![
+                        TabsRecordTab {
+                            title: "the title".to_string(),
+                            url_history: vec!["https://mozilla.org/".to_string()],
+                            icon: Some("https://mozilla.org/icon".to_string()),
+                            last_used: 1711929600015, // 4/1/2024
+                            ..Default::default()
+                        },
+                        TabsRecordTab {
+                            title: "the title".to_string(),
+                            url_history: vec![
+                                "https://example.com/".to_string(),
+                                "https://example1.com/".to_string(),
+                            ],
+                            icon: None,
+                            last_used: 1711929600015, // 4/1/2024
+                            ..Default::default()
+                        },
+                        TabsRecordTab {
+                            title: "the title".to_string(),
+                            url_history: vec!["https://example1.com/".to_string()],
+                            icon: None,
+                            last_used: 1711929600015, // 4/1/2024
+                            ..Default::default()
+                        },
+                    ],
+                },
+                last_modified: 1711929600015, // 4/1/2024
+            },
+        ];
+
+        let db = storage.open_if_exists().unwrap().unwrap();
+        for record in records {
+            db.execute(
+                "INSERT INTO tabs (guid, record, last_modified) VALUES (:guid, :record, :last_modified);",
+                rusqlite::named_params! {
+                    ":guid": &record.guid,
+                    ":record": serde_json::to_string(&record.record).unwrap(),
+                    ":last_modified": &record.last_modified,
+                },
+            ).unwrap();
+        }
+
+        // Some tabs were requested to be closed
+        storage
+            .add_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://mozilla.org/"),
+            )
+            .unwrap();
+        storage
+            .add_remote_tab_command(
+                "device-2",
+                &RemoteCommand::close_tab("https://example.com/"),
+            )
+            .unwrap();
+        storage
+            .add_remote_tab_command(
+                "device-2",
+                &RemoteCommand::close_tab("https://example1.com/"),
+            )
+            .unwrap();
+
+        let remote_tabs = storage.get_remote_tabs().unwrap();
+
+        assert_eq!(remote_tabs.len(), 2);
+
+        // Device 1 had only 1 tab synced, we remotely closed it, so we expect no tabs
+        assert_eq!(remote_tabs[0].client_id, "device-1");
+        assert_eq!(remote_tabs[0].remote_tabs.len(), 0);
+
+        // Device 2 had 3 tabs open and we remotely closed 2, so we expect 1 tab returned
+        assert_eq!(remote_tabs[1].client_id, "device-2");
+        assert_eq!(remote_tabs[1].remote_tabs.len(), 1);
+        assert_eq!(
+            remote_tabs[1].remote_tabs[0],
+            RemoteTab {
+                title: "the title".to_string(),
+                url_history: vec!["https://mozilla.org/".to_string()],
+                icon: Some("https://mozilla.org/icon".to_string()),
+                last_used: 1711929600015000, //server time is ns, so 1000 bigger than local.
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_remove_old_pending_closures_timed_removal() {
+        env_logger::try_init().ok();
+        let mut storage =
+            TabsStorage::new_with_mem_path("test_remove_old_pending_closures_timed_removal");
+
+        let now = Timestamp::now();
+        let older = now
+            .checked_sub(Duration::from_millis(REMOTE_COMMAND_TTL_MS))
+            .unwrap();
+
+        {
+            let db = storage.open_if_exists().unwrap().unwrap();
+
+            // We manually insert two devices, one that hasn't updated in awhile and one that's
+            // updated recently
+            db.execute(
+                "INSERT INTO tabs (guid, record, last_modified) VALUES ('device-synced', '', :now);",
+                rusqlite::named_params! {
+                    ":now" : now,
+                },
+            )
+            .unwrap();
+
+            db.execute(
+                "INSERT INTO tabs (guid, record, last_modified) VALUES ('device-not-synced', '', :old);",
+                    rusqlite::named_params! {
+                        ":old" : older,
+                    },
+            ).unwrap();
+        }
+        // We also manually insert some pending remote tab closures, we specifically add a recent one
+        // and one that is 48hrs older since that device updated, which should get removed
+        storage
+            .add_remote_tab_command_at(
+                "device-synced",
+                &RemoteCommand::close_tab("https://example.com"),
+                older,
+            )
+            .unwrap();
+
+        storage
+            .add_remote_tab_command_at(
+                "device-not-synced",
+                &RemoteCommand::close_tab("https://example2.com"),
+                now,
+            )
+            .unwrap();
+
+        {
+            let db = storage.open_if_exists().unwrap().unwrap();
+
+            // Verify we actually have 2 pending closures
+            let before_count: i64 = db
+                .query_one("SELECT COUNT(*) FROM remote_tab_commands")
+                .unwrap();
+            assert_eq!(before_count, 2);
+        }
+        // "incoming" records from other devices
+        let new_records = vec![(
+            TabsRecord {
+                id: "device-not-synced".to_string(),
+                client_name: "".to_string(),
+                tabs: vec![TabsRecordTab {
+                    url_history: vec!["https://example2.com".to_string()],
+                    ..Default::default()
+                }],
+            },
+            ServerTimestamp::from_millis(now.as_millis_i64()),
+        )];
+        // Cleanup old pending closures
+        storage.remove_old_pending_closures(&new_records).unwrap();
+
+        let reopen_db = storage.open_if_exists().unwrap().unwrap();
+        let after_count: i64 = reopen_db
+            .query_one("SELECT COUNT(*) FROM remote_tab_commands")
+            .unwrap();
+        assert_eq!(after_count, 1);
+
+        let remaining_device_id: String = reopen_db
+            .query_one("SELECT device_id FROM remote_tab_commands")
+            .unwrap();
+
+        // Only the device that still hasn't synced keeps
+        assert_eq!(remaining_device_id, "device-not-synced");
+    }
+    #[test]
+    fn test_remove_old_pending_closures_no_tab_removal() {
+        env_logger::try_init().ok();
+        let mut storage =
+            TabsStorage::new_with_mem_path("test_remove_old_pending_closures_no_tab_removal");
+        let db = storage.open_if_exists().unwrap().unwrap();
+
+        let now_ms: u64 = Timestamp::now().as_millis();
+
+        // Set up the initial state with tabs that have been synced recently
+        db.execute(
+            "INSERT INTO tabs (guid, record, last_modified) VALUES ('device-recent', '', :now);",
+            rusqlite::named_params! {
+                ":now": now_ms,
+            },
+        )
+        .unwrap();
+
+        // Insert pending closures for a device
+        db.execute(
+        "INSERT INTO remote_tab_commands (device_id, command, url, time_requested) VALUES (:device_id, :command, :url, :time_requested)",
+        rusqlite::named_params! {
+            ":command": CommandKind::CloseTab,
+            ":device_id": "device-recent",
+            ":url": "https://example.com",
+            ":time_requested": now_ms,
+        },
+    ).unwrap();
+
+        db.execute(
+        "INSERT INTO remote_tab_commands (device_id, command, url, time_requested) VALUES (:device_id, :command, :url, :time_requested)",
+        rusqlite::named_params! {
+            ":command": CommandKind::CloseTab,
+            ":device_id": "device-recent",
+            ":url": "https://old-url.com",
+            ":time_requested": now_ms,
+        },
+    ).unwrap();
+
+        // Verify initial state has 2 pending closures
+        let before_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM remote_tab_commands", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(before_count, 2);
+
+        // Simulate incoming data that no longer includes one of the URLs
+        let new_records = vec![(
+            TabsRecord {
+                id: "device-recent".to_string(),
+                client_name: "".to_string(),
+                tabs: vec![
+                    TabsRecordTab {
+                        url_history: vec!["https://example99.com".to_string()],
+                        ..Default::default()
+                    },
+                    TabsRecordTab {
+                        url_history: vec!["https://example.com".to_string()],
+                        ..Default::default()
+                    },
+                ],
+            },
+            ServerTimestamp::default(),
+        )];
+
+        // Perform the cleanup
+        storage.remove_old_pending_closures(&new_records).unwrap();
+
+        // need to reopen db to avoid mutable errors
+        let reopen_db = storage.open_if_exists().unwrap().unwrap();
+        // Check results after cleanup
+        let after_count: i64 = reopen_db
+            .query_row("SELECT COUNT(*) FROM remote_tab_commands", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(after_count, 1); // Only one entry should remain
+
+        let remaining_url: String = reopen_db
+            .query_row("SELECT url FROM remote_tab_commands", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(remaining_url, "https://example.com"); // The URL still present in new_records should remain
+    }
+
+    #[test]
+    fn test_remove_pending_command() {
+        env_logger::try_init().ok();
+        let mut storage = TabsStorage::new_with_mem_path("test_remove_pending_command");
+        storage.open_or_create().unwrap();
+        assert!(storage.open_if_exists().unwrap().is_some());
+
+        storage
+            .add_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://example1.com"),
+            )
+            .expect("should work");
+
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 1);
+        assert!(!storage
+            .remove_remote_tab_command(
+                "no-devce",
+                &RemoteCommand::close_tab("https://example1.com"),
+            )
+            .unwrap());
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 1);
+
+        assert!(!storage
+            .remove_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://example9.com"),
+            )
+            .unwrap());
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 1);
+
+        assert!(storage
+            .remove_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://example1.com"),
+            )
+            .unwrap());
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_sent_command() {
+        env_logger::try_init().ok();
+        let mut storage = TabsStorage::new_with_mem_path("test_sent_command");
+        let command = RemoteCommand::close_tab("https://example1.com");
+        storage
+            .add_remote_tab_command("device-1", &command)
+            .expect("should work");
+
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 1);
+        let pending_command = PendingCommand {
+            device_id: "device-1".to_string(),
+            command: command.clone(),
+            time_requested: Timestamp::now(),
+            time_sent: None,
+        };
+        assert!(storage.set_pending_command_sent(&pending_command).unwrap());
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 0);
+        // but can't re-add it because it's still alive.
+        assert!(!storage
+            .add_remote_tab_command("device-1", &command)
+            .unwrap());
+        // can remove it.
+        assert!(storage
+            .remove_remote_tab_command("device-1", &command)
+            .unwrap());
+        // now can re-add it.
+        assert!(storage
+            .add_remote_tab_command("device-1", &command)
+            .unwrap());
+        assert_eq!(storage.get_unsent_commands().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_remove_pending_closures_only_affects_target_device() {
+        env_logger::try_init().ok();
+        let mut storage =
+            TabsStorage::new_with_mem_path("test_remove_pending_closures_target_device");
+        let now = Timestamp::now();
+
+        let db = storage.open_if_exists().unwrap().unwrap();
+
+        // Insert two devices into the tabs db
+        db.execute(
+            "INSERT INTO tabs (guid, record, last_modified) VALUES ('device-1', '', :now);",
+            rusqlite::named_params! { ":now" : now },
+        )
+        .unwrap();
+
+        db.execute(
+            "INSERT INTO tabs (guid, record, last_modified) VALUES ('device-2', '', :now);",
+            rusqlite::named_params! { ":now" : now },
+        )
+        .unwrap();
+
+        // Add three commands, two for device-1 and one for device-2
+        storage
+            .add_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://example1.com"),
+            )
+            .unwrap();
+
+        storage
+            .add_remote_tab_command(
+                "device-1",
+                &RemoteCommand::close_tab("https://example2.com"),
+            )
+            .unwrap();
+
+        storage
+            .add_remote_tab_command(
+                "device-2",
+                &RemoteCommand::close_tab("https://example3.com"),
+            )
+            .unwrap();
+
+        // Pretend only device-1 "synced", example2.com tab was closed
+        let new_records = vec![(
+            TabsRecord {
+                id: "device-1".to_string(),
+                client_name: "".to_string(),
+                tabs: vec![TabsRecordTab {
+                    url_history: vec!["https://example1.com".to_string()],
+                    ..Default::default()
+                }],
+            },
+            ServerTimestamp::default(),
+        )];
+
+        storage.remove_old_pending_closures(&new_records).unwrap();
+
+        let reopen_db = storage.open_if_exists().unwrap().unwrap();
+        let remaining_commands: Vec<(String, String)> = reopen_db
+            .prepare("SELECT device_id, url FROM remote_tab_commands")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>, _>>()
+            .unwrap();
+        // We should only have removed 1 command from the list
+        assert_eq!(remaining_commands.len(), 2);
+        assert!(remaining_commands
+            .contains(&("device-1".to_string(), "https://example1.com".to_string())));
+        assert!(remaining_commands
+            .contains(&("device-2".to_string(), "https://example3.com".to_string())));
+    }
+
+    #[test]
+    fn test_close_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test_close_connection.db");
+        let mut storage = TabsStorage::new(db_path);
+
+        // Open the connection
+        storage.open_or_create().unwrap();
+
+        // Verify that the connection is open
+        assert!(matches!(storage.db_connection, DbConnection::Open(_)));
+
+        // Close the connection
+        storage.close();
+
+        // Verify that the connection is closed
+        assert!(matches!(storage.db_connection, DbConnection::Closed));
+
+        // Attempt to reopen the connection should fail
+        let result = storage.open_or_create();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnexpectedConnectionState
+        ));
     }
 }

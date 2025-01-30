@@ -9,6 +9,7 @@
 #include "nsCOMArray.h"
 #include "nsLocalFile.h"
 #include "nsMIMEInfoWin.h"
+#include "nsLocalHandlerAppWin.h"
 #include "nsIMIMEService.h"
 #include "nsNetUtil.h"
 #include <windows.h>
@@ -120,8 +121,7 @@ nsMIMEInfoWin::LaunchWithFile(nsIFile* aFile) {
           appArg.Append(path);
           const wchar_t* argv[] = {appArg.get(), path.get()};
 
-          return ShellExecuteWithIFile(defaultApp, mozilla::ArrayLength(argv),
-                                       argv);
+          return ShellExecuteWithIFile(defaultApp, std::size(argv), argv);
         }
       }
     }
@@ -206,7 +206,7 @@ nsMIMEInfoWin::LaunchWithFile(nsIFile* aFile) {
     nsAutoString path;
     aFile->GetPath(path);
     const wchar_t* argv[] = {path.get()};
-    return ShellExecuteWithIFile(executable, mozilla::ArrayLength(argv), argv);
+    return ShellExecuteWithIFile(executable, std::size(argv), argv);
   }
 
   return NS_ERROR_INVALID_ARG;
@@ -219,6 +219,16 @@ nsMIMEInfoWin::GetHasDefaultHandler(bool* _retval) {
   // there is really an application associated with this type of file
   *_retval = !mDefaultAppDescription.IsEmpty();
   return NS_OK;
+}
+
+NS_IMETHODIMP nsMIMEInfoWin::GetDefaultExecutable(nsIFile** aExecutable) {
+  nsCOMPtr<nsIFile> defaultApp = GetDefaultApplication();
+  if (defaultApp) {
+    defaultApp.forget(aExecutable);
+    return NS_OK;
+  }
+
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
@@ -361,7 +371,7 @@ void nsMIMEInfoWin::UpdateDefaultInfoIfStale() {
 bool nsMIMEInfoWin::GetLocalHandlerApp(const nsAString& aCommandHandler,
                                        nsCOMPtr<nsILocalHandlerApp>& aApp) {
   nsCOMPtr<nsIFile> locfile;
-  nsresult rv = NS_NewLocalFile(aCommandHandler, true, getter_AddRefs(locfile));
+  nsresult rv = NS_NewLocalFile(aCommandHandler, getter_AddRefs(locfile));
   if (NS_FAILED(rv)) return false;
 
   aApp = do_CreateInstance("@mozilla.org/uriloader/local-handler-app;1");
@@ -554,6 +564,7 @@ bool nsMIMEInfoWin::GetProgIDVerbCommandHandler(const nsAString& appProgIDName,
 // entries to lower case and stores them in the trackList array.
 void nsMIMEInfoWin::ProcessPath(nsCOMPtr<nsIMutableArray>& appList,
                                 nsTArray<nsString>& trackList,
+                                const nsAutoString& appIdOrName,
                                 const nsAString& appFilesystemCommand) {
   nsAutoString lower(appFilesystemCommand);
   ToLowerCase(lower);
@@ -568,6 +579,9 @@ void nsMIMEInfoWin::ProcessPath(nsCOMPtr<nsIMutableArray>& appList,
 
   nsCOMPtr<nsILocalHandlerApp> aApp;
   if (!GetLocalHandlerApp(appFilesystemCommand, aApp)) return;
+
+  // Track the app id so that the pretty name can be determined later
+  (static_cast<nsLocalHandlerAppWin*>(aApp.get()))->SetAppIdOrName(appIdOrName);
 
   // Save in our main tracking arrays
   appList->AppendElement(aApp);
@@ -673,7 +687,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
           if (GetProgIDVerbCommandHandler(appProgId, appFilesystemCommand,
                                           false) &&
               !IsPathInList(appFilesystemCommand, trackList)) {
-            ProcessPath(appList, trackList, appFilesystemCommand);
+            ProcessPath(appList, trackList, appProgId, appFilesystemCommand);
           }
         }
       }
@@ -701,7 +715,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
                                          false) ||
               IsPathInList(appFilesystemCommand, trackList))
             continue;
-          ProcessPath(appList, trackList, appFilesystemCommand);
+          ProcessPath(appList, trackList, appName, appFilesystemCommand);
         }
       }
       regKey->Close();
@@ -729,7 +743,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
                                            false) ||
               IsPathInList(appFilesystemCommand, trackList))
             continue;
-          ProcessPath(appList, trackList, appFilesystemCommand);
+          ProcessPath(appList, trackList, appProgId, appFilesystemCommand);
         }
       }
       regKey->Close();
@@ -762,7 +776,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
                                          false) ||
               IsPathInList(appFilesystemCommand, trackList))
             continue;
-          ProcessPath(appList, trackList, appFilesystemCommand);
+          ProcessPath(appList, trackList, appValue, appFilesystemCommand);
         }
       }
     }
@@ -791,7 +805,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
                                            false) ||
               IsPathInList(appFilesystemCommand, trackList))
             continue;
-          ProcessPath(appList, trackList, appFilesystemCommand);
+          ProcessPath(appList, trackList, appProgId, appFilesystemCommand);
         }
       }
       regKey->Close();
@@ -829,7 +843,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
                                              false) ||
                   IsPathInList(appFilesystemCommand, trackList))
                 continue;
-              ProcessPath(appList, trackList, appFilesystemCommand);
+              ProcessPath(appList, trackList, appName, appFilesystemCommand);
             }
           }
         }
@@ -857,7 +871,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
         if (!GetAppsVerbCommandHandler(appName, appFilesystemCommand, false) ||
             IsPathInList(appFilesystemCommand, trackList))
           continue;
-        ProcessPath(appList, trackList, appFilesystemCommand);
+        ProcessPath(appList, trackList, appName, appFilesystemCommand);
       }
     }
     regKey->Close();
@@ -882,7 +896,7 @@ nsMIMEInfoWin::GetPossibleLocalHandlers(nsIArray** _retval) {
         if (!GetAppsVerbCommandHandler(appName, appFilesystemCommand, false) ||
             IsPathInList(appFilesystemCommand, trackList))
           continue;
-        ProcessPath(appList, trackList, appFilesystemCommand);
+        ProcessPath(appList, trackList, appName, appFilesystemCommand);
       }
     }
   }

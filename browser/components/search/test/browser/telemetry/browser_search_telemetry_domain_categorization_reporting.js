@@ -9,6 +9,8 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   CATEGORIZATION_SETTINGS: "resource:///modules/SearchSERPTelemetry.sys.mjs",
+  SearchSERPDomainToCategoriesMap:
+    "resource:///modules/SearchSERPTelemetry.sys.mjs",
 });
 
 const TEST_PROVIDER_INFO = [
@@ -19,6 +21,7 @@ const TEST_PROVIDER_INFO = [
     queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
+    organicCodes: [],
     adServerAttributes: ["mozAttr"],
     nonAdsLinkRegexps: [],
     extraAdServersRegexps: [
@@ -56,6 +59,9 @@ const TEST_PROVIDER_INFO = [
         default: true,
       },
     ],
+    shoppingTab: {
+      regexp: "&page=shop",
+    },
   },
 ];
 
@@ -68,6 +74,10 @@ let categorizationAttachment;
 add_setup(async function () {
   SearchSERPTelemetry.overrideSearchTelemetryForTests(TEST_PROVIDER_INFO);
   await waitForIdle();
+
+  // Enable local telemetry recording for the duration of the tests.
+  let oldCanRecord = Services.telemetry.canRecordExtended;
+  Services.telemetry.canRecordExtended = true;
 
   let { record, attachment } = await insertRecordIntoCollection();
   categorizationRecord = record;
@@ -82,7 +92,18 @@ add_setup(async function () {
   await promise;
 
   registerCleanupFunction(async () => {
+    // Manually unload the pref so that we can check if we should wait for the
+    // the categories map to be un-initialized.
+    await SpecialPowers.popPrefEnv();
+    if (
+      !Services.prefs.getBoolPref(
+        "browser.search.serpEventTelemetryCategorization.enabled"
+      )
+    ) {
+      await waitForDomainToCategoriesUninit();
+    }
     SearchSERPTelemetry.overrideSearchTelemetryForTests();
+    Services.telemetry.canRecordExtended = oldCanRecord;
     resetTelemetry();
     await db.clear();
   });
@@ -115,7 +136,10 @@ add_task(async function test_categorization_reporting() {
       partner_code: "ff",
       provider: "example",
       tagged: "true",
+      is_shopping_page: "false",
       num_ads_clicked: "0",
+      num_ads_hidden: "0",
+      num_ads_loaded: "2",
       num_ads_visible: "2",
     },
   ]);
@@ -124,9 +148,10 @@ add_task(async function test_categorization_reporting() {
 add_task(async function test_no_reporting_if_download_failure() {
   resetTelemetry();
 
-  // Delete the attachment associated with the record so that syncing
-  // will cause an error.
-  await client.attachments.cacheImpl.delete(categorizationRecord.id);
+  let sandbox = sinon.createSandbox();
+  sandbox
+    .stub(RemoteSettings(TELEMETRY_CATEGORIZATION_KEY).attachments, "download")
+    .throws(new Error("Simulated Download Error"));
 
   let observeDownloadError = TestUtils.consoleMessageObserved(msg => {
     return (
@@ -147,13 +172,16 @@ add_task(async function test_no_reporting_if_download_failure() {
   await promise;
 
   await BrowserTestUtils.removeTab(tab);
+  // We should not record telemetry if attachments weren't downloaded.
   assertCategorizationValues([]);
 
-  // Re-insert the attachment for other tests.
-  await client.attachments.cacheImpl.set(
-    categorizationRecord.id,
-    categorizationAttachment
-  );
+  await sandbox.restore();
+
+  // The map is going to attempt to redo a download. There are other tests that
+  // do it, so instead reset the map so later tests don't get interrupted by
+  // a sync event caused by this test.
+  await SearchSERPDomainToCategoriesMap.uninit();
+  await SearchSERPDomainToCategoriesMap.init();
 });
 
 add_task(async function test_no_reporting_if_no_records() {
@@ -172,11 +200,23 @@ add_task(async function test_no_reporting_if_no_records() {
 
   let url = getSERPUrl("searchTelemetryDomainCategorizationReporting.html");
   info("Load a sample SERP with organic results.");
-  let promise = waitForPageWithCategorizedDomains();
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
-  await promise;
 
+  info("Wait roughly the amount of time a categorization event should occur.");
+  let waitPromise = sleep(1000);
+  let categorizationPromise = waitForPageWithCategorizedDomains();
+  let result = await Promise.race([
+    waitPromise.then(() => false),
+    categorizationPromise.then(() => true),
+  ]);
+  Assert.equal(
+    result,
+    false,
+    "Received a categorization event before the timeout."
+  );
   await BrowserTestUtils.removeTab(tab);
+
+  // We should not record telemetry if there are no records matching the region.
   assertCategorizationValues([]);
 });
 
@@ -218,8 +258,50 @@ add_task(async function test_reporting_limited_to_10_domains_of_each_kind() {
       partner_code: "ff",
       provider: "example",
       tagged: "true",
+      is_shopping_page: "false",
       num_ads_clicked: "0",
+      num_ads_hidden: "0",
+      num_ads_loaded: "12",
       num_ads_visible: "12",
+    },
+  ]);
+});
+
+add_task(async function test_categorization_reporting_for_shopping_page() {
+  resetTelemetry();
+
+  let url = getSERPUrl("searchTelemetryDomainCategorizationReporting.html");
+  let shoppingUrl = new URL(url);
+  shoppingUrl.searchParams.set("page", "shop");
+  shoppingUrl = shoppingUrl.toString();
+  info("Load a sample shopping page SERP with organic and sponsored results.");
+  let promise = waitForPageWithCategorizedDomains();
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, shoppingUrl);
+  await promise;
+
+  await BrowserTestUtils.removeTab(tab);
+  assertCategorizationValues([
+    {
+      organic_category: "3",
+      organic_num_domains: "1",
+      organic_num_inconclusive: "0",
+      organic_num_unknown: "0",
+      sponsored_category: "4",
+      sponsored_num_domains: "2",
+      sponsored_num_inconclusive: "0",
+      sponsored_num_unknown: "0",
+      mappings_version: "1",
+      app_version: APP_MAJOR_VERSION,
+      channel: CHANNEL,
+      region: REGION,
+      partner_code: "ff",
+      provider: "example",
+      tagged: "true",
+      is_shopping_page: "true",
+      num_ads_clicked: "0",
+      num_ads_hidden: "0",
+      num_ads_loaded: "2",
+      num_ads_visible: "2",
     },
   ]);
 });

@@ -1,4 +1,4 @@
-//! This crate provides a fully written in Rust memory allocator for Vulkan and DirectX 12.
+//! This crate provides a fully written in Rust memory allocator for Vulkan, DirectX 12 and Metal.
 //!
 //! # [Windows-rs] and [winapi]
 //!
@@ -52,7 +52,7 @@
 //! # }).unwrap();
 //!
 //! // Setup vulkan info
-//! let vk_info = vk::BufferCreateInfo::builder()
+//! let vk_info = vk::BufferCreateInfo::default()
 //!     .size(512)
 //!     .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
 //!
@@ -155,11 +155,64 @@
 //! # #[cfg(not(feature = "d3d12"))]
 //! # fn main() {}
 //! ```
+//!
+//! # Setting up the Metal memory allocator
+//!
+//! ```no_run
+//! # #[cfg(feature = "metal")]
+//! # fn main() {
+//! # use std::sync::Arc;
+//! use gpu_allocator::metal::*;
+//!
+//! # let device = Arc::new(metal::Device::system_default().unwrap());
+//! let mut allocator = Allocator::new(&AllocatorCreateDesc {
+//!     device: device.clone(),
+//!     debug_settings: Default::default(),
+//!     allocation_sizes: Default::default(),
+//! });
+//! # }
+//! # #[cfg(not(feature = "metal"))]
+//! # fn main() {}
+//! ```
+//!
+//! # Simple Metal allocation example
+//! ```no_run
+//! # #[cfg(feature = "metal")]
+//! # fn main() {
+//! # use std::sync::Arc;
+//! use gpu_allocator::metal::*;
+//! use gpu_allocator::MemoryLocation;
+//! # let device = Arc::new(metal::Device::system_default().unwrap());
+//! # let mut allocator = Allocator::new(&AllocatorCreateDesc {
+//! #     device: device.clone(),
+//! #     debug_settings: Default::default(),
+//! #     allocation_sizes: Default::default(),
+//! # })
+//! # .unwrap();
+//!
+//! let allocation_desc = AllocationCreateDesc::buffer(
+//!     &device,
+//!     "Example allocation",
+//!     512, // size in bytes
+//!     gpu_allocator::MemoryLocation::GpuOnly,
+//! );
+//! let allocation = allocator.allocate(&allocation_desc).unwrap();
+//! let resource = allocation.make_buffer().unwrap();
+//!
+//! // Cleanup
+//! drop(resource);
+//! allocator.free(&allocation).unwrap();
+//! # }
+//! # #[cfg(not(feature = "metal"))]
+//! # fn main() {}
+//! ```
 
 mod result;
 pub use result::*;
 
 pub(crate) mod allocator;
+
+pub use allocator::{AllocationReport, AllocatorReport, MemoryBlockReport};
 
 #[cfg(feature = "visualizer")]
 pub mod visualizer;
@@ -169,6 +222,9 @@ pub mod vulkan;
 
 #[cfg(all(windows, feature = "d3d12"))]
 pub mod d3d12;
+
+#[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "metal"))]
+pub mod metal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MemoryLocation {

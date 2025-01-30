@@ -4,10 +4,8 @@
 ChromeUtils.defineESModuleGetters(this, {
   BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.sys.mjs",
   NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
-  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPTelemetryUtils: "resource:///modules/SearchSERPTelemetry.sys.mjs",
-  SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
   TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
   sinon: "resource://testing-common/Sinon.sys.mjs",
 });
@@ -50,6 +48,58 @@ const TEST_PROVIDER_INFO = [
       },
     ],
   },
+  {
+    telemetryId: "example3",
+    searchPageRegexp: /^https:\/\/www\.example3\.com\/search/,
+    queryParamNames: ["a", "q"],
+    codeParamName: "abc",
+    taggedCodes: ["ff", "tb"],
+    expectedOrganicCodes: ["baz"],
+    organicCodes: ["foo"],
+    followOnParamNames: ["a"],
+    followOnCookies: [
+      {
+        host: "www.example3.com",
+        name: "_dummyCookieName",
+        codeParamName: "abc",
+        extraCodePrefixes: ["xyz"],
+        extraCodeParamName: "dummyExtraCodeParamName",
+      },
+    ],
+    extraAdServersRegexps: [/^https:\/\/www\.example\.com\/ad2/],
+    components: [
+      {
+        type: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        default: true,
+      },
+    ],
+  },
+  {
+    telemetryId: "example4",
+    searchPageRegexp: /^https:\/\/www\.example4\.com\/search/,
+    queryParamNames: ["a", "q"],
+    codeParamName: "abc",
+    taggedCodes: ["ff", "tb"],
+    expectedOrganicCodes: ["baz"],
+    organicCodes: ["foo"],
+    followOnParamNames: ["a"],
+    followOnCookies: [
+      {
+        host: "www.example4.com",
+        name: "_dummyCookieName",
+        codeParamName: "abc",
+        extraCodePrefixes: ["xyz"],
+        extraCodeParamName: "dummyExtraCodeParamName",
+      },
+    ],
+    extraAdServersRegexps: [/^https:\/\/www\.example\.com\/ad2/],
+    components: [
+      {
+        type: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        default: true,
+      },
+    ],
+  },
 ];
 
 const TESTS = [
@@ -64,10 +114,11 @@ const TESTS = [
       provider: "example",
       tagged: "true",
       partner_code: "ff",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -81,10 +132,11 @@ const TESTS = [
       provider: "example",
       tagged: "true",
       partner_code: "ff",
+      source: "unknown",
       is_shopping_page: "true",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -98,10 +150,88 @@ const TESTS = [
       provider: "example",
       tagged: "true",
       partner_code: "tb",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
+      is_signed_in: "false",
+    },
+  },
+  {
+    setUp() {
+      Services.cookies.removeAll();
+      Services.cookies.add(
+        "www.example3.com",
+        "/",
+        "_dummyCookieName",
+        "abc=tb&def=ghi",
+        false,
+        false,
+        false,
+        Date.now() + 1000 * 60 * 60,
+        {},
+        Ci.nsICookie.SAMESITE_NONE,
+        Ci.nsICookie.SCHEME_HTTPS
+      );
+    },
+    tearDown() {
+      Services.cookies.removeAll();
+    },
+    title: "Tagged follow-on with cookie",
+    trackingUrl:
+      "https://www.example3.com/search?q=test&a=next&dummyExtraCodeParamName=xyz",
+    expectedSearchCountEntry: "example3:tagged-follow-on:tb",
+    expectedAdKey: "example3:tagged-follow-on",
+    adUrls: ["https://www.example.com/ad2"],
+    nonAdUrls: ["https://www.example.com/ad3"],
+    impression: {
+      provider: "example3",
+      tagged: "true",
+      partner_code: "tb",
       source: "unknown",
+      is_shopping_page: "false",
+      is_private: "false",
+      shopping_tab_displayed: "false",
+      is_signed_in: "false",
+    },
+  },
+  {
+    setUp() {
+      Services.cookies.removeAll();
+      Services.cookies.add(
+        "www.example4.com",
+        "/",
+        "_dummyCookieName",
+        "abc=tb&def=ghi",
+        false,
+        false,
+        false,
+        Date.now() + 1000 * 60 * 60,
+        {},
+        Ci.nsICookie.SAMESITE_NONE,
+        Ci.nsICookie.SCHEME_HTTPS
+      );
+    },
+    tearDown() {
+      Services.cookies.removeAll();
+    },
+    title:
+      "Tagged follow-on with cookie and unexpected extraCodeParam casing in URL",
+    trackingUrl:
+      "https://www.example4.com/search?q=test&a=next&DUMMYEXTRACODEPARAMNAME=xyz",
+    expectedSearchCountEntry: "example4:tagged-follow-on:tb",
+    expectedAdKey: "example4:tagged-follow-on",
+    adUrls: ["https://www.example.com/ad2"],
+    nonAdUrls: ["https://www.example.com/ad3"],
+    impression: {
+      provider: "example4",
+      tagged: "true",
+      partner_code: "tb",
+      source: "unknown",
+      is_shopping_page: "false",
+      is_private: "false",
+      shopping_tab_displayed: "false",
+      is_signed_in: "false",
     },
   },
   {
@@ -115,10 +245,11 @@ const TESTS = [
       provider: "example",
       tagged: "false",
       partner_code: "foo",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -132,10 +263,11 @@ const TESTS = [
       provider: "example",
       tagged: "false",
       partner_code: "other",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -149,10 +281,11 @@ const TESTS = [
       provider: "example",
       tagged: "false",
       partner_code: "other",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -166,10 +299,11 @@ const TESTS = [
       provider: "example",
       tagged: "false",
       partner_code: "",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -183,10 +317,11 @@ const TESTS = [
       provider: "example",
       tagged: "false",
       partner_code: "",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
   {
@@ -200,10 +335,11 @@ const TESTS = [
       provider: "example2",
       tagged: "false",
       partner_code: "",
+      source: "unknown",
       is_shopping_page: "false",
       is_private: "false",
       shopping_tab_displayed: "false",
-      source: "unknown",
+      is_signed_in: "false",
     },
   },
 ];
@@ -258,19 +394,15 @@ async function testAdUrlClicked(serpUrl, adUrl, expectedAdKey) {
 
 do_get_profile();
 
-add_task(async function setup() {
-  Services.prefs.setBoolPref(
-    SearchUtils.BROWSER_SEARCH_PREF + "serpEventTelemetry.enabled",
-    true
-  );
+add_setup(async function () {
   Services.fog.initializeFOG();
   await SearchSERPTelemetry.init();
   SearchSERPTelemetry.overrideSearchTelemetryForTests(TEST_PROVIDER_INFO);
   sinon.stub(BrowserSearchTelemetry, "shouldRecordSearchCount").returns(true);
-  // There is no concept of browsing in unit tests, so assume in tests that we
-  // are not in private browsing mode. We have browser tests that check when
-  // private browsing is used.
-  sinon.stub(PrivateBrowsingUtils, "isBrowserPrivate").returns(false);
+
+  registerCleanupFunction(async () => {
+    sinon.restore();
+  });
 });
 
 add_task(async function test_parsing_search_urls() {
@@ -281,6 +413,14 @@ add_task(async function test_parsing_search_urls() {
     }
     let browser = {
       getTabBrowser: () => {},
+      // There is no concept of browsing in unit tests, so assume in tests that we
+      // are not in private browsing mode. We have browser tests that check when
+      // private browsing is used.
+      contentPrincipal: {
+        originAttributes: {
+          privateBrowsingId: 0,
+        },
+      },
     };
     SearchSERPTelemetry.updateTrackingStatus(browser, test.trackingUrl);
     SearchSERPTelemetry.reportPageImpression(

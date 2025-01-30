@@ -58,6 +58,8 @@ extensions:
     data_sensitivity:
       - technical
     telemetry_mirror: EXTENSIONS_STARTUPCACHE_LOAD_TIME
+    no_lint:
+      - GIFFT_NON_PING_LIFETIME
 
   startup_cache_read_errors:
     type: labeled_counter
@@ -75,6 +77,8 @@ extensions:
     data_sensitivity:
       - technical
     telemetry_mirror: EXTENSIONS_STARTUPCACHE_READ_ERRORS
+    no_lint:
+      - GIFFT_NON_PING_LIFETIME
 
   startup_cache_write_bytelength:
     type: quantity
@@ -92,6 +96,8 @@ extensions:
     data_sensitivity:
       - technical
     telemetry_mirror: EXTENSIONS_STARTUPCACHE_WRITE_BYTELENGTH
+    no_lint:
+      - GIFFT_NON_PING_LIFETIME
 
   process_event:
     type: labeled_counter
@@ -130,7 +136,6 @@ extensions.apis.dnr:
     expires: 138
     description: |
       Amount of data read from the DNR startup cache file.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -149,7 +154,6 @@ extensions.apis.dnr:
     expires: 138
     description: |
       Amount of time it takes to read data into the DNR startup cache file.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -168,7 +172,6 @@ extensions.apis.dnr:
     expires: 138
     description: |
       Amount of data written to the DNR startup cache file.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -187,7 +190,6 @@ extensions.apis.dnr:
     expires: 138
     description: |
       Amount of time it takes to write data into the DNR startup cache file.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -221,6 +223,8 @@ extensions.apis.dnr:
       - hit
       - miss
     telemetry_mirror: EXTENSIONS_APIS_DNR_STARTUP_CACHE_ENTRIES
+    no_lint:
+      - GIFFT_NON_PING_LIFETIME
 
   validate_rules_time:
     type: timing_distribution
@@ -229,7 +233,6 @@ extensions.apis.dnr:
     description: |
       Amount of time it takes to validate DNR rules of individual ruleset
       when dynamic or static rulesets have been loaded from disk.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -248,7 +251,6 @@ extensions.apis.dnr:
     expires: 138
     description: |
       Amount of time it takes to evaluate DNR rules for one network request.
-    lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
@@ -298,8 +300,11 @@ extensions.data:
       - https://bugzilla.mozilla.org/1781974
       - https://bugzilla.mozilla.org/1817100
       - https://bugzilla.mozilla.org/1861295
+      - https://bugzilla.mozilla.org/1912166
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1470213#c15
+    data_sensitivity:
+      - technical
     notification_emails:
       - addons-dev-internal@mozilla.com
     extra_keys:
@@ -325,7 +330,7 @@ extensions.data:
       has_olddata:
         description: Extension had some data stored in JSONFile ("y" / "n").
         type: string
-    expires: 132
+    expires: 140
 
   storage_local_error:
     type: event
@@ -341,8 +346,11 @@ extensions.data:
       - https://bugzilla.mozilla.org/1763523
       - https://bugzilla.mozilla.org/1811148
       - https://bugzilla.mozilla.org/1861297
+      - https://bugzilla.mozilla.org/1912166
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1606903#c3
+    data_sensitivity:
+      - technical
     notification_emails:
       - addons-dev-internal@mozilla.com
     extra_keys:
@@ -356,67 +364,38 @@ extensions.data:
         description: |
           A DOMException error name if any ("OtherError" for unknown errors).
         type: string
-    expires: 132
+    expires: 140
 
-extensions.quarantined_domains:
-
-  listsize:
-    type: quantity
-    unit: domains
-    description: >
-      Number of domains listed in the quarantined domains list pref for the client during
-      this session.
-    lifetime: application
-    expires: 130
-    notification_emails:
-      - addons-dev-internal@mozilla.com
+  sync_usage_quotas:
+    type: event
+    description: |
+      These events record the basic stat about usage, and are collected the
+      first time an extension uses the sync storage API during a session.
     bugs:
-      - https://bugzilla.mozilla.org/1840615/
-      - https://bugzilla.mozilla.org/1866199/
+      - https://bugzilla.mozilla.org/1915183
     data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1840615
+      - https://phabricator.services.mozilla.com/D222442
     data_sensitivity:
       - technical
-    telemetry_mirror: EXTENSIONS_QUARANTINEDDOMAINS_LISTSIZE
-
-  listhash:
-    type: string
-    description: >
-      SHA1 cryptographic hash of the quarantined domains string pref.
-    lifetime: application
-    expires: 130
     notification_emails:
       - addons-dev-internal@mozilla.com
-    bugs:
-      - https://bugzilla.mozilla.org/1841683/
-      - https://bugzilla.mozilla.org/1866199/
-    data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1840615#c2
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1841683
-    data_sensitivity:
-      - technical
-    telemetry_mirror: EXTENSIONS_QUARANTINEDDOMAINS_LISTHASH
-
-  remotehash:
-    type: string
-    description: >
-      SHA1 cryptographic hash of the quarantined domains string pref as it was
-      set based on the value got synced from the RemoteSettings collection.
-      AMRemoteSettings will be re-processing the entries on the next application
-      startup and so this metric lifetime can be set to application and expect
-      it to be always set to the value got from the RemoteSettings collection.
-    lifetime: application
-    expires: 130
-    notification_emails:
-      - addons-dev-internal@mozilla.com
-    bugs:
-      - https://bugzilla.mozilla.org/1841683/
-      - https://bugzilla.mozilla.org/1866199/
-    data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1841683
-    data_sensitivity:
-      - technical
-    telemetry_mirror: EXTENSIONS_QUARANTINEDDOMAINS_REMOTEHASH
+    extra_keys:
+      addon_id:
+        description: Id of the addon.
+        type: string
+      total_size_bytes:
+        description: Size of the sync data.
+        type: quantity
+      items_count:
+        description: Number of items in sync storage.
+        type: quantity
+      items_over_quota:
+        description: Count of items larger than QUOTA_BYTES_PER_ITEM.
+        type: quantity
+      backend:
+        description: Backend engine used, currently either "kinto" or "rust"
+        type: string
+    expires: 140
 
 extensions.counters:
 
@@ -466,6 +445,8 @@ extensions.counters:
         - reset_nativeapp
         - reset_streamfilter
         - reset_parentapicall
+        - permissions_request
+        - launchWebAuthFlow
       lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
@@ -488,7 +469,6 @@ extensions.timing:
       description: |
         Amount of time it takes to load a WebExtensions background page, from when the
         build function is called to when the page has finished processing the onload event.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -506,7 +486,6 @@ extensions.timing:
       expires: never
       description: |
         Amount of time it takes for a BrowserAction popup to open.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -532,7 +511,6 @@ extensions.timing:
       expires: never
       description: |
         Amount of time it takes for content scripts from a WebExtension to be injected into a window.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -555,7 +533,6 @@ extensions.timing:
       description: |
         Amount of time (keyed by addon id) that an event page has been running before being suspended,
         or the entire addon shutdown.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -573,7 +550,6 @@ extensions.timing:
       description: |
         Amount of time it takes for a WebExtension to start up, from when the
         startup function is called to when the startup promise resolves.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -591,63 +567,10 @@ extensions.timing:
       expires: never
       description: |
         Amount of time it takes for a PageAction popup to open.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
         - https://bugzilla.mozilla.org/1297167
-        - https://bugzilla.mozilla.org/1513556
-        - https://bugzilla.mozilla.org/1578225
-        - https://bugzilla.mozilla.org/1623315
-        - https://bugzilla.mozilla.org/1666980
-        - https://bugzilla.mozilla.org/1706839
-        - https://bugzilla.mozilla.org/1745271
-        - https://bugzilla.mozilla.org/1777402
-        - https://bugzilla.mozilla.org/1811155
-        - https://bugzilla.mozilla.org/1861303
-        - https://bugzilla.mozilla.org/1820158
-      data_reviews:
-        - https://bugzilla.mozilla.org/show_bug.cgi?id=1820158#c8
-      data_sensitivity:
-        - technical
-
-    storage_local_get_json:
-      type: timing_distribution
-      time_unit: millisecond
-      expires: 128
-      description: |
-        Amount of time it takes to perform a get via storage.local using the JSONFile backend.
-      lifetime: application
-      notification_emails:
-        - addons-dev-internal@mozilla.com
-      bugs:
-        - https://bugzilla.mozilla.org/1371398
-        - https://bugzilla.mozilla.org/1513556
-        - https://bugzilla.mozilla.org/1578225
-        - https://bugzilla.mozilla.org/1623315
-        - https://bugzilla.mozilla.org/1666980
-        - https://bugzilla.mozilla.org/1706839
-        - https://bugzilla.mozilla.org/1745271
-        - https://bugzilla.mozilla.org/1777402
-        - https://bugzilla.mozilla.org/1811155
-        - https://bugzilla.mozilla.org/1861303
-        - https://bugzilla.mozilla.org/1820158
-      data_reviews:
-        - https://bugzilla.mozilla.org/show_bug.cgi?id=1820158#c8
-      data_sensitivity:
-        - technical
-
-    storage_local_set_json:
-      type: timing_distribution
-      time_unit: millisecond
-      expires: 128
-      description: |
-        Amount of time it takes to perform a set via storage.local using the JSONFile backend.
-      lifetime: application
-      notification_emails:
-        - addons-dev-internal@mozilla.com
-      bugs:
-        - https://bugzilla.mozilla.org/1371398
         - https://bugzilla.mozilla.org/1513556
         - https://bugzilla.mozilla.org/1578225
         - https://bugzilla.mozilla.org/1623315
@@ -669,7 +592,6 @@ extensions.timing:
       expires: never
       description: |
         Amount of time it takes to perform a get via storage.local using the IndexedDB backend.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:
@@ -695,7 +617,6 @@ extensions.timing:
       expires: never
       description: |
         Amount of time it takes to perform a set via storage.local using the Indexed backend.
-      lifetime: application
       notification_emails:
         - addons-dev-internal@mozilla.com
       bugs:

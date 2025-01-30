@@ -70,7 +70,7 @@
 #include "ProfilerBacktrace.h"
 #include "ProfileBuffer.h"
 #include "RegisteredThread.h"
-#include "BaseProfilerSharedLibraries.h"
+#include "SharedLibraries.h"
 #include "ThreadInfo.h"
 #include "VTuneProfiler.h"
 
@@ -278,7 +278,8 @@ class MOZ_RAII PSAutoLock {
   detail::BaseProfilerAutoLock mLock;
 };
 
-detail::BaseProfilerMutex PSAutoLock::gPSMutex{"Base Profiler mutex"};
+MOZ_RUNINIT detail::BaseProfilerMutex PSAutoLock::gPSMutex{
+    "Base Profiler mutex"};
 
 // Only functions that take a PSLockRef arg can access CorePS's and ActivePS's
 // fields.
@@ -1283,9 +1284,9 @@ struct NativeStack {
 
 // Merges the profiling stack and native stack, outputting the details to
 // aCollector.
-static void MergeStacks(uint32_t aFeatures, bool aIsSynchronous,
+static void MergeStacks(bool aIsSynchronous,
                         const RegisteredThread& aRegisteredThread,
-                        const Registers& aRegs, const NativeStack& aNativeStack,
+                        const NativeStack& aNativeStack,
                         ProfilerStackCollector& aCollector) {
   // WARNING: this function runs within the profiler's "critical section".
   // WARNING: this function might be called while the profiler is inactive, and
@@ -1695,13 +1696,11 @@ static inline void DoSharedSample(
       aCaptureOptions == StackCaptureOptions::Full) {
     DoNativeBacktrace(aLock, aRegisteredThread, aRegs, nativeStack);
 
-    MergeStacks(ActivePS::Features(aLock), aIsSynchronous, aRegisteredThread,
-                aRegs, nativeStack, collector);
+    MergeStacks(aIsSynchronous, aRegisteredThread, nativeStack, collector);
   } else
 #endif
   {
-    MergeStacks(ActivePS::Features(aLock), aIsSynchronous, aRegisteredThread,
-                aRegs, nativeStack, collector);
+    MergeStacks(aIsSynchronous, aRegisteredThread, nativeStack, collector);
 
     // We can't walk the whole native stack, but we can record the top frame.
     if (aCaptureOptions == StackCaptureOptions::Full) {
@@ -2630,6 +2629,8 @@ void profiler_init(void* aStackTop) {
   LOG("profiler_init");
 
   profiler_init_main_thread_id();
+
+  Flow::Init();
 
   VTUNE_INIT();
 
@@ -3786,13 +3787,11 @@ void profiler_suspend_and_sample_thread(BaseProfilerThreadId aThreadId,
 #    error "Invalid configuration"
 #  endif
 
-          MergeStacks(aFeatures, isSynchronous, registeredThread, aRegs,
-                      nativeStack, aCollector);
+          MergeStacks(isSynchronous, registeredThread, nativeStack, aCollector);
         } else
 #endif
         {
-          MergeStacks(aFeatures, isSynchronous, registeredThread, aRegs,
-                      nativeStack, aCollector);
+          MergeStacks(isSynchronous, registeredThread, nativeStack, aCollector);
 
           aCollector.CollectNativeLeafAddr((void*)aRegs.mPC);
         }

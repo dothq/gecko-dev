@@ -141,8 +141,7 @@ TestNat::NatBehavior TestNat::ToNatBehavior(const std::string& type) {
     return TestNat::PORT_DEPENDENT;
   }
 
-  MOZ_ASSERT(false, "Invalid NAT behavior");
-  return TestNat::ENDPOINT_INDEPENDENT;
+  MOZ_CRASH("Invalid NAT behavior");
 }
 
 bool TestNat::has_port_mappings() const {
@@ -202,8 +201,8 @@ TestNrSocket::~TestNrSocket() { nat_->erase_socket(this); }
 
 RefPtr<NrSocketBase> TestNrSocket::create_external_socket(
     const nr_transport_addr& dest_addr) const {
-  MOZ_ASSERT(nat_->enabled_);
-  MOZ_ASSERT(!nat_->is_an_internal_tuple(dest_addr));
+  MOZ_RELEASE_ASSERT(nat_->enabled_);
+  MOZ_RELEASE_ASSERT(!nat_->is_an_internal_tuple(dest_addr));
 
   int r;
   nr_transport_addr nat_external_addr;
@@ -254,6 +253,10 @@ void TestNrSocket::close() {
     NR_async_timer_cancel(timer_handle_);
     timer_handle_ = nullptr;
   }
+  for (auto& timer : mTimers) {
+    timer->Cancel();
+  }
+  mTimers.Clear();
   internal_socket_->close();
   for (RefPtr<PortMapping>& port_mapping : port_mappings_) {
     port_mapping->external_socket_->close();
@@ -261,7 +264,7 @@ void TestNrSocket::close() {
 }
 
 int TestNrSocket::listen(int backlog) {
-  MOZ_ASSERT(internal_socket_->my_addr().protocol == IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(internal_socket_->my_addr().protocol == IPPROTO_TCP);
   r_log(LOG_GENERIC, LOG_DEBUG, "TestNrSocket %p %s listening", this,
         internal_socket_->my_addr().as_string);
 
@@ -269,7 +272,7 @@ int TestNrSocket::listen(int backlog) {
 }
 
 int TestNrSocket::accept(nr_transport_addr* addrp, nr_socket** sockp) {
-  MOZ_ASSERT(internal_socket_->my_addr().protocol == IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(internal_socket_->my_addr().protocol == IPPROTO_TCP);
   int r = internal_socket_->accept(addrp, sockp);
   if (r) {
     return r;
@@ -296,7 +299,7 @@ void TestNrSocket::process_delayed_cb(NR_SOCKET s, int how, void* cb_arg) {
 
 int TestNrSocket::sendto(const void* msg, size_t len, int flags,
                          const nr_transport_addr* to) {
-  MOZ_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
   r_log(LOG_GENERIC, LOG_DEBUG, "TestNrSocket %p %s %s", this, __FUNCTION__,
         to->as_string);
 
@@ -347,10 +350,7 @@ int TestNrSocket::sendto(const void* msg, size_t len, int flags,
       external_socket = similar_port_mapping->external_socket_;
     } else {
       external_socket = create_external_socket(*to);
-      if (!external_socket) {
-        MOZ_ASSERT(false);
-        return R_INTERNAL;
-      }
+      MOZ_RELEASE_ASSERT(external_socket);
     }
 
     port_mapping = create_port_mapping(*to, external_socket);
@@ -364,6 +364,30 @@ int TestNrSocket::sendto(const void* msg, size_t len, int flags,
     }
   }
 
+  if (nat_->enabled_ && nat_->network_delay_ms_) {
+    // nsITimer uses std::function to handle lambdas, but std::function must
+    // be copyable. That means we cannot use non-copyable captures, even if we
+    // never actually copy the lambda. Until nsITimer supports bare lambdas,
+    // we need to use a shared_ptr, instead of using a UniquePtr. Sadface. :(
+    r_log(LOG_GENERIC, LOG_DEBUG, "TestNrSocket %s delaying packet",
+          internal_socket_->my_addr().as_string);
+    std::shared_ptr<UdpPacket> packet(new UdpPacket(msg, len, *to));
+    auto callback = [this, self = RefPtr<TestNrSocket>(this), packet,
+                     port_mapping =
+                         RefPtr<PortMapping>(port_mapping)](nsITimer* timer) {
+      mTimers.RemoveElement(timer);
+      port_mapping->sendto(packet->buffer_->data(), packet->buffer_->len(),
+                           packet->remote_address_);
+    };
+    auto result = NS_NewTimerWithCallback(
+        std::move(callback), nat_->network_delay_ms_, nsITimer::TYPE_ONE_SHOT,
+        "TestNrSocket::sendto");
+    if (result.isOk()) {
+      mTimers.AppendElement(result.unwrap());
+    }
+    return 0;
+  }
+
   // We probably don't want to propagate the flags, since this is a simulated
   // external IP address.
   return port_mapping->sendto(msg, len, *to);
@@ -371,7 +395,7 @@ int TestNrSocket::sendto(const void* msg, size_t len, int flags,
 
 int TestNrSocket::recvfrom(void* buf, size_t maxlen, size_t* len, int flags,
                            nr_transport_addr* from) {
-  MOZ_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
 
   if (!read_buffer_.empty()) {
     UdpPacket& packet = read_buffer_.front();
@@ -441,8 +465,8 @@ bool TestNrSocket::allow_ingress(const nr_transport_addr& to,
                                  const nr_transport_addr& from,
                                  PortMapping** port_mapping_used) const {
   // This is only called for traffic arriving at a port mapping
-  MOZ_ASSERT(nat_->enabled_);
-  MOZ_ASSERT(!nat_->is_an_internal_tuple(from));
+  MOZ_RELEASE_ASSERT(nat_->enabled_);
+  MOZ_RELEASE_ASSERT(!nat_->is_an_internal_tuple(from));
 
   // Find the port mapping (if any) that this packet landed on
   *port_mapping_used = nullptr;
@@ -603,7 +627,7 @@ int TestNrSocket::write(const void* msg, size_t len, size_t* written) {
     return R_INTERNAL;
   }
   // This is TCP only
-  MOZ_ASSERT(port_mappings_.size() == 1);
+  MOZ_RELEASE_ASSERT(port_mappings_.size() == 1);
   r_log(LOG_GENERIC, LOG_DEBUG, "PortMapping %s -> %s writing",
         port_mappings_.front()->external_socket_->my_addr().as_string,
         port_mappings_.front()->remote_address_.as_string);
@@ -641,7 +665,7 @@ int TestNrSocket::read(void* buf, size_t maxlen, size_t* len) {
   if (port_mappings_.empty()) {
     r = internal_socket_->read(buf, maxlen, len);
   } else {
-    MOZ_ASSERT(port_mappings_.size() == 1);
+    MOZ_RELEASE_ASSERT(port_mappings_.size() == 1);
     r = port_mappings_.front()->external_socket_->read(buf, maxlen, len);
     if (!r && nat_->refresh_on_ingress_) {
       port_mappings_.front()->last_used_ = PR_IntervalNow();
@@ -722,7 +746,7 @@ int TestNrSocket::async_wait(int how, NR_async_cb cb, void* cb_arg,
   if (internal_socket_->my_addr().protocol == IPPROTO_TCP) {
     // For a TCP connection through a simulated NAT, these signals are
     // just passed through.
-    MOZ_ASSERT(port_mappings_.size() == 1);
+    MOZ_RELEASE_ASSERT(port_mappings_.size() == 1);
 
     return port_mappings_.front()->async_wait(
         how, port_mapping_tcp_passthrough_callback, this, function, line);
@@ -834,7 +858,7 @@ void TestNrSocket::on_socket_readable(NrSocketBase* real_socket) {
 }
 
 void TestNrSocket::fire_readable_callback() {
-  MOZ_ASSERT(poll_flags() & PR_POLL_READ);
+  MOZ_RELEASE_ASSERT(poll_flags() & PR_POLL_READ);
   r_log(LOG_GENERIC, LOG_DEBUG, "TestNrSocket %p %s ready for read", this,
         internal_socket_->my_addr().as_string);
   fire_callback(NR_ASYNC_WAIT_READ);
@@ -849,7 +873,7 @@ void TestNrSocket::port_mapping_writeable_callback(void* ext_sock_v, int how,
 }
 
 void TestNrSocket::write_to_port_mapping(NrSocketBase* external_socket) {
-  MOZ_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(internal_socket_->my_addr().protocol != IPPROTO_TCP);
 
   int r = 0;
   for (PortMapping* port_mapping : port_mappings_) {
@@ -935,7 +959,7 @@ TestNrSocket::PortMapping::PortMapping(
 }
 
 int TestNrSocket::PortMapping::send_from_queue() {
-  MOZ_ASSERT(remote_address_.protocol != IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(remote_address_.protocol != IPPROTO_TCP);
   int r = 0;
 
   while (!send_queue_.empty()) {
@@ -967,7 +991,7 @@ int TestNrSocket::PortMapping::send_from_queue() {
 
 int TestNrSocket::PortMapping::sendto(const void* msg, size_t len,
                                       const nr_transport_addr& to) {
-  MOZ_ASSERT(remote_address_.protocol != IPPROTO_TCP);
+  MOZ_RELEASE_ASSERT(remote_address_.protocol != IPPROTO_TCP);
   r_log(LOG_GENERIC, LOG_DEBUG, "PortMapping %s -> %s sending to %s",
         external_socket_->my_addr().as_string, remote_address_.as_string,
         to.as_string);

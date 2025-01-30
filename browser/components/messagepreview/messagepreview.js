@@ -2,9 +2,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global MPShowMessage, MPIsEnabled, MPShouldShowHint */
+/* global MPShowMessage, MPIsEnabled, MPShouldShowHint, MPToggleLights */
 
 "use strict";
+
+// decode a 16-bit string in which only one byte of each
+// 16-bit unit is occupied, to UTF-8. This is necessary to
+// comply with `btoa` API constraints.
+function fromBinary(encoded) {
+  const binary = atob(decodeURIComponent(encoded));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return String.fromCharCode(...new Uint16Array(bytes.buffer));
+}
 
 function decodeMessageFromUrl() {
   const url = new URL(document.location.href);
@@ -12,7 +24,7 @@ function decodeMessageFromUrl() {
   if (url.searchParams.has("json")) {
     const encodedMessage = url.searchParams.get("json");
 
-    return atob(encodedMessage);
+    return fromBinary(encodedMessage);
   }
   return null;
 }
@@ -21,6 +33,13 @@ function showHint() {
   document.body.classList.add("hint-box");
   document.body.innerHTML = `<div class="hint">Message preview is not enabled. Enable it in about:config by setting <code>browser.newtabpage.activity-stream.asrouter.devtoolsEnabled</code> to true.</div>`;
 }
+
+// Light switch things
+document.addEventListener("DOMContentLoaded", () => {
+  document
+    .querySelector("#light-switch")
+    .addEventListener("click", MPToggleLights);
+});
 
 const message = decodeMessageFromUrl();
 

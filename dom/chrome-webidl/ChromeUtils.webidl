@@ -228,10 +228,10 @@ namespace ChromeUtils {
 #endif // NIGHTLY_BUILD
 
   /**
-   * Clears the stylesheet cache by baseDomain. This includes associated
+   * Clears the stylesheet cache by site. This includes associated
    * state-partitioned cache.
    */
-  undefined clearStyleSheetCacheByBaseDomain(UTF8String baseDomain);
+  undefined clearStyleSheetCacheBySite(UTF8String schemelessSite, optional OriginAttributesPatternDictionary pattern = {});
 
   /**
    * Clears the stylesheet cache by principal.
@@ -242,6 +242,41 @@ namespace ChromeUtils {
    * Clears the entire stylesheet cache.
    */
   undefined clearStyleSheetCache();
+
+  /**
+   * Clears the Messaging Layer Security state by schemeless site.
+   * This includes associated state-partitioned cache.
+   */
+  [Throws]
+  undefined clearMessagingLayerSecurityStateBySite(UTF8String schemelessSite, optional OriginAttributesPatternDictionary pattern = {});
+
+  /**
+   * Clears the Messaging Layer Security state by principal.
+   */
+  [Throws]
+  undefined clearMessagingLayerSecurityStateByPrincipal(Principal principal);
+
+  /**
+   * Clears all Messaging Layer Security related state across domains
+   */
+  [Throws]
+  undefined clearMessagingLayerSecurityState();
+
+  /**
+   * Clears the JavaScript cache by schemeless site. This includes associated
+   * state-partitioned cache.
+   */
+  undefined clearScriptCacheBySite(UTF8String schemelessSite, optional OriginAttributesPatternDictionary pattern = {});
+
+  /**
+   * Clears the JavaScript cache by principal.
+   */
+  undefined clearScriptCacheByPrincipal(Principal principal);
+
+  /**
+   * Clears the entire JavaScript cache.
+   */
+  undefined clearScriptCache();
 
   /**
    * If the profiler is currently running and recording the current thread,
@@ -335,19 +370,19 @@ namespace ChromeUtils {
                         optional ImportESModuleOptionsDictionary aOptions = {});
 
   /**
-   * Defines propertys on the given target which lazily imports a ES module
+   * Defines properties on the given target which lazily imports a ES module
    * when accessed.
    *
    * @param aTarget The target object on which to define the property.
    * @param aModules An object with a property for each module property to be
    *                 imported, where the property name is the name of the
    *                 imported symbol and the value is the module URI.
-   * @param aOption An option to specify where to load the module into.
+   * @param aOptions An option to specify where to load the module into.
    *
-   * In worker threads, aOption is required and only { global: "current" } and
+   * In worker threads, aOptions is required and only { global: "current" } and
    * { global: "contextual" } are supported.
    *
-   * In DevTools distinct global, aOptions.global is reuiqred.
+   * In DevTools distinct global, aOptions.global is required.
    */
   [Throws]
   undefined defineESModuleGetters(object aTarget, object aModules,
@@ -438,16 +473,20 @@ partial namespace ChromeUtils {
   getBaseDomainFromPartitionKey(DOMString partitionKey);
 
   /**
-   * Returns the partitionKey for a given URL.
+   * Returns the partitionKey for a given subresourceURL given its top-level URL
+   * and whether or not it is in a foreign context.
    *
-   * The function will treat the URL as a first party and construct the
-   * partitionKey according to the scheme, site and port in the URL.
+   * The function will treat the topLevelURL as a first party and construct the
+   * partitionKey according to the scheme, site and port in the URL. It will also
+   * include information about the subresource and whether or not this is a foreign
+   * request in the partition key.
    *
-   * Throws for invalid urls.
+   * Throws for invalid urls, if the Third Party Service is unavailable, or if the
+   * combination of inputs is impossible.
    */
   [Throws]
   DOMString
-  getPartitionKeyFromURL(DOMString url);
+  getPartitionKeyFromURL(DOMString topLevelUrl, DOMString subresourceUrl, optional boolean foreignContext);
 
   /**
    * Loads and compiles the script at the given URL and returns an object
@@ -618,12 +657,6 @@ partial namespace ChromeUtils {
   Promise<DOMString> collectPerfStats();
 
   /**
-  * Returns a Promise containing a sequence of I/O activities
-  */
-  [NewObject]
-  Promise<sequence<IOActivityDataDictionary>> requestIOActivity();
-
-  /**
   * Returns a Promise containing all processes info
   */
   [NewObject]
@@ -780,7 +813,7 @@ enum WebIDLProcType {
  "vr",
  "rdd",
  "socket",
- "remoteSandboxBroker",
+ "inference",
 #ifdef MOZ_ENABLE_FORKSERVER
  "forkServer",
 #endif
@@ -928,18 +961,6 @@ dictionary ParentProcInfoDictionary {
 };
 
 /**
- * Used by requestIOActivity() to return the number of bytes
- * that were read (rx) and/or written (tx) for a given location.
- *
- * Locations can be sockets or files.
- */
-dictionary IOActivityDataDictionary {
-  ByteString location = "";
-  unsigned long long rx = 0;
-  unsigned long long tx = 0;
-};
-
-/**
  * Used by principals and the script security manager to represent origin
  * attributes. The first dictionary is designed to contain the full set of
  * OriginAttributes, the second is used for pattern-matching (i.e. does this
@@ -951,7 +972,7 @@ dictionary IOActivityDataDictionary {
  *     serialization, deserialization, and inheritance.
  * (3) Update the methods on mozilla::OriginAttributesPattern, including matching.
  */
-[GenerateInitFromJSON]
+[GenerateInitFromJSON, GenerateEqualityOperator]
 dictionary OriginAttributesDictionary {
   unsigned long userContextId = 0;
   unsigned long privateBrowsingId = 0;
@@ -975,6 +996,7 @@ dictionary PartitionKeyPatternDictionary {
   DOMString scheme;
   DOMString baseDomain;
   long port;
+  boolean foreignByAncestorContext;
 };
 
 dictionary CompileScriptOptionsDictionary {
@@ -982,6 +1004,11 @@ dictionary CompileScriptOptionsDictionary {
    * The character set from which to decode the script.
    */
   DOMString charset = "utf-8";
+
+  /**
+   * The filename to associate with the script. Defaults to the source's URL.
+   */
+  DOMString filename;
 
   /**
    * If true, certain parts of the script may be parsed lazily, the first time
@@ -1114,10 +1141,12 @@ enum PopupBlockerState {
 enum JSRFPTarget {
   "RoundWindowSize",
   "SiteSpecificZoom",
+  "CSSPrefersColorScheme",
 };
 
 #ifdef XP_UNIX
 dictionary LibcConstants {
+  long EPERM;
   long EINTR;
   long EACCES;
   long EAGAIN;
@@ -1154,4 +1183,5 @@ dictionary CDMInformation {
   required DOMString capabilities;
   required boolean clearlead;
   required boolean isHDCP22Compatible;
+  required boolean isHardwareDecryption;
 };

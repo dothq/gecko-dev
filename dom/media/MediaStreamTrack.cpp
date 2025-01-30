@@ -47,8 +47,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(MediaStreamTrackSource)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 auto MediaStreamTrackSource::ApplyConstraints(
-    const dom::MediaTrackConstraints& aConstraints, CallerType aCallerType)
-    -> RefPtr<ApplyConstraintsPromise> {
+    const dom::MediaTrackConstraints& aConstraints,
+    CallerType aCallerType) -> RefPtr<ApplyConstraintsPromise> {
   return ApplyConstraintsPromise::CreateAndReject(
       MakeRefPtr<MediaMgrError>(MediaMgrError::Name::OverconstrainedError, ""),
       __func__);
@@ -306,6 +306,11 @@ void MediaStreamTrack::Stop() {
   SetReadyState(MediaStreamTrackState::Ended);
 
   NotifyEnded();
+}
+
+void MediaStreamTrack::GetCapabilities(MediaTrackCapabilities& aResult,
+                                       CallerType aCallerType) {
+  GetSource().GetCapabilities(aResult);
 }
 
 void MediaStreamTrack::GetConstraints(dom::MediaTrackConstraints& aResult) {

@@ -193,11 +193,7 @@ class BaseFile(object):
             if getattr(self, "path", None) and getattr(dest, "path", None):
                 # The destination directory must exist, or CopyFile will fail.
                 destdir = os.path.dirname(dest.path)
-                try:
-                    os.makedirs(destdir)
-                except OSError as e:
-                    if e.errno != errno.EEXIST:
-                        raise
+                os.makedirs(destdir, exist_ok=True)
                 _copyfile(self.path, dest.path)
                 shutil.copystat(self.path, dest.path)
             else:
@@ -901,7 +897,7 @@ class BaseFinder(object):
         if path.endswith((".ftl", ".properties")):
             return MinifiedCommentStripped(file)
 
-        if self._minify_js and path.endswith((".js", ".jsm")):
+        if self._minify_js and path.endswith((".js", ".jsm", ".mjs")):
             return MinifiedJavaScript(file, self._minify_js_verify_command)
 
         return file

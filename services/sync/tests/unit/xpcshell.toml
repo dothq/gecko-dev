@@ -12,6 +12,7 @@ support-files = [
   "systemaddon-search.json",
   "!/services/common/tests/unit/head_helpers.js",
   "!/toolkit/components/extensions/test/xpcshell/head_sync.js",
+  "../../../../toolkit/mozapps/extensions/test/xpinstall/amosigned-sha1only.xpi",
 ]
 
 # The manifest is roughly ordered from low-level to high-level. When making
@@ -117,10 +118,6 @@ skip-if = ["appname == 'thunderbird'"]
 run-sequentially = "extension-storage migration happens only once, and must be tested first."
 
 ["test_extension_storage_engine_kinto.js"]
-skip-if = ["appname == 'thunderbird'"]
-run-sequentially = "extension-storage migration happens only once, and must be tested first."
-
-["test_extension_storage_migration_telem.js"]
 skip-if = ["appname == 'thunderbird'"]
 run-sequentially = "extension-storage migration happens only once, and must be tested first."
 

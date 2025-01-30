@@ -45,7 +45,8 @@ const SQL_ADAPTIVE_QUERY = `/* do not warn (bug 487789) */
             WHERE b.fk = h.id
           ) AS tags,
           t.open_count,
-          t.userContextId
+          t.userContextId,
+          h.last_visit_date
    FROM (
      SELECT ROUND(MAX(use_count) * (1 + (input = :search_string)), 1) AS rank,
             place_id
@@ -137,6 +138,10 @@ class ProviderInputHistory extends UrlbarProvider {
         ? row.getResultByName("bookmark_title")
         : null;
       const tags = row.getResultByName("tags") || "";
+      let lastVisitPRTime = row.getResultByName("last_visit_date");
+      let lastVisit = lastVisitPRTime
+        ? lazy.PlacesUtils.toDate(lastVisitPRTime).getTime()
+        : undefined;
 
       let resultTitle = historyTitle;
       if (openPageCount > 0 && lazy.UrlbarPrefs.get("suggest.openpage")) {
@@ -144,15 +149,25 @@ class ProviderInputHistory extends UrlbarProvider {
           // Don't suggest switching to the current page.
           continue;
         }
-        let result = new lazy.UrlbarResult(
-          UrlbarUtils.RESULT_TYPE.TAB_SWITCH,
-          UrlbarUtils.RESULT_SOURCE.TABS,
-          ...lazy.UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
+        let userContextId = row.getResultByName("userContextId") || 0;
+        let payload = lazy.UrlbarResult.payloadAndSimpleHighlights(
+          queryContext.tokens,
+          {
             url: [url, UrlbarUtils.HIGHLIGHT.TYPED],
             title: [resultTitle, UrlbarUtils.HIGHLIGHT.TYPED],
             icon: UrlbarUtils.getIconForUrl(url),
-            userContextId: row.getResultByName("userContextId") || 0,
-          })
+            userContextId,
+            lastVisit,
+          }
+        );
+        if (lazy.UrlbarPrefs.get("secondaryActions.switchToTab")) {
+          payload[0].action =
+            UrlbarUtils.createTabSwitchSecondaryAction(userContextId);
+        }
+        let result = new lazy.UrlbarResult(
+          UrlbarUtils.RESULT_TYPE.TAB_SWITCH,
+          UrlbarUtils.RESULT_SOURCE.TABS,
+          ...payload
         );
         addCallback(this, result);
         continue;
@@ -193,6 +208,7 @@ class ProviderInputHistory extends UrlbarProvider {
             ? Services.urlFormatter.formatURLPref("app.support.baseURL") +
               "awesome-bar-result-menu"
             : undefined,
+          lastVisit,
         })
       );
 
@@ -200,12 +216,8 @@ class ProviderInputHistory extends UrlbarProvider {
     }
   }
 
-  onEngagement(state, queryContext, details, controller) {
+  onEngagement(queryContext, controller, details) {
     let { result } = details;
-    if (result?.providerName != this.name) {
-      return;
-    }
-
     if (
       details.selType == "dismiss" &&
       result.type == UrlbarUtils.RESULT_TYPE.URL
@@ -236,7 +248,7 @@ class ProviderInputHistory extends UrlbarProvider {
       SQL_ADAPTIVE_QUERY,
       {
         parent: lazy.PlacesUtils.tagsFolderId,
-        search_string: queryContext.searchString.toLowerCase(),
+        search_string: queryContext.lowerCaseSearchString,
         matchBehavior: Ci.mozIPlacesAutoComplete.MATCH_ANYWHERE,
         searchBehavior: lazy.UrlbarPrefs.get("defaultBehavior"),
         userContextId: lazy.UrlbarPrefs.get("switchTabs.searchAllContainers")

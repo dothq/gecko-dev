@@ -4,11 +4,14 @@
 ChromeUtils.defineESModuleGetters(this, {
   ADLINK_CHECK_TIMEOUT_MS:
     "resource:///actors/SearchSERPTelemetryChild.sys.mjs",
+  CATEGORIZATION_SETTINGS: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   CustomizableUITestUtils:
     "resource://testing-common/CustomizableUITestUtils.sys.mjs",
   Region: "resource://gre/modules/Region.sys.mjs",
   RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
   SEARCH_TELEMETRY_SHARED: "resource:///modules/SearchSERPTelemetry.sys.mjs",
+  SearchSERPDomainToCategoriesMap:
+    "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPTelemetryUtils: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchTestUtils: "resource://testing-common/SearchTestUtils.sys.mjs",
@@ -20,6 +23,7 @@ ChromeUtils.defineESModuleGetters(this, {
   TELEMETRY_CATEGORIZATION_KEY:
     "resource:///modules/SearchSERPTelemetry.sys.mjs",
   TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
+  VISIBILITY_THRESHOLD: "resource:///actors/SearchSERPTelemetryChild.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(this, "UrlbarTestUtils", () => {
@@ -60,6 +64,11 @@ SearchTestUtils.init(this);
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function sleep(ms) {
+  // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // sharedData messages are only passed to the child on idle. Therefore
 // we wait for a few idles to try and ensure the messages have been able
@@ -193,11 +202,10 @@ async function assertSearchSourcesTelemetry(
 }
 
 function resetTelemetry() {
-  // TODO Bug 1868476: Replace when we're using Glean telemetry.
-  fakeTelemetryStorage = [];
   searchCounts.clear();
   Services.telemetry.clearScalars();
   Services.fog.testResetFOG();
+  SERPCategorizationRecorder.testReset();
 }
 
 /**
@@ -377,23 +385,6 @@ function assertSERPTelemetry(expectedEvents) {
   );
 }
 
-// TODO Bug 1868476: Replace when we're using Glean telemetry.
-let categorizationSandbox;
-let fakeTelemetryStorage = [];
-add_setup(function () {
-  categorizationSandbox = sinon.createSandbox();
-  categorizationSandbox
-    .stub(SERPCategorizationRecorder, "recordCategorizationTelemetry")
-    .callsFake(input => {
-      fakeTelemetryStorage.push(input);
-    });
-
-  registerCleanupFunction(() => {
-    categorizationSandbox.restore();
-    fakeTelemetryStorage = [];
-  });
-});
-
 async function openSerpInNewTab(url, expectedAds = true) {
   let promise;
   if (expectedAds) {
@@ -435,12 +426,11 @@ async function synthesizePageAction({
 }
 
 function assertCategorizationValues(expectedResults) {
-  // TODO Bug 1868476: Replace with calls to Glean telemetry.
-  let actualResults = [...fakeTelemetryStorage];
+  let actualResults = Glean.serp.categorization.testGetValue() ?? [];
 
   Assert.equal(
-    expectedResults.length,
     actualResults.length,
+    expectedResults.length,
     "Should have the correct number of categorization impressions."
   );
 
@@ -458,7 +448,7 @@ function assertCategorizationValues(expectedResults) {
     }
   }
   for (let actual of actualResults) {
-    for (let key in actual) {
+    for (let key in actual.extra) {
       keys.add(key);
     }
   }
@@ -467,14 +457,21 @@ function assertCategorizationValues(expectedResults) {
   for (let index = 0; index < expectedResults.length; ++index) {
     info(`Checking categorization at index: ${index}`);
     let expected = expectedResults[index];
-    let actual = actualResults[index];
+    let actual = actualResults[index].extra;
+
+    Assert.ok(
+      Number(actual?.organic_num_domains) <=
+        CATEGORIZATION_SETTINGS.MAX_DOMAINS_TO_CATEGORIZE,
+      "Number of organic domains categorized should not exceed threshold."
+    );
+
+    Assert.ok(
+      Number(actual?.sponsored_num_domains) <=
+        CATEGORIZATION_SETTINGS.MAX_DOMAINS_TO_CATEGORIZE,
+      "Number of sponsored domains categorized should not exceed threshold."
+    );
+
     for (let key of keys) {
-      // TODO Bug 1868476: This conversion to strings is to mimic Glean
-      // converting all values into strings. Once we receive real values from
-      // Glean, it can be removed.
-      if (actual[key] != null && typeof actual[key] !== "string") {
-        actual[key] = actual[key].toString();
-      }
       Assert.equal(
         actual[key],
         expected[key],
@@ -508,11 +505,27 @@ function waitForDomainToCategoriesUpdate() {
   return TestUtils.topicObserved("domain-to-categories-map-update-complete");
 }
 
+function waitForDomainToCategoriesInit() {
+  return TestUtils.topicObserved("domain-to-categories-map-init");
+}
+
+function waitForDomainToCategoriesUninit() {
+  return TestUtils.topicObserved("domain-to-categories-map-uninit");
+}
+
 registerCleanupFunction(async () => {
   await PlacesUtils.history.clear();
 });
 
-async function mockRecordWithAttachment({ id, version, filename, mapping }) {
+async function mockRecordWithAttachment({
+  id,
+  version,
+  filename,
+  mapping,
+  includeRegions,
+  excludeRegions,
+  isDefault = true,
+}) {
   // Get the bytes of the file for the hash and size for attachment metadata.
   let buffer = new TextEncoder().encode(JSON.stringify(mapping)).buffer;
   let stream = Cc["@mozilla.org/io/arraybuffer-input-stream;1"].createInstance(
@@ -534,6 +547,9 @@ async function mockRecordWithAttachment({ id, version, filename, mapping }) {
   let record = {
     id,
     version,
+    includeRegions,
+    excludeRegions,
+    isDefault,
     attachment: {
       hash,
       location: `main-workspace/search-categorization/${filename}`,
@@ -592,6 +608,9 @@ async function insertRecordIntoCollection() {
     version: 1,
     filename: "domain_category_mappings.json",
     mapping: CONVERTED_ATTACHMENT_VALUES,
+    includeRegions: [],
+    excludeRegions: [],
+    isDefault: true,
   });
   await db.create(record);
   await client.attachments.cacheImpl.set(record.id, attachment);
@@ -695,4 +714,14 @@ async function initSinglePageAppTest() {
       SPA_ADLINK_CHECK_TIMEOUT_MS
     );
   });
+}
+
+async function resizeWindow(win, width, height) {
+  let promise = BrowserTestUtils.waitForEvent(win, "resize");
+  win.resizeTo(width, height);
+  await promise;
+
+  // Wait two frames in hopes resizing is done.
+  await new Promise(resolve => win.requestAnimationFrame(resolve));
+  await new Promise(resolve => win.requestAnimationFrame(resolve));
 }

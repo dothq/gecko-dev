@@ -68,9 +68,7 @@ class ConnectPage extends PureComponent {
     };
   }
 
-  // TODO: avoid the use of this method
-  // https://bugzilla.mozilla.org/show_bug.cgi?id=1774507
-  UNSAFE_componentWillMount() {
+  componentDidMount() {
     this.props.dispatch(Actions.selectPage(PAGE_TYPES.CONNECT));
   }
 
@@ -177,6 +175,10 @@ class ConnectPage extends PureComponent {
               },
               {
                 localizationId: "about-debugging-setup-usb-step-enable-debug2",
+              },
+              {
+                localizationId:
+                  "about-debugging-setup-usb-step-enable-file-transfer",
               },
               {
                 localizationId:

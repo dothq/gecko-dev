@@ -120,7 +120,7 @@ use glow::HasContext;
 
 use naga::FastHashMap;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::{fmt, ops::Range, sync::Arc};
 
 #[derive(Clone, Debug)]
@@ -153,7 +153,8 @@ impl crate::Api for Api {
     type Sampler = Sampler;
     type QuerySet = QuerySet;
     type Fence = Fence;
-    type AccelerationStructure = ();
+    type AccelerationStructure = AccelerationStructure;
+    type PipelineCache = PipelineCache;
 
     type BindGroupLayout = BindGroupLayout;
     type BindGroup = BindGroup;
@@ -162,6 +163,30 @@ impl crate::Api for Api {
     type RenderPipeline = RenderPipeline;
     type ComputePipeline = ComputePipeline;
 }
+
+crate::impl_dyn_resource!(
+    Adapter,
+    AccelerationStructure,
+    BindGroup,
+    BindGroupLayout,
+    Buffer,
+    CommandBuffer,
+    CommandEncoder,
+    ComputePipeline,
+    Device,
+    Fence,
+    Instance,
+    PipelineCache,
+    PipelineLayout,
+    QuerySet,
+    Queue,
+    RenderPipeline,
+    Sampler,
+    ShaderModule,
+    Surface,
+    Texture,
+    TextureView
+);
 
 bitflags::bitflags! {
     /// Flags that affect internal code paths but do not
@@ -267,6 +292,14 @@ pub struct Device {
     main_vao: glow::VertexArray,
     #[cfg(all(native, feature = "renderdoc"))]
     render_doc: crate::auxil::renderdoc::RenderDoc,
+    counters: Arc<wgt::HalCounters>,
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        let gl = &self.shared.context.lock();
+        unsafe { gl.delete_vertex_array(self.main_vao) };
+    }
 }
 
 pub struct ShaderClearProgram {
@@ -290,6 +323,15 @@ pub struct Queue {
     current_index_buffer: Mutex<Option<glow::Buffer>>,
 }
 
+impl Drop for Queue {
+    fn drop(&mut self) {
+        let gl = &self.shared.context.lock();
+        unsafe { gl.delete_framebuffer(self.draw_fbo) };
+        unsafe { gl.delete_framebuffer(self.copy_fbo) };
+        unsafe { gl.delete_buffer(self.zero_buffer) };
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Buffer {
     raw: Option<glow::Buffer>,
@@ -297,12 +339,15 @@ pub struct Buffer {
     size: wgt::BufferAddress,
     map_flags: u32,
     data: Option<Arc<std::sync::Mutex<Vec<u8>>>>,
+    offset_of_current_mapping: Arc<std::sync::Mutex<wgt::BufferAddress>>,
 }
 
 #[cfg(send_sync)]
 unsafe impl Sync for Buffer {}
 #[cfg(send_sync)]
 unsafe impl Send for Buffer {}
+
+impl crate::DynBuffer for Buffer {}
 
 #[derive(Clone, Debug)]
 pub enum TextureInner {
@@ -348,6 +393,15 @@ pub struct Texture {
     #[allow(unused)]
     pub format_desc: TextureFormatDesc,
     pub copy_size: CopyExtent,
+}
+
+impl crate::DynTexture for Texture {}
+impl crate::DynSurfaceTexture for Texture {}
+
+impl std::borrow::Borrow<dyn crate::DynTexture> for Texture {
+    fn borrow(&self) -> &dyn crate::DynTexture {
+        self
+    }
 }
 
 impl Texture {
@@ -419,11 +473,24 @@ impl Texture {
         };
 
         log::error!(
-            "wgpu-hal heuristics assumed that the view dimension will be equal to `{got}` rather than `{view_dimension:?}`.\n{}\n{}\n{}\n{}",
-            "`D2` textures with `depth_or_array_layers == 1` are assumed to have view dimension `D2`",
-            "`D2` textures with `depth_or_array_layers > 1` are assumed to have view dimension `D2Array`",
-            "`D2` textures with `depth_or_array_layers == 6` are assumed to have view dimension `Cube`",
-            "`D2` textures with `depth_or_array_layers > 6 && depth_or_array_layers % 6 == 0` are assumed to have view dimension `CubeArray`",
+            concat!(
+                "wgpu-hal heuristics assumed that ",
+                "the view dimension will be equal to `{}` rather than `{:?}`.\n",
+                "`D2` textures with ",
+                "`depth_or_array_layers == 1` ",
+                "are assumed to have view dimension `D2`\n",
+                "`D2` textures with ",
+                "`depth_or_array_layers > 1` ",
+                "are assumed to have view dimension `D2Array`\n",
+                "`D2` textures with ",
+                "`depth_or_array_layers == 6` ",
+                "are assumed to have view dimension `Cube`\n",
+                "`D2` textures with ",
+                "`depth_or_array_layers > 6 && depth_or_array_layers % 6 == 0` ",
+                "are assumed to have view dimension `CubeArray`\n",
+            ),
+            got,
+            view_dimension,
         );
     }
 }
@@ -437,15 +504,21 @@ pub struct TextureView {
     format: wgt::TextureFormat,
 }
 
+impl crate::DynTextureView for TextureView {}
+
 #[derive(Debug)]
 pub struct Sampler {
     raw: glow::Sampler,
 }
 
+impl crate::DynSampler for Sampler {}
+
 #[derive(Debug)]
 pub struct BindGroupLayout {
     entries: Arc<[wgt::BindGroupLayoutEntry]>,
 }
+
+impl crate::DynBindGroupLayout for BindGroupLayout {}
 
 #[derive(Debug)]
 struct BindGroupLayoutInfo {
@@ -463,6 +536,8 @@ pub struct PipelineLayout {
     group_infos: Box<[BindGroupLayoutInfo]>,
     naga_options: naga::back::glsl::Options,
 }
+
+impl crate::DynPipelineLayout for PipelineLayout {}
 
 impl PipelineLayout {
     fn get_slot(&self, br: &naga::ResourceBinding) -> u8 {
@@ -502,6 +577,8 @@ pub struct BindGroup {
     contents: Box<[RawBinding]>,
 }
 
+impl crate::DynBindGroup for BindGroup {}
+
 type ShaderId = u32;
 
 #[derive(Debug)]
@@ -510,6 +587,8 @@ pub struct ShaderModule {
     label: Option<String>,
     id: ShaderId,
 }
+
+impl crate::DynShaderModule for ShaderModule {}
 
 #[derive(Clone, Debug, Default)]
 struct VertexFormatDesc {
@@ -602,6 +681,7 @@ struct ProgramStage {
     naga_stage: naga::ShaderStage,
     shader_id: ShaderId,
     entry_point: String,
+    zero_initialize_workgroup_memory: bool,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -625,6 +705,8 @@ pub struct RenderPipeline {
     alpha_to_coverage_enabled: bool,
 }
 
+impl crate::DynRenderPipeline for RenderPipeline {}
+
 #[cfg(send_sync)]
 unsafe impl Sync for RenderPipeline {}
 #[cfg(send_sync)]
@@ -634,6 +716,8 @@ unsafe impl Send for RenderPipeline {}
 pub struct ComputePipeline {
     inner: Arc<PipelineInner>,
 }
+
+impl crate::DynComputePipeline for ComputePipeline {}
 
 #[cfg(send_sync)]
 unsafe impl Sync for ComputePipeline {}
@@ -646,11 +730,15 @@ pub struct QuerySet {
     target: BindTarget,
 }
 
+impl crate::DynQuerySet for QuerySet {}
+
 #[derive(Debug)]
 pub struct Fence {
-    last_completed: crate::FenceValue,
+    last_completed: crate::AtomicFenceValue,
     pending: Vec<(crate::FenceValue, glow::Fence)>,
 }
+
+impl crate::DynFence for Fence {}
 
 #[cfg(any(
     not(target_arch = "wasm32"),
@@ -671,13 +759,24 @@ unsafe impl Sync for Fence {}
 
 impl Fence {
     fn get_latest(&self, gl: &glow::Context) -> crate::FenceValue {
-        let mut max_value = self.last_completed;
+        let mut max_value = self.last_completed.load(Ordering::Relaxed);
         for &(value, sync) in self.pending.iter() {
+            if value <= max_value {
+                // We already know this was good, no need to check again
+                continue;
+            }
             let status = unsafe { gl.get_sync_status(sync) };
             if status == glow::SIGNALED {
                 max_value = value;
+            } else {
+                // Anything after the first unsignalled is guaranteed to also be unsignalled
+                break;
             }
         }
+
+        // Track the latest value, to save ourselves some querying later
+        self.last_completed.fetch_max(max_value, Ordering::Relaxed);
+
         max_value
     }
 
@@ -691,9 +790,18 @@ impl Fence {
             }
         }
         self.pending.retain(|&(value, _)| value > latest);
-        self.last_completed = latest;
     }
 }
+
+#[derive(Debug)]
+pub struct AccelerationStructure;
+
+impl crate::DynAccelerationStructure for AccelerationStructure {}
+
+#[derive(Debug)]
+pub struct PipelineCache;
+
+impl crate::DynPipelineCache for PipelineCache {}
 
 #[derive(Clone, Debug, PartialEq)]
 struct StencilOps {
@@ -801,7 +909,7 @@ enum Command {
     },
     #[cfg(webgl)]
     CopyExternalImageToTexture {
-        src: wgt::ImageCopyExternalImage,
+        src: wgt::CopyExternalImageSourceInfo,
         dst: glow::Texture,
         dst_target: BindTarget,
         dst_format: wgt::TextureFormat,
@@ -948,6 +1056,8 @@ pub struct CommandBuffer {
     queries: Vec<glow::Query>,
 }
 
+impl crate::DynCommandBuffer for CommandBuffer {}
+
 impl fmt::Debug for CommandBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("CommandBuffer");
@@ -971,6 +1081,7 @@ pub struct CommandEncoder {
     cmd_buffer: CommandBuffer,
     state: command::State,
     private_caps: PrivateCapabilities,
+    counters: Arc<wgt::HalCounters>,
 }
 
 impl fmt::Debug for CommandEncoder {

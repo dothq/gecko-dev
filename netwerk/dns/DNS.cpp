@@ -11,6 +11,7 @@
 #include "mozilla/mozalloc.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "nsContentUtils.h"
+#include "nsPrintfCString.h"
 #include "nsString.h"
 #include <string.h>
 
@@ -20,36 +21,6 @@
 
 namespace mozilla {
 namespace net {
-
-const char* inet_ntop_internal(int af, const void* src, char* dst,
-                               socklen_t size) {
-#ifdef XP_WIN
-  if (af == AF_INET) {
-    struct sockaddr_in s;
-    memset(&s, 0, sizeof(s));
-    s.sin_family = AF_INET;
-    memcpy(&s.sin_addr, src, sizeof(struct in_addr));
-    int result = getnameinfo((struct sockaddr*)&s, sizeof(struct sockaddr_in),
-                             dst, size, nullptr, 0, NI_NUMERICHOST);
-    if (result == 0) {
-      return dst;
-    }
-  } else if (af == AF_INET6) {
-    struct sockaddr_in6 s;
-    memset(&s, 0, sizeof(s));
-    s.sin6_family = AF_INET6;
-    memcpy(&s.sin6_addr, src, sizeof(struct in_addr6));
-    int result = getnameinfo((struct sockaddr*)&s, sizeof(struct sockaddr_in6),
-                             dst, size, nullptr, 0, NI_NUMERICHOST);
-    if (result == 0) {
-      return dst;
-    }
-  }
-  return nullptr;
-#else
-  return inet_ntop(af, src, dst, size);
-#endif
-}
 
 // Copies the contents of a PRNetAddr to a NetAddr.
 // Does not do a ptr safety check!
@@ -135,7 +106,7 @@ bool NetAddr::ToStringBuffer(char* buf, uint32_t bufSize) const {
     }
     struct in_addr nativeAddr = {};
     nativeAddr.s_addr = addr->inet.ip;
-    return !!inet_ntop_internal(AF_INET, &nativeAddr, buf, bufSize);
+    return !!inet_ntop(AF_INET, &nativeAddr, buf, bufSize);
   }
   if (addr->raw.family == AF_INET6) {
     if (bufSize < INET6_ADDRSTRLEN) {
@@ -143,7 +114,7 @@ bool NetAddr::ToStringBuffer(char* buf, uint32_t bufSize) const {
     }
     struct in6_addr nativeAddr = {};
     memcpy(&nativeAddr.s6_addr, &addr->inet6.ip, sizeof(addr->inet6.ip.u8));
-    return !!inet_ntop_internal(AF_INET6, &nativeAddr, buf, bufSize);
+    return !!inet_ntop(AF_INET6, &nativeAddr, buf, bufSize);
   }
 #if defined(XP_UNIX)
   if (addr->raw.family == AF_LOCAL) {
@@ -176,6 +147,12 @@ nsCString NetAddr::ToString() const {
     return out;
   }
   return ""_ns;
+}
+
+void NetAddr::ToAddrPortString(nsACString& aOutput) const {
+  uint16_t port = 0;
+  GetPort(&port);
+  aOutput.Assign(nsPrintfCString("%s:%d", ToString().get(), port));
 }
 
 bool NetAddr::IsLoopbackAddr() const {
@@ -271,7 +248,8 @@ bool NetAddr::IsIPAddrV4Mapped() const {
 
 static bool isLocalIPv4(uint32_t networkEndianIP) {
   uint32_t addr32 = ntohl(networkEndianIP);
-  return addr32 >> 24 == 0x0A ||    // 10/8 prefix (RFC 1918).
+  return addr32 >> 24 == 0x00 ||    // 0/8 prefix (RFC 1122).
+         addr32 >> 24 == 0x0A ||    // 10/8 prefix (RFC 1918).
          addr32 >> 20 == 0xAC1 ||   // 172.16/12 prefix (RFC 1918).
          addr32 >> 16 == 0xC0A8 ||  // 192.168/16 prefix (RFC 1918).
          addr32 >> 16 == 0xA9FE;    // 169.254/16 prefix (Link Local).
@@ -279,6 +257,11 @@ static bool isLocalIPv4(uint32_t networkEndianIP) {
 
 bool NetAddr::IsIPAddrLocal() const {
   const NetAddr* addr = this;
+
+  // An IPv4/6 any address.
+  if (IsIPAddrAny()) {
+    return true;
+  }
 
   // IPv4 RFC1918 and Link Local Addresses.
   if (addr->raw.family == AF_INET) {
@@ -348,7 +331,7 @@ bool NetAddr::operator==(const NetAddr& other) const {
   }
   if (this->raw.family == AF_LOCAL) {
     return strncmp(this->local.path, other.local.path,
-                   ArrayLength(this->local.path));
+                   std::size(this->local.path));
 #endif
   }
   return false;

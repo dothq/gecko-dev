@@ -6,8 +6,6 @@ apply plugin: 'com.android.library'
 apply plugin: 'checkstyle'
 apply plugin: 'kotlin-android'
 
-apply from: "${topsrcdir}/mobile/android/gradle/product_flavors.gradle"
-
 // The SDK binding generation tasks depend on the JAR creation task of the
 // :annotations project.
 evaluationDependsOn(':annotations')
@@ -24,7 +22,6 @@ android {
         targetSdkVersion project.ext.targetSdkVersion
         minSdkVersion project.ext.minSdkVersion
         manifestPlaceholders = project.ext.manifestPlaceholders
-        multiDexEnabled true
 
         versionCode project.ext.versionCode
         versionName project.ext.versionName
@@ -53,7 +50,7 @@ android {
 
         // Keep in sync with actual user agent in nsHttpHandler::BuildUserAgent
         buildConfigField 'String', "USER_AGENT_GECKOVIEW_MOBILE", "\"Mozilla/5.0 (Android \" + android.os.Build.VERSION.RELEASE + \"; Mobile; rv:\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \") Gecko/\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \" Firefox/\" + ${mozconfig.defines.MOZILLA_UAVERSION}";
-        buildConfigField 'String', "USER_AGENT_GECKOVIEW_TABLET", "\"Mozilla/5.0 (Android \" + android.os.Build.VERSION.RELEASE + \"; Tablet; rv:\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \") Gecko/\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \" Firefox/\" + ${mozconfig.defines.MOZILLA_UAVERSION}";
+        buildConfigField 'String', "USER_AGENT_GECKOVIEW_MOBILE_ANDROID_10", "\"Mozilla/5.0 (Android 10; Mobile; rv:\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \") Gecko/\" + ${mozconfig.defines.MOZILLA_UAVERSION} + \" Firefox/\" + ${mozconfig.defines.MOZILLA_UAVERSION}";
 
         buildConfigField 'int', 'MIN_SDK_VERSION', mozconfig.substs.MOZ_ANDROID_MIN_SDK_VERSION;
 
@@ -79,14 +76,6 @@ android {
 
         // This env variable signifies whether we are running an isolated process build.
         buildConfigField 'boolean', 'MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS', mozconfig.substs.MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS ? 'true' : 'false';
-    }
-
-    project.configureProductFlavors.delegate = it
-    project.configureProductFlavors()
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
     }
 
     lintOptions {
@@ -123,19 +112,6 @@ android {
             }
 
             assets {
-            }
-
-            debug {
-                manifest.srcFile "${topobjdir}/mobile/android/geckoview/src/main/AndroidManifest_overlay.xml"
-            }
-
-            release {
-                manifest.srcFile "${topobjdir}/mobile/android/geckoview/src/main/AndroidManifest_overlay.xml"
-            }
-        }
-
-        withGeckoBinaries {
-            assets {
                 // This should contain only `omni.ja`.
                 srcDir "${topobjdir}/dist/geckoview/assets"
             }
@@ -147,6 +123,14 @@ android {
                     srcDir "${topobjdir}/dist/fat-aar/output/jni"
                 }
             }
+
+            debug {
+                manifest.srcFile "${topobjdir}/mobile/android/geckoview/src/main/AndroidManifest_overlay.xml"
+            }
+
+            release {
+                manifest.srcFile "${topobjdir}/mobile/android/geckoview/src/main/AndroidManifest_overlay.xml"
+            }
         }
     }
 
@@ -156,7 +140,7 @@ android {
     }
 
     publishing {
-        singleVariant('withGeckoBinariesDebug')
+        singleVariant('debug')
     }
 
     namespace 'org.mozilla.geckoview'
@@ -190,7 +174,6 @@ tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile) {
 
     kotlinOptions {
         allWarningsAsErrors = true
-        jvmTarget = JavaVersion.VERSION_17
     }
 
     doFirst {
@@ -202,7 +185,7 @@ tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile) {
 }
 
 configurations {
-    withGeckoBinariesApi {
+    api {
         outgoing {
             if (!mozconfig.substs.MOZ_ANDROID_GECKOVIEW_LITE) {
                 // The omni build provides glean-native
@@ -218,7 +201,7 @@ configurations {
     // The variant resolver _should_ pick the RuntimeOnly configuration when building
     // the tests as those define the implicit :geckoview capability but it doesn't,
     // so we manually define it here.
-    withGeckoBinariesRuntimeOnly {
+    runtimeOnly {
         outgoing {
             afterEvaluate {
                 // Implicit capability
@@ -229,44 +212,37 @@ configurations {
 }
 
 dependencies {
-    implementation "androidx.annotation:annotation:1.6.0"
-    implementation "androidx.legacy:legacy-support-v4:1.0.0"
+    implementation ComponentsDependencies.androidx_annotation
+    implementation ComponentsDependencies.androidx_collection
+    implementation ComponentsDependencies.androidx_core
 
-    implementation "com.google.android.gms:play-services-fido:20.0.1"
+    implementation ComponentsDependencies.play_services_fido
     implementation "org.yaml:snakeyaml:2.2"
+    implementation 'androidx.core:core:1.12.0'
 
-    implementation "androidx.lifecycle:lifecycle-common:2.6.1"
-    implementation "androidx.lifecycle:lifecycle-process:2.6.1"
+    implementation ComponentsDependencies.androidx_lifecycle_common
+    implementation ComponentsDependencies.androidx_lifecycle_process
 
     if (mozconfig.substs.MOZ_ANDROID_HLS_SUPPORT) {
         implementation project(":exoplayer2")
     }
 
-    testImplementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.robolectric:robolectric:4.10.1'
-    testImplementation 'org.mockito:mockito-core:5.3.1'
+    testImplementation ComponentsDependencies.junit_vintage
+    testImplementation ComponentsDependencies.testing_robolectric
 
-    androidTestImplementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.1"
-    androidTestImplementation 'androidx.test:runner:1.5.2'
-    androidTestImplementation 'androidx.test:rules:1.5.0'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.0'
+    androidTestImplementation ComponentsDependencies.testing_coroutines
+    androidTestImplementation ComponentsDependencies.androidx_test_runner
+    androidTestImplementation ComponentsDependencies.androidx_test_rules
+    androidTestImplementation ComponentsDependencies.androidx_test_junit
+    androidTestImplementation ComponentsDependencies.androidx_espresso_core
 
     androidTestImplementation 'com.koushikdutta.async:androidasync:3.1.0'
-
-    androidTestImplementation 'androidx.multidex:multidex:2.0.1'
 }
 
 apply from: "${topsrcdir}/mobile/android/gradle/with_gecko_binaries.gradle"
 
 android.libraryVariants.all { variant ->
-    // See the notes in mobile/android/app/build.gradle for details on including
-    // Gecko binaries and the Omnijar.
-    if ((variant.productFlavors*.name).contains('withGeckoBinaries')) {
-        configureVariantWithGeckoBinaries(variant)
-    }
+    configureVariantWithGeckoBinaries(variant)
 
     // Javadoc and Sources JAR configuration cribbed from
     // https://github.com/mapbox/mapbox-gl-native/blob/d169ea55c1cfa85cd8bf19f94c5f023569f71810/platform/android/MapboxGLAndroidSDK/build.gradle#L85
@@ -391,20 +367,6 @@ android.libraryVariants.all { variant ->
     }
 }
 
-android.libraryVariants.all { variant ->
-    // At this point, the Android-Gradle plugin has created all the Android
-    // tasks and configurations.  This is the time for us to declare additional
-    // Glean files to package into AAR files.  This packs `metrics.yaml` in the
-    // root of the AAR, sibling to `AndroidManifest.xml` and `classes.jar`.  By
-    // default, consumers of the AAR will ignore this file, but consumers that
-    // look for it can find it (provided GeckoView is a `module()` dependency
-    // and not a `project()` dependency.)  Under the hood this uses that the
-    // task provided by `packageLibraryProvider` task is a Maven `Zip` task,
-    // and we can simply extend its inputs.  See
-    // https://android.googlesource.com/platform/tools/base/+/0cbe8846f7d02c0bb6f07156b9f4fde16d96d329/build-system/gradle-core/src/main/java/com/android/build/gradle/tasks/BundleAar.kt#94.
-    variant.packageLibraryProvider.get().from("${topsrcdir}/toolkit/components/telemetry/geckoview/streaming/metrics.yaml")
-}
-
 apply plugin: 'maven-publish'
 
 version = getVersionNumber()
@@ -479,21 +441,18 @@ publishing {
     }
 }
 
-// This is all related to the withGeckoBinaries approach; see
-// mobile/android/gradle/with_gecko_binaries.gradle.
 afterEvaluate {
     // The bundle tasks are only present when the particular configuration is
     // being built, so this task might not exist.  (This is due to the way the
     // Android Gradle plugin defines things during configuration.)
-    def bundleWithGeckoBinaries = tasks.findByName('bundleWithGeckoBinariesReleaseAar')
-    if (!bundleWithGeckoBinaries) {
+    def bundle = tasks.findByName('bundleReleaseAar')
+    if (!bundle) {
         return
     }
 
     // Remove default configuration, which is the release configuration, when
-    // we're actually building withGeckoBinaries.  This makes `gradle install`
-    // install the withGeckoBinaries artifacts, not the release artifacts (which
-    // are withoutGeckoBinaries and not suitable for distribution.)
+    // building.  This makes `gradle install` install the deubg artifacts, not
+    // the release artifacts (which are not suitable for distribution.)
     def Configuration archivesConfig = project.getConfigurations().getByName('archives')
     archivesConfig.artifacts.removeAll { it.extension.equals('aar') }
 
@@ -530,14 +489,15 @@ task("generateSDKBindings", type: JavaExec) {
     ]
 
     mainClass = 'org.mozilla.gecko.annotationProcessors.SDKProcessor'
-    // We only want to generate bindings for the main framework JAR,
-    // but not any of the additional android.test libraries.
-    args android.bootClasspath.findAll { it.getName().startsWith('android.jar') }
-    args 29
-    args "${topobjdir}/widget/android/bindings"
 
     // Configure the arguments at evaluation-time, not at configuration-time.
     doFirst {
+        // We only want to generate bindings for the main framework JAR,
+        // but not any of the additional android.test libraries.
+        args android.bootClasspath.findAll { it.getName().startsWith('android.jar') }
+        args 29
+        args "${topobjdir}/widget/android/bindings"
+
         // From -Pgenerate_sdk_bindings_args=... on command line; missing in
         // `android-gradle-dependencies` toolchain task.
         if (project.hasProperty('generate_sdk_bindings_args')) {
@@ -556,6 +516,10 @@ apiLint {
     // TODO: Change this to `org` after hiding org.mozilla.gecko
     packageFilter = 'org.mozilla.geckoview'
     changelogFileName = 'src/main/java/org/mozilla/geckoview/doc-files/CHANGELOG.md'
+    // Put those files in ${buildDir}/intermediates/javac/<variant>
+    // instead of ${buildDir}/intermediates/javac/<variant>/compile<Variant>JavaWithJavac/classes
+    jsonResultFileName = '../../apilint-result.json'
+    apiOutputFileName = '../../api.txt'
     skipClassesRegex = [
         '^org.mozilla.geckoview.BuildConfig$',
         '^org.mozilla.geckoview.R$',

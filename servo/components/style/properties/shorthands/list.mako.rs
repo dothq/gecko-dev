@@ -5,7 +5,7 @@
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
 <%helpers:shorthand name="list-style"
-                    engines="gecko servo-2013 servo-2020"
+                    engines="gecko servo"
                     sub_properties="list-style-position list-style-image list-style-type"
                     spec="https://drafts.csswg.org/css-lists/#propdef-list-style">
     use crate::properties::longhands::{list_style_image, list_style_position, list_style_type};
@@ -69,14 +69,14 @@
                 Ok(expanded! {
                     list_style_position: position,
                     list_style_image: Image::None,
-                    list_style_type: ListStyleType::None,
+                    list_style_type: ListStyleType::none(),
                 })
             }
             (true, 1, None, Some(image)) => {
                 Ok(expanded! {
                     list_style_position: position,
                     list_style_image: image,
-                    list_style_type: ListStyleType::None,
+                    list_style_type: ListStyleType::none(),
                 })
             }
             (true, 1, Some(list_style_type), None) => {
@@ -90,7 +90,7 @@
                 Ok(expanded! {
                     list_style_position: position,
                     list_style_image: Image::None,
-                    list_style_type: ListStyleType::None,
+                    list_style_type: ListStyleType::none(),
                 })
             }
             (true, 0, list_style_type, image) => {
@@ -110,7 +110,8 @@
             use longhands::list_style_type::SpecifiedValue as ListStyleType;
             use longhands::list_style_image::SpecifiedValue as ListStyleImage;
             let mut have_one_non_initial_value = false;
-            if self.list_style_position != &ListStylePosition::Outside {
+            let position_is_initial = self.list_style_position == &ListStylePosition::Outside;
+            if !position_is_initial {
                 self.list_style_position.to_css(dest)?;
                 have_one_non_initial_value = true;
             }

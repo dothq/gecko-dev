@@ -15,6 +15,12 @@
 
 namespace js {
 
+enum class ArraySortResult : uint32_t;
+
+namespace jit {
+class TrampolineNativeFrameLayout;
+}
+
 class ArrayObject;
 
 MOZ_ALWAYS_INLINE bool IdIsIndex(jsid id, uint32_t* indexp) {
@@ -57,7 +63,8 @@ extern ArrayObject* NewDenseFullyAllocatedArray(
 // Create a dense array with length == 'length', initialized length set to 0,
 // and capacity == 'length' clamped to EagerAllocationMaxLength.
 extern ArrayObject* NewDensePartlyAllocatedArray(
-    JSContext* cx, uint32_t length, NewObjectKind newKind = GenericObject);
+    JSContext* cx, uint32_t length, NewObjectKind newKind = GenericObject,
+    gc::AllocSite* site = nullptr);
 
 // Like NewDensePartlyAllocatedArray, but the array will have |proto| as
 // prototype (or Array.prototype if |proto| is nullptr).
@@ -107,16 +114,12 @@ extern bool GetElements(JSContext* cx, HandleObject aobj, uint32_t length,
 
 /* Natives exposed for optimization by the interpreter and JITs. */
 
-extern bool intrinsic_ArrayNativeSort(JSContext* cx, unsigned argc,
-                                      js::Value* vp);
-
 extern bool array_includes(JSContext* cx, unsigned argc, js::Value* vp);
 extern bool array_indexOf(JSContext* cx, unsigned argc, js::Value* vp);
 extern bool array_lastIndexOf(JSContext* cx, unsigned argc, js::Value* vp);
-
 extern bool array_pop(JSContext* cx, unsigned argc, js::Value* vp);
-
 extern bool array_join(JSContext* cx, unsigned argc, js::Value* vp);
+extern bool array_sort(JSContext* cx, unsigned argc, js::Value* vp);
 
 extern void ArrayShiftMoveElements(ArrayObject* arr);
 
@@ -140,7 +143,8 @@ extern bool NewbornArrayPush(JSContext* cx, HandleObject obj, const Value& v);
 
 extern ArrayObject* ArrayConstructorOneArg(JSContext* cx,
                                            Handle<ArrayObject*> templateObject,
-                                           int32_t lengthInt);
+                                           int32_t lengthInt,
+                                           gc::AllocSite* site);
 
 #ifdef DEBUG
 extern bool ArrayInfo(JSContext* cx, unsigned argc, Value* vp);
@@ -171,6 +175,9 @@ extern bool ArrayLengthGetter(JSContext* cx, HandleObject obj, HandleId id,
 
 extern bool ArrayLengthSetter(JSContext* cx, HandleObject obj, HandleId id,
                               HandleValue v, ObjectOpResult& result);
+
+extern ArraySortResult ArraySortFromJit(
+    JSContext* cx, jit::TrampolineNativeFrameLayout* frame);
 
 class MOZ_NON_TEMPORARY_CLASS ArraySpeciesLookup final {
   /*
@@ -251,6 +258,8 @@ class MOZ_NON_TEMPORARY_CLASS ArraySpeciesLookup final {
     }
   }
 };
+
+bool IsArrayConstructor(const JSObject* obj);
 
 } /* namespace js */
 

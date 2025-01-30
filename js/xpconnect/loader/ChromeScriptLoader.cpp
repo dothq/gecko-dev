@@ -197,7 +197,7 @@ class AsyncScriptCompileTask final : public Task {
 };
 
 /* static */ mozilla::StaticMutex AsyncScriptCompileTask::sOngoingTasksMutex;
-/* static */ Vector<AsyncScriptCompileTask*>
+MOZ_RUNINIT /* static */ Vector<AsyncScriptCompileTask*>
     AsyncScriptCompileTask::sOngoingTasks;
 /* static */ bool AsyncScriptCompileTask::sIsShutdownRegistered = false;
 
@@ -292,7 +292,14 @@ nsresult AsyncScriptCompiler::Start(
   mCharset = aOptions.mCharset;
 
   CompileOptions options(aCx);
-  options.setFile(mURL.get()).setNoScriptRval(!aOptions.mHasReturnValue);
+  nsAutoCString filename;
+  if (aOptions.mFilename.WasPassed()) {
+    filename = NS_ConvertUTF16toUTF8(aOptions.mFilename.Value());
+    options.setFile(filename.get());
+  } else {
+    options.setFile(mURL.get());
+  }
+  options.setNoScriptRval(!aOptions.mHasReturnValue);
 
   if (!aOptions.mLazilyParse) {
     options.setForceFullParse();
@@ -418,7 +425,8 @@ void AsyncScriptCompiler::Reject(JSContext* aCx, const char* aMsg) {
   nsAutoString msg;
   msg.AppendASCII(aMsg);
   msg.AppendLiteral(": ");
-  AppendUTF8toUTF16(mURL, msg);
+  nsDependentCString filename(mOptions.filename().c_str());
+  AppendUTF8toUTF16(filename, msg);
 
   RootedValue exn(aCx);
   if (xpc::NonVoidStringToJsval(aCx, msg, &exn)) {
@@ -427,6 +435,9 @@ void AsyncScriptCompiler::Reject(JSContext* aCx, const char* aMsg) {
 
   Reject(aCx);
 }
+
+NS_IMETHODIMP
+AsyncScriptCompiler::OnStartRequest(nsIRequest* aRequest) { return NS_OK; }
 
 NS_IMETHODIMP
 AsyncScriptCompiler::OnIncrementalData(nsIIncrementalStreamLoader* aLoader,
@@ -501,13 +512,15 @@ PrecompiledScript::PrecompiledScript(nsISupports* aParent,
                                      JS::ReadOnlyCompileOptions& aOptions)
     : mParent(aParent),
       mStencil(aStencil),
-      mURL(aOptions.filename().c_str()),
+      mPublicURL(aOptions.filename().c_str()),
       mHasReturnValue(!aOptions.noScriptRval) {
   MOZ_ASSERT(aParent);
   MOZ_ASSERT(aStencil);
 #ifdef DEBUG
+  // AsyncScriptCompiler::Start can call JS::CompileOptions::setForceFullParse,
+  // but it should be compatible with the default JS::InstantiateOptions.
   JS::InstantiateOptions options(aOptions);
-  options.assertDefault();
+  options.assertCompatibleWithDefault();
 #endif
 };
 
@@ -551,7 +564,9 @@ void PrecompiledScript::ExecuteInGlobal(JSContext* aCx, HandleObject aGlobal,
   JS_WrapValue(aCx, aRval);
 }
 
-void PrecompiledScript::GetUrl(nsAString& aUrl) { CopyUTF8toUTF16(mURL, aUrl); }
+void PrecompiledScript::GetUrl(nsAString& aUrl) {
+  CopyUTF8toUTF16(mPublicURL, aUrl);
+}
 
 bool PrecompiledScript::HasReturnValue() { return mHasReturnValue; }
 

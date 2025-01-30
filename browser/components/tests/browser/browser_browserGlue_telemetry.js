@@ -14,10 +14,16 @@ add_task(function check_startup_pinned_telemetry() {
         AppConstants.platform === "win" &&
         Services.sysinfo.getProperty("hasWinPackageId")
       ) {
-        TelemetryTestUtils.assertScalarUnset(
+        TelemetryTestUtils.assertScalar(
           scalars,
-          "os.environment.is_taskbar_pinned"
+          "os.environment.is_taskbar_pinned",
+          false,
+          "Pin set on win MSIX"
         );
+        // Bug 1911343: Pinning regular browsing on MSIX
+        // causes false positives when checking for private
+        // browsing. As a result no telemetry is logged regarding
+        // private pin status.
         TelemetryTestUtils.assertScalarUnset(
           scalars,
           "os.environment.is_taskbar_pinned_private"
@@ -83,27 +89,35 @@ add_task(function check_startup_pinned_telemetry() {
 add_task(function check_is_default_handler_telemetry() {
   const scalars = TelemetryTestUtils.getProcessScalars("parent", true);
 
+  const handlers = [".pdf", "mailto"];
+
   // Check the appropriate telemetry is set or not reported by platform.
   switch (AppConstants.platform) {
-    case "win":
+    case "win": {
       // We should always set whether we're the default PDF handler.
       Assert.ok("os.environment.is_default_handler" in scalars);
-      Assert.deepEqual(
-        [".pdf"],
-        Object.keys(scalars["os.environment.is_default_handler"])
-      );
+
+      const keys = Object.keys(scalars["os.environment.is_default_handler"]);
+      handlers.every(x => {
+        Assert.ok(keys.includes(x), `${x} handler present in telemetry`);
+        return true;
+      });
 
       if (Cu.isInAutomation) {
         // But only in automation can we assume we're not the default handler.
-        TelemetryTestUtils.assertKeyedScalar(
-          scalars,
-          "os.environment.is_default_handler",
-          ".pdf",
-          false,
-          "Not default PDF handler on Windows"
-        );
+        handlers.every(x => {
+          TelemetryTestUtils.assertKeyedScalar(
+            scalars,
+            `os.environment.is_default_handler`,
+            x,
+            false,
+            `Not default ${x} handler on Windows`
+          );
+          return true;
+        });
       }
       break;
+    }
     default:
       TelemetryTestUtils.assertScalarUnset(
         scalars,

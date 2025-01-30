@@ -42,6 +42,7 @@
 #include "SQLCollations.h"
 #include "FileSystemModule.h"
 #include "mozStorageHelper.h"
+#include "sqlite3_static_ext.h"
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Logging.h"
@@ -167,6 +168,12 @@ int sqlite3_T_null(sqlite3_context* aCtx) {
 int sqlite3_T_blob(sqlite3_context* aCtx, const void* aData, int aSize) {
   ::sqlite3_result_blob(aCtx, aData, aSize, free);
   return SQLITE_OK;
+}
+
+int sqlite3_T_array(sqlite3_context* aCtx, const void* aData, int aSize,
+                    int aType) {
+  // Not supported for now.
+  return SQLITE_MISUSE;
 }
 
 #include "variantToSQLiteT_impl.h"
@@ -606,12 +613,15 @@ class AsyncBackupDatabaseFile final : public Runnable, public nsITimerCallback {
    */
   AsyncBackupDatabaseFile(Connection* aConnection, sqlite3* aNativeConnection,
                           nsIFile* aDestinationFile,
-                          mozIStorageCompletionCallback* aCallback)
+                          mozIStorageCompletionCallback* aCallback,
+                          int32_t aPagesPerStep, uint32_t aStepDelayMs)
       : Runnable("storage::AsyncBackupDatabaseFile"),
         mConnection(aConnection),
         mNativeConnection(aNativeConnection),
         mDestinationFile(aDestinationFile),
         mCallback(aCallback),
+        mPagesPerStep(aPagesPerStep),
+        mStepDelayMs(aStepDelayMs),
         mBackupFile(nullptr),
         mBackupHandle(nullptr) {
     MOZ_ASSERT(NS_IsMainThread());
@@ -674,26 +684,18 @@ class AsyncBackupDatabaseFile final : public Runnable, public nsITimerCallback {
     nsAutoString tempPath = originalPath;
     tempPath.AppendLiteral(".tmp");
 
-    nsCOMPtr<nsIFile> file =
-        do_CreateInstance("@mozilla.org/file/local;1", &rv);
+    nsCOMPtr<nsIFile> file;
+    rv = NS_NewLocalFile(tempPath, getter_AddRefs(file));
     DISPATCH_AND_RETURN_IF_FAILED(rv);
 
-    rv = file->InitWithPath(tempPath);
-    DISPATCH_AND_RETURN_IF_FAILED(rv);
-
-    // The number of milliseconds to wait between each batch of copies.
-    static constexpr uint32_t STEP_DELAY_MS = 250;
-    // The number of pages to copy per step
-    static constexpr int COPY_PAGES = 5;
-
-    int srv = ::sqlite3_backup_step(mBackupHandle, COPY_PAGES);
+    int srv = ::sqlite3_backup_step(mBackupHandle, mPagesPerStep);
     if (srv == SQLITE_OK || srv == SQLITE_BUSY || srv == SQLITE_LOCKED) {
       // We're continuing the backup later. Release the guard to avoid closing
       // the database.
       guard.release();
       // Queue up the next step
-      return NS_NewTimerWithCallback(getter_AddRefs(mTimer), this,
-                                     STEP_DELAY_MS, nsITimer::TYPE_ONE_SHOT,
+      return NS_NewTimerWithCallback(getter_AddRefs(mTimer), this, mStepDelayMs,
+                                     nsITimer::TYPE_ONE_SHOT,
                                      GetCurrentSerialEventTarget());
     }
 #ifdef DEBUG
@@ -771,6 +773,8 @@ class AsyncBackupDatabaseFile final : public Runnable, public nsITimerCallback {
   nsCOMPtr<nsITimer> mTimer;
   nsCOMPtr<nsIFile> mDestinationFile;
   nsCOMPtr<mozIStorageCompletionCallback> mCallback;
+  int32_t mPagesPerStep;
+  uint32_t mStepDelayMs;
   sqlite3* mBackupFile;
   sqlite3_backup* mBackupHandle;
 };
@@ -785,7 +789,7 @@ NS_IMPL_ISUPPORTS_INHERITED(AsyncBackupDatabaseFile, Runnable, nsITimerCallback)
 Connection::Connection(Service* aService, int aFlags,
                        ConnectionOperation aSupportedOperations,
                        const nsCString& aTelemetryFilename, bool aInterruptible,
-                       bool aIgnoreLockingMode)
+                       bool aIgnoreLockingMode, bool aOpenNotExclusive)
     : sharedAsyncExecutionMutex("Connection::sharedAsyncExecutionMutex"),
       sharedDBMutex("Connection::sharedDBMutex"),
       eventTargetOpenedOn(WrapNotNull(GetCurrentSerialEventTarget())),
@@ -801,6 +805,7 @@ Connection::Connection(Service* aService, int aFlags,
       mInterruptible(aSupportedOperations == Connection::ASYNCHRONOUS ||
                      aInterruptible),
       mIgnoreLockingMode(aIgnoreLockingMode),
+      mOpenNotExclusive(aOpenNotExclusive),
       mAsyncExecutionThreadShuttingDown(false),
       mConnectionClosed(false),
       mGrowthChunkSize(0) {
@@ -929,7 +934,6 @@ nsIEventTarget* Connection::getAsyncExecutionTarget() {
       NS_WARNING("Failed to create async thread.");
       return nullptr;
     }
-    mAsyncExecutionThread->SetNameForWakeupTelemetry("mozStorage (all)"_ns);
   }
 
   return mAsyncExecutionThread;
@@ -1086,7 +1090,8 @@ nsresult Connection::initialize(nsIFile* aDatabaseFile) {
   nsresult rv = aDatabaseFile->GetPath(path);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  bool exclusive = StaticPrefs::storage_sqlite_exclusiveLock_enabled();
+  bool exclusive =
+      StaticPrefs::storage_sqlite_exclusiveLock_enabled() && !mOpenNotExclusive;
   int srv;
   if (mIgnoreLockingMode) {
     exclusive = false;
@@ -1157,8 +1162,8 @@ nsresult Connection::initialize(nsIFileURL* aFileURL) {
 
   MOZ_ALWAYS_TRUE(
       URLParams::Parse(query, true,
-                       [&hasKey, &hasDirectoryLockId](const nsAString& aName,
-                                                      const nsAString& aValue) {
+                       [&hasKey, &hasDirectoryLockId](
+                           const nsACString& aName, const nsACString& aValue) {
                          if (aName.EqualsLiteral("key")) {
                            hasKey = true;
                            return true;
@@ -1170,7 +1175,8 @@ nsresult Connection::initialize(nsIFileURL* aFileURL) {
                          return true;
                        }));
 
-  bool exclusive = StaticPrefs::storage_sqlite_exclusiveLock_enabled();
+  bool exclusive =
+      StaticPrefs::storage_sqlite_exclusiveLock_enabled() && !mOpenNotExclusive;
 
   const char* const vfs = hasKey               ? obfsvfs::GetVFSName()
                           : hasDirectoryLockId ? quotavfs::GetVFSName()
@@ -1927,7 +1933,8 @@ Connection::AsyncClone(bool aReadOnly,
   // The cloned connection will still implement the synchronous API, but throw
   // if any synchronous methods are called on the main thread.
   RefPtr<Connection> clone =
-      new Connection(mStorageService, flags, ASYNCHRONOUS, mTelemetryFilename);
+      new Connection(mStorageService, flags, ASYNCHRONOUS, mTelemetryFilename,
+                     mInterruptible, mIgnoreLockingMode, mOpenNotExclusive);
 
   RefPtr<AsyncInitializeClone> initEvent =
       new AsyncInitializeClone(this, clone, aReadOnly, aCallback);
@@ -2962,7 +2969,8 @@ uint32_t Connection::DecreaseTransactionNestingLevel(
 
 NS_IMETHODIMP
 Connection::BackupToFileAsync(nsIFile* aDestinationFile,
-                              mozIStorageCompletionCallback* aCallback) {
+                              mozIStorageCompletionCallback* aCallback,
+                              uint32_t aPagesPerStep, uint32_t aStepDelayMs) {
   NS_ENSURE_ARG(aDestinationFile);
   NS_ENSURE_ARG(aCallback);
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
@@ -2984,9 +2992,28 @@ Connection::BackupToFileAsync(nsIFile* aDestinationFile,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
+  // The number of pages of the database to copy per step
+  static constexpr int32_t DEFAULT_PAGES_PER_STEP = 5;
+  // The number of milliseconds to wait between each step.
+  static constexpr uint32_t DEFAULT_STEP_DELAY_MS = 250;
+
+  CheckedInt<int32_t> pagesPerStep(aPagesPerStep);
+  if (!pagesPerStep.isValid()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (!pagesPerStep.value()) {
+    pagesPerStep = DEFAULT_PAGES_PER_STEP;
+  }
+
+  if (!aStepDelayMs) {
+    aStepDelayMs = DEFAULT_STEP_DELAY_MS;
+  }
+
   // Create and dispatch our backup event to the execution thread.
   nsCOMPtr<nsIRunnable> backupEvent =
-      new AsyncBackupDatabaseFile(this, mDBConn, aDestinationFile, aCallback);
+      new AsyncBackupDatabaseFile(this, mDBConn, aDestinationFile, aCallback,
+                                  pagesPerStep.value(), aStepDelayMs);
   rv = asyncThread->Dispatch(backupEvent, NS_DISPATCH_NORMAL);
   return rv;
 }

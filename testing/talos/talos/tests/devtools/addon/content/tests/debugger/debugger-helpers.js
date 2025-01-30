@@ -102,11 +102,10 @@ function findSource(dbg, url) {
 }
 exports.findSource = findSource;
 
-function getCM(dbg) {
-  const el = dbg.win.document.querySelector(".CodeMirror");
-  return el.CodeMirror;
+function getCMEditor(dbg) {
+  return dbg.win.codeMirrorSourceEditorTestInstance;
 }
-exports.getCM = getCM;
+exports.getCMEditor = getCMEditor;
 
 function waitForText(dbg, text) {
   return waitUntil(() => {
@@ -115,9 +114,8 @@ function waitForText(dbg, text) {
     if (welcomebox) {
       return false;
     }
-    const cm = getCM(dbg);
-    const editorText = cm.doc.getValue();
-    return editorText.includes(text);
+    const editor = getCMEditor(dbg);
+    return editor.getText().includes(text);
   }, "text is visible");
 }
 exports.waitForText = waitForText;
@@ -177,7 +175,9 @@ async function waitForPaused(
     return getSelectedScope(state, thread) && getIsPaused(state, thread);
   });
   promises.push(onStateChange);
-  return Promise.all(promises);
+
+  await Promise.all(promises);
+  await waitForSymbols(dbg);
 }
 exports.waitForPaused = waitForPaused;
 
@@ -257,9 +257,7 @@ async function selectSource(dbg, url) {
         return false;
       }
 
-      // wait for symbols -- a flat map of all named variables in a file -- to be calculated.
-      // this is a slow process and becomes slower the larger the file is
-      return dbg.selectors.getSymbols(state, location);
+      return true;
     },
     "selected source"
   );
@@ -293,7 +291,6 @@ async function openDebuggerAndLog(label, expected) {
     await waitForSource(dbg, expected.sourceURL);
     await selectSource(dbg, expected.file);
     await waitForText(dbg, expected.text);
-    await waitForSymbols(dbg);
   };
 
   const toolbox = await openToolboxAndLog(
@@ -319,7 +316,6 @@ async function reloadDebuggerAndLog(label, toolbox, expected) {
     await waitForSources(dbg, expected.sources);
     await waitForSource(dbg, expected.sourceURL);
     await waitForText(dbg, expected.text);
-    await waitForSymbols(dbg);
   };
   await reloadPageAndLog(`${label}.jsdebugger`, toolbox, onReload);
 }
@@ -392,11 +388,12 @@ async function step(dbg, stepType) {
 }
 exports.step = step;
 
-async function hoverOnToken(dbg, textToWaitFor, textToHover) {
+async function hoverOnToken(dbg, textToWaitFor, textToHover, isCm6Enabled) {
   await waitForText(dbg, textToWaitFor);
-  const tokenElement = [
-    ...dbg.win.document.querySelectorAll(".CodeMirror span"),
-  ].find(el => el.textContent === textToHover);
+  const selector = isCm6Enabled ? ".cm-editor span" : ".CodeMirror span";
+  const tokenElement = [...dbg.win.document.querySelectorAll(selector)].find(
+    el => el.textContent === textToHover
+  );
 
   const mouseOverEvent = new dbg.win.MouseEvent("mouseover", {
     bubbles: true,

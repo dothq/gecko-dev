@@ -10,8 +10,11 @@
 #include "MediaData.h"
 #include "KeySystemConfig.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/KeySystemNames.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "nsContentUtils.h"
+#include "nsIScriptObjectPrincipal.h"
 
 #ifdef MOZ_WMF_CDM
 #  include "mozilla/PMFCDM.h"
@@ -49,37 +52,35 @@ bool IsWidevineKeySystem(const nsAString& aKeySystem) {
 }
 
 #ifdef MOZ_WMF_CDM
-bool IsPlayReadyKeySystemAndSupported(const nsAString& aKeySystem) {
-  if (!StaticPrefs::media_eme_playready_enabled()) {
-    return false;
-  }
+bool IsMediaFoundationCDMPlaybackEnabled() {
   // 1=enabled encrypted and clear, 2=enabled encrytped.
-  if (StaticPrefs::media_wmf_media_engine_enabled() != 1 &&
-      StaticPrefs::media_wmf_media_engine_enabled() != 2) {
-    return false;
-  }
-  return IsPlayReadyKeySystem(aKeySystem);
+  return StaticPrefs::media_wmf_media_engine_enabled() == 1 ||
+         StaticPrefs::media_wmf_media_engine_enabled() == 2;
 }
 
-bool IsPlayReadyKeySystem(const nsAString& aKeySystem) {
+bool IsPlayReadyEnabled() {
+  return StaticPrefs::media_eme_playready_enabled() &&
+         IsMediaFoundationCDMPlaybackEnabled();
+}
+
+bool IsPlayReadyKeySystemAndSupported(const nsAString& aKeySystem) {
+  if (!IsPlayReadyEnabled()) {
+    return false;
+  }
   return aKeySystem.EqualsLiteral(kPlayReadyKeySystemName) ||
          aKeySystem.EqualsLiteral(kPlayReadyKeySystemHardware) ||
          aKeySystem.EqualsLiteral(kPlayReadyHardwareClearLeadKeySystemName);
 }
 
-bool IsWidevineExperimentKeySystemAndSupported(const nsAString& aKeySystem) {
-  if (!StaticPrefs::media_eme_widevine_experiment_enabled()) {
-    return false;
-  }
-  // 1=enabled encrypted and clear, 2=enabled encrytped.
-  if (StaticPrefs::media_wmf_media_engine_enabled() != 1 &&
-      StaticPrefs::media_wmf_media_engine_enabled() != 2) {
-    return false;
-  }
-  return IsWidevineExperimentKeySystem(aKeySystem);
+bool IsWidevineHardwareDecryptionEnabled() {
+  return StaticPrefs::media_eme_widevine_experiment_enabled() &&
+         IsMediaFoundationCDMPlaybackEnabled();
 }
 
-bool IsWidevineExperimentKeySystem(const nsAString& aKeySystem) {
+bool IsWidevineExperimentKeySystemAndSupported(const nsAString& aKeySystem) {
+  if (!IsWidevineHardwareDecryptionEnabled()) {
+    return false;
+  }
   return aKeySystem.EqualsLiteral(kWidevineExperimentKeySystemName) ||
          aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName);
 }
@@ -88,9 +89,7 @@ bool IsWMFClearKeySystemAndSupported(const nsAString& aKeySystem) {
   if (!StaticPrefs::media_eme_wmf_clearkey_enabled()) {
     return false;
   }
-  // 1=enabled encrypted and clear, 2=enabled encrytped.
-  if (StaticPrefs::media_wmf_media_engine_enabled() != 1 &&
-      StaticPrefs::media_wmf_media_engine_enabled() != 2) {
+  if (!IsMediaFoundationCDMPlaybackEnabled()) {
     return false;
   }
   return aKeySystem.EqualsLiteral(kClearKeyKeySystemName);
@@ -120,26 +119,6 @@ nsString KeySystemToProxyName(const nsAString& aKeySystem) {
   MOZ_ASSERT_UNREACHABLE("Not supported key system!");
   return u""_ns;
 }
-
-#define ENUM_TO_STR(enumVal) \
-  case enumVal:              \
-    return #enumVal
-
-const char* ToMediaKeyStatusStr(dom::MediaKeyStatus aStatus) {
-  switch (aStatus) {
-    ENUM_TO_STR(dom::MediaKeyStatus::Usable);
-    ENUM_TO_STR(dom::MediaKeyStatus::Expired);
-    ENUM_TO_STR(dom::MediaKeyStatus::Released);
-    ENUM_TO_STR(dom::MediaKeyStatus::Output_restricted);
-    ENUM_TO_STR(dom::MediaKeyStatus::Output_downscaled);
-    ENUM_TO_STR(dom::MediaKeyStatus::Status_pending);
-    ENUM_TO_STR(dom::MediaKeyStatus::Internal_error);
-    default:
-      return "Undefined MediaKeyStatus!";
-  }
-}
-
-#undef ENUM_TO_STR
 
 bool IsHardwareDecryptionSupported(
     const dom::MediaKeySystemConfiguration& aConfig) {
@@ -174,19 +153,6 @@ bool IsHardwareDecryptionSupported(const KeySystemConfig& aConfig) {
   return false;
 }
 
-const char* EncryptionSchemeStr(const CryptoScheme& aScheme) {
-  switch (aScheme) {
-    case CryptoScheme::None:
-      return "none";
-    case CryptoScheme::Cenc:
-      return "cenc";
-    case CryptoScheme::Cbcs:
-      return "cbcs";
-    default:
-      return "not-defined!";
-  }
-}
-
 #ifdef MOZ_WMF_CDM
 void MFCDMCapabilitiesIPDLToKeySystemConfig(
     const MFCDMCapabilitiesIPDL& aCDMConfig,
@@ -206,24 +172,30 @@ void MFCDMCapabilitiesIPDLToKeySystemConfig(
         !aKeySystemConfig.mVideoRobustness.Contains(c.robustness())) {
       aKeySystemConfig.mVideoRobustness.AppendElement(c.robustness());
     }
+    CryptoSchemeSet schemes;
+    for (const auto& scheme : c.encryptionSchemes()) {
+      schemes += scheme;
+    }
     aKeySystemConfig.mMP4.SetCanDecryptAndDecode(
-        NS_ConvertUTF16toUTF8(c.contentType()));
+        NS_ConvertUTF16toUTF8(c.contentType()), Some(schemes));
   }
   for (const auto& c : aCDMConfig.audioCapabilities()) {
     if (!c.robustness().IsEmpty() &&
         !aKeySystemConfig.mAudioRobustness.Contains(c.robustness())) {
       aKeySystemConfig.mAudioRobustness.AppendElement(c.robustness());
     }
+    CryptoSchemeSet schemes;
+    for (const auto& scheme : c.encryptionSchemes()) {
+      schemes += scheme;
+    }
     aKeySystemConfig.mMP4.SetCanDecryptAndDecode(
-        NS_ConvertUTF16toUTF8(c.contentType()));
+        NS_ConvertUTF16toUTF8(c.contentType()), Some(schemes));
   }
   aKeySystemConfig.mPersistentState = aCDMConfig.persistentState();
   aKeySystemConfig.mDistinctiveIdentifier = aCDMConfig.distinctiveID();
-  for (const auto& scheme : aCDMConfig.encryptionSchemes()) {
-    aKeySystemConfig.mEncryptionSchemes.AppendElement(
-        NS_ConvertUTF8toUTF16(EncryptionSchemeStr(scheme)));
-  }
-  aKeySystemConfig.mIsHDCP22Compatible = aCDMConfig.isHDCP22Compatible();
+  aKeySystemConfig.mIsHDCP22Compatible = aCDMConfig.isHDCP22Compatible()
+                                             ? *aCDMConfig.isHDCP22Compatible()
+                                             : false;
   EME_LOG("New Capabilities=%s",
           NS_ConvertUTF16toUTF8(aKeySystemConfig.GetDebugInfo()).get());
 }
@@ -268,6 +240,41 @@ bool DoesKeySystemSupportHardwareDecryption(const nsAString& aKeySystem) {
   }
 #endif
   return false;
+}
+
+void DeprecationWarningLog(const dom::Document* aDocument,
+                           const char* aMsgName) {
+  if (!aDocument || !aMsgName) {
+    return;
+  }
+  EME_LOG("DeprecationWarning Logging deprecation warning '%s' to WebConsole.",
+          aMsgName);
+  nsTHashMap<nsCharPtrHashKey, bool> warnings;
+  warnings.InsertOrUpdate(aMsgName, true);
+  AutoTArray<nsString, 1> params;
+  nsString& uri = *params.AppendElement();
+  Unused << aDocument->GetDocumentURI(uri);
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag, "Media"_ns,
+                                  aDocument, nsContentUtils::eDOM_PROPERTIES,
+                                  aMsgName, params);
+}
+
+Maybe<nsCString> GetOrigin(const dom::Document* aDocument) {
+  if (!aDocument) {
+    return Nothing();
+  }
+  nsCOMPtr<nsIScriptObjectPrincipal> sop =
+      do_QueryInterface(aDocument->GetInnerWindow());
+  if (!sop) {
+    return Nothing();
+  }
+  auto* principal = sop->GetPrincipal();
+  nsAutoCString origin;
+  nsresult rv = principal->GetOrigin(origin);
+  if (NS_FAILED(rv)) {
+    return Nothing();
+  }
+  return Some(origin);
 }
 
 }  // namespace mozilla

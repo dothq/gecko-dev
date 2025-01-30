@@ -2,9 +2,235 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// We use importESModule here instead of static import so that
+// the Karma test environment won't choke on this module. This
+// is because the Karma test environment already stubs out
+// AppConstants, and overrides importESModule to be a no-op (which
+// can't be done for a static import statement).
+
+// eslint-disable-next-line mozilla/use-static-import
+const { AppConstants } = ChromeUtils.importESModule(
+  "resource://gre/modules/AppConstants.sys.mjs"
+);
+
 const TWO_DAYS = 2 * 24 * 3600 * 1000;
+const isMSIX =
+  AppConstants.platform === "win" &&
+  Services.sysinfo.getProperty("hasWinPackageId", false);
 
 const MESSAGES = () => [
+  {
+    id: "TAB_GROUP_TEST_CALLOUT",
+    template: "feature_callout",
+    groups: ["cfr"],
+    content: {
+      id: "TAB_GROUP_TEST_CALLOUT",
+      template: "multistage",
+      backdrop: "transparent",
+      transitions: false,
+      screens: [
+        {
+          id: "TAB_GROUP_TEST_CALLOUT",
+          anchors: [
+            {
+              selector: ".tab-content[selected]",
+              panel_position: {
+                anchor_attachment: "bottomcenter",
+                callout_attachment: "topright",
+              },
+            },
+          ],
+          content: {
+            position: "callout",
+            width: "333px",
+            padding: 16,
+            logo: {
+              imageURL:
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/ce5a14ef-ed44-4c16-9aaf-eb99f58bcb4f.svg",
+              height: "190px",
+            },
+            title: {
+              raw: "Try tab groups for less clutter, more focus",
+            },
+            subtitle: {
+              raw: "Organize your tabs by dragging one tab on top of another to create your first tab group.",
+            },
+            primary_button: {
+              label: {
+                raw: "Got it",
+              },
+              action: {
+                dismiss: true,
+              },
+            },
+            dismiss_button: {
+              action: {
+                dismiss: true,
+              },
+              size: "small",
+              marginInline: "0 20px",
+              marginBlock: "20px 0",
+            },
+          },
+        },
+      ],
+    },
+    targeting: "tabsClosedCount >= 2 && currentTabsOpen >= 4",
+    trigger: {
+      id: "nthTabClosed",
+    },
+    frequency: {
+      lifetime: 1,
+    },
+  },
+  {
+    id: "SET_DEFAULT_SPOTLIGHT_TEST",
+    template: "spotlight",
+    content: {
+      template: "multistage",
+      id: "SET_DEFAULT_SPOTLIGHT",
+      screens: [
+        {
+          id: "PROMPT_CLONE",
+          content: {
+            width: "377px",
+            tiles: {
+              type: "multiselect",
+              style: {
+                flexDirection: "column",
+                alignItems: "flex-start",
+              },
+              data: [
+                {
+                  id: "checkbox-dont-show-again",
+                  type: "checkbox",
+                  defaultValue: false,
+                  style: {
+                    alignItems: "center",
+                  },
+                  label: {
+                    raw: "Don't show this message again",
+                    fontSize: "13px",
+                  },
+                  icon: {
+                    style: {
+                      width: "16px",
+                      height: "16px",
+                      marginInline: "0 8px",
+                    },
+                  },
+                  action: {
+                    type: "SET_PREF",
+                    data: {
+                      pref: {
+                        name: "browser.shell.checkDefaultBrowser",
+                        value: false,
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+            isSystemPromptStyleSpotlight: true,
+            title_logo: {
+              imageURL: "chrome://browser/content/assets/focus-logo.svg",
+              height: "16px",
+              width: "16px",
+            },
+            title: {
+              fontSize: "13px",
+              raw: "Make Nightly your default browser?",
+            },
+            subtitle: {
+              fontSize: "13px",
+              raw: "Keep Nightly at your fingertips — make it your default browser and keep it in your Dock.",
+            },
+            additional_button: {
+              label: {
+                raw: "Not now",
+              },
+              style: "secondary",
+              action: {
+                type: "MULTI_ACTION",
+                collectSelect: true,
+                data: {
+                  actions: [],
+                },
+                dismiss: true,
+              },
+            },
+            primary_button: {
+              label: {
+                raw: "Set as primary browser",
+              },
+              action: {
+                type: "MULTI_ACTION",
+                collectSelect: true,
+                data: {
+                  actions: [
+                    {
+                      type: "PIN_AND_DEFAULT",
+                    },
+                  ],
+                },
+                dismiss: true,
+              },
+            },
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: "NEW_PROFILE_SPOTLIGHT",
+    groups: [],
+    targeting: "canCreateSelectableProfiles && !hasSelectableProfiles",
+    trigger: {
+      id: "defaultBrowserCheck",
+    },
+    template: "spotlight",
+    content: {
+      template: "multistage",
+      modal: "tab",
+      screens: [
+        {
+          id: "SCREEN_1",
+          content: {
+            logo: {
+              imageURL:
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/a3c640c8-7594-4bb2-bc18-8b4744f3aaf2.gif",
+            },
+            title: {
+              raw: "Say hello to Firefox profiles",
+              paddingBlock: "8px",
+            },
+            subtitle: {
+              raw: "Easily switch between browsing for work and fun. Profiles keep your browsing info, including search history and passwords, totally separate so you can stay organized.",
+            },
+            dismiss_button: {
+              action: {
+                dismiss: true,
+              },
+            },
+            primary_button: {
+              label: "Create a profile",
+              action: {
+                navigate: true,
+                type: "CREATE_NEW_SELECTABLE_PROFILE",
+              },
+            },
+            secondary_button: {
+              label: "Not now",
+              action: {
+                dismiss: true,
+              },
+            },
+          },
+        },
+      ],
+      transitions: true,
+    },
+  },
   {
     id: "WNP_THANK_YOU",
     template: "update_action",
@@ -18,134 +244,6 @@ const MESSAGES = () => [
       },
     },
     trigger: { id: "momentsUpdate" },
-  },
-  {
-    id: "WHATS_NEW_FINGERPRINTER_COUNTER_ALT",
-    template: "whatsnew_panel_message",
-    order: 6,
-    content: {
-      bucket_id: "WHATS_NEW_72",
-      published_date: 1574776601000,
-      title: "Title",
-      icon_url:
-        "chrome://activity-stream/content/data/content/assets/protection-report-icon.png",
-      icon_alt: { string_id: "cfr-badge-reader-label-newfeature" },
-      body: "Message body",
-      link_text: "Click here",
-      cta_url: "about:blank",
-      cta_type: "OPEN_PROTECTION_REPORT",
-    },
-    targeting: `firefoxVersion >= 72`,
-    trigger: { id: "whatsNewPanelOpened" },
-  },
-  {
-    id: "WHATS_NEW_70_1",
-    template: "whatsnew_panel_message",
-    order: 3,
-    content: {
-      bucket_id: "WHATS_NEW_70_1",
-      published_date: 1560969794394,
-      title: "Protection Is Our Focus",
-      icon_url:
-        "chrome://activity-stream/content/data/content/assets/whatsnew-send-icon.png",
-      icon_alt: "Firefox Send Logo",
-      body: "The New Enhanced Tracking Protection, gives you the best level of protection and performance. Discover how this version is the safest version of firefox ever made.",
-      cta_url: "https://blog.mozilla.org/",
-      cta_type: "OPEN_URL",
-    },
-    targeting: `firefoxVersion > 69`,
-    trigger: { id: "whatsNewPanelOpened" },
-  },
-  {
-    id: "WHATS_NEW_70_2",
-    template: "whatsnew_panel_message",
-    order: 1,
-    content: {
-      bucket_id: "WHATS_NEW_70_1",
-      published_date: 1560969794394,
-      title: "Another thing new in Firefox 70",
-      body: "The New Enhanced Tracking Protection, gives you the best level of protection and performance. Discover how this version is the safest version of firefox ever made.",
-      link_text: "Learn more on our blog",
-      cta_url: "https://blog.mozilla.org/",
-      cta_type: "OPEN_URL",
-    },
-    targeting: `firefoxVersion > 69`,
-    trigger: { id: "whatsNewPanelOpened" },
-  },
-  {
-    id: "WHATS_NEW_SEARCH_SHORTCUTS_84",
-    template: "whatsnew_panel_message",
-    order: 2,
-    content: {
-      bucket_id: "WHATS_NEW_SEARCH_SHORTCUTS_84",
-      published_date: 1560969794394,
-      title: "Title",
-      icon_url: "chrome://global/skin/icons/check.svg",
-      icon_alt: "",
-      body: "Message content",
-      cta_url:
-        "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/search-shortcuts",
-      cta_type: "OPEN_URL",
-      link_text: "Click here",
-    },
-    targeting: "firefoxVersion >= 84",
-    trigger: {
-      id: "whatsNewPanelOpened",
-    },
-  },
-  {
-    id: "WHATS_NEW_PIONEER_82",
-    template: "whatsnew_panel_message",
-    order: 1,
-    content: {
-      bucket_id: "WHATS_NEW_PIONEER_82",
-      published_date: 1603152000000,
-      title: "Put your data to work for a better internet",
-      body: "Contribute your data to Mozilla's Pioneer program to help researchers understand pressing technology issues like misinformation, data privacy, and ethical AI.",
-      cta_url: "about:blank",
-      cta_where: "tab",
-      cta_type: "OPEN_ABOUT_PAGE",
-      link_text: "Join Pioneer",
-    },
-    targeting: "firefoxVersion >= 82",
-    trigger: {
-      id: "whatsNewPanelOpened",
-    },
-  },
-  {
-    id: "WHATS_NEW_MEDIA_SESSION_82",
-    template: "whatsnew_panel_message",
-    order: 3,
-    content: {
-      bucket_id: "WHATS_NEW_MEDIA_SESSION_82",
-      published_date: 1603152000000,
-      title: "Title",
-      body: "Message content",
-      cta_url:
-        "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/media-keyboard-control",
-      cta_type: "OPEN_URL",
-      link_text: "Click here",
-    },
-    targeting: "firefoxVersion >= 82",
-    trigger: {
-      id: "whatsNewPanelOpened",
-    },
-  },
-  {
-    id: "WHATS_NEW_69_1",
-    template: "whatsnew_panel_message",
-    order: 1,
-    content: {
-      bucket_id: "WHATS_NEW_69_1",
-      published_date: 1557346235089,
-      title: "Something new in Firefox 69",
-      body: "The New Enhanced Tracking Protection, gives you the best level of protection and performance. Discover how this version is the safest version of firefox ever made.",
-      link_text: "Learn more on our blog",
-      cta_url: "https://blog.mozilla.org/",
-      cta_type: "OPEN_URL",
-    },
-    targeting: `firefoxVersion > 68`,
-    trigger: { id: "whatsNewPanelOpened" },
   },
   {
     id: "PERSONALIZED_CFR_MESSAGE",
@@ -165,7 +263,7 @@ const MESSAGES = () => [
         },
         sumo_path: "https://example.com",
       },
-      text: { string_id: "cfr-doorhanger-bookmark-fxa-body" },
+      text: { string_id: "cfr-doorhanger-bookmark-fxa-body-2" },
       icon: "chrome://branding/content/icon64.png",
       icon_class: "cfr-doorhanger-large-icon",
       persistent_doorhanger: true,
@@ -209,6 +307,47 @@ const MESSAGES = () => [
     },
   },
   {
+    id: "TEST_BMB_BUTTON",
+    groups: [],
+    template: "bookmarks_bar_button",
+    content: {
+      label: {
+        raw: "Getting Started",
+        tooltiptext: "Getting started with Firefox",
+      },
+      logo: {
+        imageURL: "chrome://browser/content/assets/focus-logo.svg",
+      },
+      action: {
+        type: "MULTI_ACTION",
+        navigate: true,
+        data: {
+          actions: [
+            {
+              type: "SET_PREF",
+              data: {
+                pref: {
+                  name: "testpref.test.test",
+                  value: true,
+                },
+              },
+            },
+            {
+              type: "OPEN_URL",
+              data: {
+                args: "https://www.mozilla.org",
+                where: "tab",
+              },
+            },
+          ],
+        },
+      },
+    },
+    frequency: { lifetime: 100 },
+    trigger: { id: "defaultBrowserCheck" },
+    targeting: "true",
+  },
+  {
     id: "MULTISTAGE_SPOTLIGHT_MESSAGE",
     groups: ["panel-test-provider"],
     template: "spotlight",
@@ -230,9 +369,9 @@ const MESSAGES = () => [
               darkModeImageURL:
                 "chrome://browser/content/callout-tab-pickup-dark.svg",
               reducedMotionImageURL:
-                "chrome://activity-stream/content/data/content/assets/glyph-pin-16.svg",
+                "chrome://browser/content/callout-tab-pickup.svg",
               darkModeReducedMotionImageURL:
-                "chrome://activity-stream/content/data/content/assets/firefox.svg",
+                "chrome://browser/content/callout-tab-pickup-dark.svg",
               alt: "sample alt text",
             },
             hero_text: {
@@ -240,11 +379,23 @@ const MESSAGES = () => [
             },
             primary_button: {
               label: {
-                string_id: "mr2022-onboarding-pin-primary-button-label",
+                string_id: isMSIX
+                  ? "mr2022-onboarding-pin-primary-button-label-msix"
+                  : "mr2022-onboarding-pin-primary-button-label",
               },
               action: {
+                type: "MULTI_ACTION",
                 navigate: true,
-                type: "PIN_FIREFOX_TO_TASKBAR",
+                data: {
+                  actions: [
+                    {
+                      type: "PIN_FIREFOX_TO_TASKBAR",
+                    },
+                    {
+                      type: "PIN_FIREFOX_TO_START_MENU",
+                    },
+                  ],
+                },
               },
             },
             secondary_button: {
@@ -469,7 +620,7 @@ const MESSAGES = () => [
         },
       },
     },
-    groups: ["panel-test-provider"],
+    groups: ["panel-test-provider", "pbNewtab"],
     targeting: "region != 'CN' && !hasActiveEnterprisePolicies",
     frequency: { lifetime: 3 },
   },
@@ -511,6 +662,9 @@ const MESSAGES = () => [
               },
               {
                 type: "PIN_FIREFOX_TO_TASKBAR",
+              },
+              {
+                type: "PIN_FIREFOX_TO_START_MENU",
               },
               {
                 type: "BLOCK_MESSAGE",
@@ -756,6 +910,154 @@ const MESSAGES = () => [
         },
       ],
     },
+  },
+  {
+    id: "EXPERIMENT_L10N_TEST",
+    template: "feature_callout",
+    description:
+      "Test ASRouter support for flattening experiment-translated messages into plain English text. See bug 1899439.",
+    content: {
+      id: "EXPERIMENT_L10N_TEST",
+      template: "multistage",
+      backdrop: "transparent",
+      transitions: false,
+      disableHistoryUpdates: true,
+      metrics: "block",
+      screens: [
+        {
+          id: "EXPERIMENT_L10N_TEST_1",
+          anchors: [
+            {
+              selector: "#PanelUI-menu-button",
+              panel_position: {
+                anchor_attachment: "bottomcenter",
+                callout_attachment: "topright",
+              },
+            },
+          ],
+          content: {
+            position: "callout",
+            layout: "survey",
+            width: "min-content",
+            padding: "16",
+            title: {
+              raw: {
+                $l10n: {
+                  id: "question-title",
+                  text: "Help Firefox improve this page",
+                  comment:
+                    "The title of a popup asking the user to give feedback by answering a short survey",
+                },
+              },
+              marginInline: "0 42px",
+              whiteSpace: "nowrap",
+            },
+            title_logo: {
+              imageURL: "chrome://branding/content/about-logo.png",
+              alignment: "top",
+            },
+            subtitle: {
+              raw: {
+                $l10n: {
+                  id: "relevance-question",
+                  text: "How relevant are the contents of this Firefox page to you?",
+                  comment: "Survey question about relevance",
+                },
+              },
+            },
+            secondary_button: {
+              label: {
+                raw: {
+                  $l10n: {
+                    id: "advance-button-label",
+                    text: "Next",
+                    comment:
+                      "Label for the button that submits the user's response to question 1 and advances to question 2",
+                  },
+                },
+              },
+              style: "primary",
+              action: { navigate: true },
+              disabled: "hasActiveMultiSelect",
+            },
+            dismiss_button: {
+              size: "small",
+              marginBlock: "12px 0",
+              marginInline: "0 12px",
+              action: { dismiss: true },
+            },
+            tiles: {
+              type: "multiselect",
+              style: { flexDirection: "column", alignItems: "flex-start" },
+              data: [
+                {
+                  id: "radio-no-opinion",
+                  type: "radio",
+                  group: "radios",
+                  defaultValue: true,
+                  icon: {
+                    style: {
+                      width: "14px",
+                      height: "14px",
+                      marginInline: "0 0.5em",
+                    },
+                  },
+                  label: {
+                    raw: {
+                      $l10n: {
+                        id: "radio-no-opinion-label",
+                        text: "No opinion",
+                        comment:
+                          "Answer choice indicating that the user has no opinion about how relevant the New Tab Page is",
+                      },
+                    },
+                  },
+                  action: { navigate: true },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: "FXA_ACCOUNTS_APPMENU_PROTECT_BROWSING_DATA",
+    template: "menu_message",
+    content: {
+      messageType: "fxa_cta",
+      primaryText: "Bounce between devices",
+      secondaryText:
+        "Sync and encrypt your bookmarks, passwords, and more on all your devices.",
+      primaryActionText: "Sign up",
+      primaryAction: {
+        type: "FXA_SIGNIN_FLOW",
+        data: {
+          where: "tab",
+          extraParams: {
+            utm_source: "firefox-desktop",
+            utm_medium: "product",
+            utm_campaign: "some-campaign",
+            utm_content: "some-content",
+          },
+          autoClose: false,
+        },
+      },
+      closeAction: {
+        type: "BLOCK_MESSAGE",
+        data: {
+          id: "FXA_ACCOUNTS_APPMENU_PROTECT_BROWSING_DATA",
+        },
+      },
+      imageURL:
+        "chrome://browser/content/asrouter/assets/fox-with-box-on-cloud.svg",
+      imageVerticalOffset: -20,
+    },
+    skip_in_tests: "TODO",
+    trigger: {
+      id: "menuOpened",
+    },
+    testingTriggerContext: "app_menu",
   },
 ];
 

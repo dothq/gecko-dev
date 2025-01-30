@@ -263,9 +263,8 @@ export class FeatureCallout {
         this._removePanelConflictListeners();
         this.doc.querySelector(`[src="${BUNDLE_SRC}"]`)?.remove();
         if (nextMessage) {
-          const isMessageUnblocked = await lazy.ASRouter.isUnblockedMessage(
-            nextMessage
-          );
+          const isMessageUnblocked =
+            await lazy.ASRouter.isUnblockedMessage(nextMessage);
           if (!isMessageUnblocked) {
             this.endTour();
             return;
@@ -462,6 +461,10 @@ export class FeatureCallout {
    *   the callout should be aligned with which point on the anchor element.
    * @property {PopupAttachmentPoint} anchor_attachment
    * @property {PopupAttachmentPoint} callout_attachment
+   * @property {String} [panel_position_string] The attachments joined into a
+   *   string, e.g. "bottomleft topright". Passed to XULPopupElement::openPopup.
+   *   This is not provided by JSON, but generated from anchor_attachment and
+   *   callout_attachment.
    * @property {Number} [offset_x] Offset in pixels to apply to the callout
    *   position in the horizontal direction.
    * @property {Number} [offset_y] The same in the vertical direction.
@@ -514,8 +517,10 @@ export class FeatureCallout {
    */
 
   /**
-   * @typedef {Object} AnchorConfig
+   * @typedef {Object} Anchor
    * @property {String} selector CSS selector for the anchor node.
+   * @property {Element} [element] The anchor node resolved from the selector.
+   *   Not provided by JSON, but generated dynamically.
    * @property {PanelPosition} [panel_position] Used to show the callout in a
    *   XUL panel. Only works in chrome documents, like the main browser window.
    * @property {HTMLArrowPosition} [arrow_position] Used to show the callout in
@@ -533,27 +538,13 @@ export class FeatureCallout {
    */
 
   /**
-   * @typedef {Object} Anchor
-   * @property {String} selector
-   * @property {PanelPosition} [panel_position]
-   * @property {HTMLArrowPosition} [arrow_position]
-   * @property {PositionOverride} [absolute_position]
-   * @property {Boolean} [hide_arrow]
-   * @property {Boolean} [no_open_on_anchor]
-   * @property {Number} [arrow_width]
-   * @property {Element} element The anchor node resolved from the selector.
-   * @property {String} [panel_position_string] The panel_position joined into a
-   *   string, e.g. "bottomleft topright". Passed to XULPopupElement::openPopup.
-   */
-
-  /**
    * Return the first visible anchor element for the current screen. Screens can
    * specify multiple anchors in an array, and the first one that is visible
    * will be used. If none are visible, return null.
    * @returns {Anchor|null}
    */
   _getAnchor() {
-    /** @type {AnchorConfig[]} */
+    /** @type {Anchor[]} */
     const anchors = Array.isArray(this.currentScreen?.anchors)
       ? this.currentScreen.anchors
       : [];
@@ -564,10 +555,13 @@ export class FeatureCallout {
         );
         continue;
       }
-      const { selector, arrow_position, panel_position } = anchor;
-      let panel_position_string;
+      let { selector, arrow_position, panel_position } = anchor;
+      if (!selector) {
+        continue; // No selector provided.
+      }
       if (panel_position) {
-        panel_position_string = this._getPanelPositionString(panel_position);
+        let panel_position_string =
+          this._getPanelPositionString(panel_position);
         // if the positionString doesn't match the format we expect, don't
         // render the callout.
         if (!panel_position_string && !arrow_position) {
@@ -580,6 +574,7 @@ export class FeatureCallout {
           );
           continue;
         }
+        panel_position.panel_position_string = panel_position_string;
       }
       if (
         arrow_position &&
@@ -594,7 +589,44 @@ export class FeatureCallout {
         );
         continue;
       }
-      const element = selector && this.doc.querySelector(selector);
+      let scope = this.doc.documentElement;
+      // %triggerTab% is a special token that gets replaced with :scope, and
+      // instructs us to look for the anchor element within the trigger tab.
+      if (this.browser && selector.includes("%triggerTab%")) {
+        let triggerTab = this.browser.ownerGlobal.gBrowser?.getTabForBrowser(
+          this.browser
+        );
+        if (triggerTab) {
+          selector = selector.replace("%triggerTab%", ":scope");
+          scope = triggerTab;
+        } else {
+          continue;
+        }
+      }
+      if (selector.includes("::%shadow%")) {
+        let parts = selector.split("::%shadow%");
+        for (let i = 0; i < parts.length; i++) {
+          selector = parts[i].trim();
+          if (i === parts.length - 1) {
+            break;
+          }
+          let el = scope.querySelector(selector);
+          if (!el) {
+            break;
+          }
+          if (el.shadowRoot) {
+            scope = el.shadowRoot;
+          }
+        }
+      }
+      let element = scope.querySelector(selector);
+      // The element may not be a child of the scope, but the scope itself. For
+      // example, if we're anchoring directly to the trigger tab, our selector
+      // might look like `%triggerTab%[visuallyselected]`. In this case,
+      // querySelector() will return nothing, but matches() will return true.
+      if (!element && scope.matches(selector)) {
+        element = scope;
+      }
       if (!element) {
         continue; // Element doesn't exist at all.
       }
@@ -621,7 +653,7 @@ export class FeatureCallout {
       if (
         this.context === "chrome" &&
         element.id &&
-        anchor.selector.includes(`#${element.id}`)
+        selector.includes(`#${element.id}`)
       ) {
         let widget = lazy.CustomizableUI.getWidget(element.id);
         if (
@@ -637,7 +669,7 @@ export class FeatureCallout {
           continue;
         }
       }
-      return { ...anchor, panel_position_string, element };
+      return { ...anchor, element };
     }
     return null;
   }
@@ -752,13 +784,10 @@ export class FeatureCallout {
     }
 
     const { autohide, padding } = this.currentScreen.content;
-    const {
-      panel_position_string,
-      hide_arrow,
-      no_open_on_anchor,
-      arrow_width,
-    } = anchor;
-    const needsPanel = "MozXULElement" in this.win && !!panel_position_string;
+    const { panel_position, hide_arrow, no_open_on_anchor, arrow_width } =
+      anchor;
+    const needsPanel =
+      "MozXULElement" in this.win && !!panel_position?.panel_position_string;
 
     if (this._container) {
       if (needsPanel ^ (this._container?.localName === "panel")) {
@@ -775,7 +804,7 @@ export class FeatureCallout {
             noautofocus="true"
             flip="slide"
             type="arrow"
-            position="${panel_position_string}"
+            position="${panel_position.panel_position_string}"
             ${hide_arrow ? "" : 'show-arrow=""'}
             ${autohide ? "" : 'noautohide="true"'}
             ${no_open_on_anchor ? 'no-open-on-anchor=""' : ""}
@@ -797,7 +826,6 @@ export class FeatureCallout {
         "aria-describedby",
         `#${CONTAINER_ID} .welcome-text`
       );
-      this._container.tabIndex = 0;
       if (arrow_width) {
         this._container.style.setProperty("--arrow-width", `${arrow_width}px`);
       } else {
@@ -1306,6 +1334,7 @@ export class FeatureCallout {
     this._windowFuncs = {
       AWGetFeatureConfig: () => this.config,
       AWGetSelectedTheme: getActionHandler("GET_SELECTED_THEME"),
+      AWGetInstalledAddons: getActionHandler("GET_INSTALLED_ADDONS"),
       // Do not send telemetry if message config sets metrics as 'block'.
       AWSendEventTelemetry,
       AWSendToDeviceEmailsSupported: getActionHandler(
@@ -1314,6 +1343,9 @@ export class FeatureCallout {
       AWSendToParent: (name, data) => getActionHandler(name)(data),
       AWFinish: () => this.endTour(),
       AWEvaluateScreenTargeting: getActionHandler("EVALUATE_SCREEN_TARGETING"),
+      AWEvaluateAttributeTargeting: getActionHandler(
+        "EVALUATE_ATTRIBUTE_TARGETING"
+      ),
     };
     for (const [name, func] of Object.entries(this._windowFuncs)) {
       this.win[name] = func;
@@ -1564,6 +1596,8 @@ export class FeatureCallout {
    * @property {Number} [interval] Used only for `timeout` and `interval` event
    *   types. These don't set up real event listeners, but instead invoke the
    *   action on a timer.
+   * @property {Boolean} [every_window] Extend addEventListener to all windows?
+   *   Not compatible with `interval`.
    *
    * @typedef {Object} PageEventListenerAction Action sent to AboutWelcomeParent
    * @property {String} [type] Action type, e.g. `OPEN_URL`
@@ -1644,13 +1678,20 @@ export class FeatureCallout {
           .map(attr => `[${attr.name}="${attr.value}"]`)
           .join("")}`;
       }
-      if (this.doc.querySelectorAll(source).length > 1) {
+      let doc = target.ownerDocument;
+      if (doc.querySelectorAll(source).length > 1) {
         let uniqueAncestor = target.closest(`[id]:not(:scope, :root, body)`);
         if (uniqueAncestor) {
           source = `${this._getUniqueElementIdentifier(
             uniqueAncestor
           )} > ${source}`;
         }
+      }
+      if (doc !== this.doc) {
+        let windowIndex = [
+          ...Services.wm.getEnumerator("navigator:browser"),
+        ].indexOf(target.ownerGlobal);
+        source = `window${windowIndex + 1}: ${source}`;
       }
     }
     return source;
@@ -1682,8 +1723,7 @@ export class FeatureCallout {
       this._container.querySelector("input:not(:disabled, [hidden])") ||
       this._container.querySelector(
         "button:not(:disabled, [hidden], .text-link, .cta-link)"
-      ) ||
-      this._container
+      )
     );
   }
 
@@ -1742,17 +1782,21 @@ export class FeatureCallout {
             });
           } else if (this._container.localName === "panel") {
             const anchor = this._getAnchor();
-            if (!anchor) {
+            if (!anchor?.panel_position) {
               this.endTour();
               return;
             }
-            const position = anchor.panel_position_string;
+            const {
+              panel_position_string: position,
+              offset_x: x,
+              offset_y: y,
+            } = anchor.panel_position;
             this._container.addEventListener("popupshown", onRender, {
               once: true,
             });
             this._container.addEventListener("popuphiding", this);
             this._addPanelConflictListeners();
-            this._container.openPopup(anchor.element, { position });
+            this._container.openPopup(anchor.element, { position, x, y });
           }
         }
       });
@@ -1834,6 +1878,14 @@ export class FeatureCallout {
         "simulateContent",
         !!this.theme.simulateContent
       );
+      this._container.classList.toggle(
+        "lwtNewtab",
+        !!(
+          this.theme.lwtNewtab !== false &&
+          this.theme.simulateContent &&
+          ["themed-content", "newtab"].includes(this.theme.preset)
+        )
+      );
       for (const type of ["light", "dark", "hcm"]) {
         const scheme = this.theme[type];
         for (const name of FeatureCallout.themePropNames) {
@@ -1886,6 +1938,7 @@ export class FeatureCallout {
     "link-color",
     "link-color-hover",
     "link-color-active",
+    "icon-success-color",
   ];
 
   /** @type {Object<String, FeatureCalloutTheme>} */
@@ -1894,7 +1947,8 @@ export class FeatureCallout {
     // colors inherit from the user's theme through contentTheme.js.
     "themed-content": {
       all: {
-        background: "var(--newtab-background-color-secondary)",
+        background:
+          "var(--newtab-background-color, var(--in-content-page-background)) linear-gradient(var(--newtab-background-color-secondary), var(--newtab-background-color-secondary))",
         color: "var(--newtab-text-primary-color, var(--in-content-page-color))",
         border:
           "color-mix(in srgb, var(--newtab-background-color-secondary) 80%, #000)",
@@ -2007,7 +2061,8 @@ export class FeatureCallout {
     },
     newtab: {
       all: {
-        background: "var(--newtab-background-color-secondary, #FFF)",
+        background:
+          "var(--newtab-background-color, #F9F9FB) linear-gradient(var(--newtab-background-color-secondary, #FFF), var(--newtab-background-color-secondary, #FFF))",
         color: "var(--newtab-text-primary-color, WindowText)",
         border:
           "color-mix(in srgb, var(--newtab-background-color-secondary, #FFF) 80%, #000)",
@@ -2026,10 +2081,12 @@ export class FeatureCallout {
         "link-color-hover": "rgb(0, 97, 224)",
         "link-color-active": "color-mix(in srgb, rgb(0, 97, 224) 80%, #000)",
         "link-color-visited": "rgb(0, 97, 224)",
+        "icon-success-color": "#2AC3A2",
       },
       dark: {
         "accent-color": "rgb(0, 221, 255)",
-        background: "var(--newtab-background-color-secondary, #42414D)",
+        background:
+          "var(--newtab-background-color, #2B2A33) linear-gradient(var(--newtab-background-color-secondary, #42414D), var(--newtab-background-color-secondary, #42414D))",
         border:
           "color-mix(in srgb, var(--newtab-background-color-secondary, #42414D) 80%, #FFF)",
         "button-background": "color-mix(in srgb, transparent 80%, #000)",
@@ -2039,6 +2096,7 @@ export class FeatureCallout {
         "link-color-hover": "rgb(0,221,255)",
         "link-color-active": "color-mix(in srgb, rgb(0, 221, 255) 60%, #FFF)",
         "link-color-visited": "rgb(0, 221, 255)",
+        "icon-success-color": "#54FFBD",
       },
       hcm: {
         background: "-moz-dialog",
@@ -2066,34 +2124,42 @@ export class FeatureCallout {
     // stylesheets handle these variables' values.
     chrome: {
       all: {
-        background: "var(--arrowpanel-background)",
+        // Use a gradient because it's possible (due to custom themes) that the
+        // arrowpanel-background will be semi-transparent, causing the arrow to
+        // show through the callout background. Put the Menu color behind the
+        // arrowpanel-background.
+        background:
+          "Menu linear-gradient(var(--arrowpanel-background), var(--arrowpanel-background))",
         color: "var(--arrowpanel-color)",
         border: "var(--arrowpanel-border-color)",
         "accent-color": "var(--focus-outline-color)",
-        "button-background": "var(--button-bgcolor)",
-        "button-color": "var(--button-color)",
+        "button-background": "var(--button-background-color)",
+        "button-color": "var(--button-text-color)",
         "button-border": "transparent",
-        "button-background-hover": "var(--button-hover-bgcolor)",
-        "button-color-hover": "var(--button-color)",
+        "button-background-hover": "var(--button-background-color-hover)",
+        "button-color-hover": "var(--button-text-color)",
         "button-border-hover": "transparent",
-        "button-background-active": "var(--button-active-bgcolor)",
-        "button-color-active": "var(--button-color)",
+        "button-background-active": "var(--button-background-color-active)",
+        "button-color-active": "var(--button-text-color)",
         "button-border-active": "transparent",
-        "primary-button-background": "var(--button-primary-bgcolor)",
-        "primary-button-color": "var(--button-primary-color)",
+        "primary-button-background": "var(--color-accent-primary)",
+        "primary-button-color": "var(--button-text-color-primary)",
         "primary-button-border": "transparent",
-        "primary-button-background-hover":
-          "var(--button-primary-hover-bgcolor)",
-        "primary-button-color-hover": "var(--button-primary-color)",
+        "primary-button-background-hover": "var(--color-accent-primary-hover)",
+        "primary-button-color-hover": "var(--button-text-color-primary)",
         "primary-button-border-hover": "transparent",
         "primary-button-background-active":
-          "var(--button-primary-active-bgcolor)",
-        "primary-button-color-active": "var(--button-primary-color)",
+          "var(--color-accent-primary-active)",
+        "primary-button-color-active": "var(--button-text-color-primary)",
         "primary-button-border-active": "transparent",
         "link-color": "LinkText",
         "link-color-hover": "LinkText",
         "link-color-active": "ActiveText",
         "link-color-visited": "VisitedText",
+        "icon-success-color": "var(--attention-dot-color)",
+      },
+      hcm: {
+        background: "var(--arrowpanel-background)",
       },
     },
   };

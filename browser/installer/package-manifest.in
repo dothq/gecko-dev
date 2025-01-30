@@ -38,6 +38,7 @@
 #ifdef MOZ_UPDATER
 @APPNAME@/Contents/Library/LaunchServices
 #endif
+@APPNAME@/Contents/Frameworks
 @APPNAME@/Contents/PkgInfo
 @RESPATH@/firefox.icns
 @RESPATH@/document.icns
@@ -99,15 +100,22 @@
 #endif
 #endif
 #ifdef MOZ_GTK
+; This is a standalone binary launched by Firefox on Linux to verify
+; the system's graphics capabilities and behavior.
+; It is separate because it may crash, and handling this within Firefox
+; itself would be more challenging.
 @BINPATH@/glxtest
 @BINPATH@/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
 #ifdef MOZ_WAYLAND
 @BINPATH@/@DLL_PREFIX@mozwayland@DLL_SUFFIX@
 #endif
 #ifdef MOZ_ENABLE_V4L2
+; Similar to glxtest, this tests the hardware decoding for Video for Linux.
+; Currently, it doesn't ship for Firefox targeting typical Intel CPU (or compatible).
 @BINPATH@/v4l2test
 #endif
 #ifdef MOZ_ENABLE_VAAPI
+; Similar to glxtest, this tests the capabilities of the Video Acceleration API (VA-API).
 @BINPATH@/vaapitest
 #endif
 #endif
@@ -141,7 +149,10 @@
 #endif
 @RESPATH@/application.ini
 #ifdef MOZ_UPDATER
+# update-settings.ini has been removed on macOS.
+#ifndef XP_MACOSX
 @RESPATH@/update-settings.ini
+#endif
 #endif
 @RESPATH@/platform.ini
 #ifndef MOZ_FOLD_LIBS
@@ -201,12 +212,15 @@
 @BINPATH@/libGLESv2.dll
 #endif # MOZ_ANGLE_RENDERER
 
+#ifdef MOZ_DXCOMPILER
+@BINPATH@/@MOZ_DXC_DLL_NAME@
+@BINPATH@/@MOZ_DXIL_DLL_NAME@
+#endif
+
 ; [Browser Chrome Files]
 @RESPATH@/browser/chrome.manifest
 @RESPATH@/browser/chrome/browser@JAREXT@
 @RESPATH@/browser/chrome/browser.manifest
-@RESPATH@/chrome/pdfjs.manifest
-@RESPATH@/chrome/pdfjs/*
 @RESPATH@/chrome/toolkit@JAREXT@
 @RESPATH@/chrome/toolkit.manifest
 #ifdef MOZ_GTK
@@ -227,6 +241,11 @@
 @RESPATH@/browser/chrome/devtools.manifest
 @RESPATH@/browser/@PREF_DIR@/debugger.js
 
+; PdfJs
+@RESPATH@/chrome/pdfjs.manifest
+@RESPATH@/chrome/pdfjs/*
+@RESPATH@/defaults/pref/PdfJsDefaultPrefs.js
+
 ; shell icons
 #ifdef XP_UNIX
 #ifndef XP_MACOSX
@@ -245,15 +264,15 @@
 @RESPATH@/defaults/autoconfig/prefcalls.js
 @RESPATH@/browser/defaults/permissions
 ; Remote Settings JSON dumps
-@RESPATH@/browser/defaults/settings/last_modified.json
-@RESPATH@/browser/defaults/settings/blocklists
-@RESPATH@/browser/defaults/settings/main
-@RESPATH@/browser/defaults/settings/security-state
+@RESPATH@/browser/defaults/settings
 
+# channel-prefs.js has been removed on macOS.
+#ifndef XP_MACOSX
 ; Warning: changing the path to channel-prefs.js can cause bugs (Bug 756325)
 ; Technically this is an app pref file, but we are keeping it in the original
 ; gre location for now.
 @RESPATH@/defaults/pref/channel-prefs.js
+#endif
 
 ; Background tasks-specific preferences.
 ; These are in the GRE location since they apply to all tasks at this time.
@@ -381,23 +400,10 @@ bin/libfreebl_64int_3.so
 @BINPATH@/crashreporter.app/
 #else
 @BINPATH@/crashreporter@BIN_SUFFIX@
-@RESPATH@/crashreporter.ini
-#ifdef XP_UNIX
-@RESPATH@/Throbber-small.gif
-#elif defined(XP_WIN)
+#if defined(XP_WIN)
 @BINPATH@/@DLL_PREFIX@mozwer@DLL_SUFFIX@
 #endif
 #endif
-@RESPATH@/browser/crashreporter-override.ini
-#ifdef MOZ_CRASHREPORTER_INJECTOR
-@BINPATH@/breakpadinjector.dll
-#endif
-#endif
-
-; [ minidump-analyzer ]
-;
-#ifdef MOZ_CRASHREPORTER
-@BINPATH@/minidump-analyzer@BIN_SUFFIX@
 #endif
 
 ; [ Ping Sender ]
@@ -432,12 +438,6 @@ bin/libfreebl_64int_3.so
 @RESPATH@/gmp-clearkey/0.1/manifest.json
 #if defined(MOZ_WMF_CDM) && defined(ENABLE_TESTS)
 @BINPATH@/@DLL_PREFIX@wmfclearkey@DLL_SUFFIX@
-#endif
-
-#ifdef MOZ_DMD
-; DMD
-@RESPATH@/dmd.py
-@RESPATH@/fix_stacks.py
 #endif
 
 #ifdef PKG_LOCALE_MANIFEST

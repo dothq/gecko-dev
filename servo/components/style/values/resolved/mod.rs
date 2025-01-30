@@ -5,21 +5,24 @@
 //! Resolved values. These are almost always computed values, but in some cases
 //! there are used values.
 
+use app_units::Au;
+#[cfg(feature = "gecko")]
 use crate::media_queries::Device;
 use crate::properties::ComputedValues;
 use crate::ArcSlice;
 use servo_arc::Arc;
 use smallvec::SmallVec;
 
+mod animation;
 mod color;
 mod counters;
 
-use crate::values::computed;
+use crate::values::computed::{self, Length};
 
 /// Element-specific information needed to resolve property values.
+#[cfg(feature = "gecko")]
 pub struct ResolvedElementInfo<'a> {
     /// Element we're resolving line-height against.
-    #[cfg(feature = "gecko")]
     pub element: crate::gecko::wrapper::GeckoElement<'a>,
 }
 
@@ -29,8 +32,10 @@ pub struct Context<'a> {
     pub style: &'a ComputedValues,
     /// The device / document we're resolving style for. Useful to do font metrics stuff needed for
     /// line-height.
+    #[cfg(feature = "gecko")]
     pub device: &'a Device,
     /// The element-specific information to resolve the value.
+    #[cfg(feature = "gecko")]
     pub element_info: ResolvedElementInfo<'a>,
 }
 
@@ -87,7 +92,8 @@ trivial_to_resolved_value!(crate::color::AbsoluteColor);
 trivial_to_resolved_value!(crate::values::generics::color::ColorMixFlags);
 trivial_to_resolved_value!(crate::Atom);
 trivial_to_resolved_value!(crate::values::AtomIdent);
-trivial_to_resolved_value!(app_units::Au);
+trivial_to_resolved_value!(crate::custom_properties::VariableValue);
+trivial_to_resolved_value!(crate::stylesheets::UrlExtraData);
 trivial_to_resolved_value!(computed::url::ComputedUrl);
 #[cfg(feature = "gecko")]
 trivial_to_resolved_value!(computed::url::ComputedImageUrl);
@@ -95,9 +101,22 @@ trivial_to_resolved_value!(computed::url::ComputedImageUrl);
 trivial_to_resolved_value!(crate::Namespace);
 #[cfg(feature = "servo")]
 trivial_to_resolved_value!(crate::Prefix);
-trivial_to_resolved_value!(computed::LengthPercentage);
 trivial_to_resolved_value!(style_traits::values::specified::AllowedNumericType);
 trivial_to_resolved_value!(computed::TimingFunction);
+
+impl ToResolvedValue for Au {
+    type ResolvedValue = Length;
+
+    #[inline]
+    fn to_resolved_value(self, context: &Context) -> Self::ResolvedValue {
+        Length::new(self.to_f32_px()).to_resolved_value(context)
+    }
+
+    #[inline]
+    fn from_resolved_value(resolved: Self::ResolvedValue) -> Self {
+        Au::from_f32_px(Length::from_resolved_value(resolved).px())
+    }
+}
 
 impl<A, B> ToResolvedValue for (A, B)
 where
@@ -167,6 +186,25 @@ where
     T: ToResolvedValue,
 {
     type ResolvedValue = Vec<<T as ToResolvedValue>::ResolvedValue>;
+
+    #[inline]
+    fn to_resolved_value(self, context: &Context) -> Self::ResolvedValue {
+        self.into_iter()
+            .map(|item| item.to_resolved_value(context))
+            .collect()
+    }
+
+    #[inline]
+    fn from_resolved_value(resolved: Self::ResolvedValue) -> Self {
+        resolved.into_iter().map(T::from_resolved_value).collect()
+    }
+}
+
+impl<T> ToResolvedValue for thin_vec::ThinVec<T>
+where
+    T: ToResolvedValue,
+{
+    type ResolvedValue = thin_vec::ThinVec<<T as ToResolvedValue>::ResolvedValue>;
 
     #[inline]
     fn to_resolved_value(self, context: &Context) -> Self::ResolvedValue {

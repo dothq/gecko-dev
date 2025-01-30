@@ -21,6 +21,11 @@ class BounceTrackingStoragePersistenceTestCase(MarionetteTestCase):
         self.marionette.set_context("chrome")
         self.populate_state()
 
+    def tearDown(self):
+        self.marionette.restart(in_app=False, clean=True)
+
+        super(BounceTrackingStoragePersistenceTestCase, self).tearDown()
+
     def populate_state(self):
         # Add some data to test persistence.
         self.marionette.execute_script(
@@ -48,7 +53,7 @@ class BounceTrackingStoragePersistenceTestCase(MarionetteTestCase):
                 let bounceTrackingProtection = Cc["@mozilla.org/bounce-tracking-protection;1"].getService(
                 Ci.nsIBounceTrackingProtection
                 );
-                return bounceTrackingProtection.testGetBounceTrackerCandidateHosts({}).sort();
+                return bounceTrackingProtection.testGetBounceTrackerCandidateHosts({}).map(entry => entry.siteHost).sort();
             """,
         )
         self.assertEqual(
@@ -64,7 +69,7 @@ class BounceTrackingStoragePersistenceTestCase(MarionetteTestCase):
                 let bounceTrackingProtection = Cc["@mozilla.org/bounce-tracking-protection;1"].getService(
                 Ci.nsIBounceTrackingProtection
                 );
-                return bounceTrackingProtection.testGetBounceTrackerCandidateHosts({ userContextId: 3 }).sort();
+                return bounceTrackingProtection.testGetBounceTrackerCandidateHosts({ userContextId: 3 }).map(entry => entry.siteHost).sort();
             """,
         )
         self.assertEqual(
@@ -109,7 +114,7 @@ class BounceTrackingStoragePersistenceTestCase(MarionetteTestCase):
                 let bounceTrackingProtection = Cc["@mozilla.org/bounce-tracking-protection;1"].getService(
                 Ci.nsIBounceTrackingProtection
                 );
-                return bounceTrackingProtection.testGetUserActivationHosts({}).sort();
+                return bounceTrackingProtection.testGetUserActivationHosts({}).map(entry => entry.siteHost).sort();
             """,
         )
         self.assertEqual(

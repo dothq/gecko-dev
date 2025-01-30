@@ -106,7 +106,7 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
       uint64_t aInnerWindowId, bool* aRetry);
 
   bool CreateContentBridges(
-      base::ProcessId aOtherProcess,
+      mozilla::ipc::EndpointProcInfo aOtherProcess,
       mozilla::ipc::Endpoint<PCompositorManagerChild>* aOutCompositor,
       mozilla::ipc::Endpoint<PImageBridgeChild>* aOutImageBridge,
       mozilla::ipc::Endpoint<PVRManagerChild>* aOutVRBridge,
@@ -157,13 +157,19 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // Record the device reset in telemetry / annotate the crash report.
   static void RecordDeviceReset(DeviceResetReason aReason);
 
+  static void NotifyDeviceReset(DeviceResetReason aReason,
+                                DeviceResetDetectPlace aPlace);
+
   void OnProcessLaunchComplete(GPUProcessHost* aHost) override;
   void OnProcessUnexpectedShutdown(GPUProcessHost* aHost) override;
   void SimulateDeviceReset();
   void DisableWebRender(wr::WebRenderError aError, const nsCString& aMsg);
   void NotifyWebRenderError(wr::WebRenderError aError);
-  void OnInProcessDeviceReset(bool aTrackThreshold);
-  void OnRemoteProcessDeviceReset(GPUProcessHost* aHost) override;
+  void OnInProcessDeviceReset(DeviceResetReason aReason,
+                              DeviceResetDetectPlace aPlace);
+  void OnRemoteProcessDeviceReset(
+      GPUProcessHost* aHost, const DeviceResetReason& aReason,
+      const DeviceResetDetectPlace& aPlace) override;
   void OnProcessDeclaredStable() override;
   void NotifyListenersOnCompositeDeviceReset();
 
@@ -178,14 +184,18 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // true if the message was sent, false if not.
   bool NotifyGpuObservers(const char* aTopic);
 
-  // Kills the GPU process. Used for tests and diagnostics
-  void KillProcess();
+  // Kills the GPU process. Used in normal operation to recover from an error,
+  // as well as for tests and diagnostics.
+  void KillProcess(bool aGenerateMinidump = false);
 
   // Causes the GPU process to crash. Used for tests and diagnostics
   void CrashProcess();
 
   // Returns -1 if there is no GPU process, or the platform pid for it.
   base::ProcessId GPUProcessPid();
+
+  // Returns Invalid() if there is no GPU process, or the proc info for it.
+  mozilla::ipc::EndpointProcInfo GPUEndpointProcInfo();
 
   // If a GPU process is present, create a MemoryReportingProcess object.
   // Otherwise, return null.
@@ -218,17 +228,20 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   void ScreenInformationChanged();
 
   bool CreateContentCompositorManager(
-      base::ProcessId aOtherProcess, dom::ContentParentId aChildId,
-      uint32_t aNamespace,
+      mozilla::ipc::EndpointProcInfo aOtherProcess,
+      dom::ContentParentId aChildId, uint32_t aNamespace,
       mozilla::ipc::Endpoint<PCompositorManagerChild>* aOutEndpoint);
   bool CreateContentImageBridge(
-      base::ProcessId aOtherProcess, dom::ContentParentId aChildId,
+      mozilla::ipc::EndpointProcInfo aOtherProcess,
+      dom::ContentParentId aChildId,
       mozilla::ipc::Endpoint<PImageBridgeChild>* aOutEndpoint);
   bool CreateContentVRManager(
-      base::ProcessId aOtherProcess, dom::ContentParentId aChildId,
+      mozilla::ipc::EndpointProcInfo aOtherProcess,
+      dom::ContentParentId aChildId,
       mozilla::ipc::Endpoint<PVRManagerChild>* aOutEndpoint);
   void CreateContentRemoteDecoderManager(
-      base::ProcessId aOtherProcess, dom::ContentParentId aChildId,
+      mozilla::ipc::EndpointProcInfo aOtherProcess,
+      dom::ContentParentId aChildId,
       mozilla::ipc::Endpoint<PRemoteDecoderManagerChild>* aOutEndPoint);
 
   // Called from RemoteCompositorSession. We track remote sessions so we can

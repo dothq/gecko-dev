@@ -87,6 +87,9 @@ class Gatherer(object):
             if any(d in str(path.resolve()) for d in exclude_dir):
                 continue
             files = [f for f in os.listdir(path)]
+
+            # Metrics are optional so it's only added to the matched if we
+            # find the `metrics.rst` file in the perfdocs folder
             matched = {"path": str(path), "yml": "", "rst": "", "static": []}
 
             for file in files:
@@ -95,11 +98,13 @@ class Gatherer(object):
                     matched["yml"] = file
                 elif file == "index.rst":
                     matched["rst"] = file
+                elif file == "metrics.rst":
+                    matched["metrics"] = file
                 elif file.split(".")[-1] in ALLOWED_STATIC_FILETYPES:
                     matched["static"].append(file)
 
             # Append to structdocs if all the searched files were found
-            if all(val for val in matched.values() if not type(val) == list):
+            if all(val for val in matched.values() if type(val) is not list):
                 self._perfdocs_tree.append(matched)
 
         logger.log(
@@ -143,10 +148,10 @@ class Gatherer(object):
             framework_gatherer_cls = frameworks[framework["name"]]
 
         # Get and then store the frameworks tests
-        framework_gatherer = self.framework_gatherers[
-            framework["name"]
-        ] = framework_gatherer_cls(
-            framework["yml_path"], self.workspace_dir, self.taskgraph
+        framework_gatherer = self.framework_gatherers[framework["name"]] = (
+            framework_gatherer_cls(
+                framework["yml_path"], self.workspace_dir, self.taskgraph
+            )
         )
 
         if not yaml_content["static-only"]:

@@ -37,6 +37,7 @@ add_task(async function testSendButton() {
       hasTrackingContentBlocked: true,
       hasMixedActiveContentBlocked: true,
       hasMixedDisplayContentBlocked: true,
+      btpHasPurgedSite: false,
     },
     frameworks: {
       fastclick: true,
@@ -64,6 +65,7 @@ add_task(async function testSendingMoreInfo() {
       hasTrackingContentBlocked: true,
       hasMixedActiveContentBlocked: true,
       hasMixedDisplayContentBlocked: true,
+      btpHasPurgedSite: false,
     },
     frameworks: { fastclick: true, mobify: true, marfeel: true },
     consoleLog: [
@@ -103,7 +105,7 @@ add_task(async function testSendingMoreInfo() {
             actual[0].includes("trackertest.org")
           );
         },
-        pos: "0:0",
+        pos: "0:1",
         uri: REPORTABLE_PAGE_URL3,
       },
     ],

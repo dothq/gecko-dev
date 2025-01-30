@@ -43,7 +43,7 @@ nsPIDOMWindowInner* nsMimeTypeArray::GetParentObject() const {
 }
 
 nsMimeType* nsMimeTypeArray::IndexedGetter(uint32_t aIndex, bool& aFound) {
-  if (!ForceNoPlugins() && aIndex < ArrayLength(mMimeTypes)) {
+  if (!ForceNoPlugins() && aIndex < std::size(mMimeTypes)) {
     aFound = true;
     return mMimeTypes[aIndex];
   }
@@ -93,4 +93,8 @@ nsMimeType::~nsMimeType() = default;
 JSObject* nsMimeType::WrapObject(JSContext* aCx,
                                  JS::Handle<JSObject*> aGivenProto) {
   return MimeType_Binding::Wrap(aCx, this, aGivenProto);
+}
+
+already_AddRefed<nsPluginElement> nsMimeType::EnabledPlugin() const {
+  return do_AddRef(mPluginElement);
 }

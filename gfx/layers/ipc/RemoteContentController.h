@@ -68,6 +68,8 @@ class RemoteContentController : public GeckoContentController,
   void UpdateOverscrollOffset(const ScrollableLayerGuid& aGuid, float aX,
                               float aY, bool aIsRootContent) override;
 
+  void HideDynamicToolbar(const ScrollableLayerGuid& aGuid) override;
+
   void NotifyMozMouseScrollEvent(const ScrollableLayerGuid::ViewID& aScrollId,
                                  const nsString& aEvent) override;
 
@@ -98,12 +100,12 @@ class RemoteContentController : public GeckoContentController,
   nsCOMPtr<nsISerialEventTarget> mCompositorThread;
   bool mCanSend;
 
-  void HandleTapOnMainThread(
-      TapType aType, LayoutDevicePoint aPoint, Modifiers aModifiers,
+  void HandleTapOnParentProcessMainThread(
+      TapType aTapType, LayoutDevicePoint aPoint, Modifiers aModifiers,
       ScrollableLayerGuid aGuid, uint64_t aInputBlockId,
       const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics);
-  void HandleTapOnCompositorThread(
-      TapType aType, LayoutDevicePoint aPoint, Modifiers aModifiers,
+  void HandleTapOnGPUProcessMainThread(
+      TapType aTapType, LayoutDevicePoint aPoint, Modifiers aModifiers,
       ScrollableLayerGuid aGuid, uint64_t aInputBlockId,
       const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics);
   void NotifyPinchGestureOnCompositorThread(

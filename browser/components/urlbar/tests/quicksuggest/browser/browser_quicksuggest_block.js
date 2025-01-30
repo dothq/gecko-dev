@@ -5,12 +5,6 @@
 
 "use strict";
 
-ChromeUtils.defineESModuleGetters(this, {
-  CONTEXTUAL_SERVICES_PING_TYPES:
-    "resource:///modules/PartnerLinkAttribution.sys.mjs",
-});
-
-const { TELEMETRY_SCALARS } = UrlbarProviderQuickSuggest;
 const { TIMESTAMP_TEMPLATE } = QuickSuggest;
 
 // Include the timestamp template in the suggestion URLs so we can make sure
@@ -41,6 +35,9 @@ const REMOTE_SETTINGS_RESULTS = [
   },
 ];
 
+// Trying to avoid timeouts.
+requestLongerTimeout(3);
+
 add_setup(async function () {
   await PlacesUtils.history.clear();
   await PlacesUtils.bookmarks.eraseEverything();
@@ -48,9 +45,6 @@ add_setup(async function () {
 
   await QuickSuggest.blockedSuggestions._test_readyPromise;
   await QuickSuggest.blockedSuggestions.clear();
-
-  Services.telemetry.clearScalars();
-  Services.telemetry.clearEvents();
 
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     remoteSettingsRecords: [
@@ -63,7 +57,7 @@ add_setup(async function () {
 });
 
 // Picks the dismiss command in the result menu.
-add_tasks_with_rust(async function basic() {
+add_task(async function basic() {
   await doBasicBlockTest({
     block: async () => {
       await UrlbarTestUtils.openResultMenuAndPressAccesskey(window, "D", {
@@ -74,7 +68,7 @@ add_tasks_with_rust(async function basic() {
 });
 
 // Uses the key shortcut to block a suggestion.
-add_tasks_with_rust(async function basic_keyShortcut() {
+add_task(async function basic_keyShortcut() {
   await doBasicBlockTest({
     block: () => {
       // Arrow down once to select the row.
@@ -93,14 +87,13 @@ async function doBasicBlockTest({ block }) {
 
 async function doOneBasicBlockTest({ result, block }) {
   let index = 2;
-  let suggested_index = -1;
   let suggested_index_relative_to_group = true;
   let match_type = "firefox-suggest";
   let isSponsored = result.iab_category != "5 - Education";
-  let expectedBlockId =
-    UrlbarPrefs.get("quicksuggest.rustEnabled") && !isSponsored
-      ? null
-      : result.id;
+  // The suggested index is -1 even for sponsored since search suggestions are
+  // disabled.
+  let suggested_index = -1;
+  let expectedBlockId = !isSponsored ? null : result.id;
 
   let pingsSubmitted = 0;
   GleanPings.quickSuggest.testBeforeNextSubmit(() => {
@@ -181,37 +174,12 @@ async function doOneBasicBlockTest({ result, block }) {
   // Check Glean.
   Assert.equal(pingsSubmitted, 2, "Both Glean pings submitted.");
 
-  // Check telemetry scalars.
-  let scalars = {};
-  if (isSponsored) {
-    scalars[TELEMETRY_SCALARS.IMPRESSION_SPONSORED] = index;
-    scalars[TELEMETRY_SCALARS.BLOCK_SPONSORED] = index;
-  } else {
-    scalars[TELEMETRY_SCALARS.IMPRESSION_NONSPONSORED] = index;
-    scalars[TELEMETRY_SCALARS.BLOCK_NONSPONSORED] = index;
-  }
-  QuickSuggestTestUtils.assertScalars(scalars);
-
-  // Check the engagement event.
-  QuickSuggestTestUtils.assertEvents([
-    {
-      category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-      method: "engagement",
-      object: "block",
-      extra: {
-        match_type,
-        position: String(index),
-        suggestion_type: isSponsored ? "sponsored" : "nonsponsored",
-      },
-    },
-  ]);
-
   await UrlbarTestUtils.promisePopupClose(window);
   await QuickSuggest.blockedSuggestions.clear();
 }
 
 // Blocks multiple suggestions one after the other.
-add_tasks_with_rust(async function blockMultiple() {
+add_task(async function blockMultiple() {
   for (let i = 0; i < REMOTE_SETTINGS_RESULTS.length; i++) {
     // Do a search that triggers the i'th suggestion.
     let { keywords, url } = REMOTE_SETTINGS_RESULTS[i];

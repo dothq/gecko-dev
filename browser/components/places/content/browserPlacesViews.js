@@ -41,6 +41,10 @@ class PlacesViewBase {
   // The xul element that represents the root container.
   _rootElt = null;
 
+  get rootElement() {
+    return this._rootElt;
+  }
+
   // Set to true for views that are represented by native widgets (i.e.
   // the native mac menu).
   _nativeView = false;
@@ -933,6 +937,8 @@ class PlacesToolbar extends PlacesViewBase {
       this._chevron._placesView.uninit();
     }
 
+    this._chevronPopup.uninit();
+
     if (this._otherBookmarks?._placesView) {
       this._otherBookmarks._placesView.uninit();
     }
@@ -1531,7 +1537,7 @@ class PlacesToolbar extends PlacesViewBase {
    *   - folderElt: the folder to drop into, if applicable.
    */
   _getDropPoint(aEvent) {
-    if (!PlacesUtils.nodeIsFolder(this._resultNode)) {
+    if (!PlacesUtils.nodeIsFolderOrShortcut(this._resultNode)) {
       return null;
     }
 
@@ -1545,7 +1551,7 @@ class PlacesToolbar extends PlacesViewBase {
       let eltRect = elt.getBoundingClientRect();
       let eltIndex = Array.prototype.indexOf.call(this._rootElt.children, elt);
       if (
-        PlacesUtils.nodeIsFolder(elt._placesNode) &&
+        PlacesUtils.nodeIsFolderOrShortcut(elt._placesNode) &&
         !PlacesUIUtils.isFolderReadOnly(elt._placesNode)
       ) {
         // This is a folder.
@@ -1619,14 +1625,39 @@ class PlacesToolbar extends PlacesViewBase {
           dropPoint.beforeIndex = beforeIndex;
         }
       }
-    } else {
-      // We are most likely dragging on the empty area of the
-      // toolbar, we should drop after the last node.
+    } else if (elt == this._chevron) {
+      // If drop on the chevron, insert after the last bookmark.
       dropPoint.ip = new PlacesInsertionPoint({
         parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
         orientation: Ci.nsITreeView.DROP_BEFORE,
       });
       dropPoint.beforeIndex = -1;
+    } else {
+      dropPoint.ip = new PlacesInsertionPoint({
+        parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
+        orientation: Ci.nsITreeView.DROP_BEFORE,
+      });
+
+      // If could not find an insertion point before bookmark items or empty,
+      // drop after the last bookmark.
+      dropPoint.beforeIndex = -1;
+
+      let canInsertHere = this.isRTL
+        ? (x, rect) => x >= Math.round(rect.right)
+        : (x, rect) => x <= Math.round(rect.left);
+
+      // Find the bookmark placed just after the mouse point as the insertion
+      // point.
+      for (let i = 0; i < this._rootElt.children.length; i++) {
+        let childRect = window.windowUtils.getBoundsWithoutFlushing(
+          this._rootElt.children[i]
+        );
+        if (canInsertHere(aEvent.clientX, childRect)) {
+          dropPoint.beforeIndex = i;
+          dropPoint.ip.index = i;
+          break;
+        }
+      }
     }
 
     return dropPoint;
@@ -1707,9 +1738,7 @@ class PlacesToolbar extends PlacesViewBase {
         this._allowPopupShowing = false;
       }
     }
-    if (target._placesNode?.uri) {
-      PlacesUIUtils.setupSpeculativeConnection(target._placesNode.uri, window);
-    }
+    PlacesUIUtils.maybeSpeculativeConnectOnMouseDown(aEvent);
   }
 
   _cleanupDragDetails() {
@@ -1891,7 +1920,7 @@ class PlacesToolbar extends PlacesViewBase {
       PlacesUIUtils.getViewForNode(popup) == this &&
       // UI performance: folder queries are cheap, keep the resultnode open
       // so we don't rebuild its contents whenever the popup is reopened.
-      !PlacesUtils.nodeIsFolder(placesNode)
+      !PlacesUtils.nodeIsFolderOrShortcut(placesNode)
     ) {
       placesNode.containerOpen = false;
     }
@@ -2018,7 +2047,7 @@ class PlacesMenu extends PlacesViewBase {
 
     // UI performance: folder queries are cheap, keep the resultnode open
     // so we don't rebuild its contents whenever the popup is reopened.
-    if (!PlacesUtils.nodeIsFolder(placesNode)) {
+    if (!PlacesUtils.nodeIsFolderOrShortcut(placesNode)) {
       placesNode.containerOpen = false;
     }
 
@@ -2032,10 +2061,7 @@ class PlacesMenu extends PlacesViewBase {
   // We don't have a facility for catch "mousedown" events on the native
   // Mac menus because Mac doesn't expose it
   _onMouseDown(aEvent) {
-    let target = aEvent.target;
-    if (target._placesNode?.uri) {
-      PlacesUIUtils.setupSpeculativeConnection(target._placesNode.uri, window);
-    }
+    PlacesUIUtils.maybeSpeculativeConnectOnMouseDown(aEvent);
   }
 }
 
@@ -2063,6 +2089,7 @@ this.PlacesPanelview = class PlacesPanelview extends PlacesViewBase {
       "dragstart",
       "ViewHiding",
       "ViewShown",
+      "mousedown",
     ]);
   }
 
@@ -2092,11 +2119,14 @@ this.PlacesPanelview = class PlacesPanelview extends PlacesViewBase {
       case "ViewShown":
         this._onViewShown(event);
         break;
+      case "mousedown":
+        this._onMouseDown(event);
+        break;
     }
   }
 
   _onCommand(event) {
-    event = getRootEvent(event);
+    event = BrowserUtils.getRootEvent(event);
     let button = event.originalTarget;
     if (!button._placesNode) {
       return;
@@ -2121,6 +2151,39 @@ this.PlacesPanelview = class PlacesPanelview extends PlacesViewBase {
         PlacesUIUtils.openInTabClosesMenu)
     ) {
       this.panelMultiView.closest("panel").hidePopup();
+    }
+  }
+
+  destroyContextMenu() {
+    super.destroyContextMenu();
+    this.maybeClosePanel(PlacesUIUtils.lastContextMenuCommand);
+  }
+
+  /**
+   * Closes the view depending on the command.
+   *
+   * This is necessary because PlacesPanelview's buttons are not
+   * XUL menuitems and are not affected by the closemenu attribute.
+   *
+   * @param {string} command the placesCommands command
+   */
+  maybeClosePanel(command) {
+    switch (command) {
+      // placesCmd_open:newcontainertab is not a placesCommand but it
+      // is set by PlacesUIUtils.openInContainerTab to close the panel.
+      case "placesCmd_open:newcontainertab":
+      case "placesCmd_open:tab":
+        if (
+          this._viewElt.id != "PanelUI-bookmarks" ||
+          PlacesUIUtils.openInTabClosesMenu
+        ) {
+          this.panelMultiView.closest("panel").hidePopup();
+        }
+        break;
+      case "placesCmd_createBookmark":
+      case "placesCmd_deleteDataHost":
+        this.panelMultiView.closest("panel").hidePopup();
+        break;
     }
   }
 
@@ -2231,7 +2294,7 @@ this.PlacesPanelview = class PlacesPanelview extends PlacesViewBase {
       PlacesUIUtils.getViewForNode(panelview) == this &&
       // UI performance: folder queries are cheap, keep the resultnode open
       // so we don't rebuild its contents whenever the popup is reopened.
-      !PlacesUtils.nodeIsFolder(placesNode)
+      !PlacesUtils.nodeIsFolderOrShortcut(placesNode)
     ) {
       placesNode.containerOpen = false;
     }
@@ -2259,5 +2322,9 @@ this.PlacesPanelview = class PlacesPanelview extends PlacesViewBase {
     if (!this.controllers.getControllerCount() && this._controller) {
       this.controllers.appendController(this._controller);
     }
+  }
+
+  _onMouseDown(aEvent) {
+    PlacesUIUtils.maybeSpeculativeConnectOnMouseDown(aEvent);
   }
 };

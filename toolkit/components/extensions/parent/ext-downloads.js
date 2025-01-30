@@ -685,6 +685,9 @@ this.downloads = class extends ExtensionAPIPersistent {
               throw new ExtensionError("filename must not be an absolute path");
             }
 
+            // % is not permitted but relatively common.
+            filename = filename.replaceAll("%", "_");
+
             const pathComponents = PathUtils.splitRelative(filename, {
               allowEmpty: true,
               allowCurrentDir: true,
@@ -698,9 +701,10 @@ this.downloads = class extends ExtensionAPIPersistent {
             }
 
             if (
-              pathComponents.some(component => {
+              pathComponents.some((component, i) => {
                 let sanitized = DownloadPaths.sanitize(component, {
                   compressWhitespaces: false,
+                  allowDirectoryNames: i < pathComponents.length - 1,
                 });
                 return component != sanitized;
               })
@@ -770,7 +774,7 @@ this.downloads = class extends ExtensionAPIPersistent {
                 const stream = Cc[
                   "@mozilla.org/io/string-input-stream;1"
                 ].createInstance(Ci.nsIStringInputStream);
-                stream.setData(options.body, options.body.length);
+                stream.setByteStringData(options.body);
 
                 channel.QueryInterface(Ci.nsIUploadChannel2);
                 channel.explicitSetUploadStream(

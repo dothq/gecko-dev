@@ -53,7 +53,7 @@ export class AboutTranslationsChild extends JSWindowActorChild {
 
   receiveMessage({ name, data }) {
     switch (name) {
-      case "AboutTranslations:SendTranslationsPort":
+      case "AboutTranslations:SendTranslationsPort": {
         const { fromLanguage, toLanguage, port } = data;
         const transferables = [port];
         this.contentWindow.postMessage(
@@ -67,6 +67,11 @@ export class AboutTranslationsChild extends JSWindowActorChild {
           transferables
         );
         break;
+      }
+      case "AboutTranslations:RebuildTranslator": {
+        this.#sendEventToContent({ type: "rebuild-translator" });
+        break;
+      }
       default:
         throw new Error("Unknown AboutTranslations message: " + name);
     }
@@ -96,7 +101,7 @@ export class AboutTranslationsChild extends JSWindowActorChild {
         let contentWindow;
         try {
           contentWindow = this.contentWindow;
-        } catch (error) {
+        } catch {
           // The content window is no longer available.
           reject();
           return;
@@ -135,6 +140,7 @@ export class AboutTranslationsChild extends JSWindowActorChild {
       "AT_createTranslationsPort",
       "AT_identifyLanguage",
       "AT_getScriptDirection",
+      "AT_telemetry",
     ];
     for (const name of fns) {
       Cu.exportFunction(this[name].bind(this), window, { defineAs: name });
@@ -250,5 +256,18 @@ export class AboutTranslationsChild extends JSWindowActorChild {
    */
   AT_getScriptDirection(locale) {
     return Services.intl.getScriptDirection(locale);
+  }
+
+  /**
+   * Sends telemetry data to the TranslationsEngine.
+   *
+   * @param {string} telemetryFunctionName - The name of the telemetry function.
+   * @param {object} telemetryData - The data associated with the telemetry event.
+   */
+  AT_telemetry(telemetryFunctionName, telemetryData) {
+    this.sendAsyncMessage("AboutTranslations:Telemetry", {
+      telemetryFunctionName,
+      telemetryData,
+    });
   }
 }

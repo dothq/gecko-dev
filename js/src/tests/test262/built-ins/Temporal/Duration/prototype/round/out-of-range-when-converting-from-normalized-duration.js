@@ -1,4 +1,4 @@
-// |reftest| skip-if(!this.hasOwnProperty('Temporal')) -- Temporal is not enabled unconditionally
+// |reftest| shell-option(--enable-temporal) skip-if(!this.hasOwnProperty('Temporal')||!xulRuntime.shell) -- Temporal is not enabled unconditionally, requires shell-options
 // Copyright (C) 2024 Igalia, S.L. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
@@ -14,6 +14,6 @@ const d = new Temporal.Duration(0, 0, 0, 0, 0, 0, /* s = */ Number.MAX_SAFE_INTE
 assert.throws(RangeError, () => d.round({
   largestUnit: "nanoseconds",
   roundingIncrement: 1,
-}), "nanoseconds component is an unsafe integer after balancing");
+}), "nanoseconds component after balancing as a float64-representable integer is out of range");
 
 reportCompare(0, 0);

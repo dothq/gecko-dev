@@ -6,12 +6,6 @@ if (SpecialPowers.useRemoteSubframes) {
   requestLongerTimeout(2);
 }
 
-let EventUtils = {};
-Services.scriptloader.loadSubScript(
-  "chrome://mochikit/content/tests/SimpleTest/EventUtils.js",
-  EventUtils
-);
-
 ChromeUtils.defineESModuleGetters(this, {
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
 });
@@ -57,7 +51,7 @@ function clearAllPlacesFavicons() {
 
   return new Promise(resolve => {
     let observer = {
-      observe(aSubject, aTopic, aData) {
+      observe(aSubject, aTopic) {
         if (aTopic === "places-favicons-expired") {
           resolve();
           Services.obs.removeObserver(observer, "places-favicons-expired");
@@ -80,7 +74,7 @@ function FaviconObserver(
 }
 
 FaviconObserver.prototype = {
-  observe(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic) {
     // Make sure that the topic is 'http-on-modify-request'.
     if (aTopic === "http-on-modify-request") {
       // We check the userContextId for the originAttributes of the loading

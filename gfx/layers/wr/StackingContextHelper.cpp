@@ -215,7 +215,7 @@ StackingContextHelper::StackingContextHelper(
 
   MOZ_ASSERT(!aParams.clip.IsNone());
   mReferenceFrameId = mBuilder->PushStackingContext(
-      aParams, wr::ToLayoutRect(aBounds), rasterSpace);
+      aParams, wr::ToLayoutRect(aBounds), rasterSpace, nullptr);
 
   if (mReferenceFrameId) {
     mSpaceAndClipChainHelper.emplace(aBuilder, mReferenceFrameId.ref());
@@ -270,6 +270,15 @@ Maybe<gfx::Matrix4x4> StackingContextHelper::GetDeferredTransformMatrix()
   } else {
     return Nothing();
   }
+}
+
+void StackingContextHelper::ClearDeferredTransformItem() const {
+  mDeferredTransformItem = nullptr;
+}
+
+void StackingContextHelper::RestoreDeferredTransformItem(
+    nsDisplayTransform* aItem) const {
+  mDeferredTransformItem = aItem;
 }
 
 }  // namespace layers

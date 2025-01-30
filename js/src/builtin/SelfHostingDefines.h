@@ -67,12 +67,14 @@
 // name for self-hosted builtins is stored.
 #define LAZY_FUNCTION_NAME_SLOT 0
 
+// The iterated object for Array/String/Map/Set iterators.
 #define ITERATOR_SLOT_TARGET 0
-// Used for collection iterators.
-#define ITERATOR_SLOT_RANGE 1
 // Used for list, i.e. Array and String, iterators.
 #define ITERATOR_SLOT_NEXT_INDEX 1
-#define ITERATOR_SLOT_ITEM_KIND 2
+// Item kind for Array iterators.
+#define ARRAY_ITERATOR_SLOT_ITEM_KIND 2
+// Item kind for Map/Set iterators.
+#define MAP_SET_ITERATOR_SLOT_ITEM_KIND 1
 
 #define ITEM_KIND_KEY 0
 #define ITEM_KIND_VALUE 1
@@ -119,6 +121,7 @@
 #define TYPEDARRAY_KIND_UINT8CLAMPED 8
 #define TYPEDARRAY_KIND_BIGINT64 9
 #define TYPEDARRAY_KIND_BIGUINT64 10
+#define TYPEDARRAY_KIND_FLOAT16 11
 
 #define WRAP_FOR_VALID_ITERATOR_ITERATOR_SLOT 0
 #define WRAP_FOR_VALID_ITERATOR_NEXT_METHOD_SLOT 1
@@ -126,5 +129,15 @@
 #define ITERATOR_HELPER_GENERATOR_SLOT 0
 
 #define ASYNC_ITERATOR_HELPER_GENERATOR_SLOT 0
+
+// For explicit resource management.
+#define USING_HINT_SYNC 0
+#define USING_HINT_ASYNC 1
+
+#define DISPOSABLE_STACK_DISPOSABLE_RESOURCE_STACK_SLOT 0
+#define DISPOSABLE_STACK_STATE_SLOT 1
+
+#define DISPOSABLE_STACK_STATE_PENDING 0
+#define DISPOSABLE_STACK_STATE_DISPOSED 1
 
 #endif

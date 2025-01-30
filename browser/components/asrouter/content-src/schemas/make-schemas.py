@@ -63,6 +63,9 @@ SCHEMAS = [
         schema_id="chrome://browser/content/asrouter/schemas/MessagingExperiment.schema.json",
         schema_path=Path("MessagingExperiment.schema.json"),
         message_types={
+            "BookmarksBarButton": (
+                SCHEMA_DIR / "OnboardingMessage" / "BookmarksBarButton.schema.json"
+            ),
             "CFRUrlbarChiclet": (
                 SCHEMA_DIR / "CFR" / "templates" / "CFRUrlbarChiclet.schema.json"
             ),
@@ -70,6 +73,9 @@ SCHEMAS = [
                 SCHEMA_DIR / "CFR" / "templates" / "ExtensionDoorhanger.schema.json"
             ),
             "InfoBar": SCHEMA_DIR / "CFR" / "templates" / "InfoBar.schema.json",
+            "MenuMessage": (
+                SCHEMA_DIR / "OnboardingMessage" / "MenuMessage.schema.json"
+            ),
             "NewtabPromoMessage": (
                 SCHEMA_DIR / "PBNewtab" / "NewtabPromoMessage.schema.json"
             ),
@@ -82,9 +88,6 @@ SCHEMAS = [
             ),
             "UpdateAction": (
                 SCHEMA_DIR / "OnboardingMessage" / "UpdateAction.schema.json"
-            ),
-            "WhatsNewMessage": (
-                SCHEMA_DIR / "OnboardingMessage" / "WhatsNewMessage.schema.json"
             ),
         },
         bundle_common=True,

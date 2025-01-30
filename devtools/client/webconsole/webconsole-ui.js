@@ -10,14 +10,17 @@ const {
   l10n,
 } = require("resource://devtools/client/webconsole/utils/messages.js");
 
-const { BrowserLoader } = ChromeUtils.import(
-  "resource://devtools/shared/loader/browser-loader.js"
+const { BrowserLoader } = ChromeUtils.importESModule(
+  "resource://devtools/shared/loader/browser-loader.sys.mjs"
 );
 const {
   getAdHocFrontOrPrimitiveGrip,
 } = require("resource://devtools/client/fronts/object.js");
 
-const { PREFS } = require("resource://devtools/client/webconsole/constants.js");
+const {
+  PREFS,
+  FILTERS,
+} = require("resource://devtools/client/webconsole/constants.js");
 
 const FirefoxDataProvider = require("resource://devtools/client/netmonitor/src/connector/firefox-data-provider.js");
 
@@ -33,6 +36,12 @@ loader.lazyRequireGetter(
   true
 );
 const ZoomKeys = require("resource://devtools/client/shared/zoom-keys.js");
+loader.lazyRequireGetter(
+  this,
+  "TRACER_LOG_METHODS",
+  "resource://devtools/shared/specs/tracer.js",
+  true
+);
 
 const PREF_SIDEBAR_ENABLED = "devtools.webconsole.sidebarToggle";
 const PREF_BROWSERTOOLBOX_SCOPE = "devtools.browsertoolbox.scope";
@@ -179,21 +188,11 @@ class WebConsoleUI {
     });
 
     const resourceCommand = this.hud.resourceCommand;
-    resourceCommand.unwatchResources(
-      [
-        resourceCommand.TYPES.CONSOLE_MESSAGE,
-        resourceCommand.TYPES.ERROR_MESSAGE,
-        resourceCommand.TYPES.PLATFORM_MESSAGE,
-        resourceCommand.TYPES.DOCUMENT_EVENT,
-        resourceCommand.TYPES.LAST_PRIVATE_CONTEXT_EXIT,
-        resourceCommand.TYPES.JSTRACER_TRACE,
-        resourceCommand.TYPES.JSTRACER_STATE,
-      ],
-      { onAvailable: this._onResourceAvailable }
-    );
-    resourceCommand.unwatchResources([resourceCommand.TYPES.CSS_MESSAGE], {
-      onAvailable: this._onResourceAvailable,
-    });
+    if (this._watchedResources) {
+      resourceCommand.unwatchResources(this._watchedResources, {
+        onAvailable: this._onResourceAvailable,
+      });
+    }
 
     this.stopWatchingNetworkResources();
 
@@ -332,18 +331,26 @@ class WebConsoleUI {
       onDestroyed: this._onTargetDestroyed,
     });
 
-    await resourceCommand.watchResources(
-      [
-        resourceCommand.TYPES.CONSOLE_MESSAGE,
-        resourceCommand.TYPES.ERROR_MESSAGE,
-        resourceCommand.TYPES.PLATFORM_MESSAGE,
-        resourceCommand.TYPES.DOCUMENT_EVENT,
-        resourceCommand.TYPES.LAST_PRIVATE_CONTEXT_EXIT,
-        resourceCommand.TYPES.JSTRACER_TRACE,
-        resourceCommand.TYPES.JSTRACER_STATE,
-      ],
-      { onAvailable: this._onResourceAvailable }
-    );
+    this._watchedResources = [
+      resourceCommand.TYPES.CONSOLE_MESSAGE,
+      resourceCommand.TYPES.ERROR_MESSAGE,
+      resourceCommand.TYPES.PLATFORM_MESSAGE,
+      resourceCommand.TYPES.DOCUMENT_EVENT,
+      resourceCommand.TYPES.LAST_PRIVATE_CONTEXT_EXIT,
+      resourceCommand.TYPES.JSTRACER_TRACE,
+      resourceCommand.TYPES.JSTRACER_STATE,
+    ];
+
+    // CSS Warnings are only enabled when the user explicitely requested to show them
+    // as it can slow down page load.
+    const shouldShowCssWarnings = this.wrapper.getFilterState(FILTERS.CSS);
+    if (shouldShowCssWarnings) {
+      this._watchedResources.push(resourceCommand.TYPES.CSS_MESSAGE);
+    }
+
+    await resourceCommand.watchResources(this._watchedResources, {
+      onAvailable: this._onResourceAvailable,
+    });
 
     if (this.isBrowserConsole || this.isBrowserToolboxConsole) {
       const shouldEnableNetworkMonitoring = Services.prefs.getBoolPref(
@@ -451,17 +458,27 @@ class WebConsoleUI {
     this.wrapper.dispatchTabWillNavigate({ timeStamp, url });
   }
 
+  /**
+   * Called when the CSS Warning filter is enabled, in order to start observing for them in the backend.
+   */
   async watchCssMessages() {
     const { resourceCommand } = this.hud;
+    if (this._watchedResources.includes(resourceCommand.TYPES.CSS_MESSAGE)) {
+      return;
+    }
     await resourceCommand.watchResources([resourceCommand.TYPES.CSS_MESSAGE], {
       onAvailable: this._onResourceAvailable,
     });
+    this._watchedResources.push(resourceCommand.TYPES.CSS_MESSAGE);
   }
 
+  // eslint-disable-next-line complexity
   _onResourceAvailable(resources) {
     if (this._destroyed) {
       return;
     }
+
+    const { logMethod } = this.hud.commands.tracerCommand.getTracingOptions();
 
     const messages = [];
     for (const resource of resources) {
@@ -495,11 +512,17 @@ class WebConsoleUI {
       if (
         (this.isBrowserToolboxConsole || this.isBrowserConsole) &&
         resource.isAlreadyExistingResource &&
-        (resource.pageError?.private || resource.message?.private)
+        (resource.pageError?.private || resource.private)
       ) {
         continue;
       }
 
+      if (
+        resource.resourceType === TYPES.JSTRACER_TRACE &&
+        logMethod != TRACER_LOG_METHODS.CONSOLE
+      ) {
+        continue;
+      }
       if (resource.resourceType === TYPES.NETWORK_EVENT_STACKTRACE) {
         this.networkDataProvider?.onStackTraceAvailable(resource);
         continue;

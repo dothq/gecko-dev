@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { actionCreators as ac } from "common/Actions.sys.mjs";
+import { actionCreators as ac } from "common/Actions.mjs";
 import React from "react";
 import { SafeAnchor } from "../SafeAnchor/SafeAnchor";
 import { FluentOrText } from "content-src/components/FluentOrText/FluentOrText";
@@ -30,14 +30,14 @@ export class Topic extends React.PureComponent {
   }
 
   render() {
-    const { url, name } = this.props;
+    const { url, name: topicName } = this.props;
     return (
       <SafeAnchor
         onLinkClick={this.onLinkClick}
         className={this.props.className}
         url={url}
       >
-        {name}
+        {topicName}
       </SafeAnchor>
     );
   }

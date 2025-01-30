@@ -1,5 +1,3 @@
-// |jit-test| skip-if: !wasmGcEnabled()
-
 let InvalidI31Values = [
   null,
   Number.EPSILON,
@@ -147,6 +145,24 @@ for (const {input, expected} of bigI32Tests) {
   )`).exports;
   assertEq(get(input), expected);
   assertEq(getElem(), expected);
+}
+
+// Test that (ref.i31 (i32 const value)) optimization is correct
+for (let value of WasmI31refValues) {
+  let {compare} = wasmEvalText(`(module
+  (func $innerCompare (param i32) (param i31ref) (result i32)
+    (ref.eq
+      (ref.i31 local.get 0)
+      local.get 1
+    )
+  )
+  (func (export "compare") (result i32)
+    i32.const ${value}
+    (ref.i31 i32.const ${value})
+    call $innerCompare
+  )
+)`).exports;
+  assertEq(compare(value), 1);
 }
 
 const { i31GetU_null, i31GetS_null } = wasmEvalText(`(module

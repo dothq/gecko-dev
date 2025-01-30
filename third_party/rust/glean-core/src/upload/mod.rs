@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::convert::TryInto;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
@@ -26,6 +25,7 @@ use chrono::Utc;
 use crate::error::ErrorKind;
 use crate::TimerId;
 use crate::{internal_metrics::UploadMetrics, Glean};
+pub use directory::process_metadata;
 use directory::{PingDirectoryManager, PingPayloadsByDirectory};
 use policy::Policy;
 use request::create_date_header_value;
@@ -856,9 +856,6 @@ pub fn chunked_log_info(_path: &str, payload: &str) {
 
 #[cfg(test)]
 mod test {
-    use std::thread;
-    use std::time::Duration;
-
     use uuid::Uuid;
 
     use super::*;
@@ -1035,7 +1032,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1074,7 +1074,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1111,7 +1114,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1148,7 +1154,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1185,7 +1194,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1224,7 +1236,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1339,7 +1354,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1412,7 +1430,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1469,7 +1490,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1547,7 +1571,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1626,7 +1653,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 
@@ -1707,7 +1737,10 @@ mod test {
             /* send_if_empty */ true,
             true,
             true,
+            true,
             vec![],
+            vec![],
+            true,
         );
         glean.register_ping_type(&ping_type);
 

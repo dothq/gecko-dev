@@ -117,7 +117,24 @@ media.playback:
       first_frame_loaded_time:
         description:
           How long (in milliseconds) does the our media pipeline take to load
-          the first video frame.
+          the first video frame from "the creation of MDSM" to "the first frame
+          loaded".
+        type: quantity
+      metadata_loaded_time:
+        description:
+          How long (in milliseconds) does the our media pipeline take to load
+          the metadata, which happens before finishing loading the first frame.
+        type: quantity
+      total_waiting_data_time:
+        description:
+          How long (in milliseconds) does the our media pipeline has been in a
+          state of waiting video data due to lacking of data before the first
+          frame is loaded.
+        type: quantity
+      buffering_time:
+        description:
+          How long (in milliseconds) does the our media pipeline has been spent
+          on the buffering state before the first frame is loaded.
         type: quantity
       playback_type:
         description:
@@ -139,4 +156,183 @@ media.playback:
       key_system:
         description: The key system used for the EME playback if exists
         type: string
+      hls_decoder:
+        description:
+          This value will only be set on Android. It tells that whether playback
+          is performed by the HLS decoder, which utilizes the external player to
+          play video.
+        type: boolean
+      is_hardware_decoding:
+        description: True if the first frame is decoded by a hardware decoder.
+        type: boolean
+    expires: never
+  device_hardware_decoder_support:
+    type: labeled_boolean
+    description:
+      The results of hardware decoder support for different video codecs. True
+      means that codec can be decoded by hardware on user's device.
+    metadata:
+      tags:
+        - 'Core :: Audio/Video: Playback'
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1892516
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1892516#c4
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - media-alerts@mozilla.com
+    expires: never
+    labels:
+      - h264
+      - vp8
+      - vp9
+      - av1
+      - hevc
+    telemetry_mirror: MEDIA_DEVICE_HARDWARE_DECODING_SUPPORT
+  not_supported_video_per_mime_type:
+    type: labeled_counter
+    description:
+      Count the amount of times where video playback is failed to start due to the mime type is not supported by Firefox. The result is accumulated per mime type, eg. video/hevc.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1893523
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1893523#c9
+    notification_emails:
+      - media-alerts@mozilla.com
+    expires: never
+
+  decode_error:
+    type: event
+    description: >
+      Record the decode error details.
+    metadata:
+      tags:
+        - 'Core :: Audio/Video: Playback'
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1929335
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1929335
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - media-alerts@mozilla.com
+    extra_keys:
+      mime_type:
+        description: The mime type of the media track when the error occurred.
+        type: string
+      error_name:
+        description: The name of the error.
+        type: string
+      key_system:
+        description: >
+          The value indicates the key system in use when the error occurred. It
+          will be null if the error is related to non-EME playback.
+        type : string
+      decoder_name:
+        description: The name of the decoder when the error occurred.
+        type: string
+      is_hardware_accelerated:
+        description: True if the decoder used when the error occurred is a hardware decoder.
+        type: boolean
+    expires: never
+
+media:
+  element_in_page_count:
+    type: counter
+    description: >
+      The number of times a document hierarchy contained at least one
+      HTMLMediaElement. In addition, the telemetry probe
+      'MIXED_CONTENT_UNBLOCK_COUNTER' records the total number of loaded
+      top level content documents, which can help us calculate the result
+      of the percentage of documents using media.
+      This metric was generated to correspond to the Legacy Telemetry
+      scalar media.element_in_page_count.
+    bugs:
+      - https://bugzil.la/1476456
+      - https://bugzil.la/1499803
+      - https://bugzil.la/1570634
+      - https://bugzil.la/1652108
+    data_reviews:
+      - https://bugzil.la/1476456
+      - https://bugzil.la/1499803
+      - https://bugzil.la/1570634
+      - https://bugzil.la/1652108
+    notification_emails:
+      - media-alerts@mozilla.com
+    expires: never
+    telemetry_mirror: MEDIA_ELEMENT_IN_PAGE_COUNT
+
+  video_hardware_decoding_support:
+    type: labeled_boolean
+    description: >
+      Record whether hardware decoding is supported for the specific video
+      codec. The key is the type of video codec, eg. video/vp9.
+      This metric was generated to correspond to the Legacy Telemetry
+      scalar media.video_hardware_decoding_support.
+    metadata:
+      permit_non_commutative_operations_over_ipc: true
+    bugs:
+      - https://bugzil.la/1733722
+      - https://bugzil.la/1754657
+      - https://bugzil.la/1811157
+    data_reviews:
+      - https://bugzil.la/1733722
+      - https://bugzil.la/1754657
+      - https://bugzil.la/1811157
+    notification_emails:
+      - media-alerts@mozilla.com
+    expires: never
+    telemetry_mirror: MEDIA_VIDEO_HARDWARE_DECODING_SUPPORT
+
+  video_hd_hardware_decoding_support:
+    type: labeled_boolean
+    description: >
+      Record whether hardware decoding is supported for the specific video
+      codec, this only records video in HD (1280*720) or higher resultion.
+      The key is the type of video codec, eg. video/vp9.
+      This metric was generated to correspond to the Legacy Telemetry
+      scalar media.video_hd_hardware_decoding_support.
+    metadata:
+      permit_non_commutative_operations_over_ipc: true
+    bugs:
+      - https://bugzil.la/1741286
+      - https://bugzil.la/1754657
+      - https://bugzil.la/1811157
+    data_reviews:
+      - https://bugzil.la/1741286
+      - https://bugzil.la/1754657
+      - https://bugzil.la/1811157
+    notification_emails:
+      - media-alerts@mozilla.com
+    expires: never
+    telemetry_mirror: MEDIA_VIDEO_HD_HARDWARE_DECODING_SUPPORT
+
+  error:
+    type: event
+    description: >
+      Record the error details happened on a media element.
+    metadata:
+      tags:
+        - 'Core :: Audio/Video: Playback'
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1929335
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1929335
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - media-alerts@mozilla.com
+    extra_keys:
+      error_type:
+        description: The error type defined in MediaError.webidl.
+        type: string
+      error_name:
+        description: The name of the internal error.
+        type: string
+      key_system:
+        description: >
+          The value indicates the key system in use when the error occurred. It
+          will be null if the error is related to non-EME playback.
+        type : string
     expires: never

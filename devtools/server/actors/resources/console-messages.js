@@ -4,9 +4,6 @@
 
 "use strict";
 
-const {
-  TYPES: { CONSOLE_MESSAGE },
-} = require("devtools/server/actors/resources/index");
 const Targets = require("devtools/server/actors/targets/index");
 
 const consoleAPIListenerModule = isWorker
@@ -47,12 +44,7 @@ class ConsoleMessageWatcher {
 
     // Bug 1642297: Maybe we could merge ConsoleAPI Listener into this module?
     const onConsoleAPICall = message => {
-      onAvailable([
-        {
-          resourceType: CONSOLE_MESSAGE,
-          message: prepareConsoleMessageForRemote(targetActor, message),
-        },
-      ]);
+      onAvailable([prepareConsoleMessageForRemote(targetActor, message)]);
     };
 
     const isTargetActorContentProcess =
@@ -63,13 +55,9 @@ class ConsoleMessageWatcher {
     // But ParentProcess should be ignored as we want all messages emitted directly from
     // that process (window and window-less).
     // To do that we pass a null window and ConsoleAPIListener will catch everything.
-    // And also ignore WebExtension as we will filter out only by addonId, which is
-    // passed via consoleAPIListenerOptions. WebExtension may have multiple windows/documents
-    // but all of them will be flagged with the same addon ID.
     const messagesShouldMatchWindow =
       targetActor.targetType === Targets.TYPES.FRAME &&
-      targetActor.typeName != "parentProcessTarget" &&
-      targetActor.typeName != "webExtensionTarget";
+      targetActor.typeName != "parentProcessTarget";
     const window = messagesShouldMatchWindow ? targetActor.window : null;
 
     // If we should match messages for a given window but for some reason, targetActor.window
@@ -83,13 +71,16 @@ class ConsoleMessageWatcher {
     const listener = new ConsoleAPIListener(window, onConsoleAPICall, {
       excludeMessagesBoundToWindow: isTargetActorContentProcess,
       matchExactWindow: targetActor.ignoreSubFrames,
-      ...(targetActor.consoleAPIListenerOptions || {}),
+      addonId:
+        targetActor.targetType === Targets.TYPES.CONTENT_SCRIPT
+          ? targetActor.addonId
+          : null,
     });
     this.listener = listener;
     listener.init();
 
     // It can happen that the targetActor does not have a window reference (e.g. in worker
-    // thread, targetActor exposes a workerGlobal property)
+    // thread, targetActor exposes a targetGlobal property which isn't a Window object)
     const winStartTime =
       targetActor.window?.performance?.timing?.navigationStart || 0;
 
@@ -104,10 +95,7 @@ class ConsoleMessageWatcher {
       ) {
         continue;
       }
-      messages.push({
-        resourceType: CONSOLE_MESSAGE,
-        message: prepareConsoleMessageForRemote(targetActor, message),
-      });
+      messages.push(prepareConsoleMessageForRemote(targetActor, message));
     }
     onAvailable(messages);
   }
@@ -142,10 +130,7 @@ class ConsoleMessageWatcher {
           throw new Error("timeStamp property is mandatory");
         }
 
-        return {
-          resourceType: CONSOLE_MESSAGE,
-          message: prepareConsoleMessageForRemote(this.targetActor, message),
-        };
+        return prepareConsoleMessageForRemote(this.targetActor, message);
       })
     );
   }
@@ -174,7 +159,9 @@ function getConsoleTableMessageItems(targetActor, result) {
   const needEntries = ["Map", "WeakMap", "Set", "WeakSet"].includes(dataType);
   const ignoreNonIndexedProperties = isArray(tableItemGrip);
 
-  const tableItemActor = targetActor.getActorByID(tableItemGrip.actor);
+  const tableItemActor = targetActor.objectsPool.getActorByID(
+    tableItemGrip.actor
+  );
   if (!tableItemActor) {
     return null;
   }
@@ -198,7 +185,8 @@ function getConsoleTableMessageItems(targetActor, result) {
           const grip = desc[key];
 
           // We need to load sub-properties as well to render the table in a nice way.
-          const actor = grip && targetActor.getActorByID(grip.actor);
+          const actor =
+            grip && targetActor.objectsPool.getActorByID(grip.actor);
           if (actor) {
             const res = actor
               .enumProperties({

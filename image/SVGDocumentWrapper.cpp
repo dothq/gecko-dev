@@ -54,6 +54,7 @@ SVGDocumentWrapper::~SVGDocumentWrapper() {
 }
 
 void SVGDocumentWrapper::DestroyViewer() {
+  MOZ_ASSERT(NS_IsMainThread());
   if (mViewer) {
     mViewer->GetDocument()->OnPageHide(false, nullptr);
     mViewer->Close(nullptr);
@@ -71,12 +72,14 @@ void SVGDocumentWrapper::UpdateViewportBounds(const nsIntSize& aViewportSize) {
   MOZ_ASSERT(!mIgnoreInvalidation, "shouldn't be reentrant");
   mIgnoreInvalidation = true;
 
-  nsIntRect currentBounds;
+  LayoutDeviceIntRect currentBounds;
   mViewer->GetBounds(currentBounds);
 
   // If the bounds have changed, we need to do a layout flush.
-  if (currentBounds.Size() != aViewportSize) {
-    mViewer->SetBounds(IntRect(IntPoint(0, 0), aViewportSize));
+  if (currentBounds.Size().ToUnknownSize() != aViewportSize) {
+    mViewer->SetBounds(LayoutDeviceIntRect(
+        LayoutDeviceIntPoint(),
+        LayoutDeviceIntSize::FromUnknownSize(aViewportSize)));
     FlushLayout();
   }
 
@@ -206,7 +209,7 @@ SVGDocumentWrapper::OnStartRequest(nsIRequest* aRequest) {
     mViewer->GetDocument()->SetIsBeingUsedAsImage();
     StopAnimation();  // otherwise animations start automatically in helper doc
 
-    rv = mViewer->Init(nullptr, nsIntRect(0, 0, 0, 0), nullptr);
+    rv = mViewer->Init(nullptr, LayoutDeviceIntRect(), nullptr);
     if (NS_SUCCEEDED(rv)) {
       rv = mViewer->Open(nullptr, nullptr);
     }
@@ -282,20 +285,14 @@ nsresult SVGDocumentWrapper::SetupViewer(nsIRequest* aRequest,
   NS_ENSURE_TRUE(newLoadGroup, NS_ERROR_OUT_OF_MEMORY);
   newLoadGroup->SetLoadGroup(loadGroup);
 
-  nsCOMPtr<nsICategoryManager> catMan =
-      do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
-  NS_ENSURE_TRUE(catMan, NS_ERROR_NOT_AVAILABLE);
-  nsCString contractId;
-  nsresult rv = catMan->GetCategoryEntry("Gecko-Content-Viewers", IMAGE_SVG_XML,
-                                         contractId);
-  NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIDocumentLoaderFactory> docLoaderFactory =
-      do_GetService(contractId.get());
+      nsContentUtils::FindInternalDocumentViewer(
+          nsLiteralCString(IMAGE_SVG_XML));
   NS_ENSURE_TRUE(docLoaderFactory, NS_ERROR_NOT_AVAILABLE);
 
   nsCOMPtr<nsIDocumentViewer> viewer;
   nsCOMPtr<nsIStreamListener> listener;
-  rv = docLoaderFactory->CreateInstance(
+  nsresult rv = docLoaderFactory->CreateInstance(
       "external-resource", chan, newLoadGroup, nsLiteralCString(IMAGE_SVG_XML),
       nullptr, nullptr, getter_AddRefs(listener), getter_AddRefs(viewer));
   NS_ENSURE_SUCCESS(rv, rv);

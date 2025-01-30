@@ -131,29 +131,6 @@ class TestInterface : public nsISupports, public nsWrapperCache {
       JS::Handle<JS::Value>, const Optional<JS::Handle<JSObject*>>&,
       const Optional<JS::Handle<JSObject*>>&, ErrorResult&);
 
-  static already_AddRefed<TestInterface> Test3(const GlobalObject&,
-                                               const LongOrStringAnyRecord&,
-                                               ErrorResult&);
-
-  static already_AddRefed<TestInterface> Test4(
-      const GlobalObject&, const Record<nsString, Record<nsString, JS::Value>>&,
-      ErrorResult&);
-
-  static already_AddRefed<TestInterface> Test5(
-      const GlobalObject&,
-      const Record<
-          nsString,
-          Sequence<Record<nsString,
-                          Record<nsString, Sequence<Sequence<JS::Value>>>>>>&,
-      ErrorResult&);
-
-  static already_AddRefed<TestInterface> Test6(
-      const GlobalObject&,
-      const Sequence<Record<
-          nsCString,
-          Sequence<Sequence<Record<nsCString, Record<nsString, JS::Value>>>>>>&,
-      ErrorResult&);
-
   // Integer types
   int8_t ReadonlyByte();
   int8_t WritableByte();
@@ -1175,6 +1152,11 @@ class TestInterface : public nsISupports, public nsWrapperCache {
   void PassUnionAllowSharedArrayBuffer(
       const StringOrMaybeSharedArrayBuffer& foo);
 
+  void GetReflectedHTMLAttributeReturningFrozenArray(
+      bool*, Nullable<nsTArray<RefPtr<Element>>>&) const;
+  void SetReflectedHTMLAttributeReturningFrozenArray(
+      const Nullable<Sequence<OwningNonNull<Element>>>&);
+
  private:
   // We add signatures here that _could_ start matching if the codegen
   // got data types wrong.  That way if it ever does we'll have a call
@@ -1392,6 +1374,48 @@ class TestInterface : public nsISupports, public nsWrapperCache {
   void PassString(NonNull<nsAString>&) = delete;
   void PassString(const OwningNonNull<nsAString>&) = delete;
   void PassString(OwningNonNull<nsAString>&) = delete;
+};
+
+class TestLegacyFactoryFunctionInterface : public nsISupports,
+                                           public nsWrapperCache {
+ public:
+  NS_DECL_ISUPPORTS
+
+  // We need a GetParentObject to make binding codegen happy
+  virtual nsISupports* GetParentObject();
+
+  // And now our actual WebIDL API
+  static already_AddRefed<TestLegacyFactoryFunctionInterface> Test3(
+      const GlobalObject&, const LongOrStringAnyRecord&, ErrorResult&);
+
+  static already_AddRefed<TestLegacyFactoryFunctionInterface> Test4(
+      const GlobalObject&, const Record<nsString, Record<nsString, JS::Value>>&,
+      ErrorResult&);
+};
+
+class TestLegacyFactoryFunctionInterface2 : public nsISupports,
+                                            public nsWrapperCache {
+ public:
+  NS_DECL_ISUPPORTS
+
+  // We need a GetParentObject to make binding codegen happy
+  virtual nsISupports* GetParentObject();
+
+  // And now our actual WebIDL API
+  static already_AddRefed<TestLegacyFactoryFunctionInterface2> Test5(
+      const GlobalObject&,
+      const Record<
+          nsString,
+          Sequence<Record<nsString,
+                          Record<nsString, Sequence<Sequence<JS::Value>>>>>>&,
+      ErrorResult&);
+
+  static already_AddRefed<TestLegacyFactoryFunctionInterface2> Test6(
+      const GlobalObject&,
+      const Sequence<Record<
+          nsCString,
+          Sequence<Sequence<Record<nsCString, Record<nsString, JS::Value>>>>>>&,
+      ErrorResult&);
 };
 
 class TestIndexedGetterInterface : public nsISupports, public nsWrapperCache {

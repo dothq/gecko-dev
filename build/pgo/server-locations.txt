@@ -87,6 +87,7 @@ http://sub1.test2.example.org:8000   privileged
 http://sub2.test1.example.org:8000   privileged
 http://sub2.test2.example.org:8000   privileged
 http://example.com:80                privileged
+http://example.onion:80              privileged
 http://www.example.com:80            privileged
 http://test1.example.com:80          privileged
 http://test2.example.com:80          privileged
@@ -105,9 +106,11 @@ https://example.com:443                privileged
 https://www.example.com:443            privileged
 https://test1.example.com:443          privileged
 https://test2.example.com:443          privileged
+https://test3.example.com:443
 https://example.org:443                privileged
 https://test1.example.org:443          privileged
 https://test2.example.org:443          privileged
+https://test3.example.org:443
 https://sub1.test1.example.org:443     privileged
 https://sub1.test2.example.org:443     privileged
 https://sub2.test1.example.org:443     privileged
@@ -132,6 +135,7 @@ https://untrusted-expired.example.com:443	privileged,cert=untrustedandexpired
 https://mismatch.untrusted-expired.example.com:443	privileged,cert=untrustedandexpired
 https://supports-insecure.expired.example.com:443   privileged,cert=expired
 https://no-subject-alt-name.example.com:443   cert=noSubjectAltName
+https://issued-by-cca.example.com:443  privileged,cert=issuedByCCA
 
 # Used for secure contexts on ip addresses, see bug 1616675. Note that
 # 127.0.0.1 prompts ssltunnel.cpp to do special-cases, so we use .2
@@ -308,16 +312,21 @@ https://bad.include-subdomains.pinning-dynamic.example.com:443    privileged,cer
 https://badchain.include-subdomains.pinning.example.com:443       privileged,cert=staticPinningBad
 https://fail-handshake.example.com:443                            privileged,failHandshake
 
-# Host for bad cert domain fixup test
+# Hosts for bad cert domain fixup tests
 https://badcertdomain.example.com:443                             privileged,cert=badCertDomain
 https://www.badcertdomain.example.com:443                         privileged,cert=badCertDomain
 https://127.0.0.3:433                                             privileged,cert=badCertDomain
 https://badcertdomain.example.com:82                              privileged,cert=badCertDomain
 https://mismatch.badcertdomain.example.com:443                    privileged,cert=badCertDomain
+https://badcertdomain2.example.com:443                            privileged,cert=badCertDomain2
+https://www.badcertdomain2.example.com:443                        privileged,cert=badCertDomain2
 
 # Hosts for HTTPS-First upgrades/downgrades
 http://httpsfirst.com:80                                          privileged
 https://httpsfirst.com:443                                        privileged,nocert
+https://invalid.example.com:443                                   privileged,nocert
+http://httpsfirst.local:80                                        privileged
+https://httpsfirst.local:443                                      privileged,nocert
 
 # Hosts for sha1 console warning tests
 https://sha1ee.example.com:443                                    privileged,cert=sha1_end_entity
@@ -362,6 +371,7 @@ https://no-suggestion-example.com:443       privileged,cert=badCertDomain
 
 # testing HTTPS-First doesn't show warning page for bad cert
 http://nocert.example.com:80                    privileged
+http://nocert.example.org:80                    privileged
 http://self-signed.example.com:80               privileged
 http://untrusted.example.com:80                 privileged
 http://untrusted-expired.example.com:80         privileged

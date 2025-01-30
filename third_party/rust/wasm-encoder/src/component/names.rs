@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use super::*;
-use crate::{encoding_size, CustomSection, Encode, ExportKind, NameMap, SectionId};
+use crate::{encoding_size, ExportKind, NameMap, SectionId};
 
 /// Encoding for the `component-name` custom section which assigns
 /// human-readable names to items within a component.
@@ -102,6 +102,12 @@ impl ComponentNameSection {
     /// component.
     pub fn instances(&mut self, names: &NameMap) {
         self.component_decls(INSTANCE_SORT, names)
+    }
+
+    /// Appends a raw subsection with the given id and data.
+    pub fn raw(&mut self, id: u8, data: &[u8]) {
+        self.bytes.push(id);
+        data.encode(&mut self.bytes);
     }
 
     fn component_decls(&mut self, kind: u8, names: &NameMap) {

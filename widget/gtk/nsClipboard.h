@@ -8,28 +8,15 @@
 #ifndef __nsClipboard_h_
 #define __nsClipboard_h_
 
-#include "mozilla/UniquePtr.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/Span.h"
+#include "mozilla/UniquePtr.h"
 #include "nsBaseClipboard.h"
 #include "nsIClipboard.h"
 #include "nsIObserver.h"
 #include "nsCOMPtr.h"
 #include "GUniquePtr.h"
 #include <gtk/gtk.h>
-
-#ifdef MOZ_LOGGING
-#  include "mozilla/Logging.h"
-#  include "nsTArray.h"
-#  include "Units.h"
-extern mozilla::LazyLogModule gClipboardLog;
-#  define LOGCLIP(...) \
-    MOZ_LOG(gClipboardLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
-#  define LOGCLIP_ENABLED() \
-    MOZ_LOG_TEST(gClipboardLog, mozilla::LogLevel::Debug)
-#else
-#  define LOGCLIP(...)
-#  define LOGCLIP_ENABLED() false
-#endif /* MOZ_LOGGING */
 
 class ClipboardTargets {
   friend class ClipboardData;
@@ -127,22 +114,24 @@ class nsClipboard : public nsBaseClipboard, public nsIObserver {
   void OwnerChangedEvent(GtkClipboard* aGtkClipboard,
                          GdkEventOwnerChange* aEvent);
 
+  mozilla::Result<int32_t, nsresult> GetNativeClipboardSequenceNumber(
+      ClipboardType aWhichClipboard) override;
+
  protected:
   // Implement the native clipboard behavior.
   NS_IMETHOD SetNativeClipboardData(nsITransferable* aTransferable,
-                                    int32_t aWhichClipboard) override;
+                                    ClipboardType aWhichClipboard) override;
   NS_IMETHOD GetNativeClipboardData(nsITransferable* aTransferable,
-                                    int32_t aWhichClipboard) override;
+                                    ClipboardType aWhichClipboard) override;
   void AsyncGetNativeClipboardData(nsITransferable* aTransferable,
-                                   int32_t aWhichClipboard,
+                                   ClipboardType aWhichClipboard,
                                    GetDataCallback&& aCallback) override;
-  nsresult EmptyNativeClipboardData(int32_t aWhichClipboard) override;
-  mozilla::Result<int32_t, nsresult> GetNativeClipboardSequenceNumber(
-      int32_t aWhichClipboard) override;
+  nsresult EmptyNativeClipboardData(ClipboardType aWhichClipboard) override;
   mozilla::Result<bool, nsresult> HasNativeClipboardDataMatchingFlavors(
-      const nsTArray<nsCString>& aFlavorList, int32_t aWhichClipboard) override;
+      const nsTArray<nsCString>& aFlavorList,
+      ClipboardType aWhichClipboard) override;
   void AsyncHasNativeClipboardDataMatchingFlavors(
-      const nsTArray<nsCString>& aFlavorList, int32_t aWhichClipboard,
+      const nsTArray<nsCString>& aFlavorList, ClipboardType aWhichClipboard,
       HasMatchingFlavorsCallback&& aCallback) override;
 
  private:
@@ -172,6 +161,7 @@ extern const int kClipboardTimeout;
 extern const int kClipboardFastIterationNum;
 
 GdkAtom GetSelectionAtom(int32_t aWhichClipboard);
-int GetGeckoClipboardType(GtkClipboard* aGtkClipboard);
+mozilla::Maybe<nsIClipboard::ClipboardType> GetGeckoClipboardType(
+    GtkClipboard* aGtkClipboard);
 
 #endif /* __nsClipboard_h_ */

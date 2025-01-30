@@ -18,7 +18,7 @@ macro_rules! try_parse_one {
 }
 
 <%helpers:shorthand name="transition"
-                    engines="gecko servo-2013 servo-2020"
+                    engines="gecko servo"
                     extra_prefixes="moz:layout.css.prefixes.transitions webkit"
                     sub_properties="transition-property transition-duration
                                     transition-timing-function
@@ -204,7 +204,7 @@ macro_rules! try_parse_one {
 </%helpers:shorthand>
 
 <%helpers:shorthand name="animation"
-                    engines="gecko servo-2013 servo-2020"
+                    engines="gecko servo"
                     extra_prefixes="moz:layout.css.prefixes.animations webkit"
                     sub_properties="animation-name animation-duration
                                     animation-timing-function animation-delay
@@ -213,12 +213,13 @@ macro_rules! try_parse_one {
                     rule_types_allowed="Style"
                     spec="https://drafts.csswg.org/css-animations/#propdef-animation">
     <%
-        props = "name timeline duration timing_function delay iteration_count \
+        props = "name duration timing_function delay iteration_count \
                  direction fill_mode play_state".split()
     %>
     % for prop in props:
     use crate::properties::longhands::animation_${prop};
     % endfor
+    use crate::properties::longhands::animation_timeline;
 
     pub fn parse_value<'i, 't>(
         context: &ParserContext,
@@ -254,9 +255,14 @@ macro_rules! try_parse_one {
                 try_parse_one!(context, input, fill_mode, animation_fill_mode);
                 try_parse_one!(context, input, play_state, animation_play_state);
                 try_parse_one!(context, input, name, animation_name);
-                if static_prefs::pref!("layout.css.scroll-driven-animations.enabled") {
-                    try_parse_one!(context, input, timeline, animation_timeline);
-                }
+
+                // Note: per spec issue discussion, all animation longhands not defined in
+                // Animations 1 are defined as reset-only sub-properties for now.
+                // https://github.com/w3c/csswg-drafts/issues/6946#issuecomment-1233190360
+                //
+                // FIXME: Bug 1824261. We should revisit this when the spec gets updated with the
+                // new syntax.
+                // https://github.com/w3c/csswg-drafts/issues/6946
 
                 parsed -= 1;
                 break
@@ -290,11 +296,22 @@ macro_rules! try_parse_one {
             % for prop in props:
             animation_${prop}: animation_${prop}::SpecifiedValue(${prop}s.into()),
             % endfor
+            // FIXME: Bug 1824261. animation-timeline is reset-only for now.
+            animation_timeline: animation_timeline::SpecifiedValue(
+                vec![animation_timeline::single_value::get_initial_specified_value()].into()
+            ),
         })
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
         fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
+            use crate::values::specified::easing::TimingFunction;
+            use crate::values::specified::{
+                AnimationDirection, AnimationFillMode, AnimationPlayState,
+            };
+            use crate::Zero;
+            use style_traits::values::SequenceWriter;
+
             let len = self.animation_name.0.len();
             // There should be at least one declared value
             if len == 0 {
@@ -303,15 +320,15 @@ macro_rules! try_parse_one {
 
             // If any value list length is differs then we don't do a shorthand serialization
             // either.
-            % for name in props[2:]:
+            % for name in props[1:]:
                 if len != self.animation_${name}.0.len() {
                     return Ok(())
                 }
             % endfor
 
-            // If the preference of animation-timeline is disabled, `self.animation_timeline` is
-            // None.
-            if self.animation_timeline.map_or(false, |v| len != v.0.len()) {
+            // FIXME: Bug 1824261. We don't serialize this shorthand if the animation-timeline is
+            // speficied, per the wpt update: https://github.com/web-platform-tests/wpt/pull/38848.
+            if self.animation_timeline.map_or(false, |v| v.0.len() != 1 || !v.0[0].is_auto()) {
                 return Ok(());
             }
 
@@ -320,28 +337,77 @@ macro_rules! try_parse_one {
                     dest.write_str(", ")?;
                 }
 
-                % for name in props[2:]:
-                    self.animation_${name}.0[i].to_css(dest)?;
-                    dest.write_char(' ')?;
+                // We follow the order of this syntax:
+                // <single-animation> =
+                //   <animation-duration> ||
+                //   <easing-function> ||
+                //   <animation-delay> ||
+                //   <single-animation-iteration-count> ||
+                //   <single-animation-direction> ||
+                //   <single-animation-fill-mode> ||
+                //   <single-animation-play-state> ||
+                //   [ none | <keyframes-name> ] ||
+                //   <single-animation-timeline>
+                //
+                // https://drafts.csswg.org/css-animations-2/#animation-shorthand
+                //
+                // Note: animation-timeline is not serialized for now because it is always the
+                // initial value in this loop.
+                let has_duration = !self.animation_duration.0[i].is_auto()
+                    && (static_prefs::pref!("layout.css.scroll-driven-animations.enabled")
+                        || !self.animation_duration.0[i].is_zero());
+                let has_timing_function = !self.animation_timing_function.0[i].is_ease();
+                let has_delay = !self.animation_delay.0[i].is_zero();
+                let has_iteration_count = !self.animation_iteration_count.0[i].is_one();
+                let has_direction =
+                    !matches!(self.animation_direction.0[i], AnimationDirection::Normal);
+                let has_fill_mode =
+                    !matches!(self.animation_fill_mode.0[i], AnimationFillMode::None);
+                let has_play_state =
+                    !matches!(self.animation_play_state.0[i], AnimationPlayState::Running);
+                let animation_name = &self.animation_name.0[i];
+                let has_name = !animation_name.is_none();
+
+                let mut writer = SequenceWriter::new(dest, " ");
+
+                // To avoid ambiguity, we have to serialize duration if duration is initial
+                // but delay is not. (In other words, it's ambiguous if we serialize delay only.)
+                if has_duration || has_delay {
+                    writer.item(&self.animation_duration.0[i])?;
+                }
+
+                if has_timing_function || TimingFunction::match_keywords(animation_name) {
+                    writer.item(&self.animation_timing_function.0[i])?;
+                }
+
+                // For animation-delay and animation-iteration-count.
+                % for name in props[3:5]:
+                if has_${name} {
+                    writer.item(&self.animation_${name}.0[i])?;
+                }
                 % endfor
 
-                self.animation_name.0[i].to_css(dest)?;
+                if has_direction || AnimationDirection::match_keywords(animation_name) {
+                    writer.item(&self.animation_direction.0[i])?;
+                }
 
-                // Based on the spec, the default values of other properties must be output in at
-                // least the cases necessary to distinguish an animation-name. The serialization
-                // order of animation-timeline is always later than animation-name, so it's fine
-                // to not serialize it if it is the default value. It's still possible to
-                // distinguish them (because we always serialize animation-name).
-                // https://drafts.csswg.org/css-animations-1/#animation
-                // https://drafts.csswg.org/css-animations-2/#typedef-single-animation
-                //
-                // Note: it's also fine to always serialize this. However, it seems Blink
-                // doesn't serialize default animation-timeline now, so we follow the same rule.
-                if let Some(ref timeline) = self.animation_timeline {
-                    if !timeline.0[i].is_auto() {
-                        dest.write_char(' ')?;
-                        timeline.0[i].to_css(dest)?;
-                    }
+                if has_fill_mode || AnimationFillMode::match_keywords(animation_name) {
+                    writer.item(&self.animation_fill_mode.0[i])?;
+                }
+
+                if has_play_state || AnimationPlayState::match_keywords(animation_name) {
+                    writer.item(&self.animation_play_state.0[i])?;
+                }
+
+                // If all values are initial, we must serialize animation-name.
+                let has_any = {
+                    has_duration
+                % for name in props[2:]:
+                        || has_${name}
+                % endfor
+                };
+                if has_name || !has_any {
+                    writer.item(animation_name)?;
                 }
             }
             Ok(())

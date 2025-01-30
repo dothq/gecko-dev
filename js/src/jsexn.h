@@ -77,6 +77,9 @@ static_assert(
         JSProto_Error + int(JSEXN_EVALERR) == JSProto_EvalError &&
         JSProto_Error + int(JSEXN_RANGEERR) == JSProto_RangeError &&
         JSProto_Error + int(JSEXN_REFERENCEERR) == JSProto_ReferenceError &&
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+        JSProto_Error + int(JSEXN_SUPPRESSEDERR) == JSProto_SuppressedError &&
+#endif
         JSProto_Error + int(JSEXN_SYNTAXERR) == JSProto_SyntaxError &&
         JSProto_Error + int(JSEXN_TYPEERR) == JSProto_TypeError &&
         JSProto_Error + int(JSEXN_URIERR) == JSProto_URIError &&
@@ -118,6 +121,8 @@ class AutoClearPendingException {
   ~AutoClearPendingException() { JS_ClearPendingException(cx); }
 };
 
+// Convert the given value to a string for use in an error message. This
+// function never returns nullptr and never reports an exception.
 extern const char* ValueToSourceForError(JSContext* cx, HandleValue val,
                                          JS::UniqueChars& bytes);
 

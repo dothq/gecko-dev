@@ -11,6 +11,10 @@ pytestmark = pytest.mark.slow
 PARAMS = TRY_AUTO_PARAMETERS.copy()
 PARAMS.update(
     {
+        "files_changed": [
+            "dom/html/HTMLDetailsElement.cpp",
+            "gfx/thebes/gfxUserFontSet.cpp",
+        ],
         "head_repository": "https://hg.mozilla.org/try",
         "project": "try",
         "target_kind": "test",
@@ -46,7 +50,7 @@ def test_only_important_manifests(params, full_task_graph, filter_tasks):
             ]
 
             # Manifest scheduling is disabled for mochitest-ally.
-            if attr("unittest_suite") == "mochitest-a11y":
+            if attr("unittest_suite") in ["mochitest-a11y"]:
                 assert len(unimportant) > 0
             else:
                 assert unimportant == []

@@ -29,6 +29,8 @@ interface ShadowRoot : DocumentFragment
   readonly attribute SlotAssignmentMode slotAssignment;
   [Pref="dom.webcomponents.shadowdom.declarative.enabled"]
   readonly attribute boolean clonable;
+  [Pref="dom.webcomponents.shadowdom.declarative.enabled"]
+  readonly attribute boolean serializable;
   readonly attribute Element host;
   attribute EventHandler onslotchange;
 
@@ -36,7 +38,7 @@ interface ShadowRoot : DocumentFragment
 
   // https://w3c.github.io/DOM-Parsing/#the-innerhtml-mixin
   [CEReactions, SetterThrows]
-  attribute [LegacyNullToEmptyString] DOMString innerHTML;
+  attribute (TrustedHTML or [LegacyNullToEmptyString] DOMString) innerHTML;
 
   // When JS invokes importNode or createElement, the binding code needs to
   // create a reflector, and so invoking those methods directly on the content
@@ -60,8 +62,10 @@ interface ShadowRoot : DocumentFragment
 
 partial interface ShadowRoot {
   // https://html.spec.whatwg.org/#dom-shadowroot-sethtmlunsafe
+  [Pref="dom.webcomponents.shadowdom.declarative.enabled", Throws]
+  undefined setHTMLUnsafe((TrustedHTML or DOMString) html);
   [Pref="dom.webcomponents.shadowdom.declarative.enabled"]
-  undefined setHTMLUnsafe(DOMString html);
+  DOMString getHTML(optional GetHTMLOptions options = {});
 };
 
 ShadowRoot includes DocumentOrShadowRoot;

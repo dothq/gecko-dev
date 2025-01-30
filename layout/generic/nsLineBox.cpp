@@ -184,15 +184,15 @@ static void ListFloats(FILE* out, const char* aPrefix,
   }
 }
 
-/* static */ const char* nsLineBox::StyleClearToString(StyleClear aClearType) {
+/* static */ const char* nsLineBox::UsedClearToString(UsedClear aClearType) {
   switch (aClearType) {
-    case StyleClear::None:
+    case UsedClear::None:
       return "none";
-    case StyleClear::Left:
+    case UsedClear::Left:
       return "left";
-    case StyleClear::Right:
+    case UsedClear::Right:
       return "right";
-    case StyleClear::Both:
+    case UsedClear::Both:
       return "both";
   }
   return "unknown";
@@ -217,12 +217,12 @@ void nsLineBox::List(FILE* out, const char* aPrefix,
       IsPreviousMarginDirty() ? "prevmargindirty" : "prevmarginclean",
       IsImpactedByFloat() ? "impacted" : "not-impacted",
       IsLineWrapped() ? "wrapped" : "not-wrapped",
-      HasForcedLineBreak() ? "forced-break" : "no-break",
-      StyleClearToString(FloatClearTypeBefore()),
-      StyleClearToString(FloatClearTypeAfter()));
+      HasForcedLineBreakAfter() ? "forced-break-after" : "no-break",
+      UsedClearToString(FloatClearTypeBefore()),
+      UsedClearToString(FloatClearTypeAfter()));
 
   if (IsBlock() && !GetCarriedOutBEndMargin().IsZero()) {
-    const nscoord bm = GetCarriedOutBEndMargin().get();
+    const nscoord bm = GetCarriedOutBEndMargin().Get();
     str += nsPrintfCString("bm=%s ",
                            nsIFrame::ConvertToString(bm, aFlags).c_str());
   }
@@ -242,6 +242,12 @@ void nsLineBox::List(FILE* out, const char* aPrefix,
       str += nsPrintfCString("ink-overflow=%s scr-overflow=%s ",
                              nsIFrame::ConvertToString(vo, aFlags).c_str(),
                              nsIFrame::ConvertToString(so, aFlags).c_str());
+    }
+    if (mData->mInFlowChildBounds) {
+      str += nsPrintfCString(
+          "in-flow-scr-overflow=%s ",
+          nsIFrame::ConvertToString(*mData->mInFlowChildBounds, aFlags)
+              .c_str());
     }
   }
   fprintf_stderr(out, "%s<\n", str.get());
@@ -272,9 +278,9 @@ nsIFrame* nsLineBox::LastChild() const {
 }
 #endif
 
-int32_t nsLineBox::IndexOf(nsIFrame* aFrame) const {
+int32_t nsLineBox::IndexOf(const nsIFrame* aFrame) const {
   int32_t i, n = GetChildCount();
-  nsIFrame* frame = mFirstChild;
+  const nsIFrame* frame = mFirstChild;
   for (i = 0; i < n; i++) {
     if (frame == aFrame) {
       return i;
@@ -284,28 +290,45 @@ int32_t nsLineBox::IndexOf(nsIFrame* aFrame) const {
   return -1;
 }
 
-int32_t nsLineBox::RIndexOf(nsIFrame* aFrame,
-                            nsIFrame* aLastFrameInLine) const {
-  nsIFrame* frame = aLastFrameInLine;
-  for (int32_t i = GetChildCount() - 1; i >= 0; --i) {
-    MOZ_ASSERT(i != 0 || frame == mFirstChild,
-               "caller provided incorrect last frame");
-    if (frame == aFrame) {
-      return i;
+int32_t nsLineBox::RLIndexOf(const nsIFrame* aFrame,
+                             const nsIFrame* aLastFrameInLine) const {
+  const nsIFrame* leftFrame = mFirstChild;
+  const nsIFrame* rightFrame = aLastFrameInLine;
+  int32_t leftIndex = 0, rightIndex = GetChildCount() - 1;
+  while (true) {
+    if (aFrame == rightFrame) {
+      return rightIndex;
     }
-    frame = frame->GetPrevSibling();
+    if (leftIndex == rightIndex) {
+      MOZ_ASSERT(leftFrame == rightFrame,
+                 "caller provided incorrect last frame");
+      break;
+    }
+    if (aFrame == leftFrame) {
+      return leftIndex;
+    }
+    if (++leftIndex == rightIndex) {
+      MOZ_ASSERT(leftFrame->GetNextSibling() == rightFrame,
+                 "caller provided incorrect last frame");
+      break;
+    }
+    leftFrame = leftFrame->GetNextSibling();
+    rightFrame = rightFrame->GetPrevSibling();
+    --rightIndex;
   }
   return -1;
 }
 
 bool nsLineBox::IsEmpty() const {
-  if (IsBlock()) return mFirstChild->IsEmpty();
+  if (IsBlock()) {
+    return mFirstChild->IsEmpty();
+  }
 
-  int32_t n;
-  nsIFrame* kid;
-  for (n = GetChildCount(), kid = mFirstChild; n > 0;
-       --n, kid = kid->GetNextSibling()) {
-    if (!kid->IsEmpty()) return false;
+  nsIFrame* kid = mFirstChild;
+  for (int32_t n = GetChildCount(); n > 0; --n, kid = kid->GetNextSibling()) {
+    if (!kid->IsEmpty()) {
+      return false;
+    }
   }
   if (HasMarker()) {
     return false;
@@ -326,11 +349,9 @@ bool nsLineBox::CachedIsEmpty() {
   if (IsBlock()) {
     result = mFirstChild->CachedIsEmpty();
   } else {
-    int32_t n;
-    nsIFrame* kid;
+    nsIFrame* kid = mFirstChild;
     result = true;
-    for (n = GetChildCount(), kid = mFirstChild; n > 0;
-         --n, kid = kid->GetNextSibling()) {
+    for (int32_t n = GetChildCount(); n > 0; --n, kid = kid->GetNextSibling()) {
       if (!kid->CachedIsEmpty()) {
         result = false;
         break;
@@ -350,25 +371,27 @@ void nsLineBox::DeleteLineList(nsPresContext* aPresContext, nsLineList& aLines,
                                nsFrameList* aFrames, DestroyContext& aContext) {
   PresShell* presShell = aPresContext->PresShell();
 
-  // Keep our line list and frame list up to date as we
-  // remove frames, in case something wants to traverse the
-  // frame tree while we're destroying.
+  // Keep our line list and frame list up to date as we remove frames, in case
+  // something wants to traverse the frame tree while we're destroying.
+  //
+  // Note: We delete the line list and the frames in each line in reverse order
+  // to avoid unnecessary updates to the first-continuation and first-in-flow
+  // cache. If we delete them from front to back, updating the cache has a
+  // O(n^2) time complexity.
   while (!aLines.empty()) {
-    nsLineBox* line = aLines.front();
+    nsLineBox* line = aLines.back();
     if (MOZ_UNLIKELY(line->mFlags.mHasHashedFrames)) {
       line->SwitchToCounter();  // Avoid expensive has table removals.
     }
     while (line->GetChildCount() > 0) {
-      nsIFrame* child = aFrames->RemoveFirstChild();
+      nsIFrame* child = aFrames->RemoveLastChild();
       MOZ_DIAGNOSTIC_ASSERT(child->PresContext() == aPresContext);
-      MOZ_DIAGNOSTIC_ASSERT(child == line->mFirstChild, "Lines out of sync");
-      line->mFirstChild = aFrames->FirstChild();
       line->NoteFrameRemoved(child);
       child->Destroy(aContext);
     }
-    MOZ_DIAGNOSTIC_ASSERT(line == aLines.front(),
+    MOZ_DIAGNOSTIC_ASSERT(line == aLines.back(),
                           "destroying child frames messed up our lines!");
-    aLines.pop_front();
+    aLines.pop_back();
     line->Destroy(presShell);
   }
 }
@@ -407,13 +430,13 @@ bool nsLineBox::RFindLineContaining(nsIFrame* aFrame,
   return false;
 }
 
-nsCollapsingMargin nsLineBox::GetCarriedOutBEndMargin() const {
+CollapsingMargin nsLineBox::GetCarriedOutBEndMargin() const {
   NS_ASSERTION(IsBlock(), "GetCarriedOutBEndMargin called on non-block line.");
   return (IsBlock() && mBlockData) ? mBlockData->mCarriedOutBEndMargin
-                                   : nsCollapsingMargin();
+                                   : CollapsingMargin();
 }
 
-bool nsLineBox::SetCarriedOutBEndMargin(nsCollapsingMargin aValue) {
+bool nsLineBox::SetCarriedOutBEndMargin(CollapsingMargin aValue) {
   bool changed = false;
   if (IsBlock()) {
     if (!aValue.IsZero()) {
@@ -433,7 +456,10 @@ bool nsLineBox::SetCarriedOutBEndMargin(nsCollapsingMargin aValue) {
 
 void nsLineBox::MaybeFreeData() {
   nsRect bounds = GetPhysicalBounds();
-  if (mData && mData->mOverflowAreas == OverflowAreas(bounds, bounds)) {
+  // If we have space allocated for additional data but no additional data to
+  // represent, just delete it.
+  if (mData && mData->mOverflowAreas == OverflowAreas(bounds, bounds) &&
+      !mData->mInFlowChildBounds) {
     if (IsInline()) {
       if (mInlineData->mFloats.IsEmpty()) {
         delete mInlineData;
@@ -527,6 +553,30 @@ void nsLineBox::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
     mData->mOverflowAreas = aOverflowAreas;
     MaybeFreeData();
   }
+}
+
+void nsLineBox::SetInFlowChildBounds(const Maybe<nsRect>& aInFlowChildBounds) {
+  if (aInFlowChildBounds) {
+    if (!mData) {
+      nsRect bounds = GetPhysicalBounds();
+      if (IsInline()) {
+        mInlineData = new ExtraInlineData(bounds);
+      } else {
+        mBlockData = new ExtraBlockData(bounds);
+      }
+    }
+    mData->mInFlowChildBounds = aInFlowChildBounds;
+  } else if (mData) {
+    mData->mInFlowChildBounds = Nothing{};
+    MaybeFreeData();
+  }
+}
+
+Maybe<nsRect> nsLineBox::GetInFlowChildBounds() const {
+  if (!mData) {
+    return Nothing{};
+  }
+  return mData->mInFlowChildBounds;
 }
 
 //----------------------------------------------------------------------

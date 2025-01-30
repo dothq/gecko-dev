@@ -150,9 +150,9 @@ extern JS_PUBLIC_API bool ForceLexicalInitialization(JSContext* cx,
 /**
  * Whether we are poisoning unused/released data for error detection. Governed
  * by the JS_GC_ALLOW_EXTRA_POISONING #ifdef as well as the
- * $JSGC_EXTRA_POISONING environment variable.
+ * javascript.options.extra_gc_poisoning pref.
  */
-extern JS_PUBLIC_API int IsGCPoisoning();
+extern JS_PUBLIC_API bool IsGCPoisoning();
 
 extern JS_PUBLIC_API JSPrincipals* GetRealmPrincipals(JS::Realm* realm);
 
@@ -194,14 +194,11 @@ struct JSFunctionSpecWithHelp {
 };
 
 #define JS_FN_HELP(name, call, nargs, flags, usage, help) \
-  { name, call, nargs, (flags) | JSPROP_ENUMERATE, nullptr, usage, help }
+  {name, call, nargs, (flags) | JSPROP_ENUMERATE, nullptr, usage, help}
 #define JS_INLINABLE_FN_HELP(name, call, nargs, flags, native, usage, help)    \
-  {                                                                            \
-    name, call, nargs, (flags) | JSPROP_ENUMERATE, &js::jit::JitInfo_##native, \
-        usage, help                                                            \
-  }
-#define JS_FS_HELP_END \
-  { nullptr, nullptr, 0, 0, nullptr, nullptr }
+  {name,  call, nargs, (flags) | JSPROP_ENUMERATE, &js::jit::JitInfo_##native, \
+   usage, help}
+#define JS_FS_HELP_END {nullptr, nullptr, 0, 0, nullptr, nullptr}
 
 extern JS_PUBLIC_API bool JS_DefineFunctionsWithHelp(
     JSContext* cx, JS::HandleObject obj, const JSFunctionSpecWithHelp* fs);
@@ -245,6 +242,12 @@ extern JS_PUBLIC_API bool EnqueueJob(JSContext* cx, JS::HandleObject job);
  * builtin being called, or if it wants to resume executing jobs later on.
  */
 extern JS_PUBLIC_API void StopDrainingJobQueue(JSContext* cx);
+
+/**
+ * Instruct the runtime to restart draining the internal job queue after
+ * stopping it with StopDrainingJobQueue.
+ */
+extern JS_PUBLIC_API void RestartDrainingJobQueue(JSContext* cx);
 
 extern JS_PUBLIC_API void RunJobs(JSContext* cx);
 
@@ -389,6 +392,10 @@ JS_PUBLIC_API JSFunction* NewFunctionByIdWithReserved(JSContext* cx,
                                                       unsigned nargs,
                                                       unsigned flags, jsid id);
 
+JS_PUBLIC_API JSFunction* NewFunctionByIdWithReservedAndProto(
+    JSContext* cx, JSNative native, JS::Handle<JSObject*> proto, unsigned nargs,
+    unsigned flags, jsid id);
+
 /**
  * Get or set function's reserved slot value.
  * `fun` should be a function created with `*WithReserved` API above.
@@ -446,7 +453,8 @@ JS_PUBLIC_API bool AppendUnique(JSContext* cx, JS::MutableHandleIdVector base,
  *
  * If it is, returns true and outputs the index in *indexp.
  */
-JS_PUBLIC_API bool StringIsArrayIndex(JSLinearString* str, uint32_t* indexp);
+JS_PUBLIC_API bool StringIsArrayIndex(const JSLinearString* str,
+                                      uint32_t* indexp);
 
 /**
  * Overload of StringIsArrayIndex taking a (char16_t*,length) pair. Behaves
@@ -498,15 +506,12 @@ extern JS_PUBLIC_API JSLinearString* GetErrorTypeName(JSContext* cx,
                                                       int16_t exnType);
 
 /* Implemented in CrossCompartmentWrapper.cpp. */
-typedef enum NukeReferencesToWindow {
-  NukeWindowReferences,
-  DontNukeWindowReferences
-} NukeReferencesToWindow;
+enum NukeReferencesToWindow { NukeWindowReferences, DontNukeWindowReferences };
 
-typedef enum NukeReferencesFromTarget {
+enum NukeReferencesFromTarget {
   NukeAllReferences,
   NukeIncomingReferences,
-} NukeReferencesFromTarget;
+};
 
 /*
  * These filters are designed to be ephemeral stack classes, and thus don't
@@ -701,8 +706,8 @@ extern JS_PUBLIC_API bool IsSavedFrame(JSObject* obj);
 #if defined(XP_WIN)
 // Parameters use void* types to avoid #including windows.h. The return value of
 // this function is returned from the exception handler.
-typedef long (*JitExceptionHandler)(void* exceptionRecord,  // PEXECTION_RECORD
-                                    void* context);         // PCONTEXT
+using JitExceptionHandler = long (*)(void* exceptionRecord,  // PEXECTION_RECORD
+                                     void* context);         // PCONTEXT
 
 /**
  * Windows uses "structured exception handling" to handle faults. When a fault

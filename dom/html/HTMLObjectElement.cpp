@@ -100,6 +100,11 @@ void HTMLObjectElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                      nsIPrincipal* aSubjectPrincipal,
                                      bool aNotify) {
   AfterMaybeChangeAttr(aNamespaceID, aName, aNotify);
+
+  if (aName == nsGkAtoms::data) {
+    RefreshFeaturePolicy();
+  }
+
   return nsGenericHTMLFormControlElement::AfterSetAttr(
       aNamespaceID, aName, aValue, aOldValue, aSubjectPrincipal, aNotify);
 }
@@ -126,6 +131,7 @@ void HTMLObjectElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
       BlockEmbedOrObjectContentLoading()) {
     return;
   }
+
   nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
       "HTMLObjectElement::LoadObject",
       [self = RefPtr<HTMLObjectElement>(this), aNotify]() {
@@ -135,7 +141,8 @@ void HTMLObjectElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
       }));
 }
 
-bool HTMLObjectElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
+bool HTMLObjectElement::IsHTMLFocusable(IsFocusableFlags aFlags,
+                                        bool* aIsFocusable,
                                         int32_t* aTabIndex) {
   // TODO: this should probably be managed directly by IsHTMLFocusable.
   // See bug 597242.

@@ -24,7 +24,8 @@ class ContentMediaControlKeyReceiver {
   static ContentMediaControlKeyReceiver* Get(BrowsingContext* aBC);
 
   // Use this method to handle the event from `ContentMediaAgent`.
-  virtual void HandleMediaKey(MediaControlKey aKey) = 0;
+  virtual void HandleMediaKey(MediaControlKey aKey,
+                              Maybe<SeekDetails> aDetails = Nothing()) = 0;
 
   virtual bool IsPlaying() const = 0;
 };
@@ -67,6 +68,9 @@ class ContentMediaAgent : public IMediaInfoUpdater {
                                   bool aIsInFullScreen) override;
   void UpdatePositionState(uint64_t aBrowsingContextId,
                            const Maybe<PositionState>& aState) override;
+  void UpdateGuessedPositionState(uint64_t aBrowsingContextId,
+                                  const nsID& aMediaId,
+                                  const Maybe<PositionState>& aState) override;
 
   // Use these methods to register/unregister `ContentMediaControlKeyReceiver`
   // in order to listen to media control key events.
@@ -91,7 +95,8 @@ class ContentMediaController final : public ContentMediaAgent,
   void RemoveReceiver(ContentMediaControlKeyReceiver* aListener) override;
 
   // ContentMediaControlKeyReceiver method
-  void HandleMediaKey(MediaControlKey aKey) override;
+  void HandleMediaKey(MediaControlKey aKey,
+                      Maybe<SeekDetails> aDetails = Nothing()) override;
 
  private:
   ~ContentMediaController() = default;

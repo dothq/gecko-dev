@@ -265,15 +265,18 @@ add_task(async function test_get_records_with_multiple_versions() {
     client.db.create(record);
   }
 
-  TranslationsParent.mockTranslationsEngine(
-    client,
-    await createTranslationsWasmRemoteClient()
-  );
+  TranslationsParent.applyTestingMocks({
+    translationModelsRemoteClient: client,
+    translationsWasmRemoteClient: (await createTranslationsWasmRemoteClient())
+      .client,
+  });
 
-  const retrievedRecords = await TranslationsParent.getMaxVersionRecords(
-    client,
-    { lookupKey, majorVersion: 1 }
-  );
+  const retrievedRecords =
+    await TranslationsParent.getMaxSupportedVersionRecords(client, {
+      lookupKey,
+      minSupportedMajorVersion: 1,
+      maxSupportedMajorVersion: 1,
+    });
 
   for (const record of retrievedRecords) {
     is(
@@ -299,5 +302,5 @@ add_task(async function test_get_records_with_multiple_versions() {
     ), but found ${retrievedRecords.length}\n`
   );
 
-  TranslationsParent.unmockTranslationsEngine();
+  TranslationsParent.removeTestingMocks();
 });

@@ -42,6 +42,7 @@ extensions = [
     "sphinx.ext.todo",
     "mozbuild.sphinx",
     "sphinx_js",
+    "sphinxcontrib.jquery",
     "sphinxcontrib.mermaid",
     "sphinx_copybutton",
     "sphinx_markdown_tables",
@@ -55,11 +56,14 @@ extensions = [
 # excluded from valid-jsdoc in the top-level .eslintrc.js.
 js_source_path = [
     "../browser/components/backup",
+    "../browser/components/backup/actors",
+    "../browser/components/backup/resources",
     "../browser/components/extensions",
     "../browser/components/migration",
     "../browser/components/migration/content",
     "../browser/components/uitour",
     "../browser/components/urlbar",
+    "../js/xpconnect/loader",
     "../remote/marionette",
     "../testing/mochitest/BrowserTestUtils",
     "../testing/mochitest/tests/SimpleTest/SimpleTest.js",
@@ -70,11 +74,13 @@ js_source_path = [
     "../toolkit/components/extensions",
     "../toolkit/components/extensions/parent",
     "../toolkit/components/featuregates",
+    "../toolkit/components/ml/content/ONNXPipeline.mjs",
     "../toolkit/mozapps/extensions",
     "../toolkit/components/prompts/src",
     "../toolkit/components/pictureinpicture",
     "../toolkit/components/pictureinpicture/content",
     "../toolkit/components/search",
+    "../toolkit/components/uniffi-bindgen-gecko-js/components/generated",
 ]
 root_for_relative_js_paths = ".."
 jsdoc_config_path = "jsdoc.json"
@@ -121,11 +127,12 @@ if on_rtd:
 else:
     # We only need to set the RTD theme when not on RTD because the RTD
     # environment handles this otherwise.
-    import sphinx_rtd_theme
 
     html_theme = "sphinx_rtd_theme"
-    html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
+# As we parse the error messages and they can be translated, force
+# the english locale
+os.environ["LANG"] = "C"
 
 html_static_path = ["_static"]
 htmlhelp_basename = "FirefoxTreeDocs"

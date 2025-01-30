@@ -11,10 +11,13 @@
 #include <string_view>
 #include <type_traits>  // std::enable_if
 
+#include "fmt/format.h"
+#include "fmt/xchar.h"
+
 #include "mozilla/Char16.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/fallible.h"
-#include "nsStringBuffer.h"
+#include "mozilla/StringBuffer.h"
 #include "nsStringFlags.h"
 #include "nsStringFwd.h"
 #include "nsStringIterator.h"
@@ -74,9 +77,9 @@ class nsTStringLengthStorage {
       "nsTString's maximum length, including the trailing null, must fit "
       "within `int32_t`, as callers will cast to `int32_t` occasionally");
   static_assert(((CheckedInt<uint32_t>{kMax} + 1) * sizeof(T) +
-                 sizeof(nsStringBuffer))
+                 sizeof(mozilla::StringBuffer))
                     .isValid(),
-                "Math required to allocate a nsStringBuffer for a "
+                "Math required to allocate a mozilla::StringBuffer for a "
                 "maximum-capacity string must not overflow uint32_t");
 
   // Implicit conversion and assignment from `size_t` which assert that the
@@ -554,5 +557,16 @@ inline bool operator>(const mozilla::detail::nsTStringRepr<T>& aLhs,
                       const mozilla::detail::nsTStringRepr<T>& aRhs) {
   return Compare(aLhs, aRhs) > 0;
 }
+
+template <typename Char>
+struct fmt::formatter<mozilla::detail::nsTStringRepr<Char>, Char>
+    : fmt::formatter<basic_string_view<Char>, Char> {
+  template <typename FormatContext>
+  constexpr auto format(const mozilla::detail::nsTStringRepr<Char>& aVal,
+                        FormatContext& aCtx) const -> decltype(aCtx.out()) {
+    return formatter<basic_string_view<Char>, Char>::format(
+        basic_string_view<Char>{aVal.BeginReading(), aVal.Length()}, aCtx);
+  }
+};
 
 #endif

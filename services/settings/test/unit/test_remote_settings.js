@@ -1,26 +1,7 @@
 /* import-globals-from ../../../common/tests/unit/head_helpers.js */
 
-const { AppConstants } = ChromeUtils.importESModule(
-  "resource://gre/modules/AppConstants.sys.mjs"
-);
 const { ObjectUtils } = ChromeUtils.importESModule(
   "resource://gre/modules/ObjectUtils.sys.mjs"
-);
-const { setTimeout } = ChromeUtils.importESModule(
-  "resource://gre/modules/Timer.sys.mjs"
-);
-
-const { RemoteSettings } = ChromeUtils.importESModule(
-  "resource://services-settings/remote-settings.sys.mjs"
-);
-const { Utils } = ChromeUtils.importESModule(
-  "resource://services-settings/Utils.sys.mjs"
-);
-const { UptakeTelemetry, Policy } = ChromeUtils.importESModule(
-  "resource://services-common/uptake-telemetry.sys.mjs"
-);
-const { TelemetryTestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/TelemetryTestUtils.sys.mjs"
 );
 
 const IS_ANDROID = AppConstants.platform == "android";
@@ -54,7 +35,7 @@ async function clear_state() {
   TelemetryTestUtils.assertEvents([], {}, { process: "dummy" });
 }
 
-function run_test() {
+add_task(() => {
   // Set up an HTTP Server
   server = new HttpServer();
   server.start(-1);
@@ -93,13 +74,11 @@ function run_test() {
   );
   server.registerPathHandler("/fake-x5u", handleResponse);
 
-  run_next_test();
-
   registerCleanupFunction(() => {
     Policy.getChannel = oldGetChannel;
     server.stop(() => {});
   });
-}
+});
 add_task(clear_state);
 
 add_task(async function test_records_obtained_from_server_are_stored_in_db() {
@@ -532,7 +511,7 @@ add_task(async function test_get_can_verify_signature() {
   }
   equal(
     error.message,
-    "Invalid content signature (main/password-fields) using 'fake-x5u'"
+    "Invalid content signature (main/password-fields) using 'fake-x5u' and signer remote-settings.content-signature.mozilla.org"
   );
 });
 add_task(clear_state);
@@ -1685,3 +1664,23 @@ wNuvFqc=
     responses[req.method]
   );
 }
+
+add_task(clear_state);
+
+add_task(async function test_hasAttachments_works_as_expected() {
+  let res = await client.db.hasAttachments();
+  Assert.equal(res, false, "Should return false, no attachments at start");
+
+  await client.db.saveAttachment("foo", {
+    record: { id: "foo" },
+    blob: new Blob(["foo"]),
+  });
+
+  res = await client.db.hasAttachments();
+  Assert.equal(res, true, "Should return true, just saved an attachment");
+
+  await client.db.pruneAttachments([]);
+
+  res = await client.db.hasAttachments();
+  Assert.equal(res, false, "Should return false after attachments are pruned");
+});

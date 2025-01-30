@@ -35,7 +35,6 @@ EXPORTS.mozilla = [
     "CheckedInt.h",
     "CompactPair.h",
     "Compiler.h",
-    "Compression.h",
     "DbgMacro.h",
     "DebugOnly.h",
     "DefineEnum.h",
@@ -73,6 +72,7 @@ EXPORTS.mozilla = [
     "MemoryChecking.h",
     "MemoryReporting.h",
     "MoveOnlyFunction.h",
+    "MPSCQueue.h",
     "MruCache.h",
     "NeverDestroyed.h",
     "NonDereferenceable.h",
@@ -106,6 +106,7 @@ EXPORTS.mozilla = [
     "SplayTree.h",
     "SPSCQueue.h",
     "StaticAnalysisFunctions.h",
+    "StringBuffer.h",
     "TaggedAnonymousMemory.h",
     "Tainting.h",
     "TemplateLib.h",
@@ -161,7 +162,6 @@ if CONFIG["MOZ_TSAN"]:
 UNIFIED_SOURCES += [
     "Assertions.cpp",
     "ChaosMode.cpp",
-    "Compression.cpp",
     "double-conversion/double-conversion/bignum-dtoa.cc",
     "double-conversion/double-conversion/bignum.cc",
     "double-conversion/double-conversion/cached-powers.cc",
@@ -175,6 +175,7 @@ UNIFIED_SOURCES += [
     "JSONWriter.cpp",
     "Poison.cpp",
     "RandomNum.cpp",
+    "RefCounted.cpp",
     "SHA1.cpp",
     "TaggedAnonymousMemory.cpp",
     "UniquePtrExtensions.cpp",
@@ -191,22 +192,12 @@ if CONFIG["MOZ_BUILD_APP"] not in (
 
 DEFINES["IMPL_MFBT"] = True
 
-SOURCES += [
-    "lz4/lz4.c",
-    "lz4/lz4file.c",
-    "lz4/lz4frame.c",
-    "lz4/lz4hc.c",
-    "lz4/xxhash.c",
-]
-
-SOURCES["lz4/xxhash.c"].flags += ["-Wno-unused-function"]
-
 DisableStlWrapping()
 
-if CONFIG["MOZ_NEEDS_LIBATOMIC"]:
-    OS_LIBS += ["atomic"]
+OS_LIBS += CONFIG["LIBATOMIC_LIBS"]
 
-DEFINES["LZ4LIB_VISIBILITY"] = ""
+# For RefCounted.cpp
+DEFINES["MOZ_SUPPORT_LEAKCHECKING"] = True
 
 # This is kind of gross because this is not a subdirectory,
 # but pure_virtual requires mfbt to build and some projects

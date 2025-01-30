@@ -28,17 +28,14 @@ class SystemPrincipal;
 
 namespace JS {
 enum class RuntimeCode;
+enum class CompilationType;
 }  // namespace JS
 
 /////////////////////////////
 // nsScriptSecurityManager //
 /////////////////////////////
-#define NS_SCRIPTSECURITYMANAGER_CID                 \
-  {                                                  \
-    0x7ee2a4c0, 0x4b93, 0x17d3, {                    \
-      0xba, 0x18, 0x00, 0x60, 0xb0, 0xf1, 0x99, 0xa2 \
-    }                                                \
-  }
+#define NS_SCRIPTSECURITYMANAGER_CID \
+  {0x7ee2a4c0, 0x4b93, 0x17d3, {0xba, 0x18, 0x00, 0x60, 0xb0, 0xf1, 0x99, 0xa2}}
 
 class nsScriptSecurityManager final : public nsIScriptSecurityManager {
  public:
@@ -70,6 +67,7 @@ class nsScriptSecurityManager final : public nsIScriptSecurityManager {
    */
   static bool SecurityCompareURIs(nsIURI* aSourceURI, nsIURI* aTargetURI);
   static uint32_t SecurityHashURI(nsIURI* aURI);
+  static bool IsHttpOrHttpsAndCrossOrigin(nsIURI* aUriA, nsIURI* aUriB);
 
   static nsresult ReportError(const char* aMessageTag, nsIURI* aSource,
                               nsIURI* aTarget, bool aFromPrivateWindow,
@@ -79,8 +77,6 @@ class nsScriptSecurityManager final : public nsIScriptSecurityManager {
                               const nsACString& targetSpec,
                               bool aFromPrivateWindow,
                               uint64_t aInnerWindowID = 0);
-
-  static uint32_t HashPrincipalByOrigin(nsIPrincipal* aPrincipal);
 
   static bool GetStrictFileOriginPolicy() { return sStrictFileOriginPolicy; }
 
@@ -92,9 +88,13 @@ class nsScriptSecurityManager final : public nsIScriptSecurityManager {
   virtual ~nsScriptSecurityManager();
 
   // Decides, based on CSP, whether or not eval() and stuff can be executed.
-  static bool ContentSecurityPolicyPermitsJSAction(JSContext* cx,
-                                                   JS::RuntimeCode kind,
-                                                   JS::Handle<JSString*> aCode);
+  MOZ_CAN_RUN_SCRIPT static bool ContentSecurityPolicyPermitsJSAction(
+      JSContext* aCx, JS::RuntimeCode aKind, JS::Handle<JSString*> aCodeString,
+      JS::CompilationType aCompilationType,
+      JS::Handle<JS::StackGCVector<JSString*>> aParameterStrings,
+      JS::Handle<JSString*> aBodyString,
+      JS::Handle<JS::StackGCVector<JS::Value>> aParameterArgs,
+      JS::Handle<JS::Value> aBodyArg, bool* aOutCanCompileStrings);
 
   static bool JSPrincipalsSubsume(JSPrincipals* first, JSPrincipals* second);
 

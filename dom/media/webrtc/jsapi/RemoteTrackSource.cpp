@@ -51,8 +51,8 @@ void RemoteTrackSource::Destroy() {
 }
 
 auto RemoteTrackSource::ApplyConstraints(
-    const dom::MediaTrackConstraints& aConstraints, dom::CallerType aCallerType)
-    -> RefPtr<ApplyConstraintsPromise> {
+    const dom::MediaTrackConstraints& aConstraints,
+    dom::CallerType aCallerType) -> RefPtr<ApplyConstraintsPromise> {
   return ApplyConstraintsPromise::CreateAndReject(
       MakeRefPtr<MediaMgrError>(
           dom::MediaStreamError::Name::OverconstrainedError, ""),
@@ -69,5 +69,13 @@ void RemoteTrackSource::SetMuted(bool aMuted) { MutedChanged(aMuted); }
 void RemoteTrackSource::ForceEnded() { OverrideEnded(); }
 
 SourceMediaTrack* RemoteTrackSource::Stream() const { return mStream; }
+
+const dom::RTCStatsTimestampMaker* RemoteTrackSource::GetTimestampMaker()
+    const {
+  if (!mReceiver) {
+    return nullptr;
+  }
+  return mReceiver->GetTimestampMaker();
+}
 
 }  // namespace mozilla

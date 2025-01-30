@@ -2,6 +2,10 @@
 /* import-globals-from ../../../../../testing/mochitest/tests/SimpleTest/EventUtils.js */
 /* import-globals-from ../../../../../toolkit/components/satchel/test/satchel_common.js */
 /* eslint-disable no-unused-vars */
+// Despite a use of `spawnChrome` and thus ChromeUtils, we can't use isInstance
+// here as it gets used in plain mochitests which don't have the ChromeOnly
+// APIs for it.
+/* eslint-disable mozilla/use-isInstance */
 
 "use strict";
 
@@ -12,6 +16,10 @@ let expectingPopup = null;
 
 const { FormAutofillUtils } = SpecialPowers.ChromeUtils.importESModule(
   "resource://gre/modules/shared/FormAutofillUtils.sys.mjs"
+);
+
+const { OSKeyStore } = SpecialPowers.ChromeUtils.importESModule(
+  "resource://gre/modules/OSKeyStore.sys.mjs"
 );
 
 async function sleep(ms = 500, reason = "Intentionally wait for UI ready") {
@@ -80,8 +88,9 @@ function clickOnElement(selector) {
   SimpleTest.executeSoon(() => element.click());
 }
 
-// The equivalent helper function to getAdaptedProfiles in FormAutofillHandler.jsm that
-// transforms the given profile to expected filled profile.
+// The equivalent helper function to getAdaptedProfiles in
+// FormAutofillSection.sys.mjs that transforms the given profile to expected
+// filled profile.
 function _getAdaptedProfile(profile) {
   const adaptedProfile = Object.assign({}, profile);
 
@@ -270,16 +279,43 @@ async function onStorageChanged(type) {
   });
 }
 
-function checkMenuEntries(expectedValues, isFormAutofillResult = true) {
-  let actualValues = getMenuEntries();
-  // Expect one more item would appear at the bottom as the footer if the result is from form autofill.
-  let expectedLength = isFormAutofillResult
-    ? expectedValues.length + 1
-    : expectedValues.length;
+function makeAddressComment({ primary, secondary, status }) {
+  return JSON.stringify({
+    primary,
+    secondary,
+    status,
+    ariaLabel: primary + " " + secondary + " " + status,
+  });
+}
+
+// Compare the labels on the autocomplete menu items to the expected labels.
+function checkMenuEntries(expectedValues, extraRows = 1) {
+  let actualValues = getMenuEntries().labels;
+  let expectedLength = expectedValues.length + extraRows;
 
   is(actualValues.length, expectedLength, " Checking length of expected menu");
   for (let i = 0; i < expectedValues.length; i++) {
     is(actualValues[i], expectedValues[i], " Checking menu entry #" + i);
+  }
+}
+
+// Compare the comment on the autocomplete menu items to the expected comment.
+// The profile field is not compared.
+function checkMenuEntriesComment(expectedValues, extraRows = 1) {
+  let actualValues = getMenuEntries().comments;
+  let expectedLength = expectedValues.length + extraRows;
+
+  is(actualValues.length, expectedLength, " Checking length of expected menu");
+  for (let i = 0; i < expectedValues.length; i++) {
+    const expectedValue = JSON.parse(expectedValues[i]);
+    const actualValue = JSON.parse(actualValues[i]);
+    for (const [key, value] of Object.entries(expectedValue)) {
+      is(
+        actualValue[key],
+        value,
+        ` Checking menu entry #${i}, ${key} should be the same`
+      );
+    }
   }
 }
 
@@ -345,7 +381,73 @@ async function canTestOSKeyStoreLogin() {
   return canTest;
 }
 
+/**
+ * This function should be used along with the `waitForOSKeyStoreLogin` API.
+ * See the comment in `waitForOSKeyStoreLogin` for more details.
+ */
+async function waitForOSKeyStoreLoginTestSetupComplete() {
+  if (
+    !(await SpecialPowers.spawnChrome([], () => {
+      // Need to re-import this because we're running in the parent.
+      // eslint-disable-next-line no-shadow
+      const { FormAutofillUtils } = ChromeUtils.importESModule(
+        "resource://gre/modules/shared/FormAutofillUtils.sys.mjs"
+      );
+
+      return FormAutofillUtils.getOSAuthEnabled(
+        FormAutofillUtils.AUTOFILL_CREDITCARDS_REAUTH_PREF
+      );
+    }))
+  ) {
+    return;
+  }
+
+  await SimpleTest.promiseWaitForCondition(async () => {
+    return await SpecialPowers.spawnChrome([], () => {
+      const { OSKeyStoreTestUtils } = ChromeUtils.importESModule(
+        "resource://testing-common/OSKeyStoreTestUtils.sys.mjs"
+      );
+
+      return Services.prefs.getStringPref(
+        OSKeyStoreTestUtils.TEST_ONLY_REAUTH,
+        ""
+      );
+    });
+  });
+}
+
+/**
+ * This API returns a promise that will be resolved when
+ * `waitForOSKeyStoreLogin` in `OSKeyStoreTestUtils.sys.mjs` completes.
+ * It is common to use it as follows:
+ *   const promise = waitForOSKeyStoreLogin();
+ *   triggerOSReauth();  // Code that triggers OS re-authentication
+ *   await promise;
+ *
+ * However, the timing to switch to using test OS re-auth after calling this
+ * function is asynchronous, which means triggering OS re-auth right after
+ * this API may still activate the real OS re-auth popup. To avoid that, you
+ * need to call `await waitForOSKeyStoreLoginTestSetupComplete()` before
+ * triggering OS re-auth.
+ */
 async function waitForOSKeyStoreLogin(login = false) {
+  // Need to fetch this from the parent in order for it to be correct.
+  if (
+    !(await SpecialPowers.spawnChrome([], () => {
+      // Need to re-import this because we're running in the parent.
+      // eslint-disable-next-line no-shadow
+      const { FormAutofillUtils } = ChromeUtils.importESModule(
+        "resource://gre/modules/shared/FormAutofillUtils.sys.mjs"
+      );
+
+      return FormAutofillUtils.getOSAuthEnabled(
+        FormAutofillUtils.AUTOFILL_CREDITCARDS_REAUTH_PREF
+      );
+    }))
+  ) {
+    return;
+  }
+
   await invokeAsyncChromeTask("FormAutofillTest:OSKeyStoreLogin", { login });
 }
 
@@ -391,9 +493,10 @@ function initPopupListener() {
 }
 
 async function triggerPopupAndHoverItem(fieldSelector, selectIndex) {
+  const promise = expectPopup();
   await focusAndWaitForFieldsIdentified(fieldSelector);
   synthesizeKey("KEY_ArrowDown");
-  await expectPopup();
+  await promise;
   for (let i = 0; i <= selectIndex; i++) {
     synthesizeKey("KEY_ArrowDown");
   }

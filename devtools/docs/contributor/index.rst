@@ -92,13 +92,13 @@ Frontend
 .. toctree::
    :maxdepth: 1
 
-  Panel SVGs <frontend/svgs.md>
-  React <frontend/react.md>
-  React Guidelines <frontend/react-guidelines.md>
-  Redux <frontend/redux.md>
-  Redux Guidelines <frontend/redux-guidelines.md>
-  Telemetry <frontend/telemetry.md>
-  Content Security Policy <frontend/csp.md>
+   Panel SVGs <frontend/svgs.md>
+   React <frontend/react.md>
+   React Guidelines <frontend/react-guidelines.md>
+   Redux <frontend/redux.md>
+   Redux Guidelines <frontend/redux-guidelines.md>
+   Telemetry <frontend/telemetry.md>
+   Content Security Policy <frontend/csp.md>
 
 
 Backend
@@ -107,6 +107,7 @@ Backend
    :maxdepth: 1
 
    Remote Debugging Protocol <backend/protocol.md>
+   Backend Overview <backend/watcher-architecture.md>
    Client API <backend/client-api.md>
    Debugger API <backend/debugger-api.md>
    Backward Compatibility <backend/backward-compatibility.md>

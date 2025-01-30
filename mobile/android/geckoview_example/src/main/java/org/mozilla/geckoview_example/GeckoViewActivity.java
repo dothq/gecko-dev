@@ -91,7 +91,6 @@ import org.mozilla.geckoview.GeckoWebExecutor;
 import org.mozilla.geckoview.Image;
 import org.mozilla.geckoview.MediaSession;
 import org.mozilla.geckoview.OrientationController;
-import org.mozilla.geckoview.RuntimeTelemetry;
 import org.mozilla.geckoview.SlowScriptResponse;
 import org.mozilla.geckoview.TranslationsController;
 import org.mozilla.geckoview.WebExtension;
@@ -101,6 +100,7 @@ import org.mozilla.geckoview.WebNotificationDelegate;
 import org.mozilla.geckoview.WebRequest;
 import org.mozilla.geckoview.WebRequestError;
 import org.mozilla.geckoview.WebResponse;
+import org.mozilla.geckoview_example.utils.WindowUtils;
 
 interface WebExtensionDelegate {
   default GeckoSession toggleBrowserActionPopup(boolean force) {
@@ -144,8 +144,13 @@ class WebExtensionManager
 
   @Nullable
   @Override
-  public GeckoResult<AllowOrDeny> onInstallPrompt(final @NonNull WebExtension extension) {
-    return GeckoResult.allow();
+  public GeckoResult<WebExtension.PermissionPromptResponse> onInstallPromptRequest(
+      @NonNull WebExtension extension, @NonNull String[] permissions, @NonNull String[] origins) {
+    return GeckoResult.fromValue(
+        new org.mozilla.geckoview.WebExtension.PermissionPromptResponse(
+            true, // isPermissionsGranted
+            true // isPrivateModeGranted
+            ));
   }
 
   @Nullable
@@ -778,11 +783,13 @@ public class GeckoViewActivity extends AppCompatActivity
       new BooleanSetting(R.string.key_dfpi, R.bool.dfpi_default) {
         @Override
         public void setValue(final GeckoRuntimeSettings settings, final Boolean value) {
-          int cookieBehavior =
-              value
-                  ? ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS
-                  : ContentBlocking.CookieBehavior.ACCEPT_NON_TRACKERS;
-          settings.getContentBlocking().setCookieBehavior(cookieBehavior);
+          // If dFPI is enabled set appropriate cookieBehavior, else do not overwrite.
+          if (value) {
+            settings
+                .getContentBlocking()
+                .setCookieBehavior(
+                    ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS);
+          }
         }
       };
 
@@ -824,6 +831,8 @@ public class GeckoViewActivity extends AppCompatActivity
     mGeckoView.setActivityContextDelegate(new ExampleActivityDelegate());
     mTabSessionManager = new TabSessionManager();
 
+    WindowUtils.setupPersistentInsets(getWindow());
+    WindowUtils.setupImeBehavior(getWindow());
     setSupportActionBar(findViewById(R.id.toolbar));
 
     SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
@@ -874,7 +883,6 @@ public class GeckoViewActivity extends AppCompatActivity
                   .build())
           .crashHandler(ExampleCrashHandler.class)
           .preferredColorScheme(mPreferredColorScheme.value())
-          .telemetryDelegate(new ExampleTelemetryDelegate())
           .javaScriptEnabled(mJavascriptEnabled.value())
           .extensionsProcessEnabled(mExtensionsProcessEnabled.value())
           .globalPrivacyControlEnabled(mGlobalPrivacyControlEnabled.value())
@@ -1337,6 +1345,9 @@ public class GeckoViewActivity extends AppCompatActivity
         break;
       case R.id.translate_manage:
         translateManage();
+        break;
+      case R.id.webcompat_info:
+        webCompatInfo(session);
         break;
       default:
         return super.onOptionsItemSelected(item);
@@ -2159,16 +2170,19 @@ public class GeckoViewActivity extends AppCompatActivity
     }
 
     @Override
-    public void onProductUrl(@NonNull final GeckoSession session) {
-      Log.d("Gecko", "onProductUrl");
-    }
-
-    @Override
     public void onShowDynamicToolbar(final GeckoSession session) {
       final View toolbar = findViewById(R.id.toolbar);
       if (toolbar != null) {
         toolbar.setTranslationY(0f);
         mGeckoView.setVerticalClipping(0);
+      }
+    }
+
+    @Override
+    public void onHideDynamicToolbar(final GeckoSession session) {
+      final View toolbar = findViewById(R.id.toolbar);
+      if (toolbar != null) {
+        toolbar.setTranslationY(toolbar.getHeight());
       }
     }
 
@@ -2421,6 +2435,15 @@ public class GeckoViewActivity extends AppCompatActivity
       }
     }
     return null;
+  }
+
+  public void webCompatInfo(@NonNull final GeckoSession session) {
+    GeckoResult<JSONObject> result = session.getWebCompatInfo();
+    result.map(
+        info -> {
+          Log.d(LOGTAG, "Received web compat info.");
+          return info;
+        });
   }
 
   public void shoppingActions(@NonNull final GeckoSession session, @NonNull final String url) {
@@ -3036,28 +3059,6 @@ public class GeckoViewActivity extends AppCompatActivity
       } else {
         mActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
       }
-    }
-  }
-
-  private final class ExampleTelemetryDelegate implements RuntimeTelemetry.Delegate {
-    @Override
-    public void onHistogram(final @NonNull RuntimeTelemetry.Histogram histogram) {
-      Log.d(LOGTAG, "onHistogram " + histogram);
-    }
-
-    @Override
-    public void onBooleanScalar(final @NonNull RuntimeTelemetry.Metric<Boolean> scalar) {
-      Log.d(LOGTAG, "onBooleanScalar " + scalar);
-    }
-
-    @Override
-    public void onLongScalar(final @NonNull RuntimeTelemetry.Metric<Long> scalar) {
-      Log.d(LOGTAG, "onLongScalar " + scalar);
-    }
-
-    @Override
-    public void onStringScalar(final @NonNull RuntimeTelemetry.Metric<String> scalar) {
-      Log.d(LOGTAG, "onStringScalar " + scalar);
     }
   }
 

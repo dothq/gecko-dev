@@ -1,68 +1,31 @@
-From: Jan Grulich <jgrulich@redhat.com>
-Date: Fri, 2 Feb 2024 11:47:00 +0000
-Subject: Bug 1876896 - WebRTC backport: Allow VideoCaptureModulePipeWire to be
- shared with more consumers r=pehrsons,webrtc-reviewers
+From: Nico Grunbaum <na-g@nostrum.com>
+Date: Thu, 23 May 2024 17:28:00 +0000
+Subject: Bug 1897459 - P0 - for BSD do not build physical_socket_server in
+ libwebrtc;r=mjf,webrtc-reviewers
 
-This is a simple backport of an WebRTC upstream change.
+libwebrtc added the use of several non-portable socket options in this code.
+Firefox does not use any of the code in this file, but there is a header dependency chain leading from code that is used.
 
-Upstream commit: 958c9ac546f33716d097b5092515dcac705151d3
-
-Differential Revision: https://phabricator.services.mozilla.com/D200142
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/2ba2ef65280b2e6f246fed24d6986718981744f5
+Differential Revision: https://phabricator.services.mozilla.com/D210858
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/4e7b3c485e549e7e35b227b517acadbbad957004
 ---
- .../video_capture/linux/video_capture_pipewire.cc | 15 ++++++++++++++-
- .../video_capture/linux/video_capture_pipewire.h  |  1 +
- 2 files changed, 15 insertions(+), 1 deletion(-)
+ rtc_base/BUILD.gn | 6 ++++++
+ 1 file changed, 6 insertions(+)
 
-diff --git a/modules/video_capture/linux/video_capture_pipewire.cc b/modules/video_capture/linux/video_capture_pipewire.cc
-index 9d47e3ddbf..fb813e331f 100644
---- a/modules/video_capture/linux/video_capture_pipewire.cc
-+++ b/modules/video_capture/linux/video_capture_pipewire.cc
-@@ -48,7 +48,10 @@ VideoType VideoCaptureModulePipeWire::PipeWireRawFormatToVideoType(
- 
- VideoCaptureModulePipeWire::VideoCaptureModulePipeWire(
-     VideoCaptureOptions* options)
--    : VideoCaptureImpl(), session_(options->pipewire_session()) {}
-+    : VideoCaptureImpl(),
-+      session_(options->pipewire_session()),
-+      initialized_(false),
-+      started_(false) {}
- 
- VideoCaptureModulePipeWire::~VideoCaptureModulePipeWire() {
-   RTC_DCHECK_RUN_ON(&api_checker_);
-@@ -121,6 +124,14 @@ int32_t VideoCaptureModulePipeWire::StartCapture(
-   RTC_CHECK_RUNS_SERIALIZED(&capture_checker_);
-   RTC_DCHECK_RUN_ON(&api_checker_);
- 
-+  if (initialized_) {
-+    if (capability == _requestedCapability) {
-+      return 0;
-+    } else {
-+      StopCapture();
-+    }
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index c16dc3619d..c402055b84 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -1004,6 +1004,12 @@ rtc_library("threading") {
+     "thread.cc",
+     "thread.h",
+   ]
++  if (is_bsd && build_with_mozilla) {
++    sources -= [
++      "physical_socket_server.cc",
++      "physical_socket_server.h",
++    ]
 +  }
-+
-   uint8_t buffer[1024] = {};
- 
-   RTC_LOG(LS_VERBOSE) << "Creating new PipeWire stream for node " << node_id_;
-@@ -171,6 +182,8 @@ int32_t VideoCaptureModulePipeWire::StartCapture(
-   }
- 
-   _requestedCapability = capability;
-+  initialized_ = true;
-+
-   return 0;
- }
- 
-diff --git a/modules/video_capture/linux/video_capture_pipewire.h b/modules/video_capture/linux/video_capture_pipewire.h
-index 620ee520ca..5d6794ed65 100644
---- a/modules/video_capture/linux/video_capture_pipewire.h
-+++ b/modules/video_capture/linux/video_capture_pipewire.h
-@@ -50,6 +50,7 @@ class VideoCaptureModulePipeWire : public VideoCaptureImpl {
-   int node_id_ RTC_GUARDED_BY(capture_checker_);
-   VideoCaptureCapability configured_capability_
-       RTC_GUARDED_BY(pipewire_checker_);
-+  bool initialized_ RTC_GUARDED_BY(capture_checker_);
-   bool started_ RTC_GUARDED_BY(api_lock_);
- 
-   struct pw_stream* stream_ RTC_GUARDED_BY(pipewire_checker_) = nullptr;
+   deps = [
+     ":async_dns_resolver",
+     ":byte_order",

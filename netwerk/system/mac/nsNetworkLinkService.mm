@@ -26,6 +26,8 @@
 #include "nsCRT.h"
 #include "nsNetCID.h"
 #include "nsThreadUtils.h"
+#include "mozilla/AppShutdown.h"
+#include "mozilla/Components.h"
 #include "mozilla/Logging.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/SHA1.h"
@@ -87,6 +89,8 @@ static void CFReleaseSafe(CFTypeRef cf) {
     ::CFRelease(cf);
   }
 }
+
+mozilla::Atomic<bool, mozilla::MemoryOrdering::Relaxed> sHasNonLocalIPv6{true};
 
 NS_IMPL_ISUPPORTS(nsNetworkLinkService, nsINetworkLinkService, nsIObserver,
                   nsITimerCallback, nsINamed)
@@ -423,6 +427,7 @@ bool nsNetworkLinkService::RoutingFromKernel(nsTArray<nsCString>& aHash) {
     LOG(("RoutingFromKernel: Can create a socket for network id"));
     return false;
   }
+  auto sockfd_guard = mozilla::MakeScopeExit([sockfd] { close(sockfd); });
 
   MOZ_ASSERT(!NS_IsMainThread());
 
@@ -526,6 +531,7 @@ bool nsNetworkLinkService::IPv6NetworkId(SHA1Sum* sha1) {
   std::vector<prefix_and_netmask> prefixAndNetmaskStore;
 
   if (!getifaddrs(&ifap)) {
+    bool hasNonLocalIPv6 = false;
     struct ifaddrs* ifa;
     for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
       if (ifa->ifa_addr == NULL) {
@@ -534,6 +540,7 @@ bool nsNetworkLinkService::IPv6NetworkId(SHA1Sum* sha1) {
       if ((AF_INET6 == ifa->ifa_addr->sa_family) &&
           !(ifa->ifa_flags & (IFF_POINTOPOINT | IFF_LOOPBACK))) {
         // only IPv6 interfaces that aren't pointtopoint or loopback
+        hasNonLocalIPv6 = true;
         struct sockaddr_in6* sin_netmask =
             (struct sockaddr_in6*)ifa->ifa_netmask;
         if (sin_netmask) {
@@ -567,6 +574,7 @@ bool nsNetworkLinkService::IPv6NetworkId(SHA1Sum* sha1) {
         }
       }
     }
+    sHasNonLocalIPv6 = hasNonLocalIPv6;
     freeifaddrs(ifap);
   }
   if (prefixAndNetmaskStore.empty()) {
@@ -583,6 +591,10 @@ bool nsNetworkLinkService::IPv6NetworkId(SHA1Sum* sha1) {
 void nsNetworkLinkService::calculateNetworkIdWithDelay(uint32_t aDelay) {
   MOZ_ASSERT(NS_IsMainThread());
 
+  if (AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdownNetTeardown)) {
+    return;
+  }
+
   if (aDelay) {
     if (mNetworkIdTimer) {
       LOG(("Restart the network id timer."));
@@ -595,8 +607,8 @@ void nsNetworkLinkService::calculateNetworkIdWithDelay(uint32_t aDelay) {
     return;
   }
 
-  nsCOMPtr<nsIEventTarget> target =
-      do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
+  nsCOMPtr<nsIEventTarget> target;
+  target = mozilla::components::StreamTransport::Service();
   if (!target) {
     return;
   }
@@ -723,8 +735,8 @@ void nsNetworkLinkService::NetworkConfigChanged(SCDynamicStoreRef aStoreREf,
 
 void nsNetworkLinkService::DNSConfigChanged(uint32_t aDelayMs) {
   LOG(("nsNetworkLinkService::DNSConfigChanged"));
-  nsCOMPtr<nsIEventTarget> target =
-      do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
+  nsCOMPtr<nsIEventTarget> target;
+  target = mozilla::components::StreamTransport::Service();
   if (!target) {
     return;
   }
@@ -752,8 +764,8 @@ void nsNetworkLinkService::DNSConfigChanged(uint32_t aDelayMs) {
 nsresult nsNetworkLinkService::Init(void) {
   nsresult rv;
 
-  nsCOMPtr<nsIObserverService> observerService =
-      do_GetService("@mozilla.org/observer-service;1", &rv);
+  nsCOMPtr<nsIObserverService> observerService;
+  observerService = mozilla::components::Observer::Service(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = observerService->AddObserver(this, "xpcom-shutdown", false);
@@ -761,7 +773,7 @@ nsresult nsNetworkLinkService::Init(void) {
 
   if (inet_pton(AF_INET, ROUTE_CHECK_IPV4, &mRouteCheckIPv4) != 1) {
     LOG(("Cannot parse address " ROUTE_CHECK_IPV4));
-    MOZ_DIAGNOSTIC_ASSERT(false, "Cannot parse address " ROUTE_CHECK_IPV4);
+    MOZ_DIAGNOSTIC_CRASH("Cannot parse address " ROUTE_CHECK_IPV4);
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -990,4 +1002,9 @@ void nsNetworkLinkService::ReachabilityChanged(SCNetworkReachabilityRef target,
   // If a new interface is up or the order of interfaces is changed, we should
   // update the DNS suffix list.
   service->DNSConfigChanged(0);
+}
+
+// static
+bool nsINetworkLinkService::HasNonLocalIPv6Address() {
+  return sHasNonLocalIPv6;
 }

@@ -64,9 +64,7 @@ class SVGUseElement final : public SVGUseElementBase,
   NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
 
   // SVGElement specializations:
-  gfxMatrix PrependLocalTransformsTo(
-      const gfxMatrix& aMatrix,
-      SVGTransformTypes aWhich = eAllTransforms) const override;
+  gfxMatrix ChildToUserSpaceTransform() const override;
   bool HasValidDimensions() const override;
 
   // nsIContent interface
@@ -143,6 +141,7 @@ class SVGUseElement final : public SVGUseElementBase,
     SVGUseElement* mOwningUseElement;
   };
 
+  void DidAnimateAttribute(int32_t aNameSpaceID, nsAtom* aAttribute) override;
   SVGUseFrame* GetFrame() const;
 
   LengthAttributesInfo GetLengthInfo() override;

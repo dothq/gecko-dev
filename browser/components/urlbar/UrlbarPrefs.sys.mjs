@@ -15,6 +15,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Region: "resource://gre/modules/Region.sys.mjs",
   TelemetryEnvironment: "resource://gre/modules/TelemetryEnvironment.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
+  CustomizableUI: "resource:///modules/CustomizableUI.sys.mjs",
 });
 
 const PREF_URLBAR_BRANCH = "browser.urlbar.";
@@ -65,11 +66,16 @@ const PREF_URLBAR_DEFAULTS = new Map([
   ["autoFill.stddevMultiplier", [0.0, "float"]],
 
   // Feature gate pref for clipboard suggestions in the urlbar.
-  ["clipboard.featureGate", true],
+  ["clipboard.featureGate", false],
+
+  // Whether to close other panels when the urlbar panel opens.
+  // This feature gate exists just as an emergency rollback in case of
+  // unexpected issues in Release. We normally want this behavior.
+  ["closeOtherPanelsOnOpen", true],
 
   // Whether to show a link for using the search functionality provided by the
   // active view if the the view utilizes OpenSearch.
-  ["contextualSearch.enabled", false],
+  ["contextualSearch.enabled", true],
 
   // Whether using `ctrl` when hitting return/enter in the URL bar
   // (or clicking 'go') should prefix 'www.' and suffix
@@ -108,9 +114,6 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether the heuristic result is hidden.
   ["experimental.hideHeuristic", false],
 
-  // Whether the urlbar displays a permanent search button.
-  ["experimental.searchButton", false],
-
   // Comma-separated list of `source.providers` combinations, that are used to
   // determine if an exposure event should be fired. This can be set by a
   // Nimbus variable and is expected to be set via nimbus experiment
@@ -125,8 +128,27 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // amount of time in milliseconds for them to respond before timing out.
   ["extension.omnibox.timeout", 3000],
 
+  // Feature gate pref for Fakespot suggestions in the urlbar.
+  ["fakespot.featureGate", false],
+
+  // The minimum prefix length of a Fakespot keyword the user must type to
+  // trigger the suggestion. 0 means the min length should be taken from Nimbus.
+  ["fakespot.minKeywordLength", 4],
+
+  // The number of times the user has clicked the "Show less frequently" command
+  // for Fakespot suggestions.
+  ["fakespot.showLessFrequentlyCount", 0],
+
+  // The index of Fakespot results within the Firefox Suggest section. A
+  // negative index is relative to the end of the section.
+  ["fakespot.suggestedIndex", -1],
+
   // When true, `javascript:` URLs are not included in search results.
   ["filter.javascript", true],
+
+  // Focus the content document when pressing the Escape key, if there's no
+  // remaining typed history.
+  ["focusContentDocumentOnEsc", true],
 
   // Applies URL highlighting and other styling to the text in the urlbar input.
   ["formatting.enabled", true],
@@ -136,8 +158,16 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // future.
   ["groupLabels.enabled", true],
 
+  // Set default intent threshold value of 0.5
+  ["intentThreshold", [0.5, "float"]],
+
   // Whether the results panel should be kept open during IME composition.
   ["keepPanelOpenDuringImeComposition", false],
+
+  // Comma-separated list of result types that should trigger keyword-exposure
+  // telemetry. Only applies to results with an `exposureTelemetry` value other
+  // than `NONE`.
+  ["keywordExposureResults", ""],
 
   // As a user privacy measure, don't fetch results from remote services for
   // searches that start by pasting a string longer than this. The pref name
@@ -165,6 +195,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Timeout for Merino fetches (ms).
   ["merino.timeoutMs", 200],
 
+  // Set default NER threshold value of 0.5
+  ["nerThreshold", [0.5, "float"]],
+
   // Whether addresses and search results typed into the address bar
   // should be opened in new tabs by default.
   ["openintab", false],
@@ -178,7 +211,7 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // If disabled, QuickActions will not be included in either the default search
   // mode or the QuickActions search mode.
-  ["quickactions.enabled", false],
+  ["quickactions.enabled", true],
 
   // Whether we will match QuickActions within a phrase and not only a prefix.
   ["quickactions.matchInPhrase", true],
@@ -188,15 +221,19 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // zero prefix state.
   ["quickactions.minimumSearchString", 3],
 
-  // Show multiple actions in a random order.
-  ["quickactions.randomOrderActions", false],
-
   // Whether we show the Actions section in about:preferences.
   ["quickactions.showPrefs", false],
 
   // Whether quick suggest results can be shown in position specified in the
   // suggestions.
   ["quicksuggest.allowPositionInSuggestions", true],
+
+  // When non-zero, this is the character-count threshold (inclusive) for
+  // showing AMP suggestions as top picks. If an AMP suggestion is triggered by
+  // a keyword at least this many characters long, it will be shown as a top
+  // pick. Full keywords will also show AMP suggestions as top picks even if
+  // they have fewer characters than this threshold.
+  ["quicksuggest.ampTopPickCharThreshold", 0],
 
   // JSON'ed array of blocked quick suggest URL digests.
   ["quicksuggest.blockedDigests", ""],
@@ -223,6 +260,12 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Global toggle for whether the quick suggest feature is enabled, i.e.,
   // sponsored and recommended results related to the user's search string.
   ["quicksuggest.enabled", false],
+
+  // Comma-separated list of Suggest exposure suggestion types to enable.
+  ["quicksuggest.exposureSuggestionTypes", ""],
+
+  // Whether Suggest should be hidden in the settings UI even when enabled.
+  ["quicksuggest.hideSettingsUI", false],
 
   // Whether non-sponsored quick suggest results are subject to impression
   // frequency caps. This pref is a fallback for the Nimbus variable
@@ -257,6 +300,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
   //    `suggest.quicksuggest.sponsored` are true. Previously they were false.
   ["quicksuggest.migrationVersion", 0],
 
+  // Whether Suggest will use the ML backend in addition to Rust.
+  ["quicksuggest.mlEnabled", false],
+
   // The user's response to the Firefox Suggest online opt-in dialog.
   ["quicksuggest.onboardingDialogChoice", ""],
 
@@ -283,7 +329,7 @@ const PREF_URLBAR_DEFAULTS = new Map([
   ["quicksuggest.seenRestarts", 0],
 
   // Whether to show the quick suggest onboarding dialog.
-  ["quicksuggest.shouldShowOnboardingDialog", true],
+  ["quicksuggest.shouldShowOnboardingDialog", false],
 
   // Whether the user has seen the onboarding dialog.
   ["quicksuggest.showedOnboardingDialog", false],
@@ -293,7 +339,7 @@ const PREF_URLBAR_DEFAULTS = new Map([
   ["recentsearches.expirationMs", (1000 * 60 * 60 * 24 * 3).toString()],
 
   // Feature gate pref for recent searches being shown in the urlbar.
-  ["recentsearches.featureGate", false],
+  ["recentsearches.featureGate", true],
 
   // Store the time the last default engine changed so we can only show
   // recent searches since then.
@@ -317,16 +363,36 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // If true, we show tail suggestions when available.
   ["richSuggestions.tail", true],
 
+  // Disable the urlbar OneOff panel from being shown.
+  ["scotchBonnet.disableOneOffs", false],
+
+  // A short-circuit pref to enable all the features that are part of a
+  // grouped release.
+  ["scotchBonnet.enableOverride", false],
+
+  // Allow searchmode to be persisted as the user navigates the
+  // search host.
+  ["scotchBonnet.persistSearchMode", false],
+
+  // Feature gate pref for search restrict keywords being shown in the urlbar.
+  ["searchRestrictKeywords.featureGate", false],
+
   // Hidden pref. Disables checks that prevent search tips being shown, thus
   // showing them every time the newtab page or the default search engine
   // homepage is opened.
   ["searchTips.test.ignoreShowLimits", false],
 
+  // Feature gate pref for secondary actions being shown in the urlbar.
+  ["secondaryActions.featureGate", false],
+
+  // Alternative switch to tab implementation using secondaryActions.
+  ["secondaryActions.switchToTab", false],
+
   // Whether to show each local search shortcut button in the view.
   ["shortcuts.bookmarks", true],
   ["shortcuts.tabs", true],
   ["shortcuts.history", true],
-  ["shortcuts.quickactions", false],
+  ["shortcuts.actions", true],
 
   // Boolean to determine if the providers defined in `exposureResults`
   // should be displayed in search results. This can be set by a
@@ -367,6 +433,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Whether results will include search engines (e.g. tab-to-search).
   ["suggest.engines", true],
+
+  // If `browser.urlbar.fakespot.featureGate` is true, this controls whether
+  // Fakespot suggestions are turned on.
+  ["suggest.fakespot", true],
 
   // Whether results will include the user's history.
   ["suggest.history", true],
@@ -417,6 +487,13 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Yelp suggestions are turned on.
   ["suggest.yelp", true],
 
+  // Whether history results with the same title and URL excluding the ref
+  // will be deduplicated.
+  ["deduplication.enabled", false],
+
+  // How old history results have to be to be deduplicated.
+  ["deduplication.thresholdDays", 7],
+
   // When using switch to tabs, if set to true this will move the tab into the
   // active window.
   ["switchTabs.adoptIntoActiveWindow", false],
@@ -425,6 +502,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // or only from the current container.
   ["switchTabs.searchAllContainers", true],
 
+  // The minimum number of characters needed to match a tab group name.
+  ["tabGroups.minSearchLength", 1],
+
   // The number of remaining times the user can interact with tab-to-search
   // onboarding results before we stop showing them.
   ["tabToSearch.onboard.interactionsLeft", 3],
@@ -432,14 +512,11 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // The number of times the user has been shown the onboarding search tip.
   ["tipShownCount.searchTip_onboard", 0],
 
-  // The number of times the user has been shown the urlbar persisted search tip.
-  ["tipShownCount.searchTip_persist", 0],
-
   // The number of times the user has been shown the redirect search tip.
   ["tipShownCount.searchTip_redirect", 0],
 
   // Feature gate pref for trending suggestions in the urlbar.
-  ["trending.featureGate", false],
+  ["trending.featureGate", true],
 
   // The maximum number of trending results to show while not in search mode.
   ["trending.maxResultsNoSearchMode", 10],
@@ -450,7 +527,7 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether to only show trending results when the urlbar is in search
   // mode or when the user initially opens the urlbar without selecting
   // an engine.
-  ["trending.requireSearchMode", true],
+  ["trending.requireSearchMode", false],
 
   // Remove 'https://' from url when urlbar is focused.
   ["trimHttps", true],
@@ -464,30 +541,35 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // The index where we show unit conversion results.
   ["unitConversion.suggestedIndex", 1],
 
-  // Controls the empty search behavior in Search Mode:
-  //  0 - Show nothing
-  //  1 - Show search history
-  //  2 - Show search and browsing history
-  ["update2.emptySearchBehavior", 0],
+  // Untrim url, when urlbar is focused.
+  // Note: This pref will be removed once the feature is stable.
+  ["untrimOnUserInteraction.featureGate", false],
+
+  // Whether or not Unified Search Button is shown always.
+  ["unifiedSearchButton.always", false],
 
   // Feature gate pref for weather suggestions in the urlbar.
   ["weather.featureGate", false],
-
-  // When false, the weather suggestion will not be fetched when a VPN is
-  // detected. When true, it will be fetched anyway.
-  ["weather.ignoreVPN", false],
 
   // The minimum prefix length of a weather keyword the user must type to
   // trigger the suggestion. 0 means the min length should be taken from Nimbus
   // or remote settings.
   ["weather.minKeywordLength", 0],
 
+  // The number of times the user has clicked the "Show less frequently" command
+  // for weather suggestions.
+  ["weather.showLessFrequentlyCount", 0],
+
   // Feature gate pref for Yelp suggestions in the urlbar.
   ["yelp.featureGate", false],
 
   // The minimum prefix length of a Yelp keyword the user must type to trigger
   // the suggestion. 0 means the min length should be taken from Nimbus.
-  ["yelp.minKeywordLength", 0],
+  ["yelp.minKeywordLength", 4],
+
+  // Whether Yelp suggestions will be served from the Suggest ML backend instead
+  // of Rust.
+  ["yelp.mlEnabled", false],
 
   // Whether Yelp suggestions should be shown as top picks. This is a fallback
   // pref for the `yelpSuggestPriority` Nimbus variable.
@@ -496,19 +578,15 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // The number of times the user has clicked the "Show less frequently" command
   // for Yelp suggestions.
   ["yelp.showLessFrequentlyCount", 0],
-
-  // The group-relative suggestedIndex of Yelp suggestions within the Firefox
-  // Suggest section. Ignored when Yelp suggestions are shown as top picks. This
-  // is a fallback pref for the `yelpSuggestNonPriorityIndex` Nimbus variable.
-  ["yelp.suggestedIndex", 0],
 ]);
 
 const PREF_OTHER_DEFAULTS = new Map([
   ["browser.fixup.dns_first_for_single_words", false],
+  ["browser.ml.enable", false],
   ["browser.search.suggest.enabled", true],
   ["browser.search.suggest.enabled.private", false],
-  ["browser.search.widget.inNavBar", false],
   ["keyword.enabled", true],
+  ["security.insecure_connection_text.enabled", false],
   ["ui.popup.disable_autohide", false],
 ]);
 
@@ -517,16 +595,14 @@ const PREF_OTHER_DEFAULTS = new Map([
 // defaults are the values of their fallbacks.
 const NIMBUS_DEFAULTS = {
   addonsShowLessFrequentlyCap: 0,
-  experimentType: "",
+  fakespotMinKeywordLength: null,
   pocketShowLessFrequentlyCap: 0,
-  quickSuggestRemoteSettingsDataType: "data",
+  pocketSuggestIndex: null,
   quickSuggestScoreMap: null,
-  recordNavigationalSuggestionTelemetry: false,
-  weatherKeywords: null,
-  weatherKeywordsMinimumLength: 0,
-  weatherKeywordsMinimumLengthCap: 0,
-  weatherSimpleUI: false,
-  yelpMinKeywordLength: 0,
+  weatherKeywordsMinimumLength: null,
+  weatherShowLessFrequentlyCap: null,
+  yelpMinKeywordLength: null,
+  yelpSuggestNonPriorityIndex: null,
 };
 
 // Maps preferences under browser.urlbar.suggest to behavior names, as defined
@@ -598,6 +674,10 @@ function makeResultGroups({ showSearchSuggestionsFirst }) {
           { group: lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_BOOKMARK_KEYWORD },
           { group: lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_AUTOFILL },
           { group: lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_TOKEN_ALIAS_ENGINE },
+          {
+            group:
+              lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_RESTRICT_KEYWORD_AUTOFILL,
+          },
           { group: lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_HISTORY_URL },
           { group: lazy.UrlbarUtils.RESULT_GROUP.HEURISTIC_FALLBACK },
         ],
@@ -664,6 +744,10 @@ function makeResultGroups({ showSearchSuggestionsFirst }) {
                 // only added for queries starting with "about:".
                 flex: 2,
                 group: lazy.UrlbarUtils.RESULT_GROUP.ABOUT_PAGES,
+              },
+              {
+                flex: 99,
+                group: lazy.UrlbarUtils.RESULT_GROUP.RESTRICT_SEARCH_KEYWORD,
               },
             ],
           },
@@ -784,6 +868,19 @@ class Preferences {
    */
   makeResultGroups(options) {
     return makeResultGroups(options);
+  }
+
+  /**
+   * Gets a pref but allows the `scotchBonnet.enableOverride` pref to
+   * short circuit them so one pref can be used to enable multiple
+   * features.
+   *
+   * @param {string} pref
+   *        The name of the preference to clear.
+   * @returns {*} The preference value.
+   */
+  getScotchBonnetPref(pref) {
+    return this.get("scotchBonnet.enableOverride") || this.get(pref);
   }
 
   get resultGroups() {
@@ -1048,6 +1145,10 @@ class Preferences {
     return {
       history: {
         "quicksuggest.enabled": false,
+        "quicksuggest.dataCollection.enabled": false,
+        "quicksuggest.shouldShowOnboardingDialog": false,
+        "suggest.quicksuggest.nonsponsored": false,
+        "suggest.quicksuggest.sponsored": false,
       },
       offline: {
         "quicksuggest.enabled": true,
@@ -1492,6 +1593,9 @@ class Preferences {
    */
   _getPrefValue(pref) {
     switch (pref) {
+      case "shortcuts.actions": {
+        return this.get("scotchBonnet.enableOverride") && this._readPref(pref);
+      }
       case "defaultBehavior": {
         let val = 0;
         for (let type of Object.keys(SUGGEST_PREF_TO_BEHAVIOR)) {
@@ -1507,12 +1611,22 @@ class Preferences {
         return this.shouldHandOffToSearchModePrefs.some(
           prefName => !this.get(prefName)
         );
-      case "autoFillAdaptiveHistoryUseCountThreshold":
+      case "autoFillAdaptiveHistoryUseCountThreshold": {
         const nimbusValue =
           this._nimbus.autoFillAdaptiveHistoryUseCountThreshold;
         return nimbusValue === undefined
           ? this.get("autoFill.adaptiveHistory.useCountThreshold")
           : parseFloat(nimbusValue);
+      }
+      case "exposureResults":
+      case "keywordExposureResults":
+      case "quicksuggest.exposureSuggestionTypes":
+        return new Set(
+          this._readPref(pref)
+            .split(",")
+            .map(s => s.trim())
+            .filter(s => !!s)
+        );
     }
     return this._readPref(pref);
   }
@@ -1636,7 +1750,7 @@ class Preferences {
     return (
       this.get("showSearchTermsFeatureGate") &&
       this.get("showSearchTerms.enabled") &&
-      !this.get("browser.search.widget.inNavBar")
+      !lazy.CustomizableUI.getPlacementOfWidget("search-container")
     );
   }
 

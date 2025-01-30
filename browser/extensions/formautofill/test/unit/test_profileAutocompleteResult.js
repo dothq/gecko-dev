@@ -51,35 +51,71 @@ let allFieldNames = [
   "tel",
 ];
 
+function makeAddressComment({ primary, secondary, status, profile }) {
+  return JSON.stringify({
+    primary,
+    secondary,
+    status,
+    ariaLabel: primary + " " + secondary + " " + status,
+    fillMessageName: "FormAutofill:FillForm",
+    fillMessageData: { profile },
+  });
+}
+
+function makeCreditCardComment({
+  primary,
+  secondary,
+  ariaLabel,
+  image,
+  profile,
+}) {
+  return JSON.stringify({
+    primary,
+    secondary,
+    ariaLabel,
+    image,
+    fillMessageName: "FormAutofill:FillForm",
+    fillMessageData: { profile },
+  });
+}
+
 let addressTestCases = [
   {
     description: "Focus on an `organization` field",
     options: {},
     matchingProfiles,
+    filledCategories: [
+      ["address", "name", "tel"],
+      ["address", "name", "tel"],
+    ],
     allFieldNames,
     searchString: "",
-    fieldName: "organization",
+    fieldDetail: { fieldName: "organization" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "Sesame Street",
+          comment: makeAddressComment({
             primary: "Sesame Street",
             secondary: "123 Sesame Street.",
+            status: "Also autofills address, name, phone",
+            profile: matchingProfiles[0],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "Mozilla",
+          comment: makeAddressComment({
             primary: "Mozilla",
             secondary: "331 E. Evelyn Avenue",
+            status: "Also autofills address, name, phone",
+            profile: matchingProfiles[1],
           }),
           image: "",
         },
@@ -90,40 +126,51 @@ let addressTestCases = [
     description: "Focus on an `tel` field",
     options: {},
     matchingProfiles,
+    filledCategories: [
+      ["address", "name", "tel", "organization"],
+      ["address", "name", "tel", "organization"],
+      ["address", "tel"],
+    ],
     allFieldNames,
     searchString: "",
-    fieldName: "tel",
+    fieldDetail: { fieldName: "tel" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "1-345-345-3456.",
+          comment: makeAddressComment({
             primary: "1-345-345-3456.",
             secondary: "123 Sesame Street.",
+            status: "Also autofills address, name, organization",
+            profile: matchingProfiles[0],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "1-650-903-0800",
+          comment: makeAddressComment({
             primary: "1-650-903-0800",
             secondary: "331 E. Evelyn Avenue",
+            status: "Also autofills address, name, organization",
+            profile: matchingProfiles[1],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[2]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "1-000-000-0000",
+          comment: makeAddressComment({
             primary: "1-000-000-0000",
             secondary: "321, No Name St. 2nd line 3rd line",
+            status: "Also autofills address",
+            profile: matchingProfiles[2],
           }),
           image: "",
         },
@@ -134,40 +181,51 @@ let addressTestCases = [
     description: "Focus on an `street-address` field",
     options: {},
     matchingProfiles,
+    filledCategories: [
+      ["address", "name", "tel", "organization"],
+      ["address", "name", "tel", "organization"],
+      ["address", "tel"],
+    ],
     allFieldNames,
     searchString: "",
-    fieldName: "street-address",
+    fieldDetail: { fieldName: "street-address" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "123 Sesame Street.",
+          comment: makeAddressComment({
             primary: "123 Sesame Street.",
             secondary: "Timothy Berners-Lee",
+            status: "Also autofills name, organization, phone",
+            profile: matchingProfiles[0],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "331 E. Evelyn Avenue",
+          comment: makeAddressComment({
             primary: "331 E. Evelyn Avenue",
             secondary: "John Doe",
+            status: "Also autofills name, organization, phone",
+            profile: matchingProfiles[1],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[2]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "321, No Name St. 2nd line 3rd line",
+          comment: makeAddressComment({
             primary: "321, No Name St. 2nd line 3rd line",
             secondary: "1-000-000-0000",
+            status: "Also autofills phone",
+            profile: matchingProfiles[2],
           }),
           image: "",
         },
@@ -178,40 +236,51 @@ let addressTestCases = [
     description: "Focus on an `address-line1` field",
     options: {},
     matchingProfiles,
+    filledCategories: [
+      ["address", "name", "tel", "organization"],
+      ["address", "name", "tel", "organization"],
+      ["address", "tel"],
+    ],
     allFieldNames,
     searchString: "",
-    fieldName: "address-line1",
+    fieldDetail: { fieldName: "address-line1" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "123 Sesame Street.",
+          comment: makeAddressComment({
             primary: "123 Sesame Street.",
             secondary: "Timothy Berners-Lee",
+            status: "Also autofills name, organization, phone",
+            profile: matchingProfiles[0],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "331 E. Evelyn Avenue",
+          comment: makeAddressComment({
             primary: "331 E. Evelyn Avenue",
             secondary: "John Doe",
+            status: "Also autofills name, organization, phone",
+            profile: matchingProfiles[1],
           }),
           image: "",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[2]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "321, No Name St.",
+          comment: makeAddressComment({
             primary: "321, No Name St.",
             secondary: "1-000-000-0000",
+            status: "Also autofills phone",
+            profile: matchingProfiles[2],
           }),
           image: "",
         },
@@ -224,7 +293,7 @@ let addressTestCases = [
     matchingProfiles: [],
     allFieldNames,
     searchString: "",
-    fieldName: "",
+    fieldDetail: { fieldName: "" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_NOMATCH,
       defaultIndex: 0,
@@ -237,7 +306,7 @@ let addressTestCases = [
     matchingProfiles: [],
     allFieldNames,
     searchString: "",
-    fieldName: "",
+    fieldDetail: { fieldName: "" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_FAILURE,
       defaultIndex: 0,
@@ -280,32 +349,34 @@ let creditCardTestCases = [
     matchingProfiles,
     allFieldNames,
     searchString: "",
-    fieldName: "cc-name",
+    fieldDetail: { fieldName: "cc-name" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "Timothy Berners-Lee",
+          comment: makeCreditCardComment({
             primary: "Timothy Berners-Lee",
-            secondary: "****6785",
+            secondary: "••••6785",
             ariaLabel: "Visa Timothy Berners-Lee ****6785",
             image: "chrome://formautofill/content/third-party/cc-logo-visa.svg",
+            profile: matchingProfiles[0],
           }),
           image: "chrome://formautofill/content/third-party/cc-logo-visa.svg",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
+          style: "autofill",
+          label: "John Doe",
+          comment: makeCreditCardComment({
             primary: "John Doe",
-            secondary: "****1234",
+            secondary: "••••1234",
             ariaLabel: "American Express John Doe ****1234",
             image: "chrome://formautofill/content/third-party/cc-logo-amex.png",
+            profile: matchingProfiles[1],
           }),
           image: "chrome://formautofill/content/third-party/cc-logo-amex.png",
         },
@@ -318,44 +389,47 @@ let creditCardTestCases = [
     matchingProfiles,
     allFieldNames,
     searchString: "",
-    fieldName: "cc-number",
+    fieldDetail: { fieldName: "cc-number" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_SUCCESS,
       defaultIndex: 0,
       items: [
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[0]),
-          label: JSON.stringify({
-            primary: "****6785",
+          style: "autofill",
+          label: "••••6785",
+          comment: makeCreditCardComment({
+            primary: "••••6785",
             secondary: "Timothy Berners-Lee",
             ariaLabel: "Visa 6785 Timothy Berners-Lee",
             image: "chrome://formautofill/content/third-party/cc-logo-visa.svg",
+            profile: matchingProfiles[0],
           }),
           image: "chrome://formautofill/content/third-party/cc-logo-visa.svg",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[1]),
-          label: JSON.stringify({
-            primary: "****1234",
+          style: "autofill",
+          label: "••••1234",
+          comment: makeCreditCardComment({
+            primary: "••••1234",
             secondary: "John Doe",
             ariaLabel: "American Express 1234 John Doe",
             image: "chrome://formautofill/content/third-party/cc-logo-amex.png",
+            profile: matchingProfiles[1],
           }),
           image: "chrome://formautofill/content/third-party/cc-logo-amex.png",
         },
         {
           value: "",
-          style: "autofill-profile",
-          comment: JSON.stringify(matchingProfiles[2]),
-          label: JSON.stringify({
-            primary: "****5678",
+          style: "autofill",
+          label: "••••5678",
+          comment: makeCreditCardComment({
+            primary: "••••5678",
             secondary: "",
             ariaLabel: "5678",
             image: "chrome://formautofill/content/icon-credit-card-generic.svg",
+            profile: matchingProfiles[2],
           }),
           image: "chrome://formautofill/content/icon-credit-card-generic.svg",
         },
@@ -368,7 +442,7 @@ let creditCardTestCases = [
     matchingProfiles: [],
     allFieldNames,
     searchString: "",
-    fieldName: "",
+    fieldDetail: { fieldName: "" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_NOMATCH,
       defaultIndex: 0,
@@ -381,7 +455,7 @@ let creditCardTestCases = [
     matchingProfiles: [],
     allFieldNames,
     searchString: "",
-    fieldName: "",
+    fieldDetail: { fieldName: "" },
     expected: {
       searchResult: Ci.nsIAutoCompleteResult.RESULT_FAILURE,
       defaultIndex: 0,
@@ -407,16 +481,24 @@ add_task(async function test_all_patterns() {
       info("Starting testcase: " + testCase.description);
       let actual = new collectionConstructor(
         testCase.searchString,
-        testCase.fieldName,
+        testCase.fieldDetail,
         testCase.allFieldNames,
         testCase.matchingProfiles,
+        testCase.filledCategories,
         testCase.options
       );
       let expectedValue = testCase.expected;
       let expectedItemLength = expectedValue.items.length;
       // If the last item shows up as a footer, we expect one more item
       // than expected.
-      if (actual.getStyleAt(actual.matchCount - 1) == "autofill-footer") {
+      if (actual.getStyleAt(actual.matchCount - 1) == "action") {
+        expectedItemLength++;
+      }
+      // Add one row for the status.
+      if (
+        actual.matchCount > 2 &&
+        actual.getStyleAt(actual.matchCount - 2) == "status"
+      ) {
         expectedItemLength++;
       }
 
@@ -425,7 +507,10 @@ add_task(async function test_all_patterns() {
       equal(actual.matchCount, expectedItemLength);
       expectedValue.items.forEach((item, index) => {
         equal(actual.getValueAt(index), item.value);
-        equal(actual.getCommentAt(index), item.comment);
+        Assert.deepEqual(
+          JSON.parse(actual.getCommentAt(index)),
+          JSON.parse(item.comment)
+        );
         equal(actual.getLabelAt(index), item.label);
         equal(actual.getStyleAt(index), item.style);
         equal(actual.getImageAt(index), item.image);

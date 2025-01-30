@@ -494,7 +494,7 @@ void nsXPCWrappedJS::CleanupOutparams(const nsXPTMethodInfo* info,
                                       bool inOutOnly, uint8_t count) {
   // clean up any 'out' params handed in
   for (uint8_t i = 0; i < count; i++) {
-    const nsXPTParamInfo& param = info->GetParam(i);
+    const nsXPTParamInfo& param = info->Param(i);
     if (!param.IsOut()) {
       continue;
     }
@@ -645,7 +645,7 @@ nsresult nsXPCWrappedJS::CheckForException(XPCCallContext& ccx,
             // try to get filename, lineno from the first
             // stack frame location.
             int32_t lineNumber = 0;
-            nsString sourceName;
+            nsAutoCString sourceName;
 
             nsCOMPtr<nsIStackFrame> location = xpc_exception->GetLocation();
             if (location) {
@@ -657,8 +657,8 @@ nsresult nsXPCWrappedJS::CheckForException(XPCCallContext& ccx,
             }
 
             nsresult rv = scriptError->InitWithWindowID(
-                NS_ConvertUTF8toUTF16(newMessage), sourceName, u""_ns,
-                lineNumber, 0, 0, "XPConnect JavaScript",
+                NS_ConvertUTF8toUTF16(newMessage), sourceName, lineNumber, 0, 0,
+                "XPConnect JavaScript",
                 nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(cx));
             if (NS_FAILED(rv)) {
               scriptError = nullptr;
@@ -776,7 +776,7 @@ nsXPCWrappedJS::CallMethod(uint16_t methodIndex, const nsXPTMethodInfo* info,
   AutoSavePendingResult apr(xpccx);
 
   // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
-  uint8_t paramCount = info->GetParamCount();
+  uint8_t paramCount = info->ParamCount();
   uint8_t argc = paramCount;
   if (info->HasRetval()) {
     argc -= 1;
@@ -844,7 +844,7 @@ nsXPCWrappedJS::CallMethod(uint16_t methodIndex, const nsXPTMethodInfo* info,
   // we're trusting the JS engine to come up with a good global to use for
   // our object (whatever it was).
   for (i = 0; i < argc; i++) {
-    const nsXPTParamInfo& param = info->GetParam(i);
+    const nsXPTParamInfo& param = info->Param(i);
     const nsXPTType& type = param.GetType();
     uint32_t array_count;
     RootedValue val(cx, NullValue());
@@ -953,7 +953,7 @@ pre_call_clean_up:
 
   foundDependentParam = false;
   for (i = 0; i < paramCount; i++) {
-    const nsXPTParamInfo& param = info->GetParam(i);
+    const nsXPTParamInfo& param = info->Param(i);
     MOZ_ASSERT(!param.IsShared(), "[shared] implies [noscript]!");
     if (!param.IsOut() || !nativeParams[i].val.p) {
       continue;
@@ -998,7 +998,7 @@ pre_call_clean_up:
   // if any params were dependent, then we must iterate again to convert them.
   if (foundDependentParam && i == paramCount) {
     for (i = 0; i < paramCount; i++) {
-      const nsXPTParamInfo& param = info->GetParam(i);
+      const nsXPTParamInfo& param = info->Param(i);
       if (!param.IsOut()) {
         continue;
       }

@@ -87,23 +87,19 @@ class DepthBiasTest extends TextureTestMixin(GPUTest) {
         unreachable();
     }
 
-    const renderTarget = this.trackForCleanup(
-      this.device.createTexture({
-        format: renderTargetFormat,
-        size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-        usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-      })
-    );
+    const renderTarget = this.createTextureTracked({
+      format: renderTargetFormat,
+      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+      usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
 
-    const depthTexture = this.trackForCleanup(
-      this.device.createTexture({
-        size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-        format: depthFormat,
-        sampleCount: 1,
-        mipLevelCount: 1,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      })
-    );
+    const depthTexture = this.createTextureTracked({
+      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+      format: depthFormat,
+      sampleCount: 1,
+      mipLevelCount: 1,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
 
     const depthStencilAttachment: GPURenderPassDepthStencilAttachment = {
       view: depthTexture.createView(),
@@ -119,8 +115,8 @@ class DepthBiasTest extends TextureTestMixin(GPUTest) {
       colorAttachments: [
         {
           view: renderTarget.createView(),
-          storeOp: 'store',
           loadOp: 'load',
+          storeOp: 'store',
         },
       ],
       depthStencilAttachment,
@@ -304,6 +300,12 @@ g.test('depth_bias')
         },
       ] as const)
   )
+  .beforeAllSubcases(t => {
+    t.skipIf(
+      t.isCompatibility && t.params.biasClamp !== 0,
+      'non zero depthBiasClamp is not supported in compatibility mode'
+    );
+  })
   .fn(t => {
     t.runDepthBiasTest('depth32float', t.params);
   });
@@ -346,6 +348,12 @@ g.test('depth_bias_24bit_format')
         },
       ] as const)
   )
+  .beforeAllSubcases(t => {
+    t.skipIf(
+      t.isCompatibility && t.params.biasClamp !== 0,
+      'non zero depthBiasClamp is not supported in compatibility mode'
+    );
+  })
   .fn(t => {
     const { format } = t.params;
     t.runDepthBiasTestFor24BitFormat(format, t.params);

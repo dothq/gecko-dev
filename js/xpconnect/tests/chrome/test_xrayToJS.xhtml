@@ -270,6 +270,11 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
       gPrototypeProperties[c] = ["constructor", "name", "message", "stack"];
       gConstructorProperties[c] = constructorProps([]);
   }
+
+  if (typeof Error.isError === "function") {
+    gConstructorProperties.Error.push("isError");
+  }
+
   // toString and toSource only live on the parent proto (Error.prototype).
   gPrototypeProperties.Error.push('toString');
   gPrototypeProperties.Error.push('toSource');
@@ -285,7 +290,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
      "flags", "dotAll", "global", "hasIndices", "ignoreCase", "multiline", "source", "sticky",
      "unicode", "unicodeSets"];
   gConstructorProperties.RegExp =
-    constructorProps(["input", "lastMatch", "lastParen",
+    constructorProps(["escape", "input", "lastMatch", "lastParen",
                       "leftContext", "rightContext", "$1", "$2", "$3", "$4",
                       "$5", "$6", "$7", "$8", "$9", "$_", "$&", "$+",
                       "$`", "$'", Symbol.species])
@@ -293,16 +298,16 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
   gPrototypeProperties.Promise =
     ["constructor", "catch", "then", "finally", Symbol.toStringTag];
   gConstructorProperties.Promise =
-    constructorProps(["resolve", "reject", "all", "allSettled", "any", "race",
+    constructorProps(["resolve", "reject", "all", "allSettled", "any", "race", "try",
                       "withResolvers", Symbol.species]);
 
   gPrototypeProperties.ArrayBuffer =
-    ["constructor", "byteLength", "detached", "slice", Symbol.toStringTag, "transfer", "transferToFixedLength"];
+    ["constructor", "byteLength", "detached", "slice", Symbol.toStringTag, "transfer", "transferToFixedLength", "maxByteLength", "resizable", "resize"];
   gConstructorProperties.ArrayBuffer =
     constructorProps(["isView", Symbol.species]);
   gStatefulProperties.ArrayBuffer = ["transfer", "transferToFixedLength"]
 
-  gPrototypeProperties.SharedArrayBuffer = ["constructor", "slice", "byteLength", "detached", Symbol.toStringTag, "transfer", "transferToFixedLength"];
+  gPrototypeProperties.SharedArrayBuffer = ["constructor", "slice", "byteLength", "detached", Symbol.toStringTag, "transfer", "transferToFixedLength", "maxByteLength", "growable", "grow"];
   gConstructorProperties.SharedArrayBuffer = constructorProps([Symbol.species]);
   gStatefulProperties.SharedArrayBuffer = ["transfer", "transferToFixedLength"]
 
@@ -313,8 +318,10 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
     constructorProps(["groupBy", Symbol.species]);
 
   gPrototypeProperties.Set =
-    ["constructor", "size", Symbol.toStringTag, "has", "add", "delete",
-     "keys", "values", "clear", "forEach", "entries", Symbol.iterator];
+     [Symbol.toStringTag, Symbol.iterator, "add", "clear", "constructor", "delete",
+      "difference", "entries", "forEach", "has", "intersection", "isDisjointFrom",
+      "isSubsetOf", "isSupersetOf", "keys", "size", "symmetricDifference", "union",
+      "values"];
   gConstructorProperties.Set =
     constructorProps([Symbol.species]);
 
@@ -334,7 +341,8 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
      "getInt32", "getUint32", "getFloat32", "getFloat64",
      "setInt8", "setUint8", "setInt16", "setUint16",
      "setInt32", "setUint32", "setFloat32", "setFloat64",
-     "getBigInt64", "getBigUint64", "setBigInt64", "setBigUint64"]
+     "getBigInt64", "getBigUint64", "setBigInt64", "setBigUint64",
+     "getFloat16", "setFloat16"];
   gConstructorProperties.DataView = constructorProps([]);
 
   // Sort an array that may contain symbols as well as strings.
@@ -945,7 +953,12 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=933681
     // RegExp[@@species] is affected by above skip, but we don't fix it until
     // compelling use-case appears, as supporting RegExp[@@species] while
     // skipping other static properties makes things complicated.
-    let ctorPropsToSkip = ["input", "lastMatch", "lastParen",
+    // Since RegExp.escape is a method, there's no obvious reason to skip it,
+    // but it would require some changes in the Xray code (would need to special
+    // case it in xpc::JSXrayTraits::resolveOwnProperty and
+    // xpc::JSXrayTraits::enumerateNames) that are not necessarily worth the effort
+    // since it is a static method with no state.
+    let ctorPropsToSkip = ["escape", "input", "lastMatch", "lastParen",
                            "leftContext", "rightContext", "$1", "$2", "$3",
                            "$4", "$5", "$6", "$7", "$8", "$9", "$_", "$&",
                            "$+", "$`", "$'", Symbol.species];

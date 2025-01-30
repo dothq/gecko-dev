@@ -496,6 +496,9 @@ MarkupView.prototype = {
   },
 
   _enableImagePreviewTooltip() {
+    if (!this.imagePreviewTooltip) {
+      return;
+    }
     this.imagePreviewTooltip.startTogglingOnHover(
       this._elt,
       this._isImagePreviewTarget
@@ -2412,9 +2415,8 @@ MarkupView.prototype = {
 
     // We have to use node's walker and not a top level walker
     // as for fission frames, we are going to have multiple walkers
-    const inspectorFront = await container.node.targetFront.getFront(
-      "inspector"
-    );
+    const inspectorFront =
+      await container.node.targetFront.getFront("inspector");
     return inspectorFront.walker.children(container.node, {
       maxNodes: maxChildren,
       center: centered,

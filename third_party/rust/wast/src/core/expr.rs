@@ -1,3 +1,4 @@
+use crate::annotation;
 use crate::core::*;
 use crate::encode::Encode;
 use crate::kw;
@@ -13,20 +14,59 @@ use std::mem;
 #[derive(Debug)]
 #[allow(missing_docs)]
 pub struct Expression<'a> {
+    /// Instructions in this expression.
     pub instrs: Box<[Instruction<'a>]>,
+
+    /// Branch hints, if any, found while parsing instructions.
+    pub branch_hints: Box<[BranchHint]>,
+
+    /// Optionally parsed spans of all instructions in `instrs`.
+    ///
+    /// This value is `None` as it's disabled by default. This can be enabled
+    /// through the
+    /// [`ParseBuffer::track_instr_spans`](crate::parser::ParseBuffer::track_instr_spans)
+    /// function.
+    ///
+    /// This is not tracked by default due to the memory overhead and limited
+    /// use of this field.
+    pub instr_spans: Option<Box<[Span]>>,
+}
+
+/// A `@metadata.code.branch_hint` in the code, associated with a If or BrIf
+/// This instruction is a placeholder and won't produce anything. Its purpose
+/// is to store the offset of the following instruction and check that
+/// it's followed by `br_if` or `if`.
+#[derive(Debug)]
+pub struct BranchHint {
+    /// Index of instructions in `instrs` field of `Expression` that this hint
+    /// applies to.
+    pub instr_index: usize,
+    /// The value of this branch hint
+    pub value: u32,
 }
 
 impl<'a> Parse<'a> for Expression<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
-        let mut exprs = ExpressionParser::default();
+        let mut exprs = ExpressionParser::new(parser);
         exprs.parse(parser)?;
         Ok(Expression {
-            instrs: exprs.instrs.into(),
+            instrs: exprs.raw_instrs.into(),
+            branch_hints: exprs.branch_hints.into(),
+            instr_spans: exprs.spans.map(|s| s.into()),
         })
     }
 }
 
 impl<'a> Expression<'a> {
+    /// Creates an expression from the single `instr` specified.
+    pub fn one(instr: Instruction<'a>) -> Expression<'a> {
+        Expression {
+            instrs: [instr].into(),
+            branch_hints: Box::new([]),
+            instr_spans: None,
+        }
+    }
+
     /// Parse an expression formed from a single folded instruction.
     ///
     /// Attempts to parse an expression formed from a single folded instruction.
@@ -43,10 +83,12 @@ impl<'a> Expression<'a> {
     /// operation, so [`crate::Error`] is typically fatal and propagated all the
     /// way back to the top parse call site.
     pub fn parse_folded_instruction(parser: Parser<'a>) -> Result<Self> {
-        let mut exprs = ExpressionParser::default();
+        let mut exprs = ExpressionParser::new(parser);
         exprs.parse_folded_instruction(parser)?;
         Ok(Expression {
-            instrs: exprs.instrs.into(),
+            instrs: exprs.raw_instrs.into(),
+            branch_hints: exprs.branch_hints.into(),
+            instr_spans: exprs.spans.map(|s| s.into()),
         })
     }
 }
@@ -57,28 +99,39 @@ impl<'a> Expression<'a> {
 /// call-thread-stack recursive function. Since we're parsing user input that
 /// runs the risk of blowing the call stack, so we want to be sure to use a heap
 /// stack structure wherever possible.
-#[derive(Default)]
 struct ExpressionParser<'a> {
     /// The flat list of instructions that we've parsed so far, and will
     /// eventually become the final `Expression`.
-    instrs: Vec<Instruction<'a>>,
+    ///
+    /// Appended to with `push_instr` to ensure that this is the same length of
+    /// `spans` if `spans` is used.
+    raw_instrs: Vec<Instruction<'a>>,
 
     /// Descriptor of all our nested s-expr blocks. This only happens when
     /// instructions themselves are nested.
     stack: Vec<Level<'a>>,
+
+    /// Related to the branch hints proposal.
+    /// Will be used later to collect the offsets in the final binary.
+    /// <(index of branch instructions, BranchHintAnnotation)>
+    branch_hints: Vec<BranchHint>,
+
+    /// Storage for all span information in `raw_instrs`. Optionally disabled to
+    /// reduce memory consumption of parsing expressions.
+    spans: Option<Vec<Span>>,
 }
 
 enum Paren {
     None,
     Left,
-    Right,
+    Right(Span),
 }
 
 /// A "kind" of nested block that we can be parsing inside of.
 enum Level<'a> {
     /// This is a normal `block` or `loop` or similar, where the instruction
     /// payload here is pushed when the block is exited.
-    EndWith(Instruction<'a>),
+    EndWith(Instruction<'a>, Option<Span>),
 
     /// This is a pretty special variant which means that we're parsing an `if`
     /// statement, and the state of the `if` parsing is tracked internally in
@@ -89,15 +142,18 @@ enum Level<'a> {
     /// which don't correspond to terminating instructions, we're just in a
     /// nested block.
     IfArm,
+
+    /// This means we are finishing the parsing of a branch hint annotation.
+    BranchHint,
 }
 
 /// Possible states of "what is currently being parsed?" in an `if` expression.
 enum If<'a> {
-    /// Only the `if` instructoin has been parsed, next thing to parse is the
+    /// Only the `if` instruction has been parsed, next thing to parse is the
     /// clause, if any, of the `if` instruction.
     ///
     /// This parse ends when `(then ...)` is encountered.
-    Clause(Instruction<'a>),
+    Clause(Instruction<'a>, Span),
     /// Currently parsing the `then` block, and afterwards a closing paren is
     /// required or an `(else ...)` expression.
     Then,
@@ -106,6 +162,19 @@ enum If<'a> {
 }
 
 impl<'a> ExpressionParser<'a> {
+    fn new(parser: Parser<'a>) -> ExpressionParser<'a> {
+        ExpressionParser {
+            raw_instrs: Vec::new(),
+            stack: Vec::new(),
+            branch_hints: Vec::new(),
+            spans: if parser.track_instr_spans() {
+                Some(Vec::new())
+            } else {
+                None
+            },
+        }
+    }
+
     fn parse(&mut self, parser: Parser<'a>) -> Result<()> {
         // Here we parse instructions in a loop, and we do not recursively
         // invoke this parse function to avoid blowing the stack on
@@ -128,7 +197,10 @@ impl<'a> ExpressionParser<'a> {
             match self.paren(parser)? {
                 // No parenthesis seen? Then we just parse the next instruction
                 // and move on.
-                Paren::None => self.instrs.push(parser.parse()?),
+                Paren::None => {
+                    let span = parser.cur_span();
+                    self.push_instr(parser.parse()?, span);
+                }
 
                 // If we see a left-parenthesis then things are a little
                 // special. We handle block-like instructions specially
@@ -145,53 +217,62 @@ impl<'a> ExpressionParser<'a> {
                     if self.handle_if_lparen(parser)? {
                         continue;
                     }
+
+                    // Handle the case of a branch hint annotation
+                    if parser.peek::<annotation::metadata_code_branch_hint>()? {
+                        self.parse_branch_hint(parser)?;
+                        self.stack.push(Level::BranchHint);
+                        continue;
+                    }
+
+                    let span = parser.cur_span();
                     match parser.parse()? {
                         // If block/loop show up then we just need to be sure to
                         // push an `end` instruction whenever the `)` token is
                         // seen
                         i @ Instruction::Block(_)
                         | i @ Instruction::Loop(_)
-                        | i @ Instruction::Let(_)
                         | i @ Instruction::TryTable(_) => {
-                            self.instrs.push(i);
-                            self.stack.push(Level::EndWith(Instruction::End(None)));
+                            self.push_instr(i, span);
+                            self.stack
+                                .push(Level::EndWith(Instruction::End(None), None));
                         }
 
                         // Parsing an `if` instruction is super tricky, so we
                         // push an `If` scope and we let all our scope-based
                         // parsing handle the remaining items.
                         i @ Instruction::If(_) => {
-                            self.stack.push(Level::If(If::Clause(i)));
+                            self.stack.push(Level::If(If::Clause(i, span)));
                         }
 
                         // Anything else means that we're parsing a nested form
                         // such as `(i32.add ...)` which means that the
                         // instruction we parsed will be coming at the end.
-                        other => self.stack.push(Level::EndWith(other)),
+                        other => self.stack.push(Level::EndWith(other, Some(span))),
                     }
                 }
 
                 // If we registered a `)` token as being seen, then we're
                 // guaranteed there's an item in the `stack` stack for us to
                 // pop. We peel that off and take a look at what it says to do.
-                Paren::Right => match self.stack.pop().unwrap() {
-                    Level::EndWith(i) => self.instrs.push(i),
+                Paren::Right(span) => match self.stack.pop().unwrap() {
+                    Level::EndWith(i, s) => self.push_instr(i, s.unwrap_or(span)),
                     Level::IfArm => {}
+                    Level::BranchHint => {}
 
                     // If an `if` statement hasn't parsed the clause or `then`
                     // block, then that's an error because there weren't enough
                     // items in the `if` statement. Otherwise we're just careful
                     // to terminate with an `end` instruction.
-                    Level::If(If::Clause(_)) => {
+                    Level::If(If::Clause(..)) => {
                         return Err(parser.error("previous `if` had no `then`"));
                     }
                     Level::If(_) => {
-                        self.instrs.push(Instruction::End(None));
+                        self.push_instr(Instruction::End(None), span);
                     }
                 },
             }
         }
-
         Ok(())
     }
 
@@ -200,14 +281,15 @@ impl<'a> ExpressionParser<'a> {
         while !done {
             match self.paren(parser)? {
                 Paren::Left => {
-                    self.stack.push(Level::EndWith(parser.parse()?));
+                    let span = parser.cur_span();
+                    self.stack.push(Level::EndWith(parser.parse()?, Some(span)));
                 }
-                Paren::Right => {
-                    let top_instr = match self.stack.pop().unwrap() {
-                        Level::EndWith(i) => i,
+                Paren::Right(span) => {
+                    let (top_instr, span) = match self.stack.pop().unwrap() {
+                        Level::EndWith(i, s) => (i, s.unwrap_or(span)),
                         _ => panic!("unknown level type"),
                     };
-                    self.instrs.push(top_instr);
+                    self.push_instr(top_instr, span);
                     if self.stack.is_empty() {
                         done = true;
                     }
@@ -227,7 +309,7 @@ impl<'a> ExpressionParser<'a> {
                 Some(rest) => (Paren::Left, rest),
                 None if self.stack.is_empty() => (Paren::None, cursor),
                 None => match cursor.rparen()? {
-                    Some(rest) => (Paren::Right, rest),
+                    Some(rest) => (Paren::Right(cursor.cur_span()), rest),
                     None => (Paren::None, cursor),
                 },
             })
@@ -236,7 +318,7 @@ impl<'a> ExpressionParser<'a> {
 
     /// State transitions with parsing an `if` statement.
     ///
-    /// The syntactical form of an `if` stament looks like:
+    /// The syntactical form of an `if` statement looks like:
     ///
     /// ```wat
     /// (if ($clause)... (then $then) (else $else))
@@ -260,14 +342,15 @@ impl<'a> ExpressionParser<'a> {
             // folded instruction unless it starts with `then`, in which case
             // this transitions to the `Then` state and a new level has been
             // reached.
-            If::Clause(if_instr) => {
+            If::Clause(if_instr, if_instr_span) => {
                 if !parser.peek::<kw::then>()? {
                     return Ok(false);
                 }
                 parser.parse::<kw::then>()?;
                 let instr = mem::replace(if_instr, Instruction::End(None));
-                self.instrs.push(instr);
+                let span = *if_instr_span;
                 *i = If::Then;
+                self.push_instr(instr, span);
                 self.stack.push(Level::IfArm);
                 Ok(true)
             }
@@ -275,9 +358,9 @@ impl<'a> ExpressionParser<'a> {
             // Previously we were parsing the `(then ...)` clause so this next
             // `(` must be followed by `else`.
             If::Then => {
-                parser.parse::<kw::r#else>()?;
-                self.instrs.push(Instruction::Else(None));
+                let span = parser.parse::<kw::r#else>()?.0;
                 *i = If::Else;
+                self.push_instr(Instruction::Else(None), span);
                 self.stack.push(Level::IfArm);
                 Ok(true)
             }
@@ -285,6 +368,31 @@ impl<'a> ExpressionParser<'a> {
             // If after a `(else ...` clause is parsed there's another `(` then
             // that's not syntactically allowed.
             If::Else => Err(parser.error("unexpected token: too many payloads inside of `(if)`")),
+        }
+    }
+
+    fn parse_branch_hint(&mut self, parser: Parser<'a>) -> Result<()> {
+        parser.parse::<annotation::metadata_code_branch_hint>()?;
+
+        let hint = parser.parse::<String>()?;
+
+        let value = match hint.as_bytes() {
+            [0] => 0,
+            [1] => 1,
+            _ => return Err(parser.error("invalid value for branch hint")),
+        };
+
+        self.branch_hints.push(BranchHint {
+            instr_index: self.raw_instrs.len(),
+            value,
+        });
+        Ok(())
+    }
+
+    fn push_instr(&mut self, instr: Instruction<'a>, span: Span) {
+        self.raw_instrs.push(instr);
+        if let Some(spans) = &mut self.spans {
+            spans.push(span);
         }
     }
 }
@@ -299,7 +407,7 @@ macro_rules! instructions {
     }) => (
         /// A listing of all WebAssembly instructions that can be in a module
         /// that this crate currently parses.
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         #[allow(missing_docs)]
         pub enum Instruction<'a> {
             $(
@@ -417,8 +525,6 @@ instructions! {
         // function-references proposal
         CallRef(Index<'a>) : [0x14] : "call_ref",
         ReturnCallRef(Index<'a>) : [0x15] : "return_call_ref",
-        FuncBind(FuncBindType<'a>) : [0x16] : "func.bind",
-        Let(LetType<'a>) : [0x17] : "let",
 
         Drop : [0x1a] : "drop",
         Select(SelectTypes<'a>) : [] : "select",
@@ -523,8 +629,8 @@ instructions! {
 
         I32Const(i32) : [0x41] : "i32.const",
         I64Const(i64) : [0x42] : "i64.const",
-        F32Const(Float32) : [0x43] : "f32.const",
-        F64Const(Float64) : [0x44] : "f64.const",
+        F32Const(F32) : [0x43] : "f32.const",
+        F64Const(F64) : [0x44] : "f64.const",
 
         I32Clz : [0x67] : "i32.clz",
         I32Ctz : [0x68] : "i32.ctz",
@@ -751,6 +857,44 @@ instructions! {
         I64AtomicRmw8CmpxchgU(MemArg<1>) : [0xfe, 0x4c] : "i64.atomic.rmw8.cmpxchg_u",
         I64AtomicRmw16CmpxchgU(MemArg<2>) : [0xfe, 0x4d] : "i64.atomic.rmw16.cmpxchg_u",
         I64AtomicRmw32CmpxchgU(MemArg<4>) : [0xfe, 0x4e] : "i64.atomic.rmw32.cmpxchg_u",
+
+        // proposal: shared-everything-threads
+        GlobalAtomicGet(Ordered<Index<'a>>) : [0xfe, 0x4f] : "global.atomic.get",
+        GlobalAtomicSet(Ordered<Index<'a>>) : [0xfe, 0x50] : "global.atomic.set",
+        GlobalAtomicRmwAdd(Ordered<Index<'a>>) : [0xfe, 0x51] : "global.atomic.rmw.add",
+        GlobalAtomicRmwSub(Ordered<Index<'a>>) : [0xfe, 0x52] : "global.atomic.rmw.sub",
+        GlobalAtomicRmwAnd(Ordered<Index<'a>>) : [0xfe, 0x53] : "global.atomic.rmw.and",
+        GlobalAtomicRmwOr(Ordered<Index<'a>>) : [0xfe, 0x54] : "global.atomic.rmw.or",
+        GlobalAtomicRmwXor(Ordered<Index<'a>>) : [0xfe, 0x55] : "global.atomic.rmw.xor",
+        GlobalAtomicRmwXchg(Ordered<Index<'a>>) : [0xfe, 0x56] : "global.atomic.rmw.xchg",
+        GlobalAtomicRmwCmpxchg(Ordered<Index<'a>>) : [0xfe, 0x57] : "global.atomic.rmw.cmpxchg",
+        TableAtomicGet(Ordered<TableArg<'a>>) : [0xfe, 0x58] : "table.atomic.get",
+        TableAtomicSet(Ordered<TableArg<'a>>) : [0xfe, 0x59] : "table.atomic.set",
+        TableAtomicRmwXchg(Ordered<TableArg<'a>>) : [0xfe, 0x5a] : "table.atomic.rmw.xchg",
+        TableAtomicRmwCmpxchg(Ordered<TableArg<'a>>) : [0xfe, 0x5b] : "table.atomic.rmw.cmpxchg",
+        StructAtomicGet(Ordered<StructAccess<'a>>) : [0xfe, 0x5c] : "struct.atomic.get",
+        StructAtomicGetS(Ordered<StructAccess<'a>>) : [0xfe, 0x5d] : "struct.atomic.get_s",
+        StructAtomicGetU(Ordered<StructAccess<'a>>) : [0xfe, 0x5e] : "struct.atomic.get_u",
+        StructAtomicSet(Ordered<StructAccess<'a>>) : [0xfe, 0x5f] : "struct.atomic.set",
+        StructAtomicRmwAdd(Ordered<StructAccess<'a>>) : [0xfe, 0x60] : "struct.atomic.rmw.add",
+        StructAtomicRmwSub(Ordered<StructAccess<'a>>) : [0xfe, 0x61] : "struct.atomic.rmw.sub",
+        StructAtomicRmwAnd(Ordered<StructAccess<'a>>) : [0xfe, 0x62] : "struct.atomic.rmw.and",
+        StructAtomicRmwOr(Ordered<StructAccess<'a>>) : [0xfe, 0x63] : "struct.atomic.rmw.or",
+        StructAtomicRmwXor(Ordered<StructAccess<'a>>) : [0xfe, 0x64] : "struct.atomic.rmw.xor",
+        StructAtomicRmwXchg(Ordered<StructAccess<'a>>) : [0xfe, 0x65] : "struct.atomic.rmw.xchg",
+        StructAtomicRmwCmpxchg(Ordered<StructAccess<'a>>) : [0xfe, 0x66] : "struct.atomic.rmw.cmpxchg",
+        ArrayAtomicGet(Ordered<Index<'a>>) : [0xfe, 0x67] : "array.atomic.get",
+        ArrayAtomicGetS(Ordered<Index<'a>>) : [0xfe, 0x68] : "array.atomic.get_s",
+        ArrayAtomicGetU(Ordered<Index<'a>>) : [0xfe, 0x69] : "array.atomic.get_u",
+        ArrayAtomicSet(Ordered<Index<'a>>) : [0xfe, 0x6a] : "array.atomic.set",
+        ArrayAtomicRmwAdd(Ordered<Index<'a>>) : [0xfe, 0x6b] : "array.atomic.rmw.add",
+        ArrayAtomicRmwSub(Ordered<Index<'a>>) : [0xfe, 0x6c] : "array.atomic.rmw.sub",
+        ArrayAtomicRmwAnd(Ordered<Index<'a>>) : [0xfe, 0x6d] : "array.atomic.rmw.and",
+        ArrayAtomicRmwOr(Ordered<Index<'a>>) : [0xfe, 0x6e] : "array.atomic.rmw.or",
+        ArrayAtomicRmwXor(Ordered<Index<'a>>) : [0xfe, 0x6f] : "array.atomic.rmw.xor",
+        ArrayAtomicRmwXchg(Ordered<Index<'a>>) : [0xfe, 0x70] : "array.atomic.rmw.xchg",
+        ArrayAtomicRmwCmpxchg(Ordered<Index<'a>>) : [0xfe, 0x71] : "array.atomic.rmw.cmpxchg",
+        RefI31Shared : [0xfe, 0x72] : "ref.i31_shared",
 
         // proposal: simd
         //
@@ -1015,7 +1159,7 @@ instructions! {
         TryTable(TryTable<'a>) : [0x1f] : "try_table",
         Throw(Index<'a>) : [0x08] : "throw",
 
-        // Deprecated exception handling optocdes
+        // Deprecated exception handling opcodes
         Try(Box<BlockType<'a>>) : [0x06] : "try",
         Catch(Index<'a>) : [0x07] : "catch",
         Rethrow(Index<'a>) : [0x09] : "rethrow",
@@ -1043,6 +1187,20 @@ instructions! {
         I16x8RelaxedQ15mulrS: [0xfd, 0x111]: "i16x8.relaxed_q15mulr_s",
         I16x8RelaxedDotI8x16I7x16S: [0xfd, 0x112]: "i16x8.relaxed_dot_i8x16_i7x16_s",
         I32x4RelaxedDotI8x16I7x16AddS: [0xfd, 0x113]: "i32x4.relaxed_dot_i8x16_i7x16_add_s",
+
+        // Stack switching proposal
+        ContNew(Index<'a>)             : [0xe0] : "cont.new",
+        ContBind(ContBind<'a>)         : [0xe1] : "cont.bind",
+        Suspend(Index<'a>)             : [0xe2] : "suspend",
+        Resume(Resume<'a>)             : [0xe3] : "resume",
+        ResumeThrow(ResumeThrow<'a>)   : [0xe4] : "resume_throw",
+        Switch(Switch<'a>)             : [0xe5] : "switch",
+
+        // Wide arithmetic proposal
+        I64Add128   : [0xfc, 19] : "i64.add128",
+        I64Sub128   : [0xfc, 20] : "i64.sub128",
+        I64MulWideS : [0xfc, 21] : "i64.mul_wide_s",
+        I64MulWideU : [0xfc, 22] : "i64.mul_wide_u",
     }
 }
 
@@ -1053,7 +1211,7 @@ instructions! {
 const _: () = {
     let size = std::mem::size_of::<Instruction<'_>>();
     let pointer = std::mem::size_of::<u64>();
-    assert!(size <= pointer * 10);
+    assert!(size <= pointer * 11);
 };
 
 impl<'a> Instruction<'a> {
@@ -1072,7 +1230,7 @@ impl<'a> Instruction<'a> {
 ///
 /// This is used to label blocks and also annotate what types are expected for
 /// the block.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct BlockType<'a> {
     pub label: Option<Id<'a>>,
@@ -1092,7 +1250,114 @@ impl<'a> Parse<'a> for BlockType<'a> {
     }
 }
 
-#[derive(Debug)]
+/// Extra information associated with the cont.bind instruction
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct ContBind<'a> {
+    pub argument_index: Index<'a>,
+    pub result_index: Index<'a>,
+}
+
+impl<'a> Parse<'a> for ContBind<'a> {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        Ok(ContBind {
+            argument_index: parser.parse()?,
+            result_index: parser.parse()?,
+        })
+    }
+}
+
+/// Extra information associated with the resume instruction
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct Resume<'a> {
+    pub type_index: Index<'a>,
+    pub table: ResumeTable<'a>,
+}
+
+impl<'a> Parse<'a> for Resume<'a> {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        Ok(Resume {
+            type_index: parser.parse()?,
+            table: parser.parse()?,
+        })
+    }
+}
+
+/// Extra information associated with the resume_throw instruction
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct ResumeThrow<'a> {
+    pub type_index: Index<'a>,
+    pub tag_index: Index<'a>,
+    pub table: ResumeTable<'a>,
+}
+
+impl<'a> Parse<'a> for ResumeThrow<'a> {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        Ok(ResumeThrow {
+            type_index: parser.parse()?,
+            tag_index: parser.parse()?,
+            table: parser.parse()?,
+        })
+    }
+}
+
+/// Extra information associated with the switch instruction
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct Switch<'a> {
+    pub type_index: Index<'a>,
+    pub tag_index: Index<'a>,
+}
+
+impl<'a> Parse<'a> for Switch<'a> {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        Ok(Switch {
+            type_index: parser.parse()?,
+            tag_index: parser.parse()?,
+        })
+    }
+}
+
+/// A representation of resume tables
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub struct ResumeTable<'a> {
+    pub handlers: Vec<Handle<'a>>,
+}
+
+/// A representation of resume table entries
+#[derive(Debug, Clone)]
+#[allow(missing_docs)]
+pub enum Handle<'a> {
+    OnLabel { tag: Index<'a>, label: Index<'a> },
+    OnSwitch { tag: Index<'a> },
+}
+
+impl<'a> Parse<'a> for ResumeTable<'a> {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        let mut handlers = Vec::new();
+        while parser.peek::<LParen>()? && parser.peek2::<kw::on>()? {
+            handlers.push(parser.parens(|p| {
+                p.parse::<kw::on>()?;
+                let tag: Index<'a> = p.parse()?;
+                if p.peek::<kw::switch>()? {
+                    p.parse::<kw::switch>()?;
+                    Ok(Handle::OnSwitch { tag })
+                } else {
+                    Ok(Handle::OnLabel {
+                        tag,
+                        label: p.parse()?,
+                    })
+                }
+            })?);
+        }
+        Ok(ResumeTable { handlers })
+    }
+}
+
+#[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct TryTable<'a> {
     pub block: Box<BlockType<'a>>,
@@ -1136,7 +1401,7 @@ impl<'a> Parse<'a> for TryTable<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub enum TryTableCatchKind<'a> {
     // Catch a tagged exception, do not capture an exnref.
@@ -1159,50 +1424,16 @@ impl<'a> TryTableCatchKind<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct TryTableCatch<'a> {
     pub kind: TryTableCatchKind<'a>,
     pub label: Index<'a>,
 }
 
-/// Extra information associated with the func.bind instruction.
-#[derive(Debug)]
-#[allow(missing_docs)]
-pub struct FuncBindType<'a> {
-    pub ty: TypeUse<'a, FunctionType<'a>>,
-}
-
-impl<'a> Parse<'a> for FuncBindType<'a> {
-    fn parse(parser: Parser<'a>) -> Result<Self> {
-        Ok(FuncBindType {
-            ty: parser
-                .parse::<TypeUse<'a, FunctionTypeNoNames<'a>>>()?
-                .into(),
-        })
-    }
-}
-
-/// Extra information associated with the let instruction.
-#[derive(Debug)]
-#[allow(missing_docs)]
-pub struct LetType<'a> {
-    pub block: Box<BlockType<'a>>,
-    pub locals: Box<[Local<'a>]>,
-}
-
-impl<'a> Parse<'a> for LetType<'a> {
-    fn parse(parser: Parser<'a>) -> Result<Self> {
-        Ok(LetType {
-            block: parser.parse()?,
-            locals: Local::parse_remainder(parser)?.into(),
-        })
-    }
-}
-
 /// Extra information associated with the `br_table` instruction.
 #[allow(missing_docs)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BrTableIndices<'a> {
     pub labels: Vec<Index<'a>>,
     pub default: Index<'a>,
@@ -1220,7 +1451,7 @@ impl<'a> Parse<'a> for BrTableIndices<'a> {
 }
 
 /// Payload for lane-related instructions. Unsigned with no + prefix.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LaneArg {
     /// The lane argument.
     pub lane: u8,
@@ -1248,7 +1479,7 @@ impl<'a> Parse<'a> for LaneArg {
 
 /// Payload for memory-related instructions indicating offset/alignment of
 /// memory accesses.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemArg<'a> {
     /// The alignment of this access.
     ///
@@ -1323,7 +1554,7 @@ impl<'a> MemArg<'a> {
 }
 
 /// Extra data associated with the `loadN_lane` and `storeN_lane` instructions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoadOrStoreLane<'a> {
     /// The memory argument for this instruction.
     pub memarg: MemArg<'a>,
@@ -1377,7 +1608,7 @@ impl<'a> LoadOrStoreLane<'a> {
 }
 
 /// Extra data associated with the `call_indirect` instruction.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallIndirect<'a> {
     /// The table that this call is going to be indexing.
     pub table: Index<'a>,
@@ -1398,7 +1629,7 @@ impl<'a> Parse<'a> for CallIndirect<'a> {
 }
 
 /// Extra data associated with the `table.init` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableInit<'a> {
     /// The index of the table we're copying into.
     pub table: Index<'a>,
@@ -1420,7 +1651,7 @@ impl<'a> Parse<'a> for TableInit<'a> {
 }
 
 /// Extra data associated with the `table.copy` instruction.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableCopy<'a> {
     /// The index of the destination table to copy into.
     pub dst: Index<'a>,
@@ -1442,12 +1673,14 @@ impl<'a> Parse<'a> for TableCopy<'a> {
 }
 
 /// Extra data associated with unary table instructions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableArg<'a> {
     /// The index of the table argument.
     pub dst: Index<'a>,
 }
 
+// `TableArg` could be an unwrapped as an `Index` if not for this custom parse
+// behavior: if we cannot parse a table index, we default to table `0`.
 impl<'a> Parse<'a> for TableArg<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
         let dst = if let Some(dst) = parser.parse()? {
@@ -1460,7 +1693,7 @@ impl<'a> Parse<'a> for TableArg<'a> {
 }
 
 /// Extra data associated with unary memory instructions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryArg<'a> {
     /// The index of the memory space.
     pub mem: Index<'a>,
@@ -1478,7 +1711,7 @@ impl<'a> Parse<'a> for MemoryArg<'a> {
 }
 
 /// Extra data associated with the `memory.init` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryInit<'a> {
     /// The index of the data segment we're copying into memory.
     pub data: Index<'a>,
@@ -1500,7 +1733,7 @@ impl<'a> Parse<'a> for MemoryInit<'a> {
 }
 
 /// Extra data associated with the `memory.copy` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryCopy<'a> {
     /// The index of the memory we're copying from.
     pub src: Index<'a>,
@@ -1522,7 +1755,7 @@ impl<'a> Parse<'a> for MemoryCopy<'a> {
 }
 
 /// Extra data associated with the `struct.get/set` instructions
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructAccess<'a> {
     /// The index of the struct type we're accessing.
     pub r#struct: Index<'a>,
@@ -1540,7 +1773,7 @@ impl<'a> Parse<'a> for StructAccess<'a> {
 }
 
 /// Extra data associated with the `array.fill` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayFill<'a> {
     /// The index of the array type we're filling.
     pub array: Index<'a>,
@@ -1555,7 +1788,7 @@ impl<'a> Parse<'a> for ArrayFill<'a> {
 }
 
 /// Extra data associated with the `array.copy` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayCopy<'a> {
     /// The index of the array type we're copying to.
     pub dest_array: Index<'a>,
@@ -1573,7 +1806,7 @@ impl<'a> Parse<'a> for ArrayCopy<'a> {
 }
 
 /// Extra data associated with the `array.init_[data/elem]` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayInit<'a> {
     /// The index of the array type we're initializing.
     pub array: Index<'a>,
@@ -1591,7 +1824,7 @@ impl<'a> Parse<'a> for ArrayInit<'a> {
 }
 
 /// Extra data associated with the `array.new_fixed` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayNewFixed<'a> {
     /// The index of the array type we're accessing.
     pub array: Index<'a>,
@@ -1609,7 +1842,7 @@ impl<'a> Parse<'a> for ArrayNewFixed<'a> {
 }
 
 /// Extra data associated with the `array.new_data` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayNewData<'a> {
     /// The index of the array type we're accessing.
     pub array: Index<'a>,
@@ -1627,7 +1860,7 @@ impl<'a> Parse<'a> for ArrayNewData<'a> {
 }
 
 /// Extra data associated with the `array.new_elem` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayNewElem<'a> {
     /// The index of the array type we're accessing.
     pub array: Index<'a>,
@@ -1645,7 +1878,7 @@ impl<'a> Parse<'a> for ArrayNewElem<'a> {
 }
 
 /// Extra data associated with the `ref.cast` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RefCast<'a> {
     /// The type to cast to.
     pub r#type: RefType<'a>,
@@ -1660,7 +1893,7 @@ impl<'a> Parse<'a> for RefCast<'a> {
 }
 
 /// Extra data associated with the `ref.test` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RefTest<'a> {
     /// The type to test for.
     pub r#type: RefType<'a>,
@@ -1675,7 +1908,7 @@ impl<'a> Parse<'a> for RefTest<'a> {
 }
 
 /// Extra data associated with the `br_on_cast` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BrOnCast<'a> {
     /// The label to branch to.
     pub label: Index<'a>,
@@ -1696,7 +1929,7 @@ impl<'a> Parse<'a> for BrOnCast<'a> {
 }
 
 /// Extra data associated with the `br_on_cast_fail` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BrOnCastFail<'a> {
     /// The label to branch to.
     pub label: Index<'a>,
@@ -1716,16 +1949,72 @@ impl<'a> Parse<'a> for BrOnCastFail<'a> {
     }
 }
 
+/// The memory ordering for atomic instructions.
+///
+/// For an in-depth explanation of memory orderings, see the C++ documentation
+/// for [`memory_order`] or the Rust documentation for [`atomic::Ordering`].
+///
+/// [`memory_order`]: https://en.cppreference.com/w/cpp/atomic/memory_order
+/// [`atomic::Ordering`]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html
+#[derive(Clone, Debug)]
+pub enum Ordering {
+    /// Like `AcqRel` but all threads see all sequentially consistent operations
+    /// in the same order.
+    AcqRel,
+    /// For a load, it acquires; this orders all operations before the last
+    /// "releasing" store. For a store, it releases; this orders all operations
+    /// before it at the next "acquiring" load.
+    SeqCst,
+}
+
+impl<'a> Parse<'a> for Ordering {
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        if parser.peek::<kw::seq_cst>()? {
+            parser.parse::<kw::seq_cst>()?;
+            Ok(Ordering::SeqCst)
+        } else if parser.peek::<kw::acq_rel>()? {
+            parser.parse::<kw::acq_rel>()?;
+            Ok(Ordering::AcqRel)
+        } else {
+            Err(parser.error("expected a memory ordering: `seq_cst` or `acq_rel`"))
+        }
+    }
+}
+
+/// Add a memory [`Ordering`] to the argument `T` of some instruction.
+///
+/// This is helpful for many kinds of `*.atomic.*` instructions introduced by
+/// the shared-everything-threads proposal. Many of these instructions "build
+/// on" existing instructions by simply adding a memory order to them.
+#[derive(Clone, Debug)]
+pub struct Ordered<T> {
+    /// The memory ordering for this atomic instruction.
+    pub ordering: Ordering,
+    /// The original argument type.
+    pub inner: T,
+}
+
+impl<'a, T> Parse<'a> for Ordered<T>
+where
+    T: Parse<'a>,
+{
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        let ordering = parser.parse()?;
+        let inner = parser.parse()?;
+        Ok(Ordered { ordering, inner })
+    }
+}
+
 /// Different ways to specify a `v128.const` instruction
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub enum V128Const {
     I8x16([i8; 16]),
     I16x8([i16; 8]),
     I32x4([i32; 4]),
     I64x2([i64; 2]),
-    F32x4([Float32; 4]),
-    F64x2([Float64; 2]),
+    F32x4([F32; 4]),
+    F64x2([F64; 2]),
 }
 
 impl V128Const {
@@ -1883,7 +2172,7 @@ impl<'a> Parse<'a> for V128Const {
 }
 
 /// Lanes being shuffled in the `i8x16.shuffle` instruction
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct I8x16Shuffle {
     #[allow(missing_docs)]
     pub lanes: [u8; 16],
@@ -1915,7 +2204,7 @@ impl<'a> Parse<'a> for I8x16Shuffle {
 }
 
 /// Payload of the `select` instructions
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SelectTypes<'a> {
     #[allow(missing_docs)]
     pub tys: Option<Vec<ValType<'a>>>,

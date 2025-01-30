@@ -12,11 +12,12 @@
 [package]
 edition = "2021"
 name = "uniffi_bindgen"
-version = "0.25.3"
+version = "0.28.2"
 authors = ["Firefox Sync Team <sync-team@mozilla.com>"]
 description = "a multi-language bindings generator for rust (codegen and cli tooling)"
 homepage = "https://mozilla.github.io/uniffi-rs"
 documentation = "https://mozilla.github.io/uniffi-rs"
+readme = "README.md"
 keywords = [
     "ffi",
     "bindgen",
@@ -37,15 +38,7 @@ version = "1.0.8"
 
 [dependencies.cargo_metadata]
 version = "0.15"
-
-[dependencies.clap]
-version = "4"
-features = [
-    "std",
-    "derive",
-]
 optional = true
-default-features = false
 
 [dependencies.fs-err]
 version = "2.7.0"
@@ -54,10 +47,10 @@ version = "2.7.0"
 version = "0.3"
 
 [dependencies.goblin]
-version = "0.6"
+version = "0.8"
 
 [dependencies.heck]
-version = "0.4"
+version = "0.5"
 
 [dependencies.once_cell]
 version = "1.12"
@@ -67,15 +60,30 @@ version = "1.0"
 
 [dependencies.serde]
 version = "1"
+features = ["derive"]
+
+[dependencies.textwrap]
+version = "0.16"
+features = ["smawk"]
+default-features = false
 
 [dependencies.toml]
 version = "0.5"
 
 [dependencies.uniffi_meta]
-version = "=0.25.3"
+version = "=0.28.2"
 
 [dependencies.uniffi_testing]
-version = "=0.25.3"
+version = "=0.28.2"
+optional = true
 
 [dependencies.uniffi_udl]
-version = "=0.25.3"
+version = "=0.28.2"
+
+[features]
+bindgen-tests = [
+    "cargo-metadata",
+    "dep:uniffi_testing",
+]
+cargo-metadata = ["dep:cargo_metadata"]
+default = ["cargo-metadata"]

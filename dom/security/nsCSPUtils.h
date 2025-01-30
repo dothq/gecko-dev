@@ -8,14 +8,11 @@
 #define nsCSPUtils_h___
 
 #include "nsCOMPtr.h"
-#include "nsIContentSecurityPolicy.h"
 #include "nsILoadInfo.h"
 #include "nsIURI.h"
-#include "nsLiteralString.h"
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsUnicharUtils.h"
-#include "mozilla/Logging.h"
 
 class nsIChannel;
 
@@ -27,7 +24,7 @@ class Document;
 /* =============== Logging =================== */
 
 void CSP_LogLocalizedStr(const char* aName, const nsTArray<nsString>& aParams,
-                         const nsAString& aSourceName,
+                         const nsACString& aSourceName,
                          const nsAString& aSourceLine, uint32_t aLineNumber,
                          uint32_t aColumnNumber, uint32_t aFlags,
                          const nsACString& aCategory, uint64_t aInnerWindowID,
@@ -38,7 +35,7 @@ void CSP_GetLocalizedStr(const char* aName, const nsTArray<nsString>& aParams,
 
 void CSP_LogStrMessage(const nsAString& aMsg);
 
-void CSP_LogMessage(const nsAString& aMessage, const nsAString& aSourceName,
+void CSP_LogMessage(const nsAString& aMessage, const nsACString& aSourceName,
                     const nsAString& aSourceLine, uint32_t aLineNumber,
                     uint32_t aColumnNumber, uint32_t aFlags,
                     const nsACString& aCategory, uint64_t aInnerWindowID,
@@ -59,6 +56,10 @@ void CSP_LogMessage(const nsAString& aMessage, const nsAString& aSourceName,
 #define STYLE_NONCE_VIOLATION_OBSERVER_TOPIC "Inline Style had invalid nonce"
 #define SCRIPT_HASH_VIOLATION_OBSERVER_TOPIC "Inline Script had invalid hash"
 #define STYLE_HASH_VIOLATION_OBSERVER_TOPIC "Inline Style had invalid hash"
+#define TRUSTED_TYPES_VIOLATION_OBSERVER_TOPIC \
+  "Tried to create a trusted-types policy with a forbidden policy name"
+#define REQUIRE_TRUSTED_TYPES_FOR_SCRIPT_OBSERVER_TOPIC \
+  "Type mismatch for injection sink"
 
 // these strings map to the CSPDirectives in nsIContentSecurityPolicy
 // NOTE: When implementing a new directive, you will need to add it here but
@@ -93,35 +94,28 @@ static const char* CSPStrDirectives[] = {
     "script-src-attr",            // SCRIPT_SRC_ATTR_DIRECTIVE
     "style-src-elem",             // STYLE_SRC_ELEM_DIRECTIVE
     "style-src-attr",             // STYLE_SRC_ATTR_DIRECTIVE
+    "require-trusted-types-for",  // REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE
+    "trusted-types",              // TRUSTED_TYPES_DIRECTIVE
+    "report-to",                  // REPORT_TO_DIRECTIVE
 };
 
 inline const char* CSP_CSPDirectiveToString(CSPDirective aDir) {
   return CSPStrDirectives[static_cast<uint32_t>(aDir)];
 }
 
-inline CSPDirective CSP_StringToCSPDirective(const nsAString& aDir) {
-  nsString lowerDir = PromiseFlatString(aDir);
-  ToLowerCase(lowerDir);
+CSPDirective CSP_StringToCSPDirective(const nsAString& aDir);
 
-  uint32_t numDirs = (sizeof(CSPStrDirectives) / sizeof(CSPStrDirectives[0]));
-  for (uint32_t i = 1; i < numDirs; i++) {
-    if (lowerDir.EqualsASCII(CSPStrDirectives[i])) {
-      return static_cast<CSPDirective>(i);
-    }
-  }
-  return nsIContentSecurityPolicy::NO_DIRECTIVE;
-}
-
-#define FOR_EACH_CSP_KEYWORD(MACRO)             \
-  MACRO(CSP_SELF, "'self'")                     \
-  MACRO(CSP_UNSAFE_INLINE, "'unsafe-inline'")   \
-  MACRO(CSP_UNSAFE_EVAL, "'unsafe-eval'")       \
-  MACRO(CSP_UNSAFE_HASHES, "'unsafe-hashes'")   \
-  MACRO(CSP_NONE, "'none'")                     \
-  MACRO(CSP_NONCE, "'nonce-")                   \
-  MACRO(CSP_REPORT_SAMPLE, "'report-sample'")   \
-  MACRO(CSP_STRICT_DYNAMIC, "'strict-dynamic'") \
-  MACRO(CSP_WASM_UNSAFE_EVAL, "'wasm-unsafe-eval'")
+#define FOR_EACH_CSP_KEYWORD(MACRO)                 \
+  MACRO(CSP_SELF, "'self'")                         \
+  MACRO(CSP_UNSAFE_INLINE, "'unsafe-inline'")       \
+  MACRO(CSP_UNSAFE_EVAL, "'unsafe-eval'")           \
+  MACRO(CSP_UNSAFE_HASHES, "'unsafe-hashes'")       \
+  MACRO(CSP_NONE, "'none'")                         \
+  MACRO(CSP_NONCE, "'nonce-")                       \
+  MACRO(CSP_REPORT_SAMPLE, "'report-sample'")       \
+  MACRO(CSP_STRICT_DYNAMIC, "'strict-dynamic'")     \
+  MACRO(CSP_WASM_UNSAFE_EVAL, "'wasm-unsafe-eval'") \
+  MACRO(CSP_ALLOW_DUPLICATES, "'allow-duplicates'")
 
 enum CSPKeyword {
 #define KEYWORD_ENUM(id_, string_) id_,
@@ -235,6 +229,11 @@ class nsCSPBaseSrc {
   virtual bool isHash() const { return false; }
   virtual bool isNonce() const { return false; }
   virtual bool isKeyword(CSPKeyword aKeyword) const { return false; }
+  virtual bool isTrustedTypesDirectivePolicyName() const { return false; }
+  virtual bool isRequiresTrustedTypesForSinkGroup(
+      const nsAString& aSinkGroup) const {
+    return false;
+  }
 };
 
 /* =============== nsCSPSchemeSrc ============ */
@@ -382,6 +381,20 @@ class nsCSPReportURI : public nsCSPBaseSrc {
   nsCOMPtr<nsIURI> mReportURI;
 };
 
+/* =============== nsCSPGroup ============ */
+
+class nsCSPGroup : public nsCSPBaseSrc {
+ public:
+  explicit nsCSPGroup(const nsAString& aGroup);
+  virtual ~nsCSPGroup();
+
+  bool visit(nsCSPSrcVisitor* aVisitor) const override;
+  void toString(nsAString& aOutStr) const override;
+
+ private:
+  nsString mGroup;
+};
+
 /* =============== nsCSPSandboxFlags ================== */
 
 class nsCSPSandboxFlags : public nsCSPBaseSrc {
@@ -394,6 +407,41 @@ class nsCSPSandboxFlags : public nsCSPBaseSrc {
 
  private:
   nsString mFlags;
+};
+
+/* =============== nsCSPRequireTrustedTypesForDirectiveValue =============== */
+
+class nsCSPRequireTrustedTypesForDirectiveValue : public nsCSPBaseSrc {
+ public:
+  explicit nsCSPRequireTrustedTypesForDirectiveValue(const nsAString& aValue);
+  virtual ~nsCSPRequireTrustedTypesForDirectiveValue() = default;
+
+  bool visit(nsCSPSrcVisitor* aVisitor) const override;
+  void toString(nsAString& aOutStr) const override;
+
+  bool isRequiresTrustedTypesForSinkGroup(
+      const nsAString& aSinkGroup) const override;
+
+ private:
+  const nsString mValue;
+};
+
+/* =============== nsCSPTrustedTypesDirectiveExpression =============== */
+
+class nsCSPTrustedTypesDirectivePolicyName : public nsCSPBaseSrc {
+ public:
+  explicit nsCSPTrustedTypesDirectivePolicyName(const nsAString& aName);
+  virtual ~nsCSPTrustedTypesDirectivePolicyName() = default;
+
+  bool visit(nsCSPSrcVisitor* aVisitor) const override;
+  void toString(nsAString& aOutStr) const override;
+
+  bool isTrustedTypesDirectivePolicyName() const override { return true; }
+
+  const nsString& GetName() const { return mName; }
+
+ private:
+  const nsString mName;
 };
 
 /* =============== nsCSPSrcVisitor ================== */
@@ -428,26 +476,42 @@ class nsCSPDirective {
   virtual bool allows(enum CSPKeyword aKeyword,
                       const nsAString& aHashOrNonce) const;
   bool allowsAllInlineBehavior(CSPDirective aDir) const;
+
+  // Implements step 2.1 to 2.7 of
+  // <https://w3c.github.io/trusted-types/dist/spec/#should-block-create-policy>.
+  bool ShouldCreateViolationForNewTrustedTypesPolicy(
+      const nsAString& aPolicyName,
+      const nsTArray<nsString>& aCreatedPolicyNames) const;
+
+  // Implements step 2.1 to 2.4 of
+  // <https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-does-sink-type-require-trusted-types>.
+  bool AreTrustedTypesForSinkGroupRequired(const nsAString& aSinkGroup) const;
+
   virtual void toString(nsAString& outStr) const;
   void toDomCSPStruct(mozilla::dom::CSP& outCSP) const;
 
+  // Takes ownership of the passed sources.
   virtual void addSrcs(const nsTArray<nsCSPBaseSrc*>& aSrcs) {
     mSrcs = aSrcs.Clone();
   }
 
-  inline bool isDefaultDirective() const {
-    return mDirective == nsIContentSecurityPolicy::DEFAULT_SRC_DIRECTIVE;
-  }
+  bool isDefaultDirective() const;
 
   virtual bool equals(CSPDirective aDirective) const;
 
   void getReportURIs(nsTArray<nsString>& outReportURIs) const;
+
+  void getReportGroup(nsAString& outReportGroup) const;
 
   bool visitSrcs(nsCSPSrcVisitor* aVisitor) const;
 
   virtual void getDirName(nsAString& outStr) const;
 
   bool hasReportSampleKeyword() const;
+
+ private:
+  bool ContainsTrustedTypesDirectivePolicyName(
+      const nsAString& aPolicyName) const;
 
  protected:
   CSPDirective mDirective;
@@ -627,6 +691,10 @@ class nsCSPPolicy {
   void toDomCSPStruct(mozilla::dom::CSP& outCSP) const;
 
   inline void addDirective(nsCSPDirective* aDir) {
+    if (aDir->equals(
+            nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE)) {
+      mHasRequireTrustedTypesForDirective = true;
+    }
     mDirectives.AppendElement(aDir);
   }
 
@@ -647,13 +715,23 @@ class nsCSPPolicy {
 
   inline void setReportOnlyFlag(bool aFlag) { mReportOnly = aFlag; }
 
+  // Related to https://w3c.github.io/webappsec-csp/#policy-disposition.
+  // @return true if disposition is "report", false otherwise.
   inline bool getReportOnlyFlag() const { return mReportOnly; }
+
+  enum class Disposition { Enforce, Report };
+
+  Disposition getDisposition() const {
+    return getReportOnlyFlag() ? Disposition::Report : Disposition::Enforce;
+  }
 
   void getReportURIs(nsTArray<nsString>& outReportURIs) const;
 
+  void getReportGroup(nsAString& outReportGroup) const;
+
   void getViolatedDirectiveInformation(CSPDirective aDirective,
-                                       nsAString& outDirective,
-                                       nsAString& outDirectiveString,
+                                       nsAString& aDirectiveName,
+                                       nsAString& aDirectiveNameAndValue,
                                        bool* aReportSample) const;
 
   uint32_t getSandboxFlags() const;
@@ -664,11 +742,30 @@ class nsCSPPolicy {
 
   bool allowsAllInlineBehavior(CSPDirective aDir) const;
 
+  /*
+   * Implements step 2.1 to 2.7 of
+   * <https://w3c.github.io/trusted-types/dist/spec/#should-block-create-policy>.
+   * and returns the result of "createViolation".
+   *
+   * @param aCreatedPolicyNames The already created policy names.
+   * @return true if a violation for aPolicyName should be created.
+   */
+  bool ShouldCreateViolationForNewTrustedTypesPolicy(
+      const nsAString& aPolicyName,
+      const nsTArray<nsString>& aCreatedPolicyNames) const;
+
+  /**
+   * Implements step 2.1 to 2.4 of
+   * <https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-does-sink-type-require-trusted-types>.
+   */
+  bool AreTrustedTypesForSinkGroupRequired(const nsAString& aSinkGroup) const;
+
  private:
   nsCSPDirective* matchingOrDefaultDirective(CSPDirective aDirective) const;
 
   nsUpgradeInsecureDirective* mUpgradeInsecDir;
   nsTArray<nsCSPDirective*> mDirectives;
+  bool mHasRequireTrustedTypesForDirective = false;
   bool mReportOnly;
   bool mDeliveredViaMetaTag;
 };

@@ -14,7 +14,6 @@ from taskgraph.actions.util import (
 @register_callback_action(
     name="add-new-jobs",
     title="Add new jobs",
-    generic=True,
     symbol="add-new",
     description="Add new jobs using task labels.",
     order=100,
@@ -40,7 +39,7 @@ from taskgraph.actions.util import (
 )
 def add_new_jobs_action(parameters, graph_config, input, task_group_id, task_id):
     decision_task_id, full_task_graph, label_to_taskid = fetch_graph_and_labels(
-        parameters, graph_config
+        parameters, graph_config, task_group_id=task_group_id
     )
 
     to_run = []

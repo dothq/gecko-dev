@@ -1,4 +1,4 @@
-// |reftest| skip-if(!this.hasOwnProperty('Temporal')) -- Temporal is not enabled unconditionally
+// |reftest| shell-option(--enable-temporal) skip-if(!this.hasOwnProperty('Temporal')||!xulRuntime.shell) -- Temporal is not enabled unconditionally, requires shell-options
 // Copyright (C) 2022 Igalia, S.L. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
@@ -8,7 +8,7 @@ description: A number as calendar in a property bag is not accepted
 features: [Temporal]
 ---*/
 
-const instance = new Temporal.PlainDate(1976, 11, 18);
+const instance = new Temporal.PlainYearMonth(2019, 6);
 
 const numbers = [
   1,
@@ -16,6 +16,7 @@ const numbers = [
   -19970327,
   1234567890,
 ];
+
 for (const calendar of numbers) {
   const arg = { year: 2019, monthCode: "M06", calendar };
   assert.throws(

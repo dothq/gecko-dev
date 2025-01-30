@@ -28,6 +28,45 @@
     display: none;
   }
 
+  &.FS_OPT_IN_SIDEBAR_VARIANT {
+    box-shadow: none;
+
+    .section-main .main-content {
+      background-color: transparent;
+
+      &.no-steps {
+        padding: 0;
+      }
+
+      .main-content-inner {
+        justify-content: unset;
+      }
+
+      .welcome-text {
+        padding-inline: 16px;
+        margin-block: 20px 8px;
+        text-align: center;
+
+        h1 {
+          font-weight: var(--font-weight-bold);
+        }
+      }
+
+      .link-paragraph {
+        padding-inline: 16px;
+        margin-block: 0 20px;
+        text-align: center;
+      }
+
+      .legal-paragraph {
+        padding-inline: 16px;
+        margin-block: 0 40px;
+        color: var(--text-color-deemphasized);
+        text-align: center;
+      }
+    }
+  }
+
   .section-main {
     width: auto;
     height: auto;
@@ -39,7 +78,7 @@
       font: menu;
 
       @media (prefers-contrast: no-preference) and (prefers-color-scheme: dark) {
-        background-color: #52525E;
+        background-color: #42414D;
       }
 
       &.no-steps {
@@ -128,6 +167,12 @@
 }
 
 .onboardingContainer.shopping .screen[pos='split'][layout='survey'] {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 15%);
+
+  @media (prefers-contrast: no-preference) and (prefers-color-scheme: dark) {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 15%);
+  }
+
   .main-content {
     padding: 12px;
 

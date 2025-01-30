@@ -58,7 +58,7 @@ impl EntryMap {
         assert!(self.sorted);
     }
 
-    /// Create a new [`BindGroupLayoutEntryMap`] from a slice of [`wgt::BindGroupLayoutEntry`]s.
+    /// Create a new [`EntryMap`] from a slice of [`wgt::BindGroupLayoutEntry`]s.
     ///
     /// Errors if there are duplicate bindings or if any binding index is greater than
     /// the device's limits.
@@ -125,5 +125,10 @@ impl EntryMap {
     pub fn entry(&mut self, key: u32) -> indexmap::map::Entry<'_, u32, wgt::BindGroupLayoutEntry> {
         self.sorted = false;
         self.inner.entry(key)
+    }
+
+    pub fn sort(&mut self) {
+        self.inner.sort_unstable_keys();
+        self.sorted = true;
     }
 }

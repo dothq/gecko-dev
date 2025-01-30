@@ -82,9 +82,9 @@ eslint-plugin-mozilla is used by a few projects outside of mozilla-central,
 so they will pick up the rule addition when eslint-plugin-mozilla is next released.
 
 Where existing failures are disabled/turned to warnings, these should be handled
-in the :searchfox:`top-level .eslintrc.js file <.eslintrc.js>`, and follow-up bugs
-must be filed before landing and referenced in the appropriate sections. The
-follow-up bugs should block
+in the :searchfox:`top-level .eslintrc-rollouts.js file <..eslintrc-rollouts.js>`,
+and follow-up bugs must be filed before landing and referenced in the appropriate
+sections. The follow-up bugs should block
 `bug 1596191 <https://bugzilla.mozilla.org/show_bug.cgi?id=1596191>`_
 
 Adding a New ESLint Plugin
@@ -125,53 +125,3 @@ and when we upgrade the versions.
 
 The plugin can then be used with ESLint in the
 `normal way <https://eslint.org/docs/latest/use/configure/plugins>`_.
-
-Packaging node_modules
-----------------------
-
-For our continuous integration (CI) builders, we package ``node_modules`` for
-both the top-level directory, and eslint-plugin-mozilla. These are uploaded to
-our CI before the patch is released.
-
-Currently `Mark Banner (standard8) <https://people.mozilla.org/s?query=standard8>`_
-is the only person that does this regularly, and will be automatically added as
-a blocking reviewer on patches that touch the relevant ``package.json`` files.
-
-A Release Engineering team member would likely have permissions to upload the
-files as well.
-
-To upload the files, the process is:
-
-* Obtain ToolTool credentials for the public tooltool upload space.
-
-    * Download the `taskcluster shell from here <https://github.com/taskcluster/taskcluster/tree/main/clients/client-shell>`_,
-      if you haven't already.
-    * Run the following command. This will open a page for you to log in, and
-      set environment variables for the following commands to use.
-
-.. code-block:: shell
-
-    eval `TASKCLUSTER_ROOT_URL=https://firefox-ci-tc.services.mozilla.com taskcluster signin -s 'project:releng:services/tooltool/api/upload/public'`
-
-* Upload the eslint-plugin-mozilla packages:
-
-.. code-block:: shell
-
-    cd tools/lint/eslint/eslint-plugin-mozilla/
-    ./update.sh
-    <follow the instructions>
-
-* Upload the top-level packages:
-
-.. code-block:: shell
-
-    cd ..
-    ./update.sh
-    <follow the instructions>
-
-* Add the changes to the commit that changes ``package.json``.
-
-The update scripts automatically clean out the ``node_modules`` directories,
-removes the ``package-lock.json`` files, and then does a fresh installation. This
-helps to ensure a "clean" directory with only the required modules, and an up to
-date ``package-lock.json`` file.

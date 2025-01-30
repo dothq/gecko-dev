@@ -170,9 +170,9 @@ void SVGImageFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
   // TODO(heycam): We should handle aspect-ratio, like nsImageFrame does.
 }
 
-bool SVGImageFrame::IsSVGTransformed(gfx::Matrix* aOwnTransform,
-                                     gfx::Matrix* aFromParentTransform) const {
-  return SVGUtils::IsSVGTransformed(this, aOwnTransform, aFromParentTransform);
+bool SVGImageFrame::DoGetParentSVGTransforms(
+    gfx::Matrix* aFromParentTransform) const {
+  return SVGUtils::GetParentSVGTransforms(this, aFromParentTransform);
 }
 
 //----------------------------------------------------------------------
@@ -190,24 +190,15 @@ nsresult SVGImageFrame::AttributeChanged(int32_t aNameSpaceID,
       return NS_OK;
     }
   }
-
-  // Currently our SMIL implementation does not modify the DOM attributes. Once
-  // we implement the SVG 2 SMIL behaviour this can be removed
-  // SVGImageElement::AfterSetAttr's implementation will be sufficient.
-  if (aModType == MutationEvent_Binding::SMIL &&
-      aAttribute == nsGkAtoms::href &&
-      (aNameSpaceID == kNameSpaceID_XLink ||
-       aNameSpaceID == kNameSpaceID_None)) {
-    SVGImageElement* element = static_cast<SVGImageElement*>(GetContent());
-
-    bool hrefIsSet =
-        element->mStringAttributes[SVGImageElement::HREF].IsExplicitlySet() ||
-        element->mStringAttributes[SVGImageElement::XLINK_HREF]
-            .IsExplicitlySet();
-    if (hrefIsSet) {
-      element->LoadSVGImage(true, true);
-    } else {
-      element->CancelImageRequests(true);
+  if (aModType == dom::MutationEvent_Binding::REMOVAL &&
+      (aNameSpaceID == kNameSpaceID_None ||
+       aNameSpaceID == kNameSpaceID_XLink) &&
+      aAttribute == nsGkAtoms::href) {
+    auto* element = static_cast<SVGImageElement*>(GetContent());
+    if (aNameSpaceID == kNameSpaceID_None ||
+        !element->mStringAttributes[SVGImageElement::HREF].IsExplicitlySet()) {
+      mImageContainer = nullptr;
+      InvalidateFrame();
     }
   }
 
@@ -258,7 +249,6 @@ bool SVGImageFrame::GetIntrinsicImageDimensions(
   }
 
   ImageResolution resolution = mImageContainer->GetResolution();
-
   int32_t width, height;
   if (NS_FAILED(mImageContainer->GetWidth(&width))) {
     aSize.width = -1;
@@ -274,9 +264,7 @@ bool SVGImageFrame::GetIntrinsicImageDimensions(
     resolution.ApplyYTo(aSize.height);
   }
 
-  Maybe<AspectRatio> asp = mImageContainer->GetIntrinsicRatio();
-  aAspectRatio = asp.valueOr(AspectRatio{});
-
+  aAspectRatio = mImageContainer->GetIntrinsicRatio();
   return true;
 }
 
@@ -332,12 +320,14 @@ void SVGImageFrame::PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
     nsCOMPtr<imgIRequest> currentRequest;
     nsCOMPtr<nsIImageLoadingContent> imageLoader =
         do_QueryInterface(GetContent());
-    if (imageLoader)
+    if (imageLoader) {
       imageLoader->GetRequest(nsIImageLoadingContent::CURRENT_REQUEST,
                               getter_AddRefs(currentRequest));
+    }
 
-    if (currentRequest)
+    if (currentRequest) {
       currentRequest->GetImage(getter_AddRefs(mImageContainer));
+    }
   }
 
   if (mImageContainer) {
@@ -424,7 +414,7 @@ void SVGImageFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     if (!IsVisibleForPainting()) {
       return;
     }
-    if (StyleEffects()->IsTransparent()) {
+    if (StyleEffects()->IsTransparent() && SVGUtils::CanOptimizeOpacity(this)) {
       return;
     }
     aBuilder->BuildCompositorHitTestInfoIfNeeded(this,
@@ -443,7 +433,8 @@ bool SVGImageFrame::IsInvisible() const {
   // Anything below will round to zero later down the pipeline.
   constexpr float opacity_threshold = 1.0 / 128.0;
 
-  return StyleEffects()->mOpacity <= opacity_threshold;
+  return StyleEffects()->mOpacity <= opacity_threshold &&
+         SVGUtils::CanOptimizeOpacity(this);
 }
 
 bool SVGImageFrame::CreateWebRenderCommands(

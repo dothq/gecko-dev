@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.63.0"
 name = "goblin"
-version = "0.7.1"
+version = "0.8.2"
 authors = [
     "m4b <m4b.github.io@gmail.com>",
     "seu <seu@panopticon.re>",
@@ -54,8 +54,11 @@ default-features = false
 version = "0.2.3"
 
 [dependencies.scroll]
-version = "0.11"
+version = "0.12"
 default_features = false
+
+[dev-dependencies.stderrlog]
+version = "0.5.4"
 
 [features]
 alloc = [

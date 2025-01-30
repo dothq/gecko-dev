@@ -15,6 +15,7 @@
 #include "nsPrintfCString.h"
 #include "WebGLBuffer.h"
 #include "WebGLContextUtils.h"
+#include "WebGLFormats.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLProgram.h"
 #include "WebGLRenderbuffer.h"
@@ -238,7 +239,7 @@ bool WebGLContext::ValidateStencilParamsForDrawCall() const {
 
   const auto fnMask = [&](const uint32_t x) { return x & stencilMax; };
   const auto fnClamp = [&](const int32_t x) {
-    return std::max(0, std::min(x, (int32_t)stencilMax));
+    return std::clamp(x, 0, (int32_t)stencilMax);
   };
 
   bool ok = true;
@@ -1190,6 +1191,12 @@ bool WebGLContext::DoFakeVertexAttrib0(
   }
 
   gl->fEnableVertexAttribArray(0);
+  {
+    const auto& attrib0 = mBoundVertexArray->AttribBinding(0);
+    if (attrib0.layout.divisor) {
+      gl->fVertexAttribDivisor(0, 0);
+    }
+  }
 
   if (!mFakeVertexAttrib0BufferObject) {
     gl->fGenBuffers(1, &mFakeVertexAttrib0BufferObject);

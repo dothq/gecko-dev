@@ -113,9 +113,8 @@ enum class ExceptionResumeKind : int32_t {
   // Jump to the bailout tail stub.
   Bailout,
 
-  // The innermost frame was a wasm frame.
-  // Return to the wasm entry frame.
-  Wasm,
+  // Return to the wasm interpreter entry frame.
+  WasmInterpEntry,
 
   // The exception was caught by a wasm catch handler.
   // Restore state and jump to it.
@@ -299,6 +298,17 @@ class RectifierFrameLayout : public JitFrameLayout {
   static inline size_t Size() { return sizeof(RectifierFrameLayout); }
 };
 
+class TrampolineNativeFrameLayout : public JitFrameLayout {
+ public:
+  static inline size_t Size() { return sizeof(TrampolineNativeFrameLayout); }
+
+  template <typename T>
+  T* getFrameData() {
+    uint8_t* raw = reinterpret_cast<uint8_t*>(this) - sizeof(T);
+    return reinterpret_cast<T*>(raw);
+  }
+};
+
 class WasmToJSJitFrameLayout : public JitFrameLayout {
  public:
   static inline size_t Size() { return sizeof(WasmToJSJitFrameLayout); }
@@ -403,8 +413,8 @@ class ExitFrameLayout : public CommonFrameLayout {
   inline uint8_t* top() { return reinterpret_cast<uint8_t*>(this + 1); }
 
  public:
-  static inline size_t Size() { return sizeof(ExitFrameLayout); }
-  static inline size_t SizeWithFooter() {
+  static constexpr size_t Size() { return sizeof(ExitFrameLayout); }
+  static constexpr size_t SizeWithFooter() {
     return Size() + ExitFooterFrame::Size();
   }
 

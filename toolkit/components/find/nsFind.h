@@ -12,6 +12,7 @@
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsINode.h"
+#include "mozilla/intl/Segmenter.h"
 
 #define NS_FIND_CONTRACTID "@mozilla.org/embedcomp/rangefind;1"
 
@@ -28,6 +29,19 @@ class nsFind : public nsIFind {
   NS_DECL_NSIFIND
   NS_DECL_CYCLE_COLLECTION_CLASS(nsFind)
 
+  // The IDL interface allows to toggle the "find entire words" search mode
+  // by calling `SetEntireWord()`.
+  // Internally, it is possible to specify word boundaries at the beginning
+  // and/or the end of the search pattern.
+  // `GetEntireWord()` returns true if `mWordStartBounded` and `mWordEndBounded`
+  // are true.
+  void SetWordStartBounded(bool aWordStartBounded) {
+    mWordStartBounded = aWordStartBounded;
+  }
+  void SetWordEndBounded(bool aWordEndBounded) {
+    mWordEndBounded = aWordEndBounded;
+  }
+
  protected:
   virtual ~nsFind() = default;
 
@@ -36,10 +50,9 @@ class nsFind : public nsIFind {
   bool mCaseSensitive = false;
   bool mMatchDiacritics = false;
 
-  // Use "find entire words" mode by setting mEntireWord to true; or false to
-  // disable "entire words" mode.
-  bool mEntireWord = false;
-
+  bool mWordStartBounded = false;
+  bool mWordEndBounded = false;
+  mozilla::intl::WordBreakIteratorUtf16 mWordBreakIter{nullptr};
   struct State;
   class StateRestorer;
 
@@ -51,7 +64,7 @@ class nsFind : public nsIFind {
   //
   // This could be improved because some languages require more context than two
   // characters to determine where line breaks can occur
-  bool BreakInBetween(char32_t x, char32_t y) const;
+  bool BreakInBetween(char32_t x, char32_t y);
 
   // Get the first character from the next node (last if mFindBackward).
   //

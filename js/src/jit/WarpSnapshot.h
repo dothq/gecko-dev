@@ -14,6 +14,7 @@
 #include "gc/Policy.h"
 #include "jit/JitAllocPolicy.h"
 #include "jit/JitContext.h"
+#include "jit/JitZone.h"
 #include "jit/TypeData.h"
 #include "vm/EnvironmentObject.h"
 #include "vm/FunctionFlags.h"  // js::FunctionFlags
@@ -40,7 +41,7 @@ class WarpScriptSnapshot;
   _(WarpGetIntrinsic)            \
   _(WarpGetImport)               \
   _(WarpRest)                    \
-  _(WarpBindGName)               \
+  _(WarpBindUnqualifiedGName)    \
   _(WarpVarEnvironment)          \
   _(WarpLexicalEnvironment)      \
   _(WarpClassBodyEnvironment)    \
@@ -390,14 +391,14 @@ class WarpRest : public WarpOpSnapshot {
 #endif
 };
 
-// Global environment for BindGName
-class WarpBindGName : public WarpOpSnapshot {
+// Global environment for BindUnqualifiedGName
+class WarpBindUnqualifiedGName : public WarpOpSnapshot {
   WarpGCPtr<JSObject*> globalEnv_;
 
  public:
-  static constexpr Kind ThisKind = Kind::WarpBindGName;
+  static constexpr Kind ThisKind = Kind::WarpBindUnqualifiedGName;
 
-  WarpBindGName(uint32_t offset, JSObject* globalEnv)
+  WarpBindUnqualifiedGName(uint32_t offset, JSObject* globalEnv)
       : WarpOpSnapshot(ThisKind, offset), globalEnv_(globalEnv) {}
 
   JSObject* globalEnv() const { return globalEnv_; }
@@ -554,11 +555,16 @@ class WarpBailoutInfo {
 
 using WarpScriptSnapshotList = mozilla::LinkedList<WarpScriptSnapshot>;
 
+using WarpZoneStubsSnapshot = JitZone::Stubs<JitCode*>;
+
 // Data allocated by WarpOracle on the main thread that's used off-thread by
 // WarpBuilder to build the MIR graph.
 class WarpSnapshot : public TempObject {
   // The scripts being compiled.
   WarpScriptSnapshotList scriptSnapshots_;
+
+  // JitZone stubs this compilation depends on.
+  const WarpZoneStubsSnapshot zoneStubs_;
 
   // The global lexical environment and its thisObject(). We don't inline
   // cross-realm calls so this can be stored once per snapshot.
@@ -585,11 +591,17 @@ class WarpSnapshot : public TempObject {
  public:
   explicit WarpSnapshot(JSContext* cx, TempAllocator& alloc,
                         WarpScriptSnapshotList&& scriptSnapshots,
+                        const WarpZoneStubsSnapshot& zoneStubs,
                         const WarpBailoutInfo& bailoutInfo,
                         bool recordWarmUpCount);
 
   WarpScriptSnapshot* rootScript() { return scriptSnapshots_.getFirst(); }
   const WarpScriptSnapshotList& scripts() const { return scriptSnapshots_; }
+
+  JitCode* getZoneStub(JitZone::StubKind kind) const {
+    MOZ_ASSERT(zoneStubs_[kind]);
+    return zoneStubs_[kind];
+  }
 
   GlobalLexicalEnvironmentObject* globalLexicalEnv() const {
     return globalLexicalEnv_;

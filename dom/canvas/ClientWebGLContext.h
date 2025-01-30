@@ -18,7 +18,6 @@
 #include "mozilla/dom/WebGL2RenderingContextBinding.h"
 #include "mozilla/layers/LayersSurfaces.h"
 #include "mozilla/StaticPrefs_webgl.h"
-#include "WebGLFormats.h"
 #include "WebGLStrongTypes.h"
 #include "WebGLTypes.h"
 
@@ -134,9 +133,6 @@ class ShaderKeepAlive final {
 };
 
 class ContextGenerationInfo final {
- private:
-  ObjectId mLastId = 0;
-
  public:
   webgl::ExtensionBits mEnabledExtensions;
   RefPtr<WebGLProgramJS> mCurrentProgram;
@@ -180,7 +176,7 @@ class ContextGenerationInfo final {
 
   webgl::ProvokingVertex mProvokingVertex = webgl::ProvokingVertex::LastVertex;
 
-  ObjectId NextId() { return mLastId += 1; }
+  mutable std::unordered_map<GLenum, bool> mIsEnabledMap;
 };
 
 // -
@@ -223,7 +219,7 @@ class ObjectJS {
  protected:
   bool mDeleteRequested = false;
 
-  explicit ObjectJS(const ClientWebGLContext&);
+  explicit ObjectJS(const ClientWebGLContext*);
   virtual ~ObjectJS() = default;
 
  public:
@@ -277,7 +273,7 @@ class WebGLBufferJS final : public nsWrapperCache, public webgl::ObjectJS {
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLBufferJS)
 
   explicit WebGLBufferJS(const ClientWebGLContext& webgl)
-      : webgl::ObjectJS(webgl) {}
+      : webgl::ObjectJS(&webgl) {}
 
  private:
   ~WebGLBufferJS();
@@ -399,7 +395,7 @@ class WebGLQueryJS final : public nsWrapperCache,
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WebGLQueryJS)
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLQueryJS)
 
-  explicit WebGLQueryJS(const ClientWebGLContext& webgl)
+  explicit WebGLQueryJS(const ClientWebGLContext* const webgl)
       : webgl::ObjectJS(webgl) {}
 
  private:
@@ -423,7 +419,7 @@ class WebGLRenderbufferJS final : public nsWrapperCache,
   bool mHasBeenBound = false;  // !IsRenderbuffer until Bind
 
   explicit WebGLRenderbufferJS(const ClientWebGLContext& webgl)
-      : webgl::ObjectJS(webgl) {}
+      : webgl::ObjectJS(&webgl) {}
   ~WebGLRenderbufferJS();
 
  public:
@@ -439,7 +435,7 @@ class WebGLSamplerJS final : public nsWrapperCache, public webgl::ObjectJS {
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLSamplerJS)
 
   explicit WebGLSamplerJS(const ClientWebGLContext& webgl)
-      : webgl::ObjectJS(webgl) {}
+      : webgl::ObjectJS(&webgl) {}
 
  private:
   ~WebGLSamplerJS();
@@ -493,14 +489,14 @@ class WebGLSyncJS final : public nsWrapperCache,
 
   bool mCanBeAvailable = false;
   uint8_t mNumQueriesBeforeFirstFrameBoundary = 0;
-  bool mSignaled = false;
+  uint8_t mNumQueriesWithoutFlushCommandsBit = 0;
 
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WebGLSyncJS)
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLSyncJS)
 
   explicit WebGLSyncJS(const ClientWebGLContext& webgl)
-      : webgl::ObjectJS(webgl) {}
+      : webgl::ObjectJS(&webgl) {}
 
  private:
   ~WebGLSyncJS();
@@ -521,7 +517,7 @@ class WebGLTextureJS final : public nsWrapperCache, public webgl::ObjectJS {
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLTextureJS)
 
   explicit WebGLTextureJS(const ClientWebGLContext& webgl)
-      : webgl::ObjectJS(webgl) {}
+      : webgl::ObjectJS(&webgl) {}
 
  private:
   ~WebGLTextureJS();
@@ -574,7 +570,7 @@ class WebGLUniformLocationJS final : public nsWrapperCache,
   WebGLUniformLocationJS(const ClientWebGLContext& webgl,
                          std::weak_ptr<webgl::LinkResult> parent, uint32_t loc,
                          GLenum elemType)
-      : webgl::ObjectJS(webgl),
+      : webgl::ObjectJS(&webgl),
         mParent(parent),
         mLocation(loc),
         mValidUploadElemTypes(ValidUploadElemTypes(elemType)) {}
@@ -599,7 +595,7 @@ class WebGLVertexArrayJS final : public nsWrapperCache, public webgl::ObjectJS {
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WebGLVertexArrayJS)
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WebGLVertexArrayJS)
 
-  explicit WebGLVertexArrayJS(const ClientWebGLContext&);
+  explicit WebGLVertexArrayJS(const ClientWebGLContext*);
 
  private:
   ~WebGLVertexArrayJS();
@@ -781,8 +777,11 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   mutable GLenum mNextError = 0;
   mutable webgl::LossStatus mLossStatus = webgl::LossStatus::Ready;
   mutable bool mAwaitingRestore = false;
+  mutable webgl::ObjectId mLastId = 0;
 
  public:
+  webgl::ObjectId NextId() const { return mLastId += 1; }
+
   // Holds Some Id if async present is used
   mutable Maybe<layers::RemoteTextureId> mLastRemoteTextureId;
   mutable Maybe<layers::RemoteTextureOwnerId> mRemoteTextureOwnerId;
@@ -1013,7 +1012,7 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot(
       gfxAlphaType* out_alphaType) override;
 
-  void SetOpaqueValueFromOpaqueAttr(bool) override{};
+  void SetOpaqueValueFromOpaqueAttr(bool) override {};
   bool GetIsOpaque() override { return !mInitialOptions->alpha; }
 
   /**
@@ -1052,6 +1051,28 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
     const FuncScope funcScope(*this, "drawingBufferHeight");
     return AutoAssertCast(DrawingBufferSize().y);
   }
+
+  // -
+
+ private:
+  std::optional<dom::PredefinedColorSpace> mDrawingBufferColorSpace;
+  std::optional<dom::PredefinedColorSpace> mUnpackColorSpace;
+
+ public:
+  auto DrawingBufferColorSpace() const {
+    return mDrawingBufferColorSpace ? *mDrawingBufferColorSpace
+                                    : dom::PredefinedColorSpace::Srgb;
+  }
+  void SetDrawingBufferColorSpace(dom::PredefinedColorSpace);
+
+  auto UnpackColorSpace() const {
+    return mUnpackColorSpace ? *mUnpackColorSpace
+                             : dom::PredefinedColorSpace::Srgb;
+  }
+  void SetUnpackColorSpace(dom::PredefinedColorSpace);
+
+  // -
+
   void GetContextAttributes(dom::Nullable<dom::WebGLContextAttributes>& retval);
 
  private:
@@ -1074,8 +1095,7 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   Maybe<layers::SurfaceDescriptor> GetFrontBuffer(
       WebGLFramebufferJS*, const bool webvr = false) override;
   Maybe<layers::SurfaceDescriptor> PresentFrontBuffer(
-      WebGLFramebufferJS*, layers::TextureType,
-      const bool webvr = false) override;
+      WebGLFramebufferJS*, const bool webvr = false) override;
   RefPtr<gfx::SourceSurface> GetFrontBufferSnapshot(
       bool requireAlphaPremult = true) override;
   already_AddRefed<layers::FwdTransactionTracker> UseCompositableForwarder(
@@ -1092,15 +1112,15 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
 
   // -
 
-  bool mAutoFlushPending = false;
+  mutable bool mAutoFlushPending = false;
 
-  void AutoEnqueueFlush() {
+  void AutoEnqueueFlush() const {
     if (MOZ_LIKELY(mAutoFlushPending)) return;
     mAutoFlushPending = true;
 
-    const auto weak = WeakPtr<ClientWebGLContext>(this);
-    const auto DeferredFlush = [weak]() {
-      const auto strong = RefPtr<ClientWebGLContext>(weak);
+    const auto DeferredFlush = [weak =
+                                    WeakPtr<const ClientWebGLContext>(this)]() {
+      const auto strong = RefPtr<const ClientWebGLContext>(weak);
       if (!strong) return;
       if (!strong->mAutoFlushPending) return;
       strong->mAutoFlushPending = false;
@@ -1111,12 +1131,12 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
     };
 
     already_AddRefed<mozilla::CancelableRunnable> runnable =
-        NS_NewCancelableRunnableFunction("enqueue Event_webglcontextrestored",
+        NS_NewCancelableRunnableFunction("ClientWebGLContext::DeferredFlush",
                                          DeferredFlush);
     NS_DispatchToCurrentThread(std::move(runnable));
   }
 
-  void CancelAutoFlush() { mAutoFlushPending = false; }
+  void CancelAutoFlush() const { mAutoFlushPending = false; }
 
   // -
 
@@ -1141,6 +1161,7 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   void Disable(GLenum cap) const { SetEnabledI(cap, {}, false); }
   void Enable(GLenum cap) const { SetEnabledI(cap, {}, true); }
   void SetEnabledI(GLenum cap, Maybe<GLuint> i, bool val) const;
+
   bool IsEnabled(GLenum cap) const;
 
  private:
@@ -1397,7 +1418,7 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
 
   void DepthRange(GLclampf zNear, GLclampf zFar);
 
-  void Flush(bool flushGl = true);
+  void Flush(bool flushGl = true) const;
 
   void Finish();
 
@@ -2244,6 +2265,13 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   void GetSyncParameter(JSContext*, WebGLSyncJS&, GLenum pname,
                         JS::MutableHandle<JS::Value> retval) const;
   void WaitSync(const WebGLSyncJS&, GLbitfield flags, GLint64 timeout) const;
+
+  mutable webgl::ObjectId mCompletedSyncId = 0;
+  void OnSyncComplete(webgl::ObjectId id) const {
+    if (mCompletedSyncId < id) {
+      mCompletedSyncId = id;
+    }
+  }
 
   // -------------------------- Transform Feedback ---------------------------
 

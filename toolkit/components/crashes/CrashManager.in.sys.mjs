@@ -74,6 +74,84 @@ function parseAndRemoveField(obj, field) {
 }
 
 /**
+ * Convert a legacy Telemetry `StackTraces` layout to that expected by Glean.
+ *
+ * @param stackTraces {Object} The legacy Telemetry StackTraces object.
+ *
+ * @returns {Object} The stack traces layout expected by the Glean crash.stackTraces metric.
+ */
+function stackTracesLegacyToGlean(stackTraces) {
+  let ret = {};
+  // Change "status" to "error", only populate if an error occurred.
+  if ("status" in stackTraces && stackTraces.status !== "OK") {
+    ret.error = stackTraces.status;
+  }
+
+  // Change "crash_info" to flattened individual fields.
+  ret.crash_type = stackTraces.crash_info?.type;
+  ret.crash_address = stackTraces.crash_info?.address;
+  ret.crash_thread = stackTraces.crash_info?.crashing_thread;
+
+  ret.main_module = stackTraces.main_module;
+
+  // Rename modules[].{base_addr,end_addr}
+  if ("modules" in stackTraces) {
+    ret.modules = stackTraces.modules.map(module => ({
+      base_address: module.base_addr,
+      end_address: module.end_addr,
+      code_id: module.code_id,
+      debug_file: module.debug_file,
+      debug_id: module.debug_id,
+      filename: module.filename,
+      version: module.version,
+    }));
+  }
+
+  if ("threads" in stackTraces) {
+    ret.threads = stackTraces.threads.map(thread => ({
+      frames: thread.frames.map(frame => ({
+        module_index: frame.module_index,
+        ip: frame.ip,
+        trust: frame.trust,
+      })),
+    }));
+  }
+
+  return ret;
+}
+
+/**
+ * Convert a legacy Telemetry `AsyncShutdownTimeout` value to that expected by Glean.
+ *
+ * @param value {String} The legacy Telemetry value.
+ *
+ * @returns {Object} The object appropriate for being `.set()` on the Glean
+ * crash.asyncShutdownTimeout metric.
+ */
+function asyncShutdownTimeoutLegacyToGlean(value) {
+  let obj = JSON.parse(value);
+  // The conditions object isn't a consistent shape, so we just store it as a serialized string.
+  obj.conditions = JSON.stringify(obj.conditions);
+  // Change camelCase to snake_case
+  obj.broken_add_blockers = obj.brokenAddBlockers;
+  delete obj.brokenAddBlockers;
+  return obj;
+}
+
+/**
+ * Convert a legacy Telemetry `QuotaManagerShutdownTimeout` value to that expected by Glean.
+ *
+ * @param value {String} The legacy Telemetry value.
+ *
+ * @returns {Array} The array appropriate for being `.set()` on the Glean
+ * crash.quotaManagerShutdownTimeout metric.
+ */
+function quotaManagerShutdownTimeoutLegacyToGlean(value) {
+  // The Glean metric is an array of the lines.
+  return value.split("\n");
+}
+
+/**
  * A gateway to crash-related data.
  *
  * This type is generic and can be instantiated any number of times.
@@ -109,11 +187,12 @@ export var CrashManager = function (options) {
       case "pendingDumpsDir":
       case "submittedDumpsDir":
       case "eventsDirs":
-      case "storeDir":
+      case "storeDir": {
         let key = "_" + k;
         delete this[key];
         Object.defineProperty(this, key, { value });
         break;
+      }
       case "telemetryStoreSizeKey":
         this._telemetryStoreSizeKey = value;
         break;
@@ -354,7 +433,10 @@ CrashManager.prototype = Object.freeze({
 
         if (needsSave) {
           let store = await this._getStore();
-          await store.save();
+
+          if (store) {
+            await store.save();
+          }
         }
 
         for (let path of deletePaths) {
@@ -383,8 +465,11 @@ CrashManager.prototype = Object.freeze({
   pruneOldCrashes(date) {
     return (async () => {
       let store = await this._getStore();
-      store.pruneOldCrashes(date);
-      await store.save();
+
+      if (store) {
+        store.pruneOldCrashes(date);
+        await store.save();
+      }
     })();
   },
 
@@ -443,7 +528,7 @@ CrashManager.prototype = Object.freeze({
       }
 
       let store = await this._getStore();
-      if (store.addCrash(processType, crashType, id, date, metadata)) {
+      if (store && store.addCrash(processType, crashType, id, date, metadata)) {
         await store.save();
       }
 
@@ -518,6 +603,10 @@ CrashManager.prototype = Object.freeze({
    */
   async ensureCrashIsPresent(id) {
     let store = await this._getStore();
+    if (!store) {
+      return Promise.reject();
+    }
+
     let crash = store.getCrash(id);
 
     if (crash) {
@@ -540,7 +629,7 @@ CrashManager.prototype = Object.freeze({
    */
   async setRemoteCrashID(crashID, remoteID) {
     let store = await this._getStore();
-    if (store.setRemoteCrashID(crashID, remoteID)) {
+    if (store && store.setRemoteCrashID(crashID, remoteID)) {
       await store.save();
     }
   },
@@ -563,7 +652,7 @@ CrashManager.prototype = Object.freeze({
    */
   async addSubmissionAttempt(crashID, submissionID, date) {
     let store = await this._getStore();
-    if (store.addSubmissionAttempt(crashID, submissionID, date)) {
+    if (store && store.addSubmissionAttempt(crashID, submissionID, date)) {
       await store.save();
     }
   },
@@ -580,7 +669,10 @@ CrashManager.prototype = Object.freeze({
    */
   async addSubmissionResult(crashID, submissionID, date, result) {
     let store = await this._getStore();
-    if (store.addSubmissionResult(crashID, submissionID, date, result)) {
+    if (
+      store &&
+      store.addSubmissionResult(crashID, submissionID, date, result)
+    ) {
       await store.save();
     }
   },
@@ -595,7 +687,7 @@ CrashManager.prototype = Object.freeze({
    */
   async setCrashClassifications(crashID, classifications) {
     let store = await this._getStore();
-    if (store.setCrashClassifications(crashID, classifications)) {
+    if (store && store.setCrashClassifications(crashID, classifications)) {
       await store.save();
     }
   },
@@ -633,6 +725,10 @@ CrashManager.prototype = Object.freeze({
     return (async () => {
       let data = await IOUtils.read(entry.path);
       let store = await this._getStore();
+
+      if (!store) {
+        return this.EVENT_FILE_ERROR_UNKNOWN_EVENT;
+      }
 
       let decoder = new TextDecoder();
       data = decoder.decode(data);
@@ -688,19 +784,168 @@ CrashManager.prototype = Object.freeze({
    * Submit a Glean crash ping with the given parameters.
    *
    * @param {string} reason - the reason for the crash ping, one of: "crash", "event_found"
-   * @param {string} type - the process type (from {@link processTypes})
+   * @param {string} process_type - the process type (from {@link processTypes})
    * @param {DateTime} date - the time of the crash (or the closest time after it)
+   * @param {string} minidumpHash - the hash of the minidump file, if any
+   * @param {object} stackTraces - the object containing stack trace information
    * @param {object} metadata - the object of Telemetry crash metadata
    */
-  _submitGleanCrashPing(reason, type, date, metadata) {
-    if ("UptimeTS" in metadata) {
-      Glean.crash.uptime.setRaw(parseFloat(metadata.UptimeTS) * 1e3);
+  _submitGleanCrashPing(
+    reason,
+    process_type,
+    date,
+    minidumpHash,
+    stackTraces,
+    metadata
+  ) {
+    if (stackTraces) {
+      // Glean.crash.stack_traces has a slightly different shape than Telemetry
+      stackTraces = stackTracesLegacyToGlean(stackTraces);
+
+      // FIXME: Glean should probably accept an empty object here. Some tests
+      // pass { status: "OK" }, which ends up being removed by the above logic.
+      if (Object.keys(stackTraces).length) {
+        // FIXME: ?. a temporary workaround for bug 1900442
+        Glean.crash.stackTraces?.set(stackTraces);
+      }
     }
-    Glean.crash.processType.set(type);
+
+    Glean.crash.processType.set(process_type);
     Glean.crash.time.set(date.getTime() * 1000);
-    Glean.crash.startup.set(
-      "StartupCrash" in metadata && parseInt(metadata.StartupCrash) === 1
-    );
+    Glean.crash.minidumpSha256Hash.set(minidumpHash);
+
+    // Convert Telemetry environment values to Glean metrics
+
+    const cap = Symbol("capitalize");
+    // Types such as quantity and string which can simply be `.set()`.
+    const generic = Symbol("generic");
+    const bool = Symbol("bool");
+    const string = Symbol("string");
+    const semicolon_list = Symbol("semicolon-separated string");
+    const comma_list = Symbol("comma-separated string");
+    const seconds = Symbol("seconds (floating)");
+
+    class Typed {
+      constructor(type, metaKey) {
+        this.type = type;
+        this.metaKey = metaKey;
+      }
+    }
+    function t(type, metaKey) {
+      return new Typed(type, metaKey);
+    }
+
+    const fieldMapping = {
+      crash: {
+        appChannel: "ReleaseChannel",
+        appDisplayVersion: "Version",
+        appBuild: "BuildID",
+        asyncShutdownTimeout: t(asyncShutdownTimeoutLegacyToGlean, cap),
+        backgroundTaskName: cap,
+        eventLoopNestingLevel: cap,
+        fontName: cap,
+        gpuProcessLaunch: "GPUProcessLaunchCount",
+        ipcChannelError: "ipc_channel_error",
+        isGarbageCollecting: cap,
+        mainThreadRunnableName: cap,
+        mozCrashReason: cap,
+        profilerChildShutdownPhase: cap,
+        quotaManagerShutdownTimeout: t(
+          quotaManagerShutdownTimeoutLegacyToGlean,
+          cap
+        ),
+        remoteType: cap,
+        utilityActorsName: t(comma_list, "UtilityActorsName"),
+        shutdownProgress: cap,
+        startup: t(bool, "StartupCrash"),
+      },
+      crashWindows: {
+        errorReporting: t(bool, "WindowsErrorReporting"),
+        fileDialogErrorCode: t(string, "WindowsFileDialogErrorCode"),
+      },
+      dllBlocklist: {
+        list: t(semicolon_list, "BlockedDllList"),
+        initFailed: t(bool, "BlocklistInitFailed"),
+        user32LoadedBefore: t(bool, "User32BeforeBlocklist"),
+      },
+      environment: {
+        experimentalFeatures: t(comma_list, cap),
+        headlessMode: t(bool, cap),
+        uptime: t(seconds, "UptimeTS"),
+      },
+      memory: {
+        availableCommit: "AvailablePageFile",
+        availablePhysical: "AvailablePhysicalMemory",
+        availableSwap: "AvailableSwapMemory",
+        availableVirtual: "AvailableVirtualMemory",
+        lowPhysical: "LowPhysicalMemoryEvents",
+        oomAllocationSize: "OOMAllocationSize",
+        purgeablePhysical: "PurgeablePhysicalMemory",
+        systemUsePercentage: "SystemMemoryUsePercentage",
+        texture: "TextureUsage",
+        totalPageFile: cap,
+        totalPhysical: "TotalPhysicalMemory",
+        totalVirtual: "TotalVirtualMemory",
+      },
+      windows: {
+        packageFamilyName: "WindowsPackageFamilyName",
+      },
+    };
+
+    function gleanSet(root, mapping) {
+      for (const key in mapping) {
+        let value = mapping[key];
+        if (
+          typeof value === "string" ||
+          value === cap ||
+          value instanceof Typed
+        ) {
+          // Get type and metadata key
+          let type = generic;
+          let metadataKey = value;
+          if (value instanceof Typed) {
+            type = value.type;
+            metadataKey = value.metaKey;
+          }
+          // Elaborate metadata key if set to capitilize the Glean key.
+          if (metadataKey === cap) {
+            metadataKey = key.charAt(0).toUpperCase() + key.slice(1);
+          }
+
+          // If the metadata key is set, set the Glean metric.
+          if (metadataKey in metadata) {
+            let metaValue = metadata[metadataKey];
+
+            if (type === seconds) {
+              metaValue = parseFloat(metaValue) * 1e3;
+              root[key].setRaw(metaValue);
+              continue;
+            }
+
+            // Interpret types prior to calling `set`.
+            if (type === bool) {
+              metaValue = metaValue === "1";
+            } else if (type === string) {
+              metaValue = metaValue.toString();
+            } else if (type === semicolon_list) {
+              metaValue = metaValue.split(";").filter(x => x);
+            } else if (type === comma_list) {
+              metaValue = metaValue.split(",").filter(x => x);
+            } else if (typeof type === "function") {
+              // `object` metric transformation
+              metaValue = type(metaValue);
+            }
+            // FIXME: ?. a temporary workaround for bug 1900442
+            root[key]?.set(metaValue);
+          }
+        } else {
+          gleanSet(root[key], value);
+        }
+      }
+    }
+
+    gleanSet(Glean, fieldMapping);
+
     GleanPings.crash.submit(reason);
   },
 
@@ -738,7 +983,14 @@ CrashManager.prototype = Object.freeze({
     // separately in lib-crash for Fenix (and potentially other GeckoView
     // users).
     if (AppConstants.platform !== "android") {
-      this._submitGleanCrashPing(reason, type, date, reportMeta);
+      this._submitGleanCrashPing(
+        reason,
+        type,
+        date,
+        minidumpSha256Hash,
+        stackTraces,
+        reportMeta
+      );
     }
 
     if (onlyGlean) {
@@ -779,7 +1031,7 @@ CrashManager.prototype = Object.freeze({
       case "crash.main.2":
         return this.EVENT_FILE_ERROR_OBSOLETE;
 
-      case "crash.main.3":
+      case "crash.main.3": {
         let crashID = lines[0];
         let metadata = JSON.parse(lines[1]);
         store.addCrash(
@@ -799,6 +1051,7 @@ CrashManager.prototype = Object.freeze({
         );
 
         break;
+      }
 
       case "crash.submission.1":
         if (lines.length == 3) {
@@ -845,30 +1098,36 @@ CrashManager.prototype = Object.freeze({
    */
   _getDirectoryEntries(path, re) {
     return (async function () {
-      let children = await IOUtils.getChildren(path);
       let entries = [];
 
-      for (const entry of children) {
-        let stat = await IOUtils.stat(entry);
-        if (stat.type == "directory") {
-          continue;
+      try {
+        let children = await IOUtils.getChildren(path);
+
+        for (const entry of children) {
+          let stat = await IOUtils.stat(entry);
+          if (stat.type == "directory") {
+            continue;
+          }
+
+          let filename = PathUtils.filename(entry);
+          let match = re.exec(filename);
+          if (!match) {
+            continue;
+          }
+          entries.push({
+            path: entry,
+            id: match[1],
+            date: stat.lastModified,
+          });
         }
 
-        let filename = PathUtils.filename(entry);
-        let match = re.exec(filename);
-        if (!match) {
-          continue;
-        }
-        entries.push({
-          path: entry,
-          id: match[1],
-          date: stat.lastModified,
+        entries.sort((a, b) => {
+          return a.date - b.date;
         });
+      } catch (ex) {
+        // Missing events folders are allowed
+        console.error(ex);
       }
-
-      entries.sort((a, b) => {
-        return a.date - b.date;
-      });
 
       return entries;
     })();
@@ -946,15 +1205,11 @@ CrashManager.prototype = Object.freeze({
     return (async () => {
       let store = await this._getStore();
 
+      if (!store) {
+        return [];
+      }
+
       return store.crashes;
-    })();
-  },
-
-  getCrashCountsByDay() {
-    return (async () => {
-      let store = await this._getStore();
-
-      return store._countsByDay;
     })();
   },
 });
@@ -1180,12 +1435,17 @@ CrashStore.prototype = Object.freeze({
 
       let encoder = new TextEncoder();
       let data = encoder.encode(JSON.stringify(normalized));
-      let size = await IOUtils.write(this._storePath, data, {
-        tmpPath: this._storePath + ".tmp",
-        compress: true,
-      });
-      if (this._telemetrySizeKey) {
-        Services.telemetry.getHistogramById(this._telemetrySizeKey).add(size);
+      try {
+        let size = await IOUtils.write(this._storePath, data, {
+          tmpPath: this._storePath + ".tmp",
+          compress: true,
+        });
+        if (this._telemetrySizeKey) {
+          Services.telemetry.getHistogramById(this._telemetrySizeKey).add(size);
+        }
+      } catch (ex) {
+        // This operation might fail during shutdown, tough luck.
+        console.error(ex);
       }
     })();
   },

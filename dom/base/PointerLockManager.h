@@ -27,7 +27,7 @@ class PointerLockManager final {
   static void RequestLock(dom::Element* aElement, dom::CallerType aCallerType);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  static void Unlock(dom::Document* aDoc = nullptr);
+  static void Unlock(const char* aReason, dom::Document* aDoc = nullptr);
 
   static bool IsLocked() { return sIsLocked; }
 
@@ -47,7 +47,8 @@ class PointerLockManager final {
 
   // Set/release pointer lock remote target. Should only be called in parent
   // process.
-  static bool SetLockedRemoteTarget(dom::BrowserParent* aBrowserParent);
+  static void SetLockedRemoteTarget(dom::BrowserParent* aBrowserParent,
+                                    nsACString& aError);
   static void ReleaseLockedRemoteTarget(dom::BrowserParent* aBrowserParent);
 
  private:

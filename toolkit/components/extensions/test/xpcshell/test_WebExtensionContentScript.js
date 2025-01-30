@@ -119,6 +119,133 @@ add_task(function test_WebExtensionContentScript_mv3_specific() {
   });
 });
 
+add_task(async function test_WebExtensionContentScript_isUserScript() {
+  let policy = new WebExtensionPolicy({
+    id: "foo@bar.baz",
+    mozExtensionHostname: "ba159687-9472-4816-a1b2-8b14721d2ea6",
+    baseURL: "file:///foo/",
+    manifestVersion: 3,
+    allowedOrigins: new MatchPatternSet(["https://example.com/*"]),
+    localizeCallback() {},
+  });
+
+  // WebExtensionContentScript defaults to world "ISOLATED", but for user
+  // scripts only "MAIN" and "USER_SCRIPT" worlds are permitted. "MAIN" is
+  // supported by user scripts and non-userScripts, so use that here.
+  const world = "MAIN";
+
+  const matches = new MatchPatternSet(["https://example.com/match/*"]);
+  const includeGlobs = [new MatchGlob("*/glob/*")];
+  const exampleMatchesURI = newURI("https://example.com/match/");
+  const exampleGlobURI = newURI("https://example.com/glob/");
+  const exampleNotMatchedURI = newURI("https://example.com/nomatch/");
+  const exampleNoPermissionURI = newURI("https://example.net/glob/");
+
+  let defaultScript = new WebExtensionContentScript(policy, {
+    world,
+    matches,
+    includeGlobs,
+  });
+  let nonUserScript = new WebExtensionContentScript(policy, {
+    isUserScript: false,
+    world,
+    matches,
+    includeGlobs,
+  });
+  let userScript = new WebExtensionContentScript(policy, {
+    isUserScript: true,
+    world,
+    matches,
+    includeGlobs,
+  });
+
+  // Sanity checks: isUserScript flag is accurate.
+  equal(defaultScript.isUserScript, false, "isUserScript defaults to false");
+  equal(nonUserScript.isUserScript, false, "isUserScript set to false");
+  equal(userScript.isUserScript, true, "isUserScript set to true");
+
+  // Default, equivalent to isUserScript=false: matches AND includeGlobs.
+  ok(
+    !defaultScript.matchesURI(exampleMatchesURI),
+    "By default: ignore matches if includeGlobs does not match"
+  );
+  ok(
+    !defaultScript.matchesURI(exampleGlobURI),
+    "By default: ignore includeGlobs if matches does not match"
+  );
+
+  // With isUserScript=false explicitly: matches AND includeGlobs
+  ok(
+    !nonUserScript.matchesURI(exampleMatchesURI),
+    "Non-userScript: ignore matches if includeGlobs does not match"
+  );
+  ok(
+    !nonUserScript.matchesURI(exampleGlobURI),
+    "non-userScript: ignore includeGlobs if includeGlobs does not match"
+  );
+
+  // With isUserScript=true explicitly: matches OR includeGlobs
+  ok(
+    userScript.matchesURI(exampleMatchesURI),
+    "userScript: accept matches even if includeGlobs does not match"
+  );
+  ok(
+    userScript.matchesURI(exampleGlobURI),
+    "userScript: accept includeGlobs even if matches does not match"
+  );
+  ok(
+    !userScript.matchesURI(exampleNoPermissionURI),
+    "userScript: ignore includeGlobs if permission is missing"
+  );
+
+  // Now verify that empty matches is permitted.
+  let nonUserScriptEmptyMatches = new WebExtensionContentScript(policy, {
+    isUserScript: false,
+    world,
+    matches: [],
+    includeGlobs,
+  });
+  let userScriptEmptyMatches = new WebExtensionContentScript(policy, {
+    isUserScript: true,
+    world,
+    matches: [],
+    includeGlobs,
+  });
+  ok(
+    !nonUserScriptEmptyMatches.matchesURI(exampleGlobURI),
+    "non-userScript: ignore includeGlobs with empty matches"
+  );
+  ok(
+    userScriptEmptyMatches.matchesURI(exampleGlobURI),
+    "userScript: accept includeGlobs despite empty matches"
+  );
+  ok(
+    !userScriptEmptyMatches.matchesURI(exampleNotMatchedURI),
+    "userScript: ignore when not matched by includeGlobs (and empty matches)"
+  );
+  ok(
+    !userScriptEmptyMatches.matchesURI(exampleNoPermissionURI),
+    "userScript: ignore includeGlobs (and empty matches) without permission"
+  );
+
+  // Now verify that without includeGlobs, that matches works as usual.
+  // The isUserScript=false case is already extensively covered elsewhere, so
+  // we just do a sanity check for isUserScript=true.
+  let userScriptNoGlobs = new WebExtensionContentScript(policy, {
+    isUserScript: true,
+    world,
+    matches,
+  });
+  ok(
+    userScriptNoGlobs.matchesURI(exampleMatchesURI),
+    "userScript: accept matches when includeGlobs is null"
+  );
+  ok(
+    !userScriptNoGlobs.matchesURI(exampleNotMatchedURI),
+    "userScript: ignore when not matched by matches and includeGlobs is null"
+  );
+});
+
 add_task(function test_WebExtensionContentScript_restricted() {
   let tests = [
     {
@@ -179,6 +306,9 @@ async function test_frame_matching(meta) {
   let urls = {
     topLevel: `${baseURL}/file_toplevel.html`,
     iframe: `${baseURL}/file_iframe.html`,
+    dataURL: "data:,data-URL",
+    javascriptVoid: "javascript://void",
+    javascriptTrue: "javascript:true",
     srcdoc: "about:srcdoc",
     aboutBlank: "about:blank",
   };
@@ -191,6 +321,9 @@ async function test_frame_matching(meta) {
       contentScript: {},
       topLevel: true,
       iframe: false,
+      dataURL: false,
+      javascriptVoid: false,
+      javascriptTrue: false,
       aboutBlank: false,
       srcdoc: false,
     },
@@ -202,6 +335,9 @@ async function test_frame_matching(meta) {
       },
       topLevel: true,
       iframe: false,
+      dataURL: false,
+      javascriptVoid: false,
+      javascriptTrue: false,
       aboutBlank: false,
       srcdoc: false,
     },
@@ -213,6 +349,9 @@ async function test_frame_matching(meta) {
       },
       topLevel: true,
       iframe: true,
+      dataURL: false,
+      javascriptVoid: false,
+      javascriptTrue: false,
       aboutBlank: false,
       srcdoc: false,
     },
@@ -225,11 +364,52 @@ async function test_frame_matching(meta) {
       },
       topLevel: true,
       iframe: true,
+      // data-URLs used to inherit the principal until Firefox 57 (bug 1324406)
+      // but never did so in Chrome. In any case, match_about_blank should not
+      // match documents at data:-URLs.
+      dataURL: false,
+      javascriptVoid: true,
+      javascriptTrue: true,
       aboutBlank: true,
       srcdoc: true,
     },
 
     {
+      // Note: Chrome triggers a hard error when matchOriginAsFallback is used
+      // without a wildcard path (/*). We fail gracefully for simplicity.
+      matches: ["http://example.com/data/*"],
+      contentScript: {
+        allFrames: true,
+        matchOriginAsFallback: true,
+      },
+      topLevel: true,
+      iframe: true,
+      // matchOriginAsFallback only matches 'matches' if the match pattern's
+      // path component is a wildcard. Since 'matches' is not, nothing happens.
+      dataURL: false,
+      javascriptVoid: true,
+      javascriptTrue: true,
+      aboutBlank: true,
+      srcdoc: true,
+    },
+
+    {
+      matches: ["http://example.com/*"],
+      contentScript: {
+        allFrames: true,
+        matchOriginAsFallback: true,
+      },
+      topLevel: true,
+      iframe: true,
+      dataURL: true,
+      javascriptVoid: true,
+      javascriptTrue: true,
+      aboutBlank: true,
+      srcdoc: true,
+    },
+
+    {
+      // pattern in "matches" does not match.
       matches: ["http://foo.com/data/*"],
       contentScript: {
         allFrames: true,
@@ -237,6 +417,9 @@ async function test_frame_matching(meta) {
       },
       topLevel: false,
       iframe: false,
+      dataURL: false,
+      javascriptVoid: false,
+      javascriptTrue: false,
       aboutBlank: false,
       srcdoc: false,
     },
@@ -249,7 +432,13 @@ async function test_frame_matching(meta) {
     this.windows = new Map();
     this.windows.set(this.content.location.href, this.content);
     for (let c of Array.from(this.content.frames)) {
-      this.windows.set(c.location.href, c);
+      let url = c.location.href;
+      if (url === "about:blank") {
+        // When javascript: URLs are loaded, the resulting URL is about:blank.
+        // Look up the frame's "src" attribute to distinguish them.
+        url = c.frameElement.src;
+      }
+      this.windows.set(url, c);
     }
     const { MatchPatternSet, WebExtensionContentScript, WebExtensionPolicy } =
       Cu.getGlobalForObject(Services);

@@ -22,7 +22,7 @@ from mach.decorators import Command, CommandArgument, SubCommand
 
 from mozbuild.artifact_builds import JOB_CHOICES
 from mozbuild.base import MachCommandConditions as conditions
-from mozbuild.util import ensureParentDir
+from mozbuild.dirutils import ensureParentDir
 
 _COULD_NOT_FIND_ARTIFACTS_TEMPLATE = (
     "ERROR!!!!!! Could not find artifacts for a toolchain build named "
@@ -480,6 +480,7 @@ def artifact_toolchain(
             )
 
             record = ArtifactRecord(task_id, artifact_name)
+            record.unpack = task.attributes.get("toolchain-extract", True)
             records[record.filename] = record
 
     # Handle the list of files of the form task_id:path from --from-task.

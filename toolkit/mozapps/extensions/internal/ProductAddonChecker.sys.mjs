@@ -118,12 +118,18 @@ async function conservativeFetch(input) {
  * @param  contentSignatureHeader
  *         The contents of the 'content-signature' header received along with
  *         `data`.
+ * @param  trustedRoot
+ *         The identifier of the trusted root to use for certificate validation.
  * @return A promise that will resolve to nothing if the signature verification
  *         succeeds, or rejects on failure, with an Error that sets its
  *         addonCheckerErr property disambiguate failure cases and a message
  *         explaining the error.
  */
-async function verifyGmpContentSignature(data, contentSignatureHeader) {
+async function verifyGmpContentSignature(
+  data,
+  contentSignatureHeader,
+  trustedRoot
+) {
   if (!contentSignatureHeader) {
     logger.warn(
       "Unexpected missing content signature header during content signature validation"
@@ -186,13 +192,6 @@ async function verifyGmpContentSignature(data, contentSignatureHeader) {
     "@mozilla.org/security/contentsignatureverifier;1"
   ].createInstance(Ci.nsIContentSignatureVerifier);
 
-  // See bug 1771992. In the future, this may need to handle staging and dev
-  // environments in addition to just production and testing.
-  let root = Ci.nsIContentSignatureVerifier.ContentSignatureProdRoot;
-  if (Services.env.exists("XPCSHELL_TEST_PROFILE_DIR")) {
-    root = Ci.nsIX509CertDB.AppXPCShellRoot;
-  }
-
   let valid;
   try {
     valid = await verifier.asyncVerifyContentSignature(
@@ -200,7 +199,7 @@ async function verifyGmpContentSignature(data, contentSignatureHeader) {
       signature,
       certChain,
       "aus.content-signature.mozilla.org",
-      root
+      trustedRoot
     );
   } catch (err) {
     logger.warn(`Unexpected error while validating content signature: ${err}`);
@@ -329,6 +328,9 @@ function downloadXMLWithRequest(
  * @param  verifyContentSignature
  *         When true, will verify the content signature information from the
  *         response header. Failure to verify will result in an error.
+ * @param  trustedContentSignatureRoot
+ *         The trusted root to use for certificate validation.
+ *         Must be set if verifyContentSignature is true.
  * @return a promise that resolves to the DOM document downloaded or rejects
  *         with a JS exception in case of error.
  */
@@ -336,7 +338,8 @@ async function downloadXML(
   url,
   allowNonBuiltIn = false,
   allowedCerts = null,
-  verifyContentSignature = false
+  verifyContentSignature = false,
+  trustedContentSignatureRoot = null
 ) {
   let request = await downloadXMLWithRequest(
     url,
@@ -346,7 +349,8 @@ async function downloadXML(
   if (verifyContentSignature) {
     await verifyGmpContentSignature(
       request.response,
-      request.getResponseHeader("content-signature")
+      request.getResponseHeader("content-signature"),
+      trustedContentSignatureRoot
     );
   }
   return request.responseXML;
@@ -382,7 +386,7 @@ function parseXML(document) {
   let results = [];
   let addonList = document.querySelectorAll("updates:root > addons > addon");
   for (let addonElement of addonList) {
-    let addon = {};
+    let addon = { mirrorURLs: [] };
 
     for (let name of [
       "id",
@@ -397,6 +401,13 @@ function parseXML(document) {
       }
     }
     addon.size = Number(addon.size) || undefined;
+
+    let mirrorList = addonElement.querySelectorAll("mirror");
+    for (let mirrorElement of mirrorList) {
+      if (mirrorElement.hasAttribute("URL")) {
+        addon.mirrorURLs.push(mirrorElement.getAttribute("URL"));
+      }
+    }
 
     results.push(addon);
   }
@@ -422,7 +433,7 @@ function downloadFile(url, options = { httpsOnlyNoUpgrade: false }) {
   return new Promise((resolve, reject) => {
     let sr = new lazy.ServiceRequest();
 
-    sr.onload = function (response) {
+    sr.onload = function () {
       logger.info("downloadFile File download. status=" + sr.status);
       if (sr.status != 200 && sr.status != 206) {
         reject(Components.Exception("File download failed", sr.status));
@@ -473,6 +484,26 @@ function downloadFile(url, options = { httpsOnlyNoUpgrade: false }) {
       reject(ex);
     }
   });
+}
+
+async function downloadAndVerifyFile(addon, url, options) {
+  logger.info(`Try to download addon ${addon.id} from ${url}`);
+  let path;
+  try {
+    path = await downloadFile(url, options);
+  } catch (e) {
+    logger.warn(`Failed to download addon ${addon.id} from ${url}: ${e}`);
+    throw e;
+  }
+
+  try {
+    await verifyFile(addon, path);
+    return path;
+  } catch (e) {
+    logger.warn(`Failed to verify addon ${addon.id} from ${url}: ${e}`);
+    await IOUtils.remove(path);
+    throw e;
+  }
 }
 
 /**
@@ -535,6 +566,9 @@ export const ProductAddonChecker = {
    * @param  verifyContentSignature
    *         When true, will verify the content signature information from the
    *         response header. Failure to verify will result in an error.
+   * @param  trustedContentSignatureRoot
+   *         The trusted root to use for certificate validation.
+   *         Must be set if verifyContentSignature is true.
    * @return a promise that resolves to an object containing the list of add-ons
    *         and whether the local fallback was used, or rejects with a JS
    *         exception in case of error. In the case of an error, a best effort
@@ -545,13 +579,15 @@ export const ProductAddonChecker = {
     url,
     allowNonBuiltIn = false,
     allowedCerts = null,
-    verifyContentSignature = false
+    verifyContentSignature = false,
+    trustedContentSignatureRoot = null
   ) {
     return downloadXML(
       url,
       allowNonBuiltIn,
       allowedCerts,
-      verifyContentSignature
+      verifyContentSignature,
+      trustedContentSignatureRoot
     ).then(parseXML);
   },
 
@@ -568,12 +604,16 @@ export const ProductAddonChecker = {
    *         with a JS exception in case of error.
    */
   async downloadAddon(addon, options = { httpsOnlyNoUpgrade: false }) {
-    let path = await downloadFile(addon.URL, options);
     try {
-      await verifyFile(addon, path);
-      return path;
+      return await downloadAndVerifyFile(addon, addon.URL, options);
     } catch (e) {
-      await IOUtils.remove(path);
+      for (const url of addon.mirrorURLs) {
+        try {
+          return await downloadAndVerifyFile(addon, url, options);
+        } catch {
+          // Already logged; ignore error and continue.
+        }
+      }
       throw e;
     }
   },

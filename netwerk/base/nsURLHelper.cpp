@@ -206,7 +206,8 @@ nsresult net_ParseFileURL(const nsACString& inURL, nsACString& outDirectory,
 
 // Replace all /./ with a / while resolving URLs
 // But only till #?
-void net_CoalesceDirs(netCoalesceFlags flags, char* path) {
+mozilla::Maybe<mozilla::CompactPair<uint32_t, uint32_t>> net_CoalesceDirs(
+    netCoalesceFlags flags, char* path) {
   /* Stolen from the old netlib's mkparse.c.
    *
    * modifies a url of the form   /foo/../foo1  ->  /foo1
@@ -215,9 +216,13 @@ void net_CoalesceDirs(netCoalesceFlags flags, char* path) {
    */
   char* fwdPtr = path;
   char* urlPtr = path;
-  char* lastslash = path;
   uint32_t traversal = 0;
   uint32_t special_ftp_len = 0;
+
+  MOZ_ASSERT(*path == '/', "We expect the path to begin with /");
+  if (*path != '/') {
+    return Nothing();
+  }
 
   /* Remember if this url is a special ftp one: */
   if (flags & NET_COALESCE_DOUBLE_SLASH_IS_ROOT) {
@@ -232,32 +237,44 @@ void net_CoalesceDirs(netCoalesceFlags flags, char* path) {
     }
   }
 
-  /* find the last slash before # or ? */
+  // replace all %2E, %2e, %2e%2e, %2e%2E, %2E%2e, %2E%2E, etc with . or ..
+  // respectively if between two "/"s or "/" and NULL terminator
+  constexpr int PERCENT_2E_LENGTH = sizeof("%2e") - 1;
+  constexpr uint32_t PERCENT_2E_WITH_PERIOD_LENGTH = PERCENT_2E_LENGTH + 1;
+
   for (; (*fwdPtr != '\0') && (*fwdPtr != '?') && (*fwdPtr != '#'); ++fwdPtr) {
-  }
-
-  /* found nothing, but go back one only */
-  /* if there is something to go back to */
-  if (fwdPtr != path && *fwdPtr == '\0') {
-    --fwdPtr;
-  }
-
-  /* search the slash */
-  for (; (fwdPtr != path) && (*fwdPtr != '/'); --fwdPtr) {
-  }
-  lastslash = fwdPtr;
-  fwdPtr = path;
-
-  /* replace all %2E or %2e with . in the path */
-  /* but stop at lastchar if non null */
-  for (; (*fwdPtr != '\0') && (*fwdPtr != '?') && (*fwdPtr != '#') &&
-         (*lastslash == '\0' || fwdPtr != lastslash);
-       ++fwdPtr) {
-    if (*fwdPtr == '%' && *(fwdPtr + 1) == '2' &&
-        (*(fwdPtr + 2) == 'E' || *(fwdPtr + 2) == 'e')) {
+    // Assuming that we are currently at '/'
+    if (*fwdPtr == '/' &&
+        nsCRT::strncasecmp(fwdPtr + 1, "%2e", PERCENT_2E_LENGTH) == 0 &&
+        (*(fwdPtr + PERCENT_2E_LENGTH + 1) == '\0' ||
+         *(fwdPtr + PERCENT_2E_LENGTH + 1) == '/')) {
+      *urlPtr++ = '/';
       *urlPtr++ = '.';
-      ++fwdPtr;
-      ++fwdPtr;
+      fwdPtr += PERCENT_2E_LENGTH;
+    }
+    // If the remaining pathname is "%2e%2e" between "/"s, add ".."
+    else if (*fwdPtr == '/' &&
+             nsCRT::strncasecmp(fwdPtr + 1, "%2e%2e", PERCENT_2E_LENGTH * 2) ==
+                 0 &&
+             (*(fwdPtr + PERCENT_2E_LENGTH * 2 + 1) == '\0' ||
+              *(fwdPtr + PERCENT_2E_LENGTH * 2 + 1) == '/')) {
+      *urlPtr++ = '/';
+      *urlPtr++ = '.';
+      *urlPtr++ = '.';
+      fwdPtr += PERCENT_2E_LENGTH * 2;
+    }
+    // If the remaining pathname is "%2e." or ".%2e" between "/"s, add ".."
+    else if (*fwdPtr == '/' &&
+             (nsCRT::strncasecmp(fwdPtr + 1, "%2e.",
+                                 PERCENT_2E_WITH_PERIOD_LENGTH) == 0 ||
+              nsCRT::strncasecmp(fwdPtr + 1, ".%2e",
+                                 PERCENT_2E_WITH_PERIOD_LENGTH) == 0) &&
+             (*(fwdPtr + PERCENT_2E_WITH_PERIOD_LENGTH + 1) == '\0' ||
+              *(fwdPtr + PERCENT_2E_WITH_PERIOD_LENGTH + 1) == '/')) {
+      *urlPtr++ = '/';
+      *urlPtr++ = '.';
+      *urlPtr++ = '.';
+      fwdPtr += PERCENT_2E_WITH_PERIOD_LENGTH;
     } else {
       *urlPtr++ = *fwdPtr;
     }
@@ -346,11 +363,40 @@ void net_CoalesceDirs(netCoalesceFlags flags, char* path) {
     urlPtr--;
   }
 
+  // Before we start copying past ?#, we must make sure we don't overwrite
+  // the first / character.  If fwdPtr is also unchanged, just copy everything
+  // (this shouldn't happen unless we could get in here without a leading
+  // slash).
+  if (urlPtr == path && fwdPtr != path) {
+    urlPtr++;
+  }
+
   // Copy remaining stuff past the #?;
   for (; *fwdPtr != '\0'; ++fwdPtr) {
     *urlPtr++ = *fwdPtr;
   }
   *urlPtr = '\0';  // terminate the url
+
+  uint32_t lastSlash = 0;
+  uint32_t endOfBasename = 0;
+
+  // find the last slash before # or ?
+  // find the end of basename (i.e. hash, query, or end of string)
+  for (; (*(path + endOfBasename) != '\0') &&
+         (*(path + endOfBasename) != '?') && (*(path + endOfBasename) != '#');
+       ++endOfBasename) {
+  }
+
+  // Now find the last slash starting from the end
+  lastSlash = endOfBasename;
+  if (lastSlash != 0 && *(path + lastSlash) == '\0') {
+    --lastSlash;
+  }
+  // search the slash
+  for (; lastSlash != 0 && *(path + lastSlash) != '/'; --lastSlash) {
+  }
+
+  return Some(mozilla::MakeCompactPair(lastSlash, endOfBasename));
 }
 
 //----------------------------------------------------------------------------
@@ -872,7 +918,7 @@ void net_ParseRequestContentType(const nsACString& aHeaderStr,
   *aHadCharset = hadCharset;
 }
 
-bool net_IsValidHostName(const nsACString& host) {
+bool net_IsValidDNSHost(const nsACString& host) {
   // The host name is limited to 253 ascii characters.
   if (host.Length() > 253) {
     return false;
@@ -1097,24 +1143,32 @@ bool net_GetDefaultStatusTextForCode(uint16_t aCode, nsACString& aOutText) {
   return true;
 }
 
-namespace mozilla {
-static auto MakeNameMatcher(const nsAString& aName) {
+static auto MakeNameMatcher(const nsACString& aName) {
   return [&aName](const auto& param) { return param.mKey.Equals(aName); };
 }
 
-bool URLParams::Has(const nsAString& aName) {
+static void AssignMaybeInvalidUTF8String(const nsACString& aSource,
+                                         nsACString& aDest) {
+  if (NS_FAILED(UTF_8_ENCODING->DecodeWithoutBOMHandling(aSource, aDest))) {
+    MOZ_CRASH("Out of memory when converting URL params.");
+  }
+}
+
+namespace mozilla {
+
+bool URLParams::Has(const nsACString& aName) {
   return std::any_of(mParams.cbegin(), mParams.cend(), MakeNameMatcher(aName));
 }
 
-bool URLParams::Has(const nsAString& aName, const nsAString& aValue) {
+bool URLParams::Has(const nsACString& aName, const nsACString& aValue) {
   return std::any_of(
       mParams.cbegin(), mParams.cend(), [&aName, &aValue](const auto& param) {
         return param.mKey.Equals(aName) && param.mValue.Equals(aValue);
       });
 }
 
-void URLParams::Get(const nsAString& aName, nsString& aRetval) {
-  SetDOMStringToNull(aRetval);
+void URLParams::Get(const nsACString& aName, nsACString& aRetval) {
+  aRetval.SetIsVoid(true);
 
   const auto end = mParams.cend();
   const auto it = std::find_if(mParams.cbegin(), end, MakeNameMatcher(aName));
@@ -1123,7 +1177,7 @@ void URLParams::Get(const nsAString& aName, nsString& aRetval) {
   }
 }
 
-void URLParams::GetAll(const nsAString& aName, nsTArray<nsString>& aRetval) {
+void URLParams::GetAll(const nsACString& aName, nsTArray<nsCString>& aRetval) {
   aRetval.Clear();
 
   for (uint32_t i = 0, len = mParams.Length(); i < len; ++i) {
@@ -1133,13 +1187,13 @@ void URLParams::GetAll(const nsAString& aName, nsTArray<nsString>& aRetval) {
   }
 }
 
-void URLParams::Append(const nsAString& aName, const nsAString& aValue) {
+void URLParams::Append(const nsACString& aName, const nsACString& aValue) {
   Param* param = mParams.AppendElement();
   param->mKey = aName;
   param->mValue = aValue;
 }
 
-void URLParams::Set(const nsAString& aName, const nsAString& aValue) {
+void URLParams::Set(const nsACString& aName, const nsACString& aValue) {
   Param* param = nullptr;
   for (uint32_t i = 0, len = mParams.Length(); i < len;) {
     if (!mParams[i].mKey.Equals(aName)) {
@@ -1164,34 +1218,24 @@ void URLParams::Set(const nsAString& aName, const nsAString& aValue) {
   param->mValue = aValue;
 }
 
-void URLParams::Delete(const nsAString& aName) {
+void URLParams::Delete(const nsACString& aName) {
   mParams.RemoveElementsBy(
       [&aName](const auto& param) { return param.mKey.Equals(aName); });
 }
 
-void URLParams::Delete(const nsAString& aName, const nsAString& aValue) {
+void URLParams::Delete(const nsACString& aName, const nsACString& aValue) {
   mParams.RemoveElementsBy([&aName, &aValue](const auto& param) {
     return param.mKey.Equals(aName) && param.mValue.Equals(aValue);
   });
 }
 
 /* static */
-void URLParams::ConvertString(const nsACString& aInput, nsAString& aOutput) {
-  if (NS_FAILED(UTF_8_ENCODING->DecodeWithoutBOMHandling(aInput, aOutput))) {
-    MOZ_CRASH("Out of memory when converting URL params.");
-  }
-}
-
-/* static */
-void URLParams::DecodeString(const nsACString& aInput, nsAString& aOutput) {
+void URLParams::DecodeString(const nsACString& aInput, nsACString& aOutput) {
   const char* const end = aInput.EndReading();
-
-  nsAutoCString unescaped;
-
   for (const char* iter = aInput.BeginReading(); iter != end;) {
     // replace '+' with U+0020
     if (*iter == '+') {
-      unescaped.Append(' ');
+      aOutput.Append(' ');
       ++iter;
       continue;
     }
@@ -1214,30 +1258,26 @@ void URLParams::DecodeString(const nsACString& aInput, nsAString& aOutput) {
 
       if (first != end && second != end && asciiHexDigit(*first) &&
           asciiHexDigit(*second)) {
-        unescaped.Append(hexDigit(*first) * 16 + hexDigit(*second));
+        aOutput.Append(hexDigit(*first) * 16 + hexDigit(*second));
         iter = second + 1;
       } else {
-        unescaped.Append('%');
+        aOutput.Append('%');
         ++iter;
       }
 
       continue;
     }
 
-    unescaped.Append(*iter);
+    aOutput.Append(*iter);
     ++iter;
   }
-
-  // XXX It seems rather wasteful to first decode into a UTF-8 nsCString and
-  // then convert the whole string to UTF-16, at least if we exceed the inline
-  // storage size.
-  ConvertString(unescaped, aOutput);
+  AssignMaybeInvalidUTF8String(aOutput, aOutput);
 }
 
 /* static */
 bool URLParams::ParseNextInternal(const char*& aStart, const char* const aEnd,
-                                  bool aShouldDecode, nsAString* aOutputName,
-                                  nsAString* aOutputValue) {
+                                  bool aShouldDecode, nsACString* aOutputName,
+                                  nsACString* aOutputValue) {
   nsDependentCSubstring string;
 
   const char* const iter = std::find(aStart, aEnd, '&');
@@ -1273,17 +1313,18 @@ bool URLParams::ParseNextInternal(const char*& aStart, const char* const aEnd,
     return true;
   }
 
-  ConvertString(name, *aOutputName);
-  ConvertString(value, *aOutputValue);
+  AssignMaybeInvalidUTF8String(name, *aOutputName);
+  AssignMaybeInvalidUTF8String(value, *aOutputValue);
   return true;
 }
 
 /* static */
-bool URLParams::Extract(const nsACString& aInput, const nsAString& aName,
-                        nsAString& aValue) {
+bool URLParams::Extract(const nsACString& aInput, const nsACString& aName,
+                        nsACString& aValue) {
   aValue.SetIsVoid(true);
   return !URLParams::Parse(
-      aInput, true, [&aName, &aValue](const nsAString& name, nsString&& value) {
+      aInput, true,
+      [&aName, &aValue](const nsACString& name, nsCString&& value) {
         if (aName == name) {
           aValue = std::move(value);
           return false;
@@ -1296,16 +1337,14 @@ void URLParams::ParseInput(const nsACString& aInput) {
   // Remove all the existing data before parsing a new input.
   DeleteAll();
 
-  URLParams::Parse(aInput, true, [this](nsString&& name, nsString&& value) {
+  URLParams::Parse(aInput, true, [this](nsCString&& name, nsCString&& value) {
     mParams.AppendElement(Param{std::move(name), std::move(value)});
     return true;
   });
 }
 
-namespace {
-
-void SerializeString(const nsCString& aInput, nsAString& aValue) {
-  const unsigned char* p = (const unsigned char*)aInput.get();
+void URLParams::SerializeString(const nsACString& aInput, nsACString& aValue) {
+  const unsigned char* p = (const unsigned char*)aInput.BeginReading();
   const unsigned char* end = p + aInput.Length();
 
   while (p != end) {
@@ -1325,9 +1364,7 @@ void SerializeString(const nsCString& aInput, nsAString& aValue) {
   }
 }
 
-}  // namespace
-
-void URLParams::Serialize(nsAString& aValue, bool aEncode) const {
+void URLParams::Serialize(nsACString& aValue, bool aEncode) const {
   aValue.Truncate();
   bool first = true;
 
@@ -1341,9 +1378,9 @@ void URLParams::Serialize(nsAString& aValue, bool aEncode) const {
     // XXX Actually, it's not necessary to build a new string object. Generally,
     // such cases could just convert each codepoint one-by-one.
     if (aEncode) {
-      SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mKey), aValue);
+      SerializeString(mParams[i].mKey, aValue);
       aValue.Append('=');
-      SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mValue), aValue);
+      SerializeString(mParams[i].mValue, aValue);
     } else {
       aValue.Append(mParams[i].mKey);
       aValue.Append('=');
@@ -1354,7 +1391,11 @@ void URLParams::Serialize(nsAString& aValue, bool aEncode) const {
 
 void URLParams::Sort() {
   mParams.StableSort([](const Param& lhs, const Param& rhs) {
-    return Compare(lhs.mKey, rhs.mKey);
+    // FIXME(emilio, bug 1888901): The URLSearchParams.sort() spec requires
+    // comparing by utf-16 code points... That's a bit unfortunate, maybe we
+    // can optimize the string conversions here?
+    return Compare(NS_ConvertUTF8toUTF16(lhs.mKey),
+                   NS_ConvertUTF8toUTF16(rhs.mKey));
   });
 }
 

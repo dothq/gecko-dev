@@ -44,7 +44,7 @@ add_setup(async function () {
     ],
   });
 
-  await SearchTestUtils.promiseNewSearchEngine({
+  await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + TEST_ENGINE_BASENAME,
     setAsDefault: true,
   });
@@ -195,18 +195,18 @@ add_task(async function test_omnibox_result() {
       omnibox: {
         keyword: "omniboxtest",
       },
+    },
 
-      background() {
-        /* global browser */
-        browser.omnibox.setDefaultSuggestion({
-          description: "doit",
-        });
-        // Just do nothing for this test.
-        browser.omnibox.onInputEntered.addListener(() => {});
-        browser.omnibox.onInputChanged.addListener((text, suggest) => {
-          suggest([]);
-        });
-      },
+    background() {
+      /* global browser */
+      browser.omnibox.setDefaultSuggestion({
+        description: "doit",
+      });
+      // Just do nothing for this test.
+      browser.omnibox.onInputEntered.addListener(() => {});
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([]);
+      });
     },
   });
 
@@ -223,7 +223,7 @@ add_task(async function test_omnibox_result() {
 
     assertElementsDisplayed(details, {
       separator: true,
-      title: "Generated extension",
+      title: "doit",
       type: UrlbarUtils.RESULT_TYPE.OMNIBOX,
     });
   });
@@ -233,10 +233,7 @@ add_task(async function test_omnibox_result() {
 
 add_task(async function test_remote_tab_result() {
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["services.sync.username", "fake"],
-      ["services.sync.syncedTabs.showRemoteTabs", true],
-    ],
+    set: [["services.sync.username", "fake"]],
   });
   // Clear history so that history added by previous tests doesn't mess up this
   // test when it selects results in the urlbar.
@@ -295,7 +292,6 @@ add_task(async function test_remote_tab_result() {
     SyncedTabs._internal = originalSyncedTabsInternal;
     await PlacesUtils.history.clear();
     await PlacesUtils.bookmarks.eraseEverything();
-    Services.telemetry.setEventRecordingEnabled("navigation", false);
   });
 
   await BrowserTestUtils.withNewTab({ gBrowser }, async () => {

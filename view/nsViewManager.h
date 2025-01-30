@@ -109,15 +109,6 @@ class nsViewManager final {
   void InvalidateView(nsView* aView);
 
   /**
-   * Called to inform the view manager that some portion of a view is dirty and
-   * needs to be redrawn. The rect passed in should be in the view's coordinate
-   * space. Does not check for paint suppression.
-   * @param aView view to paint. should be root view
-   * @param rect rect to mark as damaged
-   */
-  void InvalidateViewNoSuppression(nsView* aView, const nsRect& aRect);
-
-  /**
    * Called to inform the view manager that it should invalidate all views.
    */
   void InvalidateAllViews();
@@ -180,12 +171,8 @@ class nsViewManager final {
    * The view manager generates the appropriate dirty regions.
    * @param aView view to move
    * @param the new bounds relative to the current position
-   * @param RepaintExposedAreaOnly
-   *     if true Repaint only the expanded or contracted region,
-   *     if false Repaint the union of the old and new rectangles.
    */
-  void ResizeView(nsView* aView, const nsRect& aRect,
-                  bool aRepaintExposedAreaOnly = false);
+  void ResizeView(nsView* aView, const nsRect& aRect);
 
   /**
    * Set the visibility of a view. Hidden views have the effect of hiding
@@ -199,29 +186,6 @@ class nsViewManager final {
    * @param visible new visibility state
    */
   void SetViewVisibility(nsView* aView, ViewVisibility aVisible);
-
-  /**
-   * Set the z-index of a view. Positive z-indices mean that a view
-   * is above its parent in z-order. Negative z-indices mean that a
-   * view is below its parent.
-   * The view manager generates the appropriate dirty regions.
-   * @param aAutoZIndex indicate that the z-index of a view is "auto". An
-   *     "auto" z-index means that the view does not define a new stacking
-   *     context, which means that the z-indicies of the view's children are
-   *     relative to the view's siblings.
-   * @param aView view to change z depth of
-   * @param aZindex explicit z depth
-   */
-  void SetViewZIndex(nsView* aView, bool aAutoZIndex, int32_t aZindex);
-
-  /**
-   * Set whether the view "floats" above all other views,
-   * which tells the compositor not to consider higher views in
-   * the view hierarchy that would geometrically intersect with
-   * this view. This is a hack, but it fixes some problems with
-   * views that need to be drawn in front of all other views.
-   */
-  void SetViewFloating(nsView* aView, bool aFloatingView);
 
   /**
    * Set the presshell associated with this manager
@@ -345,8 +309,6 @@ class nsViewManager final {
   static void CollectVMsForWillPaint(nsView* aView, nsViewManager* aParentVM,
                                      nsTArray<RefPtr<nsViewManager>>& aVMs);
 
-  void ReparentChildWidgets(nsView* aView, nsIWidget* aNewWidget);
-  void ReparentWidgets(nsView* aView, nsView* aParent);
   void InvalidateWidgetArea(nsView* aWidgetView,
                             const nsRegion& aDamagedRegion);
 
@@ -374,8 +336,6 @@ class nsViewManager final {
   bool IsPainting() const { return RootViewManager()->mPainting; }
 
   void SetPainting(bool aPainting) { RootViewManager()->mPainting = aPainting; }
-
-  void InvalidateView(nsView* aView, const nsRect& aRect);
 
   nsViewManager* RootViewManager() const {
     return mRootViewManager ? mRootViewManager.get()

@@ -30,7 +30,7 @@ Services.prefs.setBoolPref(
   false
 );
 
-// ExtensionContent.jsm needs to know when it's running from xpcshell,
+// ExtensionContent.sys.mjs needs to know when it's running from xpcshell,
 // to use the right timeout for content scripts executed at document_idle.
 ExtensionTestUtils.mockAppInfo();
 
@@ -815,12 +815,12 @@ function getOriginBase(origURL) {
  *
  * @param {Array<ElementTestCase>} tests
  *        A list of tests, as understood by {@see getElementData}.
- * @param {Object<string, object>} expectedSources
+ * @param {Record<string, object>} expectedSources
  *        A set of sources for which each of the above tests is expected
  *        to generate one request, if each of the properties in the
  *        value object matches the value of the same property in the
  *        test object.
- * @param {Object<string, object>} [forbiddenSources = {}]
+ * @param {Record<string, object>} [forbiddenSources = {}]
  *        A set of sources for which requests should never be sent. Any
  *        matching requests from these sources will cause the test to
  *        fail.
@@ -939,7 +939,7 @@ function computeExpectedForbiddenURLs(
  * @param {Promise<object>} urlsPromise
  *        A promise which resolves to an object containing expected and
  *        forbidden URL sets, as returned by {@see computeBaseURLs}.
- * @param {Object<string, string>} origins
+ * @param {Record<string, string>} origins
  *        A mapping of origin parameters as they appear in URL query
  *        strings to the origin strings returned by corresponding
  *        principals. These values are used to test requests against

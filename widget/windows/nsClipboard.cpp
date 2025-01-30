@@ -393,6 +393,35 @@ static void OleGetClipboardResultToString(const HRESULT aHres,
   }
 }
 
+static void MaybeLogClipboardCurrentOwner(
+    const HRESULT aHres, const mozilla::StaticString& aMethodName) {
+  if (!MOZ_CLIPBOARD_LOG_ENABLED()) {
+    return;
+  }
+
+  if (aHres != CLIPBRD_E_CANT_OPEN) {
+    return;
+  }
+  auto hwnd = ::GetOpenClipboardWindow();
+  if (!hwnd) {
+    MOZ_CLIPBOARD_LOG(
+        "IDataObject::%s | Clipboard already opened by unknown process",
+        aMethodName.get());
+    return;
+  }
+  DWORD procId;
+  DWORD threadId = ::GetWindowThreadProcessId(hwnd, &procId);
+  NS_ENSURE_TRUE_VOID(threadId);
+  nsAutoString procName;
+  NS_ENSURE_SUCCESS_VOID(
+      mozilla::widget::WinUtils::GetProcessImageName(procId, procName));
+  MOZ_CLIPBOARD_LOG(
+      "IDataObject::%s | Clipboard already opened by HWND: %p | "
+      "Process ID: %lu | Thread ID: %lu | App name: %s",
+      aMethodName.get(), hwnd, procId, threadId,
+      NS_ConvertUTF16toUTF8(procName).get());
+}
+
 // See
 // <https://docs.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-olegetclipboard>.
 static void LogOleGetClipboardResult(const HRESULT aHres) {
@@ -400,6 +429,7 @@ static void LogOleGetClipboardResult(const HRESULT aHres) {
     nsAutoCString hresString;
     OleGetClipboardResultToString(aHres, hresString);
     MOZ_CLIPBOARD_LOG("OleGetClipboard result: %s", hresString.get());
+    MaybeLogClipboardCurrentOwner(aHres, "OleGetClipboard");
   }
 }
 
@@ -438,6 +468,7 @@ static void LogOleSetClipboardResult(const HRESULT aHres) {
     nsAutoCString hresString;
     OleSetClipboardResultToString(aHres, hresString);
     MOZ_CLIPBOARD_LOG("OleSetClipboard result: %s", hresString.get());
+    MaybeLogClipboardCurrentOwner(aHres, "OleSetClipboard");
   }
 }
 
@@ -459,7 +490,9 @@ static HRESULT RepeatedlyTry(Function aFunction, LogFunction aLogFunction,
       break;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(kDelayInMs));
+    // TODO: This was formerly std::sleep_for, which wasn't actually sleeping
+    // in tests (bug 1927664).
+    ::SleepEx(kDelayInMs, TRUE);
   }
 
   return hres;
@@ -474,7 +507,7 @@ static void RepeatedlyTryOleSetClipboard(IDataObject* aDataObj) {
 
 //-------------------------------------------------------------------------
 NS_IMETHODIMP nsClipboard::SetNativeClipboardData(
-    nsITransferable* aTransferable, int32_t aWhichClipboard) {
+    nsITransferable* aTransferable, ClipboardType aWhichClipboard) {
   MOZ_CLIPBOARD_LOG("%s", __FUNCTION__);
 
   if (aWhichClipboard != kGlobalClipboard) {
@@ -603,12 +636,13 @@ nsresult nsClipboard::GetNativeDataOffClipboard(nsIWidget* aWidget,
 // See methods listed at
 // <https://docs.microsoft.com/en-us/windows/win32/api/objidl/nn-objidl-idataobject#methods>.
 static void LogIDataObjectMethodResult(const HRESULT aHres,
-                                       const nsCString& aMethodName) {
+                                       mozilla::StaticString aMethodName) {
   if (MOZ_CLIPBOARD_LOG_ENABLED()) {
     nsAutoCString hresString;
     IDataObjectMethodResultToString(aHres, hresString);
     MOZ_CLIPBOARD_LOG("IDataObject::%s result : %s", aMethodName.get(),
                       hresString.get());
+    MaybeLogClipboardCurrentOwner(aHres, aMethodName);
   }
 }
 
@@ -623,8 +657,7 @@ static HRESULT RepeatedlyTryGetData(IDataObject& aDataObject, LPFORMATETC pFE,
                                     LPSTGMEDIUM pSTM) {
   return RepeatedlyTry(
       [&aDataObject, &pFE, &pSTM]() { return aDataObject.GetData(pFE, pSTM); },
-      std::bind(LogIDataObjectMethodResult, std::placeholders::_1,
-                "GetData"_ns));
+      [](HRESULT hres) { LogIDataObjectMethodResult(hres, "GetData"); });
 }
 
 //-------------------------------------------------------------------------
@@ -638,7 +671,7 @@ HRESULT nsClipboard::FillSTGMedium(IDataObject* aDataObject, UINT aFormat,
   // memory
   HRESULT hres = S_FALSE;
   hres = aDataObject->QueryGetData(pFE);
-  LogIDataObjectMethodResult(hres, "QueryGetData"_ns);
+  LogIDataObjectMethodResult(hres, "QueryGetData");
   if (S_OK == hres) {
     hres = RepeatedlyTryGetData(*aDataObject, pFE, pSTM);
   }
@@ -960,8 +993,7 @@ nsresult nsClipboard::GetDataFromDataObject(IDataObject* aDataObject,
         // we have a file path in |data|. Create an nsLocalFile object.
         nsDependentString filepath(reinterpret_cast<char16_t*>(data));
         nsCOMPtr<nsIFile> file;
-        if (NS_SUCCEEDED(
-                NS_NewLocalFile(filepath, false, getter_AddRefs(file)))) {
+        if (NS_SUCCEEDED(NS_NewLocalFile(filepath, getter_AddRefs(file)))) {
           genericDataWrapper = do_QueryInterface(file);
         }
         free(data);
@@ -1159,7 +1191,7 @@ bool nsClipboard ::FindURLFromLocalFile(IDataObject* inDataObject, UINT inIndex,
     // file?
     const nsDependentString filepath(static_cast<char16_t*>(*outData));
     nsCOMPtr<nsIFile> file;
-    nsresult rv = NS_NewLocalFile(filepath, true, getter_AddRefs(file));
+    nsresult rv = NS_NewLocalFile(filepath, getter_AddRefs(file));
     if (NS_FAILED(rv)) {
       free(*outData);
       return dataFound;
@@ -1307,7 +1339,7 @@ bool nsClipboard ::IsInternetShortcut(const nsAString& inFileName) {
 //-------------------------------------------------------------------------
 NS_IMETHODIMP
 nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable,
-                                    int32_t aWhichClipboard) {
+                                    ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(aTransferable);
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
@@ -1344,7 +1376,7 @@ nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable,
   return res;
 }
 
-nsresult nsClipboard::EmptyNativeClipboardData(int32_t aWhichClipboard) {
+nsresult nsClipboard::EmptyNativeClipboardData(ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
   // Some programs such as ZoneAlarm monitor clipboard usage and then open the
@@ -1357,7 +1389,7 @@ nsresult nsClipboard::EmptyNativeClipboardData(int32_t aWhichClipboard) {
 }
 
 mozilla::Result<int32_t, nsresult>
-nsClipboard::GetNativeClipboardSequenceNumber(int32_t aWhichClipboard) {
+nsClipboard::GetNativeClipboardSequenceNumber(ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(kGlobalClipboard == aWhichClipboard);
   return (int32_t)::GetClipboardSequenceNumber();
 }
@@ -1365,7 +1397,7 @@ nsClipboard::GetNativeClipboardSequenceNumber(int32_t aWhichClipboard) {
 //-------------------------------------------------------------------------
 mozilla::Result<bool, nsresult>
 nsClipboard::HasNativeClipboardDataMatchingFlavors(
-    const nsTArray<nsCString>& aFlavorList, int32_t aWhichClipboard) {
+    const nsTArray<nsCString>& aFlavorList, ClipboardType aWhichClipboard) {
   MOZ_DIAGNOSTIC_ASSERT(
       nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
   for (const auto& flavor : aFlavorList) {
@@ -1423,6 +1455,12 @@ nsresult nsClipboard::SaveStorageOrStream(IDataObject* aDataObject, UINT aIndex,
   }
 
   if (stm.tymed == TYMED_ISTORAGE) {
+    // should never happen -- but theoretically possible, given an ill-behaved
+    // data-source
+    if (stm.pstg == nullptr) {
+      return NS_ERROR_FAILURE;
+    }
+
     RefPtr<IStorage> file;
     hres = StgCreateStorageEx(
         aFileName.Data(), STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
@@ -1442,6 +1480,11 @@ nsresult nsClipboard::SaveStorageOrStream(IDataObject* aDataObject, UINT aIndex,
   }
 
   MOZ_ASSERT(stm.tymed == TYMED_ISTREAM);
+  // should never happen -- but possible given an ill-behaved data-source, and
+  // has been seen in the wild (bug 1895681)
+  if (stm.pstm == nullptr) {
+    return NS_ERROR_FAILURE;
+  }
 
   HANDLE handle = CreateFile(aFileName.Data(), GENERIC_WRITE, FILE_SHARE_READ,
                              NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

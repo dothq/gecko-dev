@@ -20,6 +20,31 @@
  * 2. If the event message name becomes too generic, e.g., "eInvalid", that may
  *    conflict with another enum's item name, append something after the "e"
  *    prefix, e.g., "eFormInvalid".
+ *
+ * NOTE: What you need to do when you add new event messages?
+ * - If the new events are dispatched to the DOM, they should be registered in
+ *   dom/events/EventNameList.h
+ * - If the new events are dispatched to the DOM, set proper default values of
+ *   "bubbles" and "cancelable" in WidgetEvent::SetDefaultCancelableAndBubbles()
+ *   defined in widget/BasicEvents.h.
+ * - If the new events should be included into an existing event group, you may
+ *   need to update WidgetEvent::Has*EventMessage() etc defined in
+ *   widget/WidgetEventImpl.cpp.
+ * - If the new events are pointer event messages, update
+ *   IsPointerEventMessage*() defined in widget/WidgetEventImpl.cpp.
+ * - Check whether the trusted events of the new messages are targeted to
+ *   expected EventTarget by WidgetEvent::IsTargeted*(),
+ *   WidgetEvent::IsUsingCoordinates(),
+ *   WidgetEvent::IsAllowedToDispatchDOMEvent(),
+ *   WidgetEvent::CanBeSentToRemoteProcess() etc which are defined in
+ *   widget/WidgetEventImpl.cpp
+ * - If trusted events of the new events may be a content node but are allowed
+ *   to fired only on an Element node, you need to update
+ *   IsForbiddenDispatchingToNonElementContent() defined in
+ *   widget/WidgetEventImpl.cpp.
+ * - Possibly handle them in PresShell::EventHandler,
+ *   EventStateManager::PreHandleEvent and/or
+ *   EventStateManager::PostHandleEvent.
  */
 
 #ifndef NS_EVENT_MESSAGE_FIRST_LAST
@@ -59,8 +84,6 @@ NS_EVENT_MESSAGE(eMouseDown)
 NS_EVENT_MESSAGE(eMouseEnterIntoWidget)
 NS_EVENT_MESSAGE(eMouseExitFromWidget)
 NS_EVENT_MESSAGE(eMouseDoubleClick)
-NS_EVENT_MESSAGE(eMouseClick)
-NS_EVENT_MESSAGE(eMouseAuxClick)
 // eMouseActivate is fired when the widget is activated by a click.
 NS_EVENT_MESSAGE(eMouseActivate)
 NS_EVENT_MESSAGE(eMouseOver)
@@ -72,6 +95,9 @@ NS_EVENT_MESSAGE(eMouseTouchDrag)
 NS_EVENT_MESSAGE(eMouseLongTap)
 NS_EVENT_MESSAGE(eMouseExploreByTouch)
 NS_EVENT_MESSAGE_FIRST_LAST(eMouseEvent, eMouseMove, eMouseExploreByTouch)
+
+NS_EVENT_MESSAGE(ePointerClick)
+NS_EVENT_MESSAGE(ePointerAuxClick)
 
 // Pointer spec events
 NS_EVENT_MESSAGE(ePointerMove)
@@ -213,6 +239,9 @@ NS_EVENT_MESSAGE(ePageHide)
 NS_EVENT_MESSAGE(eContextLost)
 NS_EVENT_MESSAGE(eContextRestored)
 
+// content-visibility events
+NS_EVENT_MESSAGE(eContentVisibilityAutoStateChange)
+
 // SVG events
 NS_EVENT_MESSAGE(eSVGLoad)
 NS_EVENT_MESSAGE(eSVGScroll)
@@ -258,6 +287,9 @@ NS_EVENT_MESSAGE(eQueryCharacterAtPoint)
 // Query if the DOM element under Event::mRefPoint belongs to our widget
 // or not.
 NS_EVENT_MESSAGE(eQueryDOMWidgetHittest)
+// Query for the DOM element under Event::mRefPoint that is the target of a
+// delayed drop event.
+NS_EVENT_MESSAGE(eQueryDropTargetHittest)
 
 // Video events
 NS_EVENT_MESSAGE(eLoadStart)
@@ -316,6 +348,7 @@ NS_EVENT_MESSAGE(eContentCommandRedo)
 // eContentCommandInsertText tries to insert text with replacing selection
 // in focused editor.
 NS_EVENT_MESSAGE(eContentCommandInsertText)
+NS_EVENT_MESSAGE(eContentCommandReplaceText)
 NS_EVENT_MESSAGE(eContentCommandPasteTransferable)
 NS_EVENT_MESSAGE(eContentCommandLookUpDictionary)
 // eContentCommandScroll scrolls the nearest scrollable element to the
@@ -325,6 +358,8 @@ NS_EVENT_MESSAGE(eContentCommandLookUpDictionary)
 // scrollable ancestor element can only be scrolled vertically, and horizontal
 // scrolling is requested using this event, no scrolling will occur.
 NS_EVENT_MESSAGE(eContentCommandScroll)
+NS_EVENT_MESSAGE_FIRST_LAST(eContentCommandEvent, eContentCommandCut,
+                            eContentCommandScroll)
 
 // Event to gesture notification
 NS_EVENT_MESSAGE(eGestureNotify)
@@ -432,6 +467,9 @@ NS_EVENT_MESSAGE_FIRST_LAST(eGamepadEvent, eGamepadButtonDown,
 NS_EVENT_MESSAGE(eEditorInput)
 NS_EVENT_MESSAGE(eEditorBeforeInput)
 
+// textInput event which is a default action of beforeinput
+NS_EVENT_MESSAGE(eLegacyTextInput)
+
 // selection events
 NS_EVENT_MESSAGE(eSelectStart)
 NS_EVENT_MESSAGE(eSelectionChange)
@@ -450,10 +488,9 @@ NS_EVENT_MESSAGE(eToggle)
 NS_EVENT_MESSAGE(eClose)
 NS_EVENT_MESSAGE(eCancel)
 
-// Marquee element events.
-NS_EVENT_MESSAGE(eMarqueeBounce)
-NS_EVENT_MESSAGE(eMarqueeStart)
-NS_EVENT_MESSAGE(eMarqueeFinish)
+// Media element events.
+NS_EVENT_MESSAGE(eEncrypted)
+NS_EVENT_MESSAGE(eWaitingForKey)
 
 NS_EVENT_MESSAGE(eScrollend)
 

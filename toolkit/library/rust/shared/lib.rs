@@ -14,6 +14,7 @@ extern crate authrs_bridge;
 extern crate bitsdownload;
 #[cfg(feature = "moz_places")]
 extern crate bookmark_sync;
+extern crate buildid_reader;
 extern crate cascade_bloom_filter;
 extern crate cert_storage;
 extern crate chardetng_c;
@@ -24,11 +25,14 @@ extern crate cubeb_coreaudio;
 #[cfg(feature = "cubeb_pulse_rust")]
 extern crate cubeb_pulse;
 extern crate data_storage;
+extern crate dom_fragmentdirectives;
 extern crate encoding_glue;
 extern crate fog_control;
 extern crate gecko_profiler;
 extern crate gkrust_utils;
 extern crate http_sfv;
+extern crate idna_glue;
+extern crate ipdl_utils;
 extern crate jog;
 extern crate jsrust_shared;
 extern crate kvstore;
@@ -43,6 +47,7 @@ extern crate processtools;
 #[cfg(feature = "gecko_profiler")]
 extern crate profiler_helper;
 extern crate rsdparsa_capi;
+extern crate signature_cache;
 extern crate static_prefs;
 extern crate storage;
 extern crate webrender_bindings;
@@ -51,23 +56,7 @@ extern crate xpcom;
 extern crate audio_thread_priority;
 
 #[cfg(not(target_os = "android"))]
-extern crate webext_storage_bridge;
-
-#[cfg(not(target_os = "android"))]
-extern crate tabs;
-
-#[cfg(not(target_os = "android"))]
-mod reexport_tabs {
-    tabs::uniffi_reexport_scaffolding!();
-}
-
-#[cfg(not(target_os = "android"))]
-extern crate suggest;
-
-#[cfg(not(target_os = "android"))]
-mod reexport_suggest {
-    suggest::uniffi_reexport_scaffolding!();
-}
+extern crate webext_storage;
 
 #[cfg(feature = "webrtc")]
 extern crate mdns_service;
@@ -97,6 +86,12 @@ extern crate l10nregistry_ffi;
 extern crate localization_ffi;
 
 #[cfg(not(target_os = "android"))]
+extern crate gkrust_uniffi_components;
+
+#[cfg(feature = "uniffi_fixtures")]
+extern crate gkrust_uniffi_fixtures;
+
+#[cfg(not(target_os = "android"))]
 extern crate viaduct;
 
 extern crate gecko_logger;
@@ -122,27 +117,13 @@ extern crate dap_ffi;
 extern crate data_encoding_ffi;
 
 extern crate binary_http;
+extern crate mls_gk;
 extern crate oblivious_http;
 
 extern crate mime_guess_ffi;
 
-#[cfg(feature = "uniffi_fixtures")]
-mod uniffi_fixtures {
-    extern crate arithmetical;
-    extern crate uniffi_geometry;
-    extern crate uniffi_rondpoint;
-    extern crate uniffi_sprites;
-    extern crate uniffi_todolist;
-
-    arithmetical::uniffi_reexport_scaffolding!();
-    uniffi_fixture_callbacks::uniffi_reexport_scaffolding!();
-    uniffi_custom_types::uniffi_reexport_scaffolding!();
-    uniffi_fixture_external_types::uniffi_reexport_scaffolding!();
-    uniffi_geometry::uniffi_reexport_scaffolding!();
-    uniffi_rondpoint::uniffi_reexport_scaffolding!();
-    uniffi_sprites::uniffi_reexport_scaffolding!();
-    uniffi_todolist::uniffi_reexport_scaffolding!();
-}
+#[cfg(feature = "libz-rs-sys")]
+extern crate libz_rs_sys;
 
 extern crate log;
 use log::info;
@@ -171,21 +152,4 @@ pub unsafe extern "C" fn intentional_panic(message: *const c_char) {
 pub unsafe extern "C" fn debug_log(target: *const c_char, message: *const c_char) {
     // NOTE: The `info!` log macro is used here because we have the `release_max_level_info` feature set.
     info!(target: CStr::from_ptr(target).to_str().unwrap(), "{}", CStr::from_ptr(message).to_str().unwrap());
-}
-
-// Define extern "C" versions of these UniFFI functions, so that they can be called from C++
-#[no_mangle]
-pub extern "C" fn uniffi_rustbuffer_alloc(
-    size: i32,
-    call_status: &mut uniffi::RustCallStatus,
-) -> uniffi::RustBuffer {
-    uniffi::uniffi_rustbuffer_alloc(size, call_status)
-}
-
-#[no_mangle]
-pub extern "C" fn uniffi_rustbuffer_free(
-    buf: uniffi::RustBuffer,
-    call_status: &mut uniffi::RustCallStatus,
-) {
-    uniffi::uniffi_rustbuffer_free(buf, call_status)
 }

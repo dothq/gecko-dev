@@ -37,6 +37,7 @@
 #include "secmod.h"
 #include "blapi.h"
 
+#include <limits.h>
 #include <stdio.h>
 
 static PK11SymKey *ssl3_GenerateRSAPMS(sslSocket *ss, ssl3CipherSpec *spec,
@@ -1112,6 +1113,22 @@ Null_Cipher(void *ctx, unsigned char *output, unsigned int *outputLen, unsigned 
     return SECSuccess;
 }
 
+/* Wrapper around PK11_CipherOp to avoid undefined behavior due to incompatible
+ * function pointer type cast
+ */
+static SECStatus
+SSLCipher_PK11_CipherOp(void *ctx, unsigned char *output, unsigned int *outputLen, unsigned int maxOutputLen,
+                        const unsigned char *input, unsigned int inputLen)
+{
+    PK11Context *pctx = ctx;
+    PORT_Assert(maxOutputLen <= INT_MAX);
+    int signedOutputLen = maxOutputLen;
+    SECStatus rv = PK11_CipherOp(pctx, output, &signedOutputLen, maxOutputLen, input, inputLen);
+    PORT_Assert(signedOutputLen >= 0);
+    *outputLen = signedOutputLen;
+    return rv;
+}
+
 /*
  * SSL3 Utility functions
  */
@@ -1833,7 +1850,7 @@ ssl3_InitPendingContexts(sslSocket *ss, ssl3CipherSpec *spec)
         iv.data = NULL;
         iv.len = 0;
     } else {
-        spec->cipher = (SSLCipher)PK11_CipherOp;
+        spec->cipher = SSLCipher_PK11_CipherOp;
         iv.data = spec->keyMaterial.iv;
         iv.len = spec->cipherDef->iv_size;
     }
@@ -5648,7 +5665,8 @@ ssl3_SendClientHello(sslSocket *ss, sslClientHelloType type)
                 goto loser; /* code set */
             }
             if (!ss->firstHsDone) {
-                PORT_Assert(ss->ssl3.hs.dtls13ClientMessageBuffer.len == 0);
+                PORT_Assert(type == client_hello_retransmit ||
+                            ss->ssl3.hs.dtls13ClientMessageBuffer.len == 0);
                 sslBuffer_Clear(&ss->ssl3.hs.dtls13ClientMessageBuffer);
                 /* Here instead of computing the hash, we copy the data to a buffer.*/
                 rv = sslBuffer_Append(&ss->ssl3.hs.dtls13ClientMessageBuffer, chBuf.buf, chBuf.len);
@@ -7120,7 +7138,7 @@ ssl3_HandleServerHello(sslSocket *ss, PRUint8 *b, PRUint32 length)
         goto loser;
     }
 
-    /* RFC 9147. 5.2. 
+    /* RFC 9147. 5.2.
      * DTLS Handshake Message Format states the difference between the computation
      * of the transcript if the version is DTLS1.2 or DTLS1.3.
      *
@@ -8038,6 +8056,7 @@ ssl3_BeginHandleCertificateRequest(sslSocket *ss,
         PORT_Assert(ssl3_ExtensionAdvertised(ss, ssl_tls13_encrypted_client_hello_xtn));
         rv = SECFailure;
     } else if (ss->getClientAuthData != NULL) {
+        PORT_Assert(signatureSchemes || !signatureSchemeCount);
         PORT_Assert((ss->ssl3.hs.preliminaryInfo & ssl_preinfo_all) ==
                     ssl_preinfo_all);
         PORT_Assert(ss->ssl3.clientPrivateKey == NULL);
@@ -8055,7 +8074,9 @@ ssl3_BeginHandleCertificateRequest(sslSocket *ss,
          * callback will result in no filtering.*/
 
         ss->ssl3.hs.clientAuthSignatureSchemes = PORT_ZNewArray(SSLSignatureScheme, signatureSchemeCount);
-        PORT_Memcpy(ss->ssl3.hs.clientAuthSignatureSchemes, signatureSchemes, signatureSchemeCount * sizeof(SSLSignatureScheme));
+        if (signatureSchemes) {
+            PORT_Memcpy(ss->ssl3.hs.clientAuthSignatureSchemes, signatureSchemes, signatureSchemeCount * sizeof(SSLSignatureScheme));
+        }
         ss->ssl3.hs.clientAuthSignatureSchemesLen = signatureSchemeCount;
 
         rv = (SECStatus)(*ss->getClientAuthData)(ss->getClientAuthDataArg,
@@ -11321,11 +11342,7 @@ void
 ssl3_CleanupPeerCerts(sslSocket *ss)
 {
     PLArenaPool *arena = ss->ssl3.peerCertArena;
-    ssl3CertNode *certs = (ssl3CertNode *)ss->ssl3.peerCertChain;
 
-    for (; certs; certs = certs->next) {
-        CERT_DestroyCertificate(certs->cert);
-    }
     if (arena)
         PORT_FreeArena(arena, PR_FALSE);
     ss->ssl3.peerCertArena = NULL;
@@ -11540,10 +11557,10 @@ ssl3_CompleteHandleCertificate(sslSocket *ss, PRUint8 *b, PRUint32 length)
             goto loser; /* don't send alerts on memory errors */
         }
 
-        c->cert = CERT_NewTempCertificate(ss->dbHandle, &certItem, NULL,
-                                          PR_FALSE, PR_TRUE);
-        if (c->cert == NULL) {
-            goto ambiguous_err;
+        c->derCert = SECITEM_ArenaDupItem(ss->ssl3.peerCertArena,
+                                          &certItem);
+        if (c->derCert == NULL) {
+            goto loser;
         }
 
         c->next = NULL;

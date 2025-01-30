@@ -122,11 +122,11 @@ class NavigationDelegateTest : BaseSessionTest() {
         if (errorPageUrl != null) {
             sessionRule.waitUntilCalled(object : ContentDelegate, NavigationDelegate {
                 @AssertCalled(count = 1, order = [1])
-                @Suppress("OVERRIDE_DEPRECATION")
                 override fun onLocationChange(
                     session: GeckoSession,
                     url: String?,
                     perms: MutableList<PermissionDelegate.ContentPermission>,
+                    hasUserGesture: Boolean,
                 ) {
                     assertThat("URL should match", url, equalTo(testLoader.getUri()))
                 }
@@ -591,11 +591,11 @@ class NavigationDelegateTest : BaseSessionTest() {
 
         sessionRule.waitUntilCalled(object : ContentDelegate, NavigationDelegate {
             @AssertCalled(count = 1, order = [1])
-            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,
                 perms: MutableList<PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean,
             ) {
                 assertThat("URL should match", url, equalTo(httpsUri))
             }
@@ -644,11 +644,11 @@ class NavigationDelegateTest : BaseSessionTest() {
 
         // No good way to wait for loading about:blank error page. Use onLocaitonChange etc.
         sessionRule.waitUntilCalled(object : ContentDelegate, NavigationDelegate {
-            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,
                 perms: MutableList<PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean,
             ) {
                 assertThat("URL should match", url, equalTo(httpsUri))
             }
@@ -695,8 +695,11 @@ class NavigationDelegateTest : BaseSessionTest() {
     }
 
     @Test fun loadHSTSBadCert() {
-        val httpsFirstPref = "dom.security.https_first"
-        assertThat("https pref should be false", sessionRule.getPrefs(httpsFirstPref)[0] as Boolean, equalTo(false))
+        sessionRule.setPrefsUntilTestEnd(
+            mapOf(
+                "dom.security.https_first" to false,
+            ),
+        )
 
         // load secure url with hsts header
         val uri = "https://example.com/tests/junit/hsts_header.sjs"
@@ -780,8 +783,7 @@ class NavigationDelegateTest : BaseSessionTest() {
     }
 
     @Setting(key = Setting.Key.USE_TRACKING_PROTECTION, value = "true")
-    @Ignore
-    // TODO: Bug 1564373
+    @Ignore // Bug 1564373
     @Test
     fun trackingProtection() {
         val category = ContentBlocking.AntiTracking.TEST
@@ -1536,11 +1538,11 @@ class NavigationDelegateTest : BaseSessionTest() {
         // Test that if we unset the navigation delegate during a load, the load still proceeds.
         var onLocationCount = 0
         mainSession.navigationDelegate = object : NavigationDelegate {
-            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,
                 perms: MutableList<PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean,
             ) {
                 onLocationCount++
             }
@@ -2223,6 +2225,30 @@ class NavigationDelegateTest : BaseSessionTest() {
         )
     }
 
+    @Test fun loadUriInPrivateSessionReferrerSession() {
+        val uri = "https://example.com/bar"
+        val referrer = "https://example.org/"
+
+        mainSession.loadUri(referrer)
+        mainSession.waitForPageStop()
+
+        val privateSettings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+        val newSession = sessionRule.createOpenSession(privateSettings)
+        newSession.load(
+            Loader()
+                .uri(uri)
+                .referrer(mainSession)
+                .flags(GeckoSession.LOAD_FLAGS_NONE),
+        )
+        newSession.waitForPageStop()
+
+        assertThat(
+            "Referrer should not sent",
+            newSession.evaluateJS("document.referrer") as String,
+            equalTo(""),
+        )
+    }
+
     @Test fun loadUriReferrerSessionFileUrl() {
         val uri = "file:///system/etc/fonts.xml"
         val referrer = "https://example.org"
@@ -2562,8 +2588,17 @@ class NavigationDelegateTest : BaseSessionTest() {
 
         sessionRule.delegateUntilTestEnd(object : WebExtensionController.PromptDelegate {
             @AssertCalled
-            override fun onInstallPrompt(extension: WebExtension): GeckoResult<AllowOrDeny> {
-                return GeckoResult.allow()
+            override fun onInstallPromptRequest(
+                extension: WebExtension,
+                permissions: Array<String>,
+                origins: Array<String>,
+            ): GeckoResult<WebExtension.PermissionPromptResponse>? {
+                return GeckoResult.fromValue(
+                    WebExtension.PermissionPromptResponse(
+                        true, // isPermissionsGranted
+                        false, // isPrivateModeGranted
+                    ),
+                )
             }
         })
 
@@ -2750,14 +2785,6 @@ class NavigationDelegateTest : BaseSessionTest() {
     }
 
     @Test fun purgeHistory() {
-        // TODO: Bug 1884334
-        val geckoPrefs = sessionRule.getPrefs(
-            "fission.disableSessionHistoryInParent",
-        )
-        assumeThat(geckoPrefs[0] as Boolean, equalTo(true))
-        // TODO: Bug 1837551
-        assumeThat(sessionRule.env.isFission, equalTo(false))
-
         mainSession.loadUri("$TEST_ENDPOINT$HELLO_HTML_PATH")
         sessionRule.waitUntilCalled(object : HistoryDelegate, NavigationDelegate {
             @AssertCalled(count = 1)
@@ -3135,14 +3162,6 @@ class NavigationDelegateTest : BaseSessionTest() {
     }
 
     @Test fun goBackFromHistory() {
-        // TODO: Bug 1884334
-        val geckoPrefs = sessionRule.getPrefs(
-            "fission.disableSessionHistoryInParent",
-        )
-        assumeThat(geckoPrefs[0] as Boolean, equalTo(true))
-        // TODO: Bug 1837551
-        assumeThat(sessionRule.env.isFission, equalTo(false))
-
         mainSession.loadTestPath(HELLO_HTML_PATH)
 
         mainSession.waitUntilCalled(object : HistoryDelegate, ContentDelegate {
@@ -3181,11 +3200,11 @@ class NavigationDelegateTest : BaseSessionTest() {
         var lastTitle: String? = ""
         sessionRule.delegateDuringNextWait(object : NavigationDelegate, ContentDelegate {
             @AssertCalled(count = 1)
-            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,
                 perms: MutableList<PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean,
             ) {
                 assertThat("URL should match", url, endsWith(HELLO_HTML_PATH))
             }

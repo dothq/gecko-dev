@@ -34,6 +34,8 @@ ChromeUtils.defineLazyGetter(
 );
 
 const DID_SEE_ABOUT_WELCOME_PREF = "trailhead.firstrun.didSeeAboutWelcome";
+const DID_HANDLE_CAMAPAIGN_ACTION_PREF =
+  "trailhead.firstrun.didHandleCampaignAction";
 const AWTerminate = {
   WINDOW_CLOSED: "welcome-window-closed",
   TAB_CLOSED: "welcome-tab-closed",
@@ -70,7 +72,7 @@ class AboutWelcomeObserver {
     this.win.addEventListener("unload", this.onWindowClose, { once: true });
   }
 
-  observe(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic) {
     switch (aTopic) {
       case "quit-application":
         this.terminateReason = AWTerminate.APP_SHUT_DOWN;
@@ -109,8 +111,11 @@ export class AboutWelcomeParent extends JSWindowActorParent {
 
   // Static methods that calls into ShellService to check
   // if Firefox is pinned or already default
-  static doesAppNeedPin() {
-    return lazy.ShellService.doesAppNeedPin();
+  static async doesAppNeedPin() {
+    return (
+      (await lazy.ShellService.doesAppNeedPin()) ||
+      (await lazy.ShellService.doesAppNeedStartMenuPin())
+    );
   }
 
   static isDefaultBrowser() {
@@ -158,10 +163,11 @@ export class AboutWelcomeParent extends JSWindowActorParent {
       case "AWPage:TELEMETRY_EVENT":
         lazy.Telemetry.sendTelemetry(data);
         break;
-      case "AWPage:GET_ATTRIBUTION_DATA":
+      case "AWPage:GET_ATTRIBUTION_DATA": {
         let attributionData =
           await lazy.AboutWelcomeDefaults.getAttributionContent();
         return attributionData;
+      }
       case "AWPage:ENSURE_ADDON_INSTALLED":
         return new Promise(resolve => {
           let listener = {
@@ -182,7 +188,11 @@ export class AboutWelcomeParent extends JSWindowActorParent {
           };
           lazy.AddonManager.addInstallListener(listener);
         });
-      case "AWPage:GET_ADDON_DETAILS":
+      case "AWPage:GET_INSTALLED_ADDONS":
+        return lazy.AddonManager.getActiveAddons().then(response =>
+          response.addons.map(addon => addon.id)
+        );
+      case "AWPage:GET_ADDON_DETAILS": {
         let addonDetails =
           await lazy.AboutWelcomeDefaults.getAddonFromRepository(data);
 
@@ -193,12 +203,13 @@ export class AboutWelcomeParent extends JSWindowActorParent {
           screenshots: addonDetails.screenshots,
           url: addonDetails.url,
         };
+      }
       case "AWPage:SELECT_THEME":
         await lazy.BuiltInThemes.ensureBuiltInThemes();
         return lazy.AddonManager.getAddonByID(LIGHT_WEIGHT_THEMES[data]).then(
           addon => addon.enable()
         );
-      case "AWPage:GET_SELECTED_THEME":
+      case "AWPage:GET_SELECTED_THEME": {
         let themes = await lazy.AddonManager.getAddonsByTypes(["theme"]);
         let activeTheme = themes.find(addon => addon.isActive);
         // Store the current theme ID so user can restore their previous theme.
@@ -211,6 +222,7 @@ export class AboutWelcomeParent extends JSWindowActorParent {
           key => LIGHT_WEIGHT_THEMES[key] === activeTheme?.id
         );
         return themeShortName?.toLowerCase();
+      }
       case "AWPage:DOES_APP_NEED_PIN":
         return AboutWelcomeParent.doesAppNeedPin();
       case "AWPage:NEED_DEFAULT":
@@ -239,6 +251,8 @@ export class AboutWelcomeParent extends JSWindowActorParent {
         return lazy.AWScreenUtils.evaluateTargetingAndRemoveScreens(data);
       case "AWPage:ADD_SCREEN_IMPRESSION":
         return lazy.AWScreenUtils.addScreenImpression(data);
+      case "AWPage:EVALUATE_ATTRIBUTE_TARGETING":
+        return lazy.AWScreenUtils.evaluateScreenTargeting(data);
       case "AWPage:NEGOTIATE_LANGPACK":
         return lazy.LangPackMatcher.negotiateLangPackForLanguageMismatch(data);
       case "AWPage:ENSURE_LANG_PACK_INSTALLED":
@@ -247,6 +261,28 @@ export class AboutWelcomeParent extends JSWindowActorParent {
         return lazy.LangPackMatcher.setRequestedAppLocales(data);
       case "AWPage:SEND_TO_DEVICE_EMAILS_SUPPORTED": {
         return lazy.BrowserUtils.sendToDeviceEmailsSupported();
+      }
+      case "AWPage:GET_UNHANDLED_CAMPAIGN_ACTION": {
+        if (
+          !Services.prefs.getBoolPref(DID_HANDLE_CAMAPAIGN_ACTION_PREF, false)
+        ) {
+          return lazy.AWScreenUtils.getUnhandledCampaignAction();
+        }
+        break;
+      }
+      case "AWPage:HANDLE_CAMPAIGN_ACTION": {
+        if (
+          !Services.prefs.getBoolPref(DID_HANDLE_CAMAPAIGN_ACTION_PREF, false)
+        ) {
+          lazy.SpecialMessageActions.handleAction({ type: data }, browser);
+          try {
+            Services.prefs.setBoolPref(DID_HANDLE_CAMAPAIGN_ACTION_PREF, true);
+          } catch (e) {
+            lazy.log.debug(`Fails to set ${DID_HANDLE_CAMAPAIGN_ACTION_PREF}.`);
+          }
+          return true;
+        }
+        break;
       }
       default:
         lazy.log.debug(`Unexpected event ${type} was not handled.`);
@@ -275,11 +311,32 @@ export class AboutWelcomeParent extends JSWindowActorParent {
 
 export class AboutWelcomeShoppingParent extends AboutWelcomeParent {
   /**
+   * Use gBrowser as the browser in messages from the sidebar content.
+   *
+   * @param {{name: string, data?: any}} message
+   * @override
+   */
+  receiveMessage(message) {
+    const { name, data } = message;
+    let browser;
+
+    if (this.manager.rootFrameLoader) {
+      let { ownerElement } = this.manager.rootFrameLoader;
+      let { topChromeWindow } = ownerElement.ownerGlobal.browsingContext;
+      browser = topChromeWindow.gBrowser;
+      return this.onContentMessage(name, data, browser);
+    }
+
+    lazy.log.warn(`Not handling ${name} because the browser doesn't exist.`);
+    return null;
+  }
+
+  /**
    * Handle messages from AboutWelcomeChild.sys.mjs
    *
    * @param {string} type
    * @param {any=} data
-   * @param {Browser} the xul:browser rendering the page
+   * @param {Browser} the global xul:browser
    */
   onContentMessage(type, data, browser) {
     // Only handle the messages that are relevant to the shopping page.

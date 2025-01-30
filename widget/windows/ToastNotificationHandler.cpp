@@ -625,10 +625,20 @@ ComPtr<IXmlDocument> ToastNotificationHandler::CreateToastXmlDocument() {
     nsString title;
     ns = action->GetTitle(title);
     NS_ENSURE_SUCCESS(ns, nullptr);
+    if (!EnsureUTF16Validity(title)) {
+      MOZ_LOG(sWASLog, LogLevel::Warning,
+              ("Notification text was invalid UTF16, unpaired surrogates have "
+               "been replaced."));
+    }
 
     nsString actionString;
     ns = action->GetAction(actionString);
     NS_ENSURE_SUCCESS(ns, nullptr);
+    if (!EnsureUTF16Validity(actionString)) {
+      MOZ_LOG(sWASLog, LogLevel::Warning,
+              ("Notification text was invalid UTF16, unpaired surrogates have "
+               "been replaced."));
+    }
 
     nsString opaqueRelaunchData;
     ns = action->GetOpaqueRelaunchData(opaqueRelaunchData);
@@ -917,8 +927,7 @@ ToastNotificationHandler::OnActivate(
           do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
       if (winMediator) {
         nsCOMPtr<mozIDOMWindowProxy> navWin;
-        winMediator->GetMostRecentWindow(u"navigator:browser",
-                                         getter_AddRefs(navWin));
+        winMediator->GetMostRecentBrowserWindow(getter_AddRefs(navWin));
         if (navWin) {
           nsCOMPtr<nsIWidget> widget =
               WidgetUtils::DOMWindowToWidget(nsPIDOMWindowOuter::From(navWin));

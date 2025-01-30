@@ -9,6 +9,8 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsASCIIMask.h"
+#include <mozilla/Maybe.h>
+#include <mozilla/CompactPair.h>
 
 class nsIFile;
 class nsIURLParser;
@@ -59,8 +61,11 @@ nsresult net_ParseFileURL(const nsACString& inURL, nsACString& outDirectory,
                           nsACString& outFileBaseName,
                           nsACString& outFileExtension);
 
-/* handle .. in dirs while resolving URLs (path is UTF-8) */
-void net_CoalesceDirs(netCoalesceFlags flags, char* path);
+// handle .. in dirs while resolving URLs (path is UTF-8)
+// Return a tuple containing:
+// (index of the last slash, index of the end of the basename)
+mozilla::Maybe<mozilla::CompactPair<uint32_t, uint32_t>> net_CoalesceDirs(
+    netCoalesceFlags flags, char* path);
 
 /**
  * Check if a URL is absolute
@@ -214,7 +219,7 @@ inline char* net_RFindCharNotInSet(const char* str, const char* set) {
  * This function returns true if the given hostname does not include any
  * restricted characters.  Otherwise, false is returned.
  */
-bool net_IsValidHostName(const nsACString& host);
+bool net_IsValidDNSHost(const nsACString& host);
 
 /**
  * Checks whether the IPv4 address is valid according to RFC 3986 section 3.2.2.
@@ -251,7 +256,7 @@ class URLParams final {
    * \param aInput the query string to parse
    * \param aParamHandler the parameter handler as desribed above
    * \tparam ParamHandler a function type compatible with signature
-   * bool(nsString, nsString)
+   * bool(nsCString, nsCString)
    *
    * \return false if the parameter handler returned false for any parameter,
    * true otherwise
@@ -263,8 +268,8 @@ class URLParams final {
     const char* const end = aInput.EndReading();
 
     while (start != end) {
-      nsAutoString name;
-      nsAutoString value;
+      nsAutoCString name;
+      nsAutoCString value;
 
       if (!ParseNextInternal(start, end, aShouldDecode, &name, &value)) {
         continue;
@@ -290,8 +295,8 @@ class URLParams final {
    * there is no match \return true iff there was a parameter with with name
    * \paramref aName
    */
-  static bool Extract(const nsACString& aInput, const nsAString& aName,
-                      nsAString& aValue);
+  static bool Extract(const nsACString& aInput, const nsACString& aName,
+                      nsACString& aValue);
 
   /**
    * \brief Resets the state of this instance and parses a new query string.
@@ -306,11 +311,12 @@ class URLParams final {
    * \param[out] aValue will be assigned the result of the serialization
    * \param aEncode If this is true, the serialization will encode the string.
    */
-  void Serialize(nsAString& aValue, bool aEncode) const;
+  void Serialize(nsACString& aValue, bool aEncode) const;
 
-  void Get(const nsAString& aName, nsString& aRetval);
+  static void SerializeString(const nsACString& aInput, nsACString& aValue);
+  void Get(const nsACString& aName, nsACString& aRetval);
 
-  void GetAll(const nsAString& aName, nsTArray<nsString>& aRetval);
+  void GetAll(const nsACString& aName, nsTArray<nsCString>& aRetval);
 
   /**
    * \brief Sets the value of a given parameter.
@@ -319,31 +325,32 @@ class URLParams final {
    * replaced, and all further parameters of the name are deleted. Otherwise,
    * the behaviour is the same as \ref Append.
    */
-  void Set(const nsAString& aName, const nsAString& aValue);
+  void Set(const nsACString& aName, const nsACString& aValue);
 
-  void Append(const nsAString& aName, const nsAString& aValue);
+  void Append(const nsACString& aName, const nsACString& aValue);
 
-  bool Has(const nsAString& aName);
+  bool Has(const nsACString& aName);
 
-  bool Has(const nsAString& aName, const nsAString& aValue);
+  bool Has(const nsACString& aName, const nsACString& aValue);
 
   /**
    * \brief Deletes all parameters with the given name.
    */
-  void Delete(const nsAString& aName);
+  void Delete(const nsACString& aName);
 
-  void Delete(const nsAString& aName, const nsAString& aValue);
+  void Delete(const nsACString& aName, const nsACString& aValue);
 
   void DeleteAll() { mParams.Clear(); }
 
   uint32_t Length() const { return mParams.Length(); }
 
-  const nsAString& GetKeyAtIndex(uint32_t aIndex) const {
+  static void DecodeString(const nsACString& aInput, nsACString& aOutput);
+  const nsACString& GetKeyAtIndex(uint32_t aIndex) const {
     MOZ_ASSERT(aIndex < mParams.Length());
     return mParams[aIndex].mKey;
   }
 
-  const nsAString& GetValueAtIndex(uint32_t aIndex) const {
+  const nsACString& GetValueAtIndex(uint32_t aIndex) const {
     MOZ_ASSERT(aIndex < mParams.Length());
     return mParams[aIndex].mValue;
   }
@@ -355,15 +362,13 @@ class URLParams final {
   void Sort();
 
  private:
-  static void DecodeString(const nsACString& aInput, nsAString& aOutput);
-  static void ConvertString(const nsACString& aInput, nsAString& aOutput);
   static bool ParseNextInternal(const char*& aStart, const char* aEnd,
-                                bool aShouldDecode, nsAString* aOutputName,
-                                nsAString* aOutputValue);
+                                bool aShouldDecode, nsACString* aOutputName,
+                                nsACString* aOutputValue);
 
   struct Param {
-    nsString mKey;
-    nsString mValue;
+    nsCString mKey;
+    nsCString mValue;
   };
 
   nsTArray<Param> mParams;

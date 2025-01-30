@@ -36,7 +36,7 @@ static void SetUseDOSDevicePathSyntax(nsIFile* aFile) {
     nsCOMPtr<nsILocalFileWin> winFile = do_QueryInterface(aFile, &rv);
     VerifyResult(rv, "Querying nsILocalFileWin");
 
-    MOZ_ASSERT(winFile);
+    MOZ_RELEASE_ASSERT(winFile);
     winFile->SetUseDOSDevicePathSyntax(true);
   }
 }
@@ -44,10 +44,9 @@ static void SetUseDOSDevicePathSyntax(nsIFile* aFile) {
 
 static already_AddRefed<nsIFile> NewFile(nsIFile* aBase) {
   nsresult rv;
-  nsCOMPtr<nsIFile> file = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID, &rv);
-  VerifyResult(rv, "Creating nsIFile");
-  rv = file->InitWithFile(aBase);
-  VerifyResult(rv, "InitWithFile");
+  nsCOMPtr<nsIFile> file;
+  rv = NS_NewLocalFileWithFile(aBase, getter_AddRefs(file));
+  VerifyResult(rv, "NS_NewLocalFileWithFile");
 
 #ifdef XP_WIN
   SetUseDOSDevicePathSyntax(file);

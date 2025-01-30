@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/AudioDecoder.h"
 #include "mozilla/dom/AudioDecoderBinding.h"
+#include "mozilla/dom/TypedArray.h"
 
 #include "DecoderTraits.h"
 #include "MediaContainerType.h"
@@ -68,14 +69,14 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 AudioDecoderConfigInternal::AudioDecoderConfigInternal(
     const nsAString& aCodec, uint32_t aSampleRate, uint32_t aNumberOfChannels,
-    Maybe<RefPtr<MediaByteBuffer>>&& aDescription)
+    already_AddRefed<MediaByteBuffer> aDescription)
     : mCodec(aCodec),
       mSampleRate(aSampleRate),
       mNumberOfChannels(aNumberOfChannels),
-      mDescription(std::move(aDescription)) {}
+      mDescription(aDescription) {}
 
 /*static*/
-UniquePtr<AudioDecoderConfigInternal> AudioDecoderConfigInternal::Create(
+RefPtr<AudioDecoderConfigInternal> AudioDecoderConfigInternal::Create(
     const AudioDecoderConfig& aConfig) {
   nsCString errorMessage;
   if (!AudioDecoderTraits::Validate(aConfig, errorMessage)) {
@@ -83,7 +84,7 @@ UniquePtr<AudioDecoderConfigInternal> AudioDecoderConfigInternal::Create(
     return nullptr;
   }
 
-  Maybe<RefPtr<MediaByteBuffer>> description;
+  RefPtr<MediaByteBuffer> description;
   if (aConfig.mDescription.WasPassed()) {
     auto rv = GetExtraDataFromArrayBuffer(aConfig.mDescription.Value());
     if (rv.isErr()) {  // Invalid description data.
@@ -95,51 +96,40 @@ UniquePtr<AudioDecoderConfigInternal> AudioDecoderConfigInternal::Create(
           error.get());
       return nullptr;
     }
-    description.emplace(rv.unwrap());
+    description = rv.unwrap();
   }
 
-  return UniquePtr<AudioDecoderConfigInternal>(new AudioDecoderConfigInternal(
+  return MakeRefPtr<AudioDecoderConfigInternal>(
       aConfig.mCodec, aConfig.mSampleRate, aConfig.mNumberOfChannels,
-      std::move(description)));
+      description.forget());
+}
+
+nsCString AudioDecoderConfigInternal::ToString() const {
+  nsCString rv;
+
+  rv.AppendLiteral("AudioDecoderConfigInternal: ");
+  rv.AppendPrintf("%s %" PRIu32 "Hz %" PRIu32 " ch",
+                  NS_ConvertUTF16toUTF8(mCodec).get(), mSampleRate,
+                  mNumberOfChannels);
+  if (mDescription) {
+    rv.AppendPrintf("(%zu bytes of extradata)", mDescription->Length());
+  } else {
+    rv.AppendLiteral("(no extradata)");
+  }
+
+  return rv;
 }
 
 /*
  * The followings are helpers for AudioDecoder methods
  */
 
-struct AudioMIMECreateParam {
-  explicit AudioMIMECreateParam(const AudioDecoderConfigInternal& aConfig)
-      : mParsedCodec(ParseCodecString(aConfig.mCodec).valueOr(EmptyString())) {}
-  explicit AudioMIMECreateParam(const AudioDecoderConfig& aConfig)
-      : mParsedCodec(ParseCodecString(aConfig.mCodec).valueOr(EmptyString())) {}
-
-  const nsString mParsedCodec;
-};
-
 // Map between WebCodecs pcm types as strings and codec numbers
 // All other codecs
-nsCString ConvertCodecName(const nsCString& aContainer,
-                           const nsCString& aCodec) {
-  if (!aContainer.EqualsLiteral("x-wav")) {
-    return aCodec;
-  }
-  if (aCodec.EqualsLiteral("ulaw")) {
-    return nsCString("7");
-  }
-  if (aCodec.EqualsLiteral("alaw")) {
-    return nsCString("6");
-  }
-  if (aCodec.Find("f32")) {
-    return nsCString("3");
-  }
-  // Linear PCM
-  return nsCString("1");
-}
-
-static nsTArray<nsCString> GuessMIMETypes(const AudioMIMECreateParam& aParam) {
-  nsCString codec = NS_ConvertUTF16toUTF8(aParam.mParsedCodec);
+static nsTArray<nsCString> GuessMIMETypes(const nsAString& aCodec) {
+  nsCString codec = NS_ConvertUTF16toUTF8(aCodec);
   nsTArray<nsCString> types;
-  for (const nsCString& container : GuessContainers(aParam.mParsedCodec)) {
+  for (const nsCString& container : GuessContainers(aCodec)) {
     codec = ConvertCodecName(container, codec);
     nsPrintfCString mime("audio/%s; codecs=%s", container.get(), codec.get());
     types.AppendElement(mime);
@@ -147,47 +137,61 @@ static nsTArray<nsCString> GuessMIMETypes(const AudioMIMECreateParam& aParam) {
   return types;
 }
 
-static bool IsSupportedAudioCodec(const nsAString& aCodec) {
-  LOG("IsSupportedAudioCodec: %s", NS_ConvertUTF16toUTF8(aCodec).get());
-  return aCodec.EqualsLiteral("flac") || aCodec.EqualsLiteral("mp3") ||
-         IsAACCodecString(aCodec) || aCodec.EqualsLiteral("opus") ||
-         aCodec.EqualsLiteral("ulaw") || aCodec.EqualsLiteral("alaw") ||
-         aCodec.EqualsLiteral("pcm-u8") || aCodec.EqualsLiteral("pcm-s16") ||
-         aCodec.EqualsLiteral("pcm-s24") || aCodec.EqualsLiteral("pcm-s32") ||
-         aCodec.EqualsLiteral("pcm-f32");
-}
-
 // https://w3c.github.io/webcodecs/#check-configuration-support
 template <typename Config>
 static bool CanDecodeAudio(const Config& aConfig) {
-  auto param = AudioMIMECreateParam(aConfig);
-  if (!IsSupportedAudioCodec(param.mParsedCodec)) {
+  if (IsOnAndroid() && IsAACCodecString(aConfig.mCodec)) {
     return false;
   }
-  if (IsOnAndroid() && IsAACCodecString(param.mParsedCodec)) {
+  if (!IsSupportedAudioCodec(aConfig.mCodec)) {
     return false;
   }
+  bool typeSupported = false;
   // TODO: Instead of calling CanHandleContainerType with the guessed the
   // containers, DecoderTraits should provide an API to tell if a codec is
   // decodable or not.
-  for (const nsCString& mime : GuessMIMETypes(param)) {
+  for (const nsCString& mime : GuessMIMETypes(aConfig.mCodec)) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (DecoderTraits::CanHandleContainerType(
               *containerType, nullptr /* DecoderDoctorDiagnostics */) !=
           CANPLAY_NO) {
-        return true;
+        typeSupported = true;
       }
     }
   }
-  return false;
+
+  if (!typeSupported) {
+    return false;
+  }
+
+  // Perform additional checks, often codec-specific.
+  // This is to error out only when attempting to `configure(...)` the decoder,
+  // not when calling `isConfigSupported(...)`
+  if constexpr (std::is_same_v<Config, AudioDecoderConfigInternal>) {
+    if (aConfig.mCodec.EqualsLiteral("opus")) {
+      if (aConfig.mNumberOfChannels > 2 &&
+          (!aConfig.mDescription || aConfig.mDescription->Length() < 10)) {
+        LOG("Opus needs a description of at least 10 bytes when decoding > 2 "
+            "channels");
+        return false;
+      }
+    }
+    if (!aConfig.mDescription && (aConfig.mCodec.EqualsLiteral("vorbis") ||
+                                  aConfig.mCodec.EqualsLiteral("flac"))) {
+      LOG("vorbis and flac require a description");
+      return false;
+    }
+  }
+
+  return true;
 }
 
 static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(
     const AudioDecoderConfigInternal& aConfig) {
   // TODO: Instead of calling GetTracksInfo with the guessed containers,
   // DecoderTraits should provide an API to create the TrackInfo directly.
-  for (const nsCString& mime : GuessMIMETypes(AudioMIMECreateParam(aConfig))) {
+  for (const nsCString& mime : GuessMIMETypes(aConfig.mCodec)) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (nsTArray<UniquePtr<TrackInfo>> tracks =
@@ -259,13 +263,12 @@ Result<UniquePtr<TrackInfo>, nsresult> AudioDecoderTraits::CreateTrackInfo(
     return Err(NS_ERROR_INVALID_ARG);
   }
 
-  if (aConfig.mDescription.isSome()) {
-    RefPtr<MediaByteBuffer> buf;
-    buf = aConfig.mDescription.value();
-    if (buf) {
-      LOG("The given config has %zu bytes of description data", buf->Length());
-      ai->mCodecSpecificConfig =
-          AudioCodecSpecificVariant{AudioCodecSpecificBinaryBlob{buf}};
+  if (aConfig.mDescription) {
+    if (!aConfig.mDescription->IsEmpty()) {
+      LOG("The given config has %zu bytes of description data",
+          aConfig.mDescription->Length());
+      ai->mCodecSpecificConfig = AudioCodecSpecificVariant{
+          AudioCodecSpecificBinaryBlob{aConfig.mDescription}};
     }
   }
 
@@ -274,8 +277,8 @@ Result<UniquePtr<TrackInfo>, nsresult> AudioDecoderTraits::CreateTrackInfo(
 
   LOG("Created AudioInfo %s (%" PRIu32 "ch %" PRIu32
       "Hz - with extra-data: %s)",
-      NS_ConvertUTF16toUTF8(aConfig.mCodec).get(), ai->mChannels, ai->mChannels,
-      aConfig.mDescription.isSome() ? "yes" : "no");
+      NS_ConvertUTF16toUTF8(aConfig.mCodec).get(), ai->mChannels, ai->mRate,
+      aConfig.mDescription && !aConfig.mDescription->IsEmpty() ? "yes" : "no");
 
   return track;
 }
@@ -328,7 +331,7 @@ bool AudioDecoderTraits::Validate(const AudioDecoderConfig& aConfig,
 }
 
 /* static */
-UniquePtr<AudioDecoderConfigInternal> AudioDecoderTraits::CreateConfigInternal(
+RefPtr<AudioDecoderConfigInternal> AudioDecoderTraits::CreateConfigInternal(
     const AudioDecoderConfig& aConfig) {
   return AudioDecoderConfigInternal::Create(aConfig);
 }
@@ -460,7 +463,7 @@ already_AddRefed<MediaRawData> AudioDecoder::InputDataToMediaRawData(
 
 nsTArray<RefPtr<AudioData>> AudioDecoder::DecodedDataToOutputType(
     nsIGlobalObject* aGlobalObject, const nsTArray<RefPtr<MediaData>>&& aData,
-    AudioDecoderConfigInternal& aConfig) {
+    const AudioDecoderConfigInternal& aConfig) {
   AssertIsOnOwningThread();
 
   nsTArray<RefPtr<AudioData>> frames;

@@ -44,26 +44,49 @@ class MOZ_STACK_CLASS ColorStopInterpolator {
  public:
   ColorStopInterpolator(
       const nsTArray<ColorStop>& aStops,
-      const StyleColorInterpolationMethod& aStyleColorInterpolationMethod)
+      const StyleColorInterpolationMethod& aStyleColorInterpolationMethod,
+      bool aExtend)
       : mStyleColorInterpolationMethod(aStyleColorInterpolationMethod),
-        mStops(aStops) {}
+        mStops(aStops),
+        mExtend(aExtend) {}
 
   void CreateStops() {
-    for (uint32_t i = 0; i < mStops.Length() - 1; i++) {
-      const auto& start = mStops[i];
-      const auto& end = mStops[i + 1];
+    // This loop intentionally iterates extra stops at the beginning and end
+    // if extending was requested.
+    uint32_t iterStops = mStops.Length() - 1 + (mExtend ? 2 : 0);
+    for (uint32_t i = 0; i < iterStops; i++) {
+      auto thisindex = mExtend ? (i == 0 ? 0 : i - 1) : i;
+      auto nextindex =
+          mExtend && (i == iterStops - 1 || i == 0) ? thisindex : thisindex + 1;
+      const auto& start = mStops[thisindex];
+      const auto& end = mStops[nextindex];
+      float startPosition = start.mPosition;
+      float endPosition = end.mPosition;
+      // For CSS non-repeating gradients with longer hue specified, we have to
+      // pretend there is a stop beyond the last stop, and one before the first.
+      // This is never the case on SVG gradients as they only use shorter hue.
+      //
+      // See https://bugzilla.mozilla.org/show_bug.cgi?id=1885716 for more info.
+      if (mExtend) {
+        if (i == 0) {
+          startPosition = std::min(startPosition, 0.0f);
+        }
+        if (i == iterStops - 1) {
+          endPosition = std::max(endPosition, 1.0f);
+        }
+      }
       uint32_t extraStops =
-          (uint32_t)(floor(end.mPosition * kFullRangeExtraStops) -
-                     floor(start.mPosition * kFullRangeExtraStops));
-      extraStops = clamped(extraStops, 1U, kFullRangeExtraStops);
+          (uint32_t)(floor(endPosition * kFullRangeExtraStops) -
+                     floor(startPosition * kFullRangeExtraStops));
+      extraStops = std::clamp(extraStops, 1U, kFullRangeExtraStops);
       float step = 1.0f / (float)extraStops;
       for (uint32_t extraStop = 0; extraStop <= extraStops; extraStop++) {
         auto progress = (float)extraStop * step;
         auto position =
-            start.mPosition + progress * (end.mPosition - start.mPosition);
+            startPosition + progress * (endPosition - startPosition);
         StyleAbsoluteColor color =
-            Servo_InterpolateColor(mStyleColorInterpolationMethod, &end.mColor,
-                                   &start.mColor, progress);
+            Servo_InterpolateColor(mStyleColorInterpolationMethod,
+                                   &start.mColor, &end.mColor, progress);
         static_cast<T*>(this)->CreateStop(float(position),
                                           gfx::ToDeviceColor(color));
       }
@@ -73,11 +96,15 @@ class MOZ_STACK_CLASS ColorStopInterpolator {
  protected:
   StyleColorInterpolationMethod mStyleColorInterpolationMethod;
   const nsTArray<ColorStop>& mStops;
+  // This indicates that we want to extend the endPosition on the last stop,
+  // which only matters if this is a CSS non-repeating gradient with
+  // StyleHueInterpolationMethod::Longer (only valid for hsl/hwb/lch/oklch).
+  bool mExtend;
 
-  // this could be made tunable, but at 1.0/128 the error is largely
+  // This could be made tunable, but at 1.0/128 the error is largely
   // irrelevant, as WebRender re-encodes it to 128 pairs of stops.
   //
-  // note that we don't attempt to place the positions of these stops
+  // Note that we don't attempt to place the positions of these stops
   // precisely at intervals, we just add this many extra stops across the
   // range where it is convenient.
   inline static const uint32_t kFullRangeExtraStops = 128;

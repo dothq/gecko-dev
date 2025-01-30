@@ -1,33 +1,70 @@
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{quote, ToTokens};
-use syn::{
-    parse::{Parse, ParseStream},
-    Data, DataStruct, DeriveInput, Field, Lit, Token,
+use quote::quote;
+use syn::{parse::ParseStream, Data, DataStruct, DeriveInput, Field, Token};
+
+use crate::{
+    default::{default_value_metadata_calls, DefaultValue},
+    ffiops,
+    util::{
+        create_metadata_items, either_attribute_arg, extract_docstring, ident_to_string, kw,
+        mod_path, try_metadata_value_from_usize, try_read_field, AttributeSliceExt,
+        UniffiAttributeArgs,
+    },
+    DeriveOptions,
 };
 
-use crate::util::{
-    create_metadata_items, derive_all_ffi_traits, either_attribute_arg, ident_to_string, kw,
-    mod_path, tagged_impl_header, try_metadata_value_from_usize, try_read_field, AttributeSliceExt,
-    UniffiAttributeArgs,
-};
+/// Stores parsed data from the Derive Input for the struct.
+struct RecordItem {
+    ident: Ident,
+    record: DataStruct,
+    docstring: String,
+}
 
-pub fn expand_record(input: DeriveInput, udl_mode: bool) -> syn::Result<TokenStream> {
-    let record = match input.data {
-        Data::Struct(s) => s,
-        _ => {
-            return Err(syn::Error::new(
-                Span::call_site(),
-                "This derive must only be used on structs",
-            ));
-        }
-    };
+impl RecordItem {
+    fn new(input: DeriveInput) -> syn::Result<Self> {
+        let record = match input.data {
+            Data::Struct(s) => s,
+            _ => {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    "This derive must only be used on structs",
+                ));
+            }
+        };
+        Ok(Self {
+            ident: input.ident,
+            record,
+            docstring: extract_docstring(&input.attrs)?,
+        })
+    }
 
-    let ident = &input.ident;
-    let ffi_converter = record_ffi_converter_impl(ident, &record, udl_mode)
-        .unwrap_or_else(syn::Error::into_compile_error);
-    let meta_static_var = (!udl_mode).then(|| {
-        record_meta_static_var(ident, &record).unwrap_or_else(syn::Error::into_compile_error)
-    });
+    fn ident(&self) -> &Ident {
+        &self.ident
+    }
+
+    fn name(&self) -> String {
+        ident_to_string(&self.ident)
+    }
+
+    fn struct_(&self) -> &DataStruct {
+        &self.record
+    }
+
+    fn docstring(&self) -> &str {
+        self.docstring.as_str()
+    }
+}
+
+pub fn expand_record(input: DeriveInput, options: DeriveOptions) -> syn::Result<TokenStream> {
+    if let Some(e) = input.attrs.uniffi_attr_args_not_allowed_here() {
+        return Err(e);
+    }
+    let record = RecordItem::new(input)?;
+    let ffi_converter =
+        record_ffi_converter_impl(&record, &options).unwrap_or_else(syn::Error::into_compile_error);
+    let meta_static_var = options
+        .generate_metadata
+        .then(|| record_meta_static_var(&record).unwrap_or_else(syn::Error::into_compile_error));
 
     Ok(quote! {
         #ffi_converter
@@ -35,17 +72,17 @@ pub fn expand_record(input: DeriveInput, udl_mode: bool) -> syn::Result<TokenStr
     })
 }
 
-pub(crate) fn record_ffi_converter_impl(
-    ident: &Ident,
-    record: &DataStruct,
-    udl_mode: bool,
+fn record_ffi_converter_impl(
+    record: &RecordItem,
+    options: &DeriveOptions,
 ) -> syn::Result<TokenStream> {
-    let impl_spec = tagged_impl_header("FfiConverter", ident, udl_mode);
-    let derive_ffi_traits = derive_all_ffi_traits(ident, udl_mode);
+    let ident = record.ident();
+    let impl_spec = options.ffi_impl_header("FfiConverter", ident);
+    let derive_ffi_traits = options.derive_all_ffi_traits(ident);
     let name = ident_to_string(ident);
     let mod_path = mod_path()?;
-    let write_impl: TokenStream = record.fields.iter().map(write_field).collect();
-    let try_read_fields: TokenStream = record.fields.iter().map(try_read_field).collect();
+    let write_impl: TokenStream = record.struct_().fields.iter().map(write_field).collect();
+    let try_read_fields: TokenStream = record.struct_().fields.iter().map(try_read_field).collect();
 
     Ok(quote! {
         #[automatically_derived]
@@ -57,7 +94,7 @@ pub(crate) fn record_ffi_converter_impl(
             }
 
             fn try_read(buf: &mut &[::std::primitive::u8]) -> ::uniffi::deps::anyhow::Result<Self> {
-                Ok(Self { #try_read_fields })
+                ::std::result::Result::Ok(Self { #try_read_fields })
             }
 
             const TYPE_ID_META: ::uniffi::MetadataBuffer = ::uniffi::MetadataBuffer::from_code(::uniffi::metadata::codes::TYPE_RECORD)
@@ -71,42 +108,15 @@ pub(crate) fn record_ffi_converter_impl(
 
 fn write_field(f: &Field) -> TokenStream {
     let ident = &f.ident;
-    let ty = &f.ty;
-
+    let write = ffiops::write(&f.ty);
     quote! {
-        <#ty as ::uniffi::Lower<crate::UniFfiTag>>::write(obj.#ident, buf);
-    }
-}
-
-pub enum FieldDefault {
-    Literal(Lit),
-    Null(kw::None),
-}
-
-impl ToTokens for FieldDefault {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            FieldDefault::Literal(lit) => lit.to_tokens(tokens),
-            FieldDefault::Null(kw) => kw.to_tokens(tokens),
-        }
-    }
-}
-
-impl Parse for FieldDefault {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(kw::None) {
-            let none_kw: kw::None = input.parse()?;
-            Ok(Self::Null(none_kw))
-        } else {
-            Ok(Self::Literal(input.parse()?))
-        }
+        #write(obj.#ident, buf);
     }
 }
 
 #[derive(Default)]
 pub struct FieldAttributeArguments {
-    pub(crate) default: Option<FieldDefault>,
+    pub(crate) default: Option<DefaultValue>,
 }
 
 impl UniffiAttributeArgs for FieldAttributeArguments {
@@ -126,16 +136,17 @@ impl UniffiAttributeArgs for FieldAttributeArguments {
     }
 }
 
-pub(crate) fn record_meta_static_var(
-    ident: &Ident,
-    record: &DataStruct,
-) -> syn::Result<TokenStream> {
-    let name = ident_to_string(ident);
+fn record_meta_static_var(record: &RecordItem) -> syn::Result<TokenStream> {
+    let name = record.name();
+    let docstring = record.docstring();
     let module_path = mod_path()?;
-    let fields_len =
-        try_metadata_value_from_usize(record.fields.len(), "UniFFI limits structs to 256 fields")?;
+    let fields_len = try_metadata_value_from_usize(
+        record.struct_().fields.len(),
+        "UniFFI limits structs to 256 fields",
+    )?;
 
     let concat_fields: TokenStream = record
+        .struct_()
         .fields
         .iter()
         .map(|f| {
@@ -144,24 +155,17 @@ pub(crate) fn record_meta_static_var(
                 .parse_uniffi_attr_args::<FieldAttributeArguments>()?;
 
             let name = ident_to_string(f.ident.as_ref().unwrap());
-            let ty = &f.ty;
-            let default = match attrs.default {
-                Some(default) => {
-                    let default_value = default_value_concat_calls(default)?;
-                    quote! {
-                        .concat_bool(true)
-                        #default_value
-                    }
-                }
-                None => quote! { .concat_bool(false) },
-            };
+            let docstring = extract_docstring(&f.attrs)?;
+            let default = default_value_metadata_calls(&attrs.default)?;
+            let type_id_meta = ffiops::type_id_meta(&f.ty);
 
             // Note: fields need to implement both `Lower` and `Lift` to be used in a record.  The
             // TYPE_ID_META should be the same for both traits.
             Ok(quote! {
                 .concat_str(#name)
-                .concat(<#ty as ::uniffi::Lower<crate::UniFfiTag>>::TYPE_ID_META)
+                .concat(#type_id_meta)
                 #default
+                .concat_long_str(#docstring)
             })
         })
         .collect::<syn::Result<_>>()?;
@@ -175,50 +179,8 @@ pub(crate) fn record_meta_static_var(
                 .concat_str(#name)
                 .concat_value(#fields_len)
                 #concat_fields
+                .concat_long_str(#docstring)
         },
         None,
     ))
-}
-
-fn default_value_concat_calls(default: FieldDefault) -> syn::Result<TokenStream> {
-    match default {
-        FieldDefault::Literal(Lit::Int(i)) if !i.suffix().is_empty() => Err(
-            syn::Error::new_spanned(i, "integer literals with suffix not supported here"),
-        ),
-        FieldDefault::Literal(Lit::Float(f)) if !f.suffix().is_empty() => Err(
-            syn::Error::new_spanned(f, "float literals with suffix not supported here"),
-        ),
-
-        FieldDefault::Literal(Lit::Str(s)) => Ok(quote! {
-            .concat_value(::uniffi::metadata::codes::LIT_STR)
-            .concat_str(#s)
-        }),
-        FieldDefault::Literal(Lit::Int(i)) => {
-            let digits = i.base10_digits();
-            Ok(quote! {
-                .concat_value(::uniffi::metadata::codes::LIT_INT)
-                .concat_str(#digits)
-            })
-        }
-        FieldDefault::Literal(Lit::Float(f)) => {
-            let digits = f.base10_digits();
-            Ok(quote! {
-                .concat_value(::uniffi::metadata::codes::LIT_FLOAT)
-                .concat_str(#digits)
-            })
-        }
-        FieldDefault::Literal(Lit::Bool(b)) => Ok(quote! {
-            .concat_value(::uniffi::metadata::codes::LIT_BOOL)
-            .concat_bool(#b)
-        }),
-
-        FieldDefault::Literal(_) => Err(syn::Error::new_spanned(
-            default,
-            "this type of literal is not currently supported as a default",
-        )),
-
-        FieldDefault::Null(_) => Ok(quote! {
-            .concat_value(::uniffi::metadata::codes::LIT_NULL)
-        }),
-    }
 }

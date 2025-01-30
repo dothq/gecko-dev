@@ -9,7 +9,7 @@ let { ForgetAboutSite } = ChromeUtils.importESModule(
 function promiseClearHistory() {
   return new Promise(resolve => {
     let observer = {
-      observe(aSubject, aTopic, aData) {
+      observe() {
         Services.obs.removeObserver(
           this,
           "browser:purge-session-history-for-domain"
@@ -152,7 +152,7 @@ add_task(async function () {
   );
 
   let promise = promiseClearHistory();
-  await ForgetAboutSite.removeDataFromDomain("example.net");
+  await ForgetAboutSite.removeDataFromBaseDomain("example.net");
   await promise;
   closedTabs = ss.getClosedTabDataForWindow(newWin);
   is(

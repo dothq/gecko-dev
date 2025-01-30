@@ -4,12 +4,6 @@
 "use strict";
 
 // Browser tests for Pocket suggestions.
-//
-// TODO: Make this work with Rust enabled. Right now, running this test with
-// Rust hits the following error on ingest, which prevents ingest from finishing
-// successfully:
-//
-//  0:03.17 INFO Console message: [JavaScript Error: "1698289045697	urlbar	ERROR	QuickSuggest.SuggestBackendRust :: Ingest error: Error executing SQL: FOREIGN KEY constraint failed" {file: "resource://gre/modules/Log.sys.mjs" line: 722}]
 
 // The expected index of the Pocket suggestion.
 const EXPECTED_RESULT_INDEX = 1;
@@ -29,6 +23,8 @@ const REMOTE_SETTINGS_DATA = [
     ],
   },
 ];
+
+requestLongerTimeout(5);
 
 add_setup(async function () {
   await SpecialPowers.pushPrefEnv({

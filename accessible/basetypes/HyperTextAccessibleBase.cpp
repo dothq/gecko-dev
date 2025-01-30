@@ -307,24 +307,12 @@ int32_t HyperTextAccessibleBase::OffsetAtPoint(int32_t aX, int32_t aY,
   }
 
   TextLeafPoint startPoint = ToTextLeafPoint(0, false);
-  // As with TextBounds, we walk to the very end of the text contained in this
-  // hypertext and then step backwards to make our endPoint inclusive.
+  // Walk to the very end of the text contained in this hypertext in order to
+  // hit test it in its entirety.
   TextLeafPoint endPoint =
       ToTextLeafPoint(static_cast<int32_t>(CharacterCount()), true);
-  endPoint =
-      endPoint.FindBoundary(nsIAccessibleText::BOUNDARY_CHAR, eDirPrevious);
-  TextLeafPoint point = startPoint;
-  // XXX: We should create a TextLeafRange object for this hypertext and move
-  // this search inside the TextLeafRange class.
-  // If there are no characters in this container, we might have moved endPoint
-  // before startPoint. In that case, we shouldn't try to move further forward,
-  // as that might result in an infinite loop.
-  if (startPoint <= endPoint) {
-    for (; !point.ContainsPoint(coords.x, coords.y) && point != endPoint;
-         point =
-             point.FindBoundary(nsIAccessibleText::BOUNDARY_CHAR, eDirNext)) {
-    }
-  }
+  TextLeafRange range{startPoint, endPoint};
+  TextLeafPoint point = range.TextLeafPointAtScreenPoint(coords.x, coords.y);
   if (!point.ContainsPoint(coords.x, coords.y)) {
     LayoutDeviceIntRect startRect = startPoint.CharBounds();
     if (coords.x < startRect.x || coords.y < startRect.y) {
@@ -404,9 +392,11 @@ void HyperTextAccessibleBase::AdjustOriginIfEndBoundary(
       aBoundaryType != nsIAccessibleText::BOUNDARY_WORD_END) {
     return;
   }
-  TextLeafPoint actualOrig =
-      aOrigin.IsCaret() ? aOrigin.ActualizeCaret(/* aAdjustAtEndOfLine */ false)
-                        : aOrigin;
+  TextLeafPoint actualOrig = aOrigin;
+  // We explicitly care about the character at this offset. We don't want
+  // FindBoundary to behave differently even if this is the insertion point at
+  // the end of a line.
+  actualOrig.mIsEndOfLineInsertionPoint = false;
   if (aBoundaryType == nsIAccessibleText::BOUNDARY_LINE_END) {
     if (!actualOrig.IsLineFeedChar()) {
       return;
@@ -420,7 +410,7 @@ void HyperTextAccessibleBase::AdjustOriginIfEndBoundary(
       // boundary. Also, if the caret is at the end of a line, our tests expect
       // the word after the caret, not the word before. The reason for that
       // is a mystery lost to history. We can do that by explicitly using the
-      // actualized caret without adjusting for end of line.
+      // caret without adjusting for end of line.
       aOrigin = actualOrig;
       return;
     }
@@ -513,7 +503,7 @@ void HyperTextAccessibleBase::TextAtOffset(int32_t aOffset,
   if (aBoundaryType == nsIAccessibleText::BOUNDARY_CHAR) {
     if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
       TextLeafPoint caret = TextLeafPoint::GetCaret(Acc());
-      if (caret.IsCaretAtEndOfLine()) {
+      if (caret.mIsEndOfLineInsertionPoint) {
         // The caret is at the end of the line. Return no character.
         *aStartOffset = *aEndOffset = static_cast<int32_t>(adjustedOffset);
         return;
@@ -581,7 +571,7 @@ void HyperTextAccessibleBase::TextAfterOffset(
 
   if (aBoundaryType == nsIAccessibleText::BOUNDARY_CHAR) {
     if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET && adjustedOffset > 0 &&
-        TextLeafPoint::GetCaret(Acc()).IsCaretAtEndOfLine()) {
+        TextLeafPoint::GetCaret(Acc()).mIsEndOfLineInsertionPoint) {
       --adjustedOffset;
     }
     uint32_t count = CharacterCount();
@@ -624,8 +614,7 @@ void HyperTextAccessibleBase::TextAfterOffset(
 }
 
 int32_t HyperTextAccessibleBase::CaretOffset() const {
-  TextLeafPoint point = TextLeafPoint::GetCaret(const_cast<Accessible*>(Acc()))
-                            .ActualizeCaret(/* aAdjustAtEndOfLine */ false);
+  TextLeafPoint point = TextLeafPoint::GetCaret(const_cast<Accessible*>(Acc()));
   if (point.mOffset == 0 && point.mAcc == Acc()) {
     // If a text box is empty, there will be no children, so point.mAcc will be
     // this HyperText.
@@ -641,8 +630,7 @@ int32_t HyperTextAccessibleBase::CaretOffset() const {
 }
 
 int32_t HyperTextAccessibleBase::CaretLineNumber() {
-  TextLeafPoint point = TextLeafPoint::GetCaret(const_cast<Accessible*>(Acc()))
-                            .ActualizeCaret(/* aAdjustAtEndOfLine */ false);
+  TextLeafPoint point = TextLeafPoint::GetCaret(const_cast<Accessible*>(Acc()));
   if (point.mOffset == 0 && point.mAcc == Acc()) {
     MOZ_ASSERT(CharacterCount() == 0);
     // If a text box is empty, there will be no children, so point.mAcc will be

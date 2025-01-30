@@ -1,7 +1,11 @@
-// The FfiConverter interface handles converter types to and from the FFI
-//
-// All implementing objects should be public to support external types.  When a
-// type is external we need to import it's FfiConverter.
+/**
+ * The FfiConverter interface handles converter types to and from the FFI
+ *
+ * All implementing objects should be public to support external types.  When a
+ * type is external we need to import it's FfiConverter.
+ *
+ * @suppress
+ */
 public interface FfiConverter<KotlinType, FfiType> {
     // Convert an FFI type to a Kotlin type
     fun lift(value: FfiType): KotlinType
@@ -20,7 +24,7 @@ public interface FfiConverter<KotlinType, FfiType> {
     // encoding, so we pessimistically allocate the largest size possible (3
     // bytes per codepoint).  Allocating extra bytes is not really a big deal
     // because the `RustBuffer` is short-lived.
-    fun allocationSize(value: KotlinType): Int
+    fun allocationSize(value: KotlinType): ULong
 
     // Write a Kotlin type to a `ByteBuffer`
     fun write(value: KotlinType, buf: ByteBuffer)
@@ -34,11 +38,11 @@ public interface FfiConverter<KotlinType, FfiType> {
     fun lowerIntoRustBuffer(value: KotlinType): RustBuffer.ByValue {
         val rbuf = RustBuffer.alloc(allocationSize(value))
         try {
-            val bbuf = rbuf.data!!.getByteBuffer(0, rbuf.capacity.toLong()).also {
+            val bbuf = rbuf.data!!.getByteBuffer(0, rbuf.capacity).also {
                 it.order(ByteOrder.BIG_ENDIAN)
             }
             write(value, bbuf)
-            rbuf.writeField("len", bbuf.position())
+            rbuf.writeField("len", bbuf.position().toLong())
             return rbuf
         } catch (e: Throwable) {
             RustBuffer.free(rbuf)
@@ -64,7 +68,11 @@ public interface FfiConverter<KotlinType, FfiType> {
     }
 }
 
-// FfiConverter that uses `RustBuffer` as the FfiType
+/**
+ * FfiConverter that uses `RustBuffer` as the FfiType
+ *
+ * @suppress
+ */
 public interface FfiConverterRustBuffer<KotlinType>: FfiConverter<KotlinType, RustBuffer.ByValue> {
     override fun lift(value: RustBuffer.ByValue) = liftFromRustBuffer(value)
     override fun lower(value: KotlinType) = lowerIntoRustBuffer(value)

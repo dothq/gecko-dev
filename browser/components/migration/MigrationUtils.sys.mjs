@@ -156,6 +156,7 @@ class MigrationUtils {
           "MigrationWizard:OpenAboutAddons": { wantUntrusted: true },
           "MigrationWizard:PermissionsNeeded": { wantUntrusted: true },
           "MigrationWizard:GetPermissions": { wantUntrusted: true },
+          "MigrationWizard:OpenURL": { wantUntrusted: true },
         },
       },
 
@@ -203,7 +204,7 @@ class MigrationUtils {
 
   /**
    * Helper for implementing simple asynchronous cases of migration resources'
-   * |migrate(aCallback)| (see MigratorBase).  If your |migrate| method
+   * ``migrate(aCallback)`` (see MigratorBase).  If your ``migrate`` method
    * just waits for some file to be read, for example, and then migrates
    * everything right away, you can wrap the async-function with this helper
    * and not worry about notifying the callback.
@@ -234,7 +235,7 @@ class MigrationUtils {
    *   throws when it's called, aCallback(false) is called, otherwise
    *   aCallback(true) is called.
    * @param {Function} aCallback
-   *   the callback function passed to |migrate|.
+   *   the callback function passed to ``migrate``.
    * @returns {Function}
    *   the wrapped function.
    */
@@ -634,10 +635,7 @@ class MigrationUtils {
       // Record that the uninstaller requested a profile refresh
       if (Services.env.get("MOZ_UNINSTALLER_PROFILE_REFRESH")) {
         Services.env.set("MOZ_UNINSTALLER_PROFILE_REFRESH", "");
-        Services.telemetry.scalarSet(
-          "migration.uninstaller_profile_refresh",
-          true
-        );
+        Glean.migration.uninstallerProfileRefresh.set(true);
       }
 
       openStandaloneWindow(true /* blocking */);
@@ -870,37 +868,53 @@ class MigrationUtils {
    * Iterates through the favicons, sniffs for a mime type,
    * and uses the mime type to properly import the favicon.
    *
+   * Note: You may not want to await on the returned promise, especially if by
+   *       doing so there's risk of interrupting the migration of more critical
+   *       data (e.g. bookmarks).
+   *
    * @param {object[]} favicons
    *   An array of Objects with these properties:
    *     {Uint8Array} faviconData: The binary data of a favicon
    *     {nsIURI} uri: The URI of the associated page
    */
-  insertManyFavicons(favicons) {
+  async insertManyFavicons(favicons) {
     let sniffer = Cc["@mozilla.org/image/loader;1"].createInstance(
       Ci.nsIContentSniffer
     );
+
     for (let faviconDataItem of favicons) {
-      let mimeType = sniffer.getMIMETypeFromContent(
-        null,
-        faviconDataItem.faviconData,
-        faviconDataItem.faviconData.length
-      );
-      let fakeFaviconURI = Services.io.newURI(
-        "fake-favicon-uri:" + faviconDataItem.uri.spec
-      );
-      lazy.PlacesUtils.favicons.replaceFaviconData(
-        fakeFaviconURI,
-        faviconDataItem.faviconData,
-        mimeType
-      );
-      lazy.PlacesUtils.favicons.setAndFetchFaviconForPage(
-        faviconDataItem.uri,
-        fakeFaviconURI,
-        true,
-        lazy.PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-        null,
-        Services.scriptSecurityManager.getSystemPrincipal()
-      );
+      try {
+        // getMIMETypeFromContent throws error if could not get the mime type
+        // from the data.
+        let mimeType = sniffer.getMIMETypeFromContent(
+          null,
+          faviconDataItem.faviconData,
+          faviconDataItem.faviconData.length
+        );
+
+        let dataURL = await new Promise((resolve, reject) => {
+          let buffer = new Uint8ClampedArray(faviconDataItem.faviconData);
+          let blob = new Blob([buffer], { type: mimeType });
+          let reader = new FileReader();
+          reader.addEventListener("load", () => resolve(reader.result));
+          reader.addEventListener("error", reject);
+          reader.readAsDataURL(blob);
+        });
+
+        let fakeFaviconURI = Services.io.newURI(
+          "fake-favicon-uri:" + faviconDataItem.uri.spec
+        );
+        lazy.PlacesUtils.favicons
+          .setFaviconForPage(
+            faviconDataItem.uri,
+            fakeFaviconURI,
+            Services.io.newURI(dataURL)
+          )
+          .catch(console.warn);
+      } catch (e) {
+        // Even if error happens for favicon, continue the process.
+        console.warn(e);
+      }
     }
   }
 
@@ -928,6 +942,9 @@ class MigrationUtils {
    *                             `AMBrowserExtensionsImport` as the "browser
    *                             identifier" used to match add-ons
    * @param {string[]} extensionIDs a list of extension IDs from another browser
+   * @returns {(lazy.MigrationWizardConstants.PROGRESS_VALUE|string[])[]}
+   *   An array whose first element is a `MigrationWizardConstants.PROGRESS_VALUE`
+   *   and second element is an array of imported add-on ids.
    */
   async installExtensionsWrapper(migratorKey, extensionIDs) {
     const totalExtensions = extensionIDs.length;

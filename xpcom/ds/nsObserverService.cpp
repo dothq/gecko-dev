@@ -185,7 +185,7 @@ nsresult nsObserverService::FilterHttpOnTopics(const char* aTopic) {
   if (mozilla::net::IsNeckoChild() && !strncmp(aTopic, "http-on-", 8) &&
       strcmp(aTopic, "http-on-before-stop-request") &&
       strcmp(aTopic, "http-on-failed-opening-request") &&
-      strcmp(aTopic, "http-on-image-cache-response") &&
+      strcmp(aTopic, "http-on-resource-cache-response") &&
       strcmp(aTopic, "http-on-opening-request") &&
       strcmp(aTopic, "http-on-stop-request")) {
     nsCOMPtr<nsIConsoleService> console(
@@ -193,7 +193,7 @@ nsresult nsObserverService::FilterHttpOnTopics(const char* aTopic) {
     nsCOMPtr<nsIScriptError> error(
         do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
     error->Init(u"http-on-* observers only work in the parent process"_ns,
-                u""_ns, u""_ns, 0, 0, nsIScriptError::warningFlag,
+                ""_ns, 0, 0, nsIScriptError::warningFlag,
                 "chrome javascript"_ns, false /* from private window */,
                 true /* from chrome context */);
     console->LogMessage(error);

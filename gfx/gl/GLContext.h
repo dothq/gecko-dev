@@ -45,6 +45,12 @@
 #include "mozilla/GenericRefCounted.h"
 #include "mozilla/WeakPtr.h"
 
+template <class ElemT, class... More>
+constexpr inline std::array<ElemT, 1 + sizeof...(More)> make_array(
+    ElemT&& arg1, More&&... more) {
+  return {std::forward<ElemT>(arg1), std::forward<ElemT>(more)...};
+}
+
 #ifdef MOZ_WIDGET_ANDROID
 #  include "mozilla/ProfilerLabels.h"
 #endif
@@ -77,6 +83,7 @@ enum class GLFeature {
   blend_minmax,
   clear_buffers,
   copy_buffer,
+  depth_clamp,
   depth_texture,
   draw_buffers,
   draw_buffers_indexed,
@@ -374,6 +381,7 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     ARB_color_buffer_float,
     ARB_compatibility,
     ARB_copy_buffer,
+    ARB_depth_clamp,
     ARB_depth_texture,
     ARB_draw_buffers,
     ARB_draw_instanced,
@@ -414,6 +422,7 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     EXT_color_buffer_float,
     EXT_color_buffer_half_float,
     EXT_copy_texture,
+    EXT_depth_clamp,
     EXT_disjoint_timer_query,
     EXT_draw_buffers,
     EXT_draw_buffers2,
@@ -448,6 +457,10 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     EXT_timer_query,
     EXT_transform_feedback,
     EXT_unpack_subimage,
+    EXT_semaphore,
+    EXT_semaphore_fd,
+    EXT_memory_object,
+    EXT_memory_object_fd,
     IMG_read_format,
     IMG_texture_compression_pvrtc,
     IMG_texture_npot,
@@ -797,8 +810,15 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     AFTER_GL_CALL;
   }
 
+  void InvalidateFramebuffer(GLenum target) {
+    constexpr auto ATTACHMENTS = make_array(GLenum{LOCAL_GL_COLOR_ATTACHMENT0},
+                                            LOCAL_GL_DEPTH_STENCIL_ATTACHMENT);
+    fInvalidateFramebuffer(target, ATTACHMENTS.size(), ATTACHMENTS.data());
+  }
+
   void fInvalidateFramebuffer(GLenum target, GLsizei numAttachments,
                               const GLenum* attachments) {
+    if (!mSymbols.fInvalidateFramebuffer) return;
     BeforeGLDrawCall();
     BEFORE_GL_CALL;
     ASSERT_SYMBOL_PRESENT(fInvalidateFramebuffer);
@@ -810,6 +830,7 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
   void fInvalidateSubFramebuffer(GLenum target, GLsizei numAttachments,
                                  const GLenum* attachments, GLint x, GLint y,
                                  GLsizei width, GLsizei height) {
+    if (!mSymbols.fInvalidateSubFramebuffer) return;
     BeforeGLDrawCall();
     BEFORE_GL_CALL;
     ASSERT_SYMBOL_PRESENT(fInvalidateSubFramebuffer);
@@ -823,6 +844,13 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     BEFORE_GL_CALL;
     mSymbols.fBindTexture(target, texture);
     AFTER_GL_CALL;
+  }
+
+  void BindSamplerTexture(GLuint texUnitId, GLuint samplerHandle,
+                          GLenum texTarget, GLuint texHandle) {
+    fBindSampler(texUnitId, samplerHandle);
+    fActiveTexture(LOCAL_GL_TEXTURE0 + texUnitId);
+    fBindTexture(texTarget, texHandle);
   }
 
   void fBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
@@ -2028,7 +2056,11 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
  public:
   bool mElideDuplicateBindFramebuffers = false;
 
-  void fBindFramebuffer(const GLenum target, const GLuint fb) const {
+  // If e.g. GL_DRAW_FRAMEBUFFER isn't supported, will bind GL_FRAMEBUFFER.
+  void fBindFramebuffer(GLenum target, const GLuint fb) const {
+    if (!IsSupported(gl::GLFeature::framebuffer_blit)) {
+      target = LOCAL_GL_FRAMEBUFFER;
+    }
     if (mElideDuplicateBindFramebuffers) {
       MOZ_ASSERT(mCachedDrawFb ==
                  GetIntAs<GLuint>(LOCAL_GL_DRAW_FRAMEBUFFER_BINDING));
@@ -3404,6 +3436,223 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
     AFTER_GL_CALL;
   }
 
+  // -----------------------------------------------------------------------------
+  // GL_EXT_semaphore
+  void fDeleteSemaphoresEXT(GLsizei n, const GLuint* semaphores) {
+    BEFORE_GL_CALL;
+    mSymbols.fDeleteSemaphoresEXT(n, semaphores);
+    AFTER_GL_CALL;
+  }
+
+  void fGenSemaphoresEXT(GLsizei n, GLuint* semaphores) {
+    BEFORE_GL_CALL;
+    mSymbols.fGenSemaphoresEXT(n, semaphores);
+    AFTER_GL_CALL;
+  }
+
+  void fGetSemaphoreParameterui64vEXT(GLuint semaphore, GLenum pname,
+                                      GLuint64* params) {
+    BEFORE_GL_CALL;
+    mSymbols.fGetSemaphoreParameterui64vEXT(semaphore, pname, params);
+    AFTER_GL_CALL;
+  }
+
+  realGLboolean fIsSemaphoreEXT(GLuint semaphore) {
+    realGLboolean ret = false;
+    BEFORE_GL_CALL;
+    ret = mSymbols.fIsSemaphoreEXT(semaphore);
+    AFTER_GL_CALL;
+    return ret;
+  }
+
+  void fSemaphoreParameterui64vEXT(GLuint semaphore, GLenum pname,
+                                   const GLuint64* params) {
+    BEFORE_GL_CALL;
+    mSymbols.fSemaphoreParameterui64vEXT(semaphore, pname, params);
+    AFTER_GL_CALL;
+  }
+
+  void fSignalSemaphoreEXT(GLuint semaphore, GLuint numBufferBarriers,
+                           const GLuint* buffers, GLuint numTextureBarriers,
+                           const GLuint* textures, const GLenum* dstLayouts) {
+    BEFORE_GL_CALL;
+    mSymbols.fSignalSemaphoreEXT(semaphore, numBufferBarriers, buffers,
+                                 numTextureBarriers, textures, dstLayouts);
+    AFTER_GL_CALL;
+  }
+
+  void fWaitSemaphoreEXT(GLuint semaphore, GLuint numBufferBarriers,
+                         const GLuint* buffers, GLuint numTextureBarriers,
+                         const GLuint* textures, const GLenum* srcLayouts) {
+    BEFORE_GL_CALL;
+    mSymbols.fWaitSemaphoreEXT(semaphore, numBufferBarriers, buffers,
+                               numTextureBarriers, textures, srcLayouts);
+    AFTER_GL_CALL;
+  }
+
+  // -----------------------------------------------------------------------------
+  // GL_EXT_semaphore_fd
+  void fImportSemaphoreFdEXT(GLuint semaphore, GLenum handleType, GLint fd) {
+    BEFORE_GL_CALL;
+    mSymbols.fImportSemaphoreFdEXT(semaphore, handleType, fd);
+    AFTER_GL_CALL;
+  }
+
+  // -----------------------------------------------------------------------------
+  // Extension EXT_memory_object
+  void fGetUnsignedBytevEXT(GLenum pname, GLubyte* data) {
+    BEFORE_GL_CALL;
+    mSymbols.fGetUnsignedBytevEXT(pname, data);
+    AFTER_GL_CALL;
+  }
+
+  void fGetUnsignedBytei_vEXT(GLenum target, GLuint index, GLubyte* data) {
+    BEFORE_GL_CALL;
+    mSymbols.fGetUnsignedBytei_vEXT(target, index, data);
+    AFTER_GL_CALL;
+  }
+
+  void fDeleteMemoryObjectsEXT(GLsizei n, const GLuint* memoryObjects) {
+    BEFORE_GL_CALL;
+    mSymbols.fDeleteMemoryObjectsEXT(n, memoryObjects);
+    AFTER_GL_CALL;
+  }
+
+  void fIsMemoryObjectEXT(GLuint memoryObject) {
+    BEFORE_GL_CALL;
+    mSymbols.fIsMemoryObjectEXT(memoryObject);
+    AFTER_GL_CALL;
+  }
+
+  void fCreateMemoryObjectsEXT(GLsizei n, GLuint* memoryObjects) {
+    BEFORE_GL_CALL;
+    mSymbols.fCreateMemoryObjectsEXT(n, memoryObjects);
+    AFTER_GL_CALL;
+  }
+
+  void fMemoryObjectParameterivEXT(GLuint memoryObject, GLenum pname,
+                                   const GLint* params) {
+    BEFORE_GL_CALL;
+    mSymbols.fMemoryObjectParameterivEXT(memoryObject, pname, params);
+    AFTER_GL_CALL;
+  }
+
+  void fGetMemoryObjectParameterivEXT(GLuint memoryObject, GLenum pname,
+                                      GLint* params) {
+    BEFORE_GL_CALL;
+    mSymbols.fGetMemoryObjectParameterivEXT(memoryObject, pname, params);
+    AFTER_GL_CALL;
+  }
+
+  void fTexStorageMem2DEXT(GLenum target, GLsizei levels, GLenum internalFormat,
+                           GLsizei width, GLsizei height, GLuint memory,
+                           GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTexStorageMem2DEXT(target, levels, internalFormat, width, height,
+                                 memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTexStorageMem2DMultisampleEXT(GLenum target, GLsizei samples,
+                                      GLenum internalFormat, GLsizei width,
+                                      GLsizei height,
+                                      realGLboolean fixedSampleLocations,
+                                      GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTexStorageMem2DMultisampleEXT(target, samples, internalFormat,
+                                            width, height, fixedSampleLocations,
+                                            memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTexStorageMem3DEXT(GLenum target, GLsizei levels, GLenum internalFormat,
+                           GLsizei width, GLsizei height, GLsizei depth,
+                           GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTexStorageMem3DEXT(target, levels, internalFormat, width, height,
+                                 depth, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTexStorageMem3DMultisampleEXT(GLenum target, GLsizei samples,
+                                      GLenum internalFormat, GLsizei width,
+                                      GLsizei height, GLsizei depth,
+                                      realGLboolean fixedSampleLocations,
+                                      GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTexStorageMem3DMultisampleEXT(
+        target, samples, internalFormat, width, height, depth,
+        fixedSampleLocations, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fBufferStorageMemEXT(GLenum target, GLsizeiptr size, GLuint memory,
+                            GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fBufferStorageMemEXT(target, size, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTextureStorageMem2DEXT(GLuint texture, GLsizei levels,
+                               GLenum internalFormat, GLsizei width,
+                               GLsizei height, GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTextureStorageMem2DEXT(texture, levels, internalFormat, width,
+                                     height, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTextureStorageMem2DMultisampleEXT(GLuint texture, GLsizei samples,
+                                          GLenum internalFormat, GLsizei width,
+                                          GLsizei height,
+                                          realGLboolean fixedSampleLocations,
+                                          GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTextureStorageMem2DMultisampleEXT(
+        texture, samples, internalFormat, width, height, fixedSampleLocations,
+        memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTextureStorageMem3DEXT(GLuint texture, GLsizei levels,
+                               GLenum internalFormat, GLsizei width,
+                               GLsizei height, GLsizei depth, GLuint memory,
+                               GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTextureStorageMem3DEXT(texture, levels, internalFormat, width,
+                                     height, depth, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fTextureStorageMem3DMultisampleEXT(GLuint texture, GLsizei samples,
+                                          GLenum internalFormat, GLsizei width,
+                                          GLsizei height, GLsizei depth,
+                                          realGLboolean fixedSampleLocations,
+                                          GLuint memory, GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fTextureStorageMem3DMultisampleEXT(
+        texture, samples, internalFormat, width, height, depth,
+        fixedSampleLocations, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  void fNamedBufferStorageMemEXT(GLuint buffer, GLsizeiptr size, GLuint memory,
+                                 GLuint64 offset) {
+    BEFORE_GL_CALL;
+    mSymbols.fNamedBufferStorageMemEXT(buffer, size, memory, offset);
+    AFTER_GL_CALL;
+  }
+
+  // -----------------------------------------------------------------------------
+  // Extension EXT_memory_object_fd
+
+  void fImportMemoryFdEXT(GLuint memory, GLuint64 size, GLenum handleType,
+                          GLint fd) {
+    BEFORE_GL_CALL;
+    mSymbols.fImportMemoryFdEXT(memory, size, handleType, fd);
+    AFTER_GL_CALL;
+  }
+
   // -
 
 #undef BEFORE_GL_CALL
@@ -3550,9 +3799,11 @@ class GLContext : public GenericAtomicRefCounted, public SupportsWeakPtr {
 #ifdef MOZ_WIDGET_GTK
     return LOCAL_GL_TEXTURE_2D;
 #else
-    return IsExtensionSupported(OES_EGL_image_external)
-               ? LOCAL_GL_TEXTURE_EXTERNAL
-               : LOCAL_GL_TEXTURE_2D;
+    if (IsExtensionSupported(OES_EGL_image_external) &&
+        mRenderer != GLRenderer::AndroidEmulator) {
+      return LOCAL_GL_TEXTURE_EXTERNAL;
+    }
+    return LOCAL_GL_TEXTURE_2D;
 #endif
   }
 
@@ -3858,6 +4109,30 @@ class Texture final {
     const RefPtr<GLContext> gl = weakGl.get();
     if (!gl || !gl->MakeCurrent()) return;
     gl->fDeleteTextures(1, &name);
+  }
+};
+
+// -
+
+class Sampler final {
+ public:
+  const WeakPtr<GLContext> weakGl;
+  const GLuint name;
+
+ private:
+  static GLuint Create(GLContext& gl) {
+    GLuint ret = 0;
+    gl.fGenSamplers(1, &ret);
+    return ret;
+  }
+
+ public:
+  explicit Sampler(GLContext& gl) : weakGl(&gl), name(Create(gl)) {}
+
+  ~Sampler() {
+    const RefPtr<GLContext> gl = weakGl.get();
+    if (!gl || !gl->MakeCurrent()) return;
+    gl->fDeleteSamplers(1, &name);
   }
 };
 

@@ -238,37 +238,38 @@ ComputedStyle* nsTableWrapperFrame::GetParentComputedStyle(
   return (*aProviderFrame = InnerTableFrame())->Style();
 }
 
-/* virtual */
-nscoord nsTableWrapperFrame::GetMinISize(gfxContext* aRenderingContext) {
+nscoord nsTableWrapperFrame::IntrinsicISize(const IntrinsicSizeInput& aInput,
+                                            IntrinsicISizeType aType) {
   nscoord iSize = nsLayoutUtils::IntrinsicForContainer(
-      aRenderingContext, InnerTableFrame(), IntrinsicISizeType::MinISize);
-  DISPLAY_MIN_INLINE_SIZE(this, iSize);
+      aInput.mContext, InnerTableFrame(), aType);
+
+  {
+    // If aFrame is a container for font size inflation, then shrink
+    // wrapping inside of it should not apply font size inflation.
+    AutoMaybeDisableFontInflation an(this);
+
+    // Tables can't shrink smaller than their intrinsic minimum inline size,
+    // no matter what.
+    const IntrinsicSizeInput input(aInput.mContext, Nothing(), Nothing());
+
+    // GetMinISize() returns a content-box inline size, but we need the
+    // margin-box inline size as the contribution in the inline axis.
+    const IntrinsicSizeOffsetData offset =
+        InnerTableFrame()->IntrinsicISizeOffsets();
+    const nscoord innerTableMinISize =
+        InnerTableFrame()->GetMinISize(input) + offset.MarginBorderPadding();
+    iSize = std::max(iSize, innerTableMinISize);
+  }
+
   if (mCaptionFrames.NotEmpty()) {
-    nscoord capISize = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, mCaptionFrames.FirstChild(),
+    // The table wrapper's intrinsic inline size should be as least as large as
+    // caption's min inline size.
+    const nscoord capMinISize = nsLayoutUtils::IntrinsicForContainer(
+        aInput.mContext, mCaptionFrames.FirstChild(),
         IntrinsicISizeType::MinISize);
-    if (capISize > iSize) {
-      iSize = capISize;
-    }
+    iSize = std::max(iSize, capMinISize);
   }
   return iSize;
-}
-
-/* virtual */
-nscoord nsTableWrapperFrame::GetPrefISize(gfxContext* aRenderingContext) {
-  nscoord maxISize;
-  DISPLAY_PREF_INLINE_SIZE(this, maxISize);
-
-  maxISize = nsLayoutUtils::IntrinsicForContainer(
-      aRenderingContext, InnerTableFrame(), IntrinsicISizeType::PrefISize);
-  if (mCaptionFrames.NotEmpty()) {
-    // Don't let the caption's pref isize expand the table's pref isize.
-    const nscoord capMinISize = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, mCaptionFrames.FirstChild(),
-        IntrinsicISizeType::MinISize);
-    maxISize = std::max(maxISize, capMinISize);
-  }
-  return maxISize;
 }
 
 LogicalSize nsTableWrapperFrame::InnerTableShrinkWrapSize(
@@ -547,7 +548,7 @@ ComputeSizeFlags nsTableWrapperFrame::CreateComputeSizeFlagsForChild() const {
   // Shrink-wrap child frames by default, except if we're a stretched grid item.
   if (MOZ_UNLIKELY(IsGridItem())) {
     auto* gridContainer = static_cast<nsGridContainerFrame*>(GetParent());
-    if (gridContainer->GridItemShouldStretch(this, eLogicalAxisInline)) {
+    if (gridContainer->GridItemShouldStretch(this, LogicalAxis::Inline)) {
       return {};
     }
   }
@@ -691,7 +692,6 @@ void nsTableWrapperFrame::Reflow(nsPresContext* aPresContext,
                                  nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableWrapperFrame");
-  DISPLAY_REFLOW(aPresContext, this, aOuterRI, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Initialize out parameters

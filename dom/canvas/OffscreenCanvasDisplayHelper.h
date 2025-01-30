@@ -30,7 +30,6 @@ struct OffscreenCanvasDisplayData final {
   bool mIsOpaque = true;
   bool mIsAlphaPremult = true;
   mozilla::gl::OriginPos mOriginPos = gl::OriginPos::TopLeft;
-  Maybe<layers::RemoteTextureOwnerId> mOwnerId;
 };
 
 class OffscreenCanvasDisplayHelper final {
@@ -51,11 +50,13 @@ class OffscreenCanvasDisplayHelper final {
   void FlushForDisplay();
 
   bool CommitFrameToCompositor(nsICanvasRenderingContextInternal* aContext,
-                               layers::TextureType aTextureType,
                                const Maybe<OffscreenCanvasDisplayData>& aData);
 
   void DestroyCanvas();
   void DestroyElement();
+
+  bool CanElementCaptureStream() const;
+  bool UsingElementCaptureStream() const;
 
   already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot();
   already_AddRefed<mozilla::layers::Image> GetAsImage();

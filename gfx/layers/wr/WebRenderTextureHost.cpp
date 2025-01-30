@@ -75,8 +75,9 @@ void WebRenderTextureHost::UnbindTextureSource() {
   TextureHost::UnbindTextureSource();
 }
 
-already_AddRefed<gfx::DataSourceSurface> WebRenderTextureHost::GetAsSurface() {
-  return mWrappedTextureHost->GetAsSurface();
+already_AddRefed<gfx::DataSourceSurface> WebRenderTextureHost::GetAsSurface(
+    gfx::DataSourceSurface* aSurface) {
+  return mWrappedTextureHost->GetAsSurface(aSurface);
 }
 
 gfx::ColorDepth WebRenderTextureHost::GetColorDepth() const {
@@ -154,7 +155,7 @@ gfx::SurfaceFormat WebRenderTextureHost::GetReadFormat() const {
 
 int32_t WebRenderTextureHost::GetRGBStride() {
   gfx::SurfaceFormat format = GetFormat();
-  if (GetFormat() == gfx::SurfaceFormat::YUV) {
+  if (GetFormat() == gfx::SurfaceFormat::YUV420) {
     // XXX this stride is used until yuv image rendering by webrender is used.
     // Software converted RGB buffers strides are aliened to 16
     return gfx::GetAlignedStride<16>(

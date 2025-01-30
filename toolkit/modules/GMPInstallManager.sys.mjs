@@ -49,13 +49,44 @@ const LOCAL_GMP_SOURCES = [
   },
 ];
 
+function getLocalSources() {
+  if (GMPPrefs.getBool(GMPPrefs.KEY_ALLOW_LOCAL_SOURCES, true)) {
+    return LOCAL_GMP_SOURCES;
+  }
+
+  let log = getScopedLogger("GMPInstallManager.checkForAddons");
+  log.info("ignoring local sources");
+  return [];
+}
+
+function redirectChromiumUpdateService(uri) {
+  let log = getScopedLogger("GMPInstallManager.checkForAddons");
+  log.info("fetching redirect from: " + uri);
+  return new Promise((resolve, reject) => {
+    let xmlHttp = new lazy.ServiceRequest({ mozAnon: true });
+
+    xmlHttp.onload = function () {
+      resolve(this.responseURL);
+    };
+
+    xmlHttp.onerror = function (e) {
+      reject("Fetching " + uri + " results in error code: " + e.target.status);
+    };
+
+    xmlHttp.open("GET", uri);
+    xmlHttp.overrideMimeType("*/*");
+    xmlHttp.setRequestHeader("Range", "bytes=0-0");
+    xmlHttp.send();
+  });
+}
+
 function downloadJSON(uri) {
   let log = getScopedLogger("GMPInstallManager.checkForAddons");
   log.info("fetching config from: " + uri);
   return new Promise((resolve, reject) => {
     let xmlHttp = new lazy.ServiceRequest({ mozAnon: true });
 
-    xmlHttp.onload = function (aResponse) {
+    xmlHttp.onload = function () {
       resolve(JSON.parse(this.responseText));
     };
 
@@ -106,6 +137,7 @@ function downloadLocalConfig(sources) {
         return {
           id: conf.id,
           URL: details.fileUrl,
+          mirrorURLs: details.mirrorUrls,
           hashFunction: addons.hashFunction,
           hashValue: details.hashValue,
           version: addons.vendors[conf.id].version,
@@ -149,6 +181,36 @@ GMPInstallManager.prototype = {
 
     log.info("Using url (with replacement): " + url);
     return url;
+  },
+
+  /**
+   * Determines the root to use for verifying content signatures.
+   * @param url
+   *        The Balrog URL, i.e. the return value of _getURL().
+   */
+  _getContentSignatureRootForURL(url) {
+    // The prod and stage URLs of Balrog are documented at:
+    // https://mozilla-balrog.readthedocs.io/en/latest/infrastructure.html
+    // Note: we are matching by prefix without the full domain nor slash, to
+    // enable us to move to a different host name in the future if desired.
+    if (url.startsWith("https://aus")) {
+      return Ci.nsIContentSignatureVerifier.ContentSignatureProdRoot;
+    }
+    if (url.startsWith("https://stage.")) {
+      return Ci.nsIContentSignatureVerifier.ContentSignatureStageRoot;
+    }
+    if (Services.env.exists("XPCSHELL_TEST_PROFILE_DIR")) {
+      return Ci.nsIX509CertDB.AppXPCShellRoot;
+    }
+    // When content signature verification for GMP was added (bug 1714621), a
+    // pref existed to configure an arbitrary root, which enabled local testing.
+    // This pref was removed later in bug 1769669, and replaced with hard-coded
+    // roots (prod and tests only). Support for testing against the stage server
+    // was restored in bug 1771992.
+    // Note: other verifiers ultimately fall back to ContentSignatureLocalRoot,
+    // to support local development. Here we use ContentSignatureProdRoot to
+    // minimize risk (and the unclear demand for "local" development).
+    return Ci.nsIContentSignatureVerifier.ContentSignatureProdRoot;
   },
 
   /**
@@ -325,9 +387,10 @@ GMPInstallManager.prototype = {
     }
 
     let url = await this._getURL();
+    let trustedContentSignatureRoot = this._getContentSignatureRootForURL(url);
 
     log.info(
-      `Fetching product addon list url=${url}, allowNonBuiltIn=${allowNonBuiltIn}, certs=${certs}, checkContentSignature=${checkContentSignature}`
+      `Fetching product addon list url=${url}, allowNonBuiltIn=${allowNonBuiltIn}, certs=${certs}, checkContentSignature=${checkContentSignature}, trustedContentSignatureRoot=${trustedContentSignatureRoot}`
     );
 
     let success = true;
@@ -337,7 +400,8 @@ GMPInstallManager.prototype = {
         url,
         allowNonBuiltIn,
         certs,
-        checkContentSignature
+        checkContentSignature,
+        trustedContentSignatureRoot
       );
 
       if (checkContentSignature) {
@@ -354,10 +418,12 @@ GMPInstallManager.prototype = {
       }
     }
 
+    let localSources = getLocalSources();
+
     try {
       if (!success) {
         log.info("Falling back to local config");
-        let fallbackSources = LOCAL_GMP_SOURCES.filter(function (gmpSource) {
+        let fallbackSources = localSources.filter(function (gmpSource) {
           return gmpSource.installByDefault;
         });
         res = await downloadLocalConfig(fallbackSources);
@@ -379,7 +445,7 @@ GMPInstallManager.prototype = {
     // the user has requested be forced installed regardless of our update
     // server configuration.
     try {
-      let forcedSources = LOCAL_GMP_SOURCES.filter(function (gmpSource) {
+      let forcedSources = localSources.filter(function (gmpSource) {
         return GMPPrefs.getBool(
           GMPPrefs.KEY_PLUGIN_FORCE_INSTALL,
           false,
@@ -401,6 +467,73 @@ GMPInstallManager.prototype = {
       addons = addons.concat(forcedAddons);
     } catch (err) {
       log.info("Failed to force addons: " + err);
+    }
+
+    // Now let's check the addons that we are configured to override to go
+    // directly to the Chromium component update service.
+    try {
+      for (let gmpAddon of addons) {
+        if (
+          !GMPPrefs.getBool(
+            GMPPrefs.KEY_PLUGIN_FORCE_CHROMIUM_UPDATE,
+            false,
+            gmpAddon.id
+          )
+        ) {
+          continue;
+        }
+
+        const guid = GMPPrefs.getString(
+          GMPPrefs.KEY_PLUGIN_CHROMIUM_GUID,
+          "",
+          gmpAddon.id
+        );
+        if (guid === "") {
+          log.warn("Skipping chromium update, missing GUID for ", gmpAddon.id);
+          continue;
+        }
+
+        const params = GMPUtils._getChromiumUpdateParameters(gmpAddon);
+        const serviceUrl = GMPPrefs.getString(
+          GMPPrefs.KEY_CHROMIUM_UPDATE_URL,
+          ""
+        );
+        const redirectUrl = await redirectChromiumUpdateService(
+          serviceUrl.replace("%GUID%", guid) + params
+        );
+        const versionMatch = redirectUrl.match(/_(\d+\.\d+\.\d+\.\d+)\//);
+        if (!versionMatch || versionMatch.length !== 2) {
+          log.warn(
+            "Skipping chromium update, no version from URL: ",
+            redirectUrl
+          );
+          continue;
+        }
+
+        const version = versionMatch[1];
+        log.info(
+          "Forcing " +
+            gmpAddon.id +
+            " to version " +
+            version +
+            " from chromium update " +
+            redirectUrl
+        );
+
+        // Update the addon with the final URL and the extracted version.
+        gmpAddon.URL = redirectUrl;
+        gmpAddon.mirrorURLs = [];
+        gmpAddon.version = version;
+        gmpAddon.usedChromiumUpdate = true;
+
+        // Delete these properties to avoid verifying the addon against our
+        // balrog configuration, which may or may not match.
+        delete gmpAddon.size;
+        delete gmpAddon.hash;
+        delete gmpAddon.hashFunction;
+      }
+    } catch (err) {
+      log.info("Failed to switch addons to Chromium update service: " + err);
     }
 
     this._deferred.resolve({ addons });
@@ -625,6 +758,7 @@ GMPInstallManager.prototype = {
 export function GMPAddon(addon) {
   let log = getScopedLogger("GMPAddon.constructor");
   this.usedFallback = false;
+  this.usedChromiumUpdate = false;
   for (let name of Object.keys(addon)) {
     this[name] = addon[name];
   }
@@ -660,18 +794,18 @@ GMPAddon.prototype = {
       this.id &&
       this.URL &&
       this.version &&
-      this.hashFunction &&
-      !!this.hashValue
+      (this.usedChromiumUpdate || (this.hashFunction && !!this.hashValue))
     );
   },
   get isInstalled() {
     return (
       this.version &&
-      !!this.hashValue &&
       GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_VERSION, "", this.id) ===
         this.version &&
-      GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_HASHVALUE, "", this.id) ===
-        this.hashValue
+      (this.usedChromiumUpdate ||
+        (!!this.hashValue &&
+          GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_HASHVALUE, "", this.id) ===
+            this.hashValue))
     );
   },
   get isEME() {
@@ -788,48 +922,66 @@ GMPDownloader.prototype = {
           gmpAddon.version,
         ]);
         let installPromise = gmpInstaller.install();
-        return installPromise.then(
-          extractedPaths => {
-            // Success, set the prefs
-            let now = Math.round(Date.now() / 1000);
-            GMPPrefs.setInt(GMPPrefs.KEY_PLUGIN_LAST_UPDATE, now, gmpAddon.id);
-            // Remember our ABI, so that if the profile is migrated to another
-            // platform or from 32 -> 64 bit, we notice and don't try to load the
-            // unexecutable plugin library.
-            let abi = GMPUtils._expectedABI(gmpAddon);
-            log.info("Setting ABI to '" + abi + "' for " + gmpAddon.id);
-            GMPPrefs.setString(GMPPrefs.KEY_PLUGIN_ABI, abi, gmpAddon.id);
-            // We use the combination of the hash and version to ensure we are
-            // up to date.
-            GMPPrefs.setString(
-              GMPPrefs.KEY_PLUGIN_HASHVALUE,
-              gmpAddon.hashValue,
-              gmpAddon.id
-            );
-            // Setting the version pref signals installation completion to consumers,
-            // if you need to set other prefs etc. do it before this.
-            GMPPrefs.setString(
-              GMPPrefs.KEY_PLUGIN_VERSION,
-              gmpAddon.version,
-              gmpAddon.id
-            );
-            return extractedPaths;
-          },
-          reason => {
-            GMPPrefs.setString(
-              GMPPrefs.KEY_PLUGIN_LAST_INSTALL_FAIL_REASON,
-              reason,
-              gmpAddon.id
-            );
-            let now = Math.round(Date.now() / 1000);
-            GMPPrefs.setInt(
-              GMPPrefs.KEY_PLUGIN_LAST_INSTALL_FAILED,
-              now,
-              gmpAddon.id
-            );
-            throw reason;
-          }
-        );
+        return installPromise
+          .then(
+            extractedPaths => {
+              // Success, set the prefs
+              let now = Math.round(Date.now() / 1000);
+              GMPPrefs.setInt(
+                GMPPrefs.KEY_PLUGIN_LAST_UPDATE,
+                now,
+                gmpAddon.id
+              );
+              // Remember our ABI, so that if the profile is migrated to another
+              // platform or from 32 -> 64 bit, we notice and don't try to load the
+              // unexecutable plugin library.
+              let abi = GMPUtils._expectedABI(gmpAddon);
+              log.info("Setting ABI to '" + abi + "' for " + gmpAddon.id);
+              GMPPrefs.setString(GMPPrefs.KEY_PLUGIN_ABI, abi, gmpAddon.id);
+              // We use the combination of the hash and version to ensure we are
+              // up to date. Ignored if we used the Chromium update service directly.
+              if (!gmpAddon.usedChromiumUpdate) {
+                GMPPrefs.setString(
+                  GMPPrefs.KEY_PLUGIN_HASHVALUE,
+                  gmpAddon.hashValue,
+                  gmpAddon.id
+                );
+              } else {
+                GMPPrefs.reset(GMPPrefs.KEY_PLUGIN_HASHVALUE, gmpAddon.id);
+              }
+              // Setting the version pref signals installation completion to consumers,
+              // if you need to set other prefs etc. do it before this.
+              GMPPrefs.setString(
+                GMPPrefs.KEY_PLUGIN_VERSION,
+                gmpAddon.version,
+                gmpAddon.id
+              );
+              return extractedPaths;
+            },
+            reason => {
+              GMPPrefs.setString(
+                GMPPrefs.KEY_PLUGIN_LAST_INSTALL_FAIL_REASON,
+                reason,
+                gmpAddon.id
+              );
+              let now = Math.round(Date.now() / 1000);
+              GMPPrefs.setInt(
+                GMPPrefs.KEY_PLUGIN_LAST_INSTALL_FAILED,
+                now,
+                gmpAddon.id
+              );
+              throw reason;
+            }
+          )
+          .finally(() => {
+            log.info(`Deleting ${gmpAddon.id} temporary zip file ${zipPath}`);
+            // We need to send out an observer event to ensure the nsZipReaderCache
+            // clears its cache entries associated with our temporary file. Otherwise
+            // if the addons downloader reuses the temporary file path, then we may hit
+            // the cache and get different contents than expected.
+            Services.obs.notifyObservers(null, "flush-cache-entry", zipPath);
+            IOUtils.remove(zipPath);
+          });
       },
       reason => {
         GMPPrefs.setString(

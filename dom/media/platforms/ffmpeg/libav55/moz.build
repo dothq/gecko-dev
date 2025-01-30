@@ -6,7 +6,9 @@
 
 UNIFIED_SOURCES += [
     '../FFmpegAudioDecoder.cpp',
+    '../FFmpegAudioEncoder.cpp',
     '../FFmpegDataDecoder.cpp',
+    "../FFmpegDataEncoder.cpp",
     '../FFmpegDecoderModule.cpp',
     '../FFmpegEncoderModule.cpp',
     '../FFmpegVideoDecoder.cpp',
@@ -27,6 +29,8 @@ if CONFIG['CC_TYPE'] == 'gcc':
   CXXFLAGS += [
     '-Wno-attributes',
   ]
+
+include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = 'xul'
 

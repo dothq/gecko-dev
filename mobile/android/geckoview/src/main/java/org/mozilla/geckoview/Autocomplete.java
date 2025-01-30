@@ -965,7 +965,7 @@ public class Autocomplete {
     }
 
     @SuppressWarnings("checkstyle:javadocmethod")
-    public SaveOption(final @NonNull T value, final @SaveOptionHint int hint) {
+    public SaveOption(final @NonNull T value, final int hint) {
       super(value, hint);
     }
   }
@@ -1015,7 +1015,7 @@ public class Autocomplete {
     }
 
     @SuppressWarnings("checkstyle:javadocmethod")
-    public SelectOption(final @NonNull T value, final @SelectOptionHint int hint) {
+    public SelectOption(final @NonNull T value, final int hint) {
       super(value, hint);
     }
 
@@ -1129,8 +1129,7 @@ public class Autocomplete {
      * @param value The {@link LoginEntry} login entry selection option.
      * @param hint The {@link Hint} detailing the type of the option.
      */
-    /* package */ LoginSelectOption(
-        final @NonNull LoginEntry value, final @SelectOptionHint int hint) {
+    public LoginSelectOption(final @NonNull LoginEntry value, final @SelectOptionHint int hint) {
       super(value, hint);
     }
 

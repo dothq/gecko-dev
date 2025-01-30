@@ -31,6 +31,8 @@ class GetFilesCallback {
  public:
   NS_INLINE_DECL_REFCOUNTING(GetFilesCallback);
 
+  // This is called once per directory scan and is passed an array of all
+  // of the files found.
   virtual void Callback(nsresult aStatus,
                         const FallibleTArray<RefPtr<BlobImpl>>& aBlobImpls) = 0;
 
@@ -89,7 +91,7 @@ class GetFilesHelper : public Runnable, public GetFilesHelperBase {
 
   virtual void Work(ErrorResult& aRv);
 
-  virtual void Cancel(){};
+  virtual void Cancel() {};
 
   NS_IMETHOD
   Run() override;

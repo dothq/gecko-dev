@@ -3,8 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
+use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::common_metric_data::CommonMetricDataInternal;
 use crate::error_recording::{record_error, test_get_num_recorded_errors, ErrorType};
@@ -72,8 +74,8 @@ pub(crate) fn snapshot(hist: &Histogram<Functional>) -> DistributionData {
         // specialized snapshot function.
         values: hist
             .snapshot()
-            .into_iter()
-            .map(|(k, v)| (k as i64, v as i64))
+            .iter()
+            .map(|(&k, &v)| (k as i64, v as i64))
             .collect(),
         sum: hist.sum() as i64,
         count: hist.count() as i64,
@@ -83,6 +85,28 @@ pub(crate) fn snapshot(hist: &Histogram<Functional>) -> DistributionData {
 impl MetricType for TimingDistributionMetric {
     fn meta(&self) -> &CommonMetricDataInternal {
         &self.meta
+    }
+
+    fn with_name(&self, name: String) -> Self {
+        let mut meta = (*self.meta).clone();
+        meta.inner.name = name;
+        Self {
+            meta: Arc::new(meta),
+            time_unit: self.time_unit,
+            next_id: Arc::new(AtomicUsize::new(1)),
+            start_times: Arc::new(Mutex::new(Default::default())),
+        }
+    }
+
+    fn with_dynamic_label(&self, label: String) -> Self {
+        let mut meta = (*self.meta).clone();
+        meta.inner.dynamic_label = Some(label);
+        Self {
+            meta: Arc::new(meta),
+            time_unit: self.time_unit,
+            next_id: Arc::new(AtomicUsize::new(1)),
+            start_times: Arc::new(Mutex::new(Default::default())),
+        }
     }
 }
 
@@ -96,7 +120,7 @@ impl TimingDistributionMetric {
         Self {
             meta: Arc::new(meta.into()),
             time_unit,
-            next_id: Arc::new(AtomicUsize::new(0)),
+            next_id: Arc::new(AtomicUsize::new(1)),
             start_times: Arc::new(Mutex::new(Default::default())),
         }
     }
@@ -412,6 +436,35 @@ impl TimingDistributionMetric {
         })
     }
 
+    /// Accumulates precisely one duration to the metric.
+    ///
+    /// Like `TimingDistribution::accumulate_single_sample`, but for use when the
+    /// duration is:
+    ///
+    ///  * measured externally, or
+    ///  * is in a unit different from the timing_distribution's internal TimeUnit.
+    ///
+    /// # Arguments
+    ///
+    /// * `duration` - The single duration to be recorded in the metric.
+    ///
+    /// ## Notes
+    ///
+    /// Reports an [`ErrorType::InvalidOverflow`] error if `duration` is longer than
+    /// `MAX_SAMPLE_TIME`.
+    ///
+    /// The API client is responsible for ensuring that `duration` is derived from a
+    /// monotonic clock source that behaves consistently over computer sleep across
+    /// the application's platforms. Otherwise the resulting data may not share the same
+    /// guarantees that other `timing_distribution` metrics' data do.
+    pub fn accumulate_raw_duration(&self, duration: Duration) {
+        let duration_ns = duration.as_nanos().try_into().unwrap_or(u64::MAX);
+        let metric = self.clone();
+        crate::launch_with_glean(move |glean| {
+            metric.accumulate_raw_samples_nanos_sync(glean, &[duration_ns])
+        })
+    }
+
     /// **Test-only API (exported for testing purposes).**
     ///
     /// Accumulates the provided samples in the metric.
@@ -524,6 +577,111 @@ impl TimingDistributionMetric {
             test_get_num_recorded_errors(glean, self.meta(), error).unwrap_or(0)
         })
     }
+
+    /// **Experimental:** Start a new histogram buffer associated with this timing distribution metric.
+    ///
+    /// A histogram buffer accumulates in-memory.
+    /// Data is recorded into the metric on drop.
+    pub fn start_buffer(&self) -> LocalTimingDistribution<'_> {
+        LocalTimingDistribution::new(self)
+    }
+
+    fn commit_histogram(&self, histogram: Histogram<Functional>, errors: usize) {
+        let metric = self.clone();
+        crate::launch_with_glean(move |glean| {
+            if errors > 0 {
+                let max_sample_time = metric.time_unit.as_nanos(MAX_SAMPLE_TIME);
+                let msg = format!(
+                    "{} samples are longer than the maximum of {}",
+                    errors, max_sample_time
+                );
+                record_error(
+                    glean,
+                    &metric.meta,
+                    ErrorType::InvalidValue,
+                    msg,
+                    Some(errors as i32),
+                );
+            }
+
+            glean
+                .storage()
+                .record_with(glean, &metric.meta, move |old_value| {
+                    let mut hist = match old_value {
+                        Some(Metric::TimingDistribution(hist)) => hist,
+                        _ => Histogram::functional(LOG_BASE, BUCKETS_PER_MAGNITUDE),
+                    };
+
+                    hist.merge(&histogram);
+                    Metric::TimingDistribution(hist)
+                });
+        });
+    }
+}
+
+/// **Experimental:** A histogram buffer associated with a specific instance of a [`TimingDistributionMetric`].
+///
+/// Accumulation happens in-memory.
+/// Data is merged into the metric on [`Drop::drop`].
+#[derive(Debug)]
+pub struct LocalTimingDistribution<'a> {
+    histogram: Histogram<Functional>,
+    metric: &'a TimingDistributionMetric,
+    errors: usize,
+}
+
+impl<'a> LocalTimingDistribution<'a> {
+    /// Create a new histogram buffer referencing the timing distribution it will record into.
+    fn new(metric: &'a TimingDistributionMetric) -> Self {
+        let histogram = Histogram::functional(LOG_BASE, BUCKETS_PER_MAGNITUDE);
+        Self {
+            histogram,
+            metric,
+            errors: 0,
+        }
+    }
+
+    /// Accumulates one sample into the histogram.
+    ///
+    /// The provided sample must be in the "unit" declared by the instance of the metric type
+    /// (e.g. if the instance this method was called on is using [`crate::TimeUnit::Second`], then
+    /// `sample` is assumed to be in seconds).
+    ///
+    /// Accumulation happens in-memory only.
+    pub fn accumulate(&mut self, sample: u64) {
+        // Check the range prior to converting the incoming unit to
+        // nanoseconds, so we can compare against the constant
+        // MAX_SAMPLE_TIME.
+        let sample = if sample == 0 {
+            1
+        } else if sample > MAX_SAMPLE_TIME {
+            self.errors += 1;
+            MAX_SAMPLE_TIME
+        } else {
+            sample
+        };
+
+        let sample = self.metric.time_unit.as_nanos(sample);
+        self.histogram.accumulate(sample)
+    }
+
+    /// Abandon this histogram buffer and don't commit accumulated data.
+    pub fn abandon(mut self) {
+        self.histogram.clear();
+    }
+}
+
+impl Drop for LocalTimingDistribution<'_> {
+    fn drop(&mut self) {
+        if self.histogram.is_empty() {
+            return;
+        }
+
+        // We want to move that value.
+        // A `0/0` histogram doesn't allocate.
+        let buffer = mem::replace(&mut self.histogram, Histogram::functional(0.0, 0.0));
+        self.metric.commit_histogram(buffer, self.errors);
+    }
 }
 
 #[cfg(test)]
@@ -555,7 +713,6 @@ mod test {
                 "8": 1,
                 "9": 1,
                 "10": 1,
-                "11": 0,
             },
         });
 
@@ -580,10 +737,7 @@ mod test {
             "values": {
                 "1024": 2,
                 "1116": 1,
-                "1217": 0,
-                "1327": 0,
                 "1448": 1,
-                "1579": 0,
             },
         });
 

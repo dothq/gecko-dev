@@ -52,7 +52,19 @@ void MacroAssembler::flexibleDivMod32(Register rhs, Register srcDest,
   MOZ_CRASH();
 }
 
+void MacroAssembler::flexibleQuotientPtr(
+    Register rhs, Register srcDest, bool isUnsigned,
+    const LiveRegisterSet& volatileLiveRegs) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::flexibleRemainder32(
+    Register rhs, Register srcDest, bool isUnsigned,
+    const LiveRegisterSet& volatileLiveRegs) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::flexibleRemainderPtr(
     Register rhs, Register srcDest, bool isUnsigned,
     const LiveRegisterSet& volatileLiveRegs) {
   MOZ_CRASH();
@@ -83,11 +95,9 @@ void MacroAssembler::wasmBoundsCheck64(Condition cond, Register64 index,
   MOZ_CRASH();
 }
 
-void MacroAssembler::oolWasmTruncateCheckF32ToI32(FloatRegister input,
-                                                  Register output,
-                                                  TruncFlags flags,
-                                                  wasm::BytecodeOffset off,
-                                                  Label* rejoin) {
+void MacroAssembler::oolWasmTruncateCheckF32ToI32(
+    FloatRegister input, Register output, TruncFlags flags,
+    const wasm::TrapSiteDesc& trapSiteDesc, Label* rejoin) {
   MOZ_CRASH();
 }
 
@@ -103,11 +113,9 @@ void MacroAssembler::wasmTruncateDoubleToUInt64(
   MOZ_CRASH();
 }
 
-void MacroAssembler::oolWasmTruncateCheckF64ToI64(FloatRegister input,
-                                                  Register64 output,
-                                                  TruncFlags flags,
-                                                  wasm::BytecodeOffset off,
-                                                  Label* rejoin) {
+void MacroAssembler::oolWasmTruncateCheckF64ToI64(
+    FloatRegister input, Register64 output, TruncFlags flags,
+    const wasm::TrapSiteDesc& trapSiteDesc, Label* rejoin) {
   MOZ_CRASH();
 }
 
@@ -123,19 +131,15 @@ void MacroAssembler::wasmTruncateFloat32ToUInt64(
   MOZ_CRASH();
 }
 
-void MacroAssembler::oolWasmTruncateCheckF32ToI64(FloatRegister input,
-                                                  Register64 output,
-                                                  TruncFlags flags,
-                                                  wasm::BytecodeOffset off,
-                                                  Label* rejoin) {
+void MacroAssembler::oolWasmTruncateCheckF32ToI64(
+    FloatRegister input, Register64 output, TruncFlags flags,
+    const wasm::TrapSiteDesc& trapSiteDesc, Label* rejoin) {
   MOZ_CRASH();
 }
 
-void MacroAssembler::oolWasmTruncateCheckF64ToI32(FloatRegister input,
-                                                  Register output,
-                                                  TruncFlags flags,
-                                                  wasm::BytecodeOffset off,
-                                                  Label* rejoin) {
+void MacroAssembler::oolWasmTruncateCheckF64ToI32(
+    FloatRegister input, Register output, TruncFlags flags,
+    const wasm::TrapSiteDesc& trapSiteDesc, Label* rejoin) {
   MOZ_CRASH();
 }
 
@@ -300,6 +304,8 @@ void MacroAssembler::wasmAtomicExchange64(const wasm::MemoryAccessDesc& access,
   MOZ_CRASH();
 }
 
+void MacroAssembler::atomicPause() { MOZ_CRASH(); }
+
 void MacroAssembler::speculationBarrier() { MOZ_CRASH(); }
 
 void MacroAssembler::shiftIndex32AndAdd(Register indexTemp32, int shift,
@@ -311,6 +317,16 @@ void MacroAssembler::setupUnalignedABICall(Register scratch) { MOZ_CRASH(); }
 
 void MacroAssembler::enterFakeExitFrameForWasm(Register cxreg, Register scratch,
                                                ExitFrameType type) {
+  MOZ_CRASH();
+}
+
+CodeOffset MacroAssembler::sub32FromMemAndBranchIfNegativeWithPatch(
+    Address address, Label* label) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::patchSub32FromMemAndBranchIfNegative(CodeOffset offset,
+                                                          Imm32 imm) {
   MOZ_CRASH();
 }
 

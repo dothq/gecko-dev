@@ -1,14 +1,15 @@
 "use strict";
 
-const { Region } = ChromeUtils.importESModule(
-  "resource://gre/modules/Region.sys.mjs"
-);
 add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["extensions.formautofill.addresses.capture.enabled", true],
       ["extensions.formautofill.addresses.supported", "detect"],
       ["extensions.formautofill.addresses.supportedCountries", "US,CA"],
+      [
+        "extensions.formautofill.addresses.capture.requiredFields",
+        "street-address",
+      ],
     ],
   });
 });

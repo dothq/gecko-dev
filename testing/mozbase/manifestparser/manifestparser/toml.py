@@ -82,6 +82,7 @@ def read_toml(
     strict=True,
     handle_defaults=True,
     document=False,
+    add_line_no=False,
 ):
     """
     read a .toml file and return a list of [(section, values)]
@@ -93,6 +94,7 @@ def read_toml(
     - strict : whether to be strict about parsing
     - handle_defaults : whether to incorporate defaults into each section
     - document: read TOML with tomlkit and return source in test["document"]
+    - add_line_no: add the line number where the test name appears in the file to the source. Also, the document variable must be set to True for this flag to work. (This is used only to generate the documentation)
     """
 
     # variables
@@ -163,8 +165,14 @@ def read_toml(
         # merge combined defaults into each section
         sections = [(i, combine_fields(defaults, j)) for i, j in sections]
 
-    if not document:
+    if document and add_line_no:
+        # Take the line where the test name appears in the file.
+        for i, _ in enumerate(sections):
+            line = contents.split(sections[i][0])[0].count(os.linesep) + 1
+            manifest.setdefault(sections[i][0], {})["lineno"] = str(line)
+    elif not document:
         manifest = None
+
     return sections, defaults, manifest
 
 
@@ -224,6 +232,8 @@ def alphabetize_toml_str(manifest):
 
 def _simplify_comment(comment):
     """Remove any leading #, but preserve leading whitespace in comment"""
+    if comment is None:
+        return None
 
     length = len(comment)
     i = 0
@@ -236,6 +246,21 @@ def _simplify_comment(comment):
     if j > 0:
         comment = " " * j + comment
     return comment.rstrip()
+
+
+def _should_keep_condition(existing_condition: str, new_condition: str):
+    """
+    Checks if there is any overlap between the existing condition and the new one.
+    Existing conditions too simple or too complex should be replaced by the new one.
+    If both are equal, then we keep the existing to prevent changing the order of conditions
+    """
+    return existing_condition == new_condition or not (
+        # Make sure to add a space to prevent overwriting combined test variants
+        # Eg: "debug && e10s" should not overwrite "debug && e10s+swgl"
+        # but "debug" should overwrite "debug && e10s"
+        (existing_condition + " ") in new_condition
+        or (new_condition + " ") in existing_condition
+    )
 
 
 def add_skip_if(manifest, filename, condition, bug=None):
@@ -276,28 +301,23 @@ def add_skip_if(manifest, filename, condition, bug=None):
         skip_if = {"skip-if": mp_array}
         keyvals.update(skip_if)
     else:
+        # We store the conditions in a regular python array so we can sort them before
+        # dumping them in the TOML
+        conditions_array = []
         if first is not None:
             if first == condition:
                 existing = True
-            if first_comment is not None:
-                mp_array.add_line(
-                    first, indent="  ", comment=_simplify_comment(first_comment)
-                )
-            else:
-                mp_array.add_line(first, indent="  ")
+            if first_comment is not None and _should_keep_condition(first, condition):
+                conditions_array.append([first, _simplify_comment(first_comment)])
         if len(skip_if) > 1:
             e_condition = None
             e_comment = None
             for e in skip_if._iter_items():
                 if isinstance(e, String):
                     if e_condition is not None:
-                        if e_comment is not None:
-                            mp_array.add_line(
-                                e_condition, indent="  ", comment=e_comment
-                            )
-                            e_comment = None
-                        else:
-                            mp_array.add_line(e_condition, indent="  ")
+                        if _should_keep_condition(e_condition, condition):
+                            conditions_array.append([e_condition, e_comment])
+                        e_comment = None
                         e_condition = None
                     if len(e) > 0:
                         e_condition = e.as_string().strip('"')
@@ -305,16 +325,15 @@ def add_skip_if(manifest, filename, condition, bug=None):
                             existing = True
                 elif isinstance(e, Comment):
                     e_comment = _simplify_comment(e.as_string())
-            if e_condition is not None:
-                if e_comment is not None:
-                    mp_array.add_line(e_condition, indent="  ", comment=e_comment)
-                else:
-                    mp_array.add_line(e_condition, indent="  ")
+            if e_condition is not None and _should_keep_condition(
+                e_condition, condition
+            ):
+                conditions_array.append([e_condition, e_comment])
         if not existing:
-            if bug is not None:
-                mp_array.add_line(condition, indent="  ", comment=bug)
-            else:
-                mp_array.add_line(condition, indent="  ")
+            conditions_array.append([condition, bug])
+        conditions_array.sort()
+        for c in conditions_array:
+            mp_array.add_line(c[0], indent="  ", comment=c[1])
         mp_array.add_line("", indent="")  # fixed in write_toml_str
         skip_if = {"skip-if": mp_array}
         del keyvals["skip-if"]

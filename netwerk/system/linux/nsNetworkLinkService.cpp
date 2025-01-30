@@ -8,6 +8,7 @@
 #include "nsNetworkLinkService.h"
 #include "nsString.h"
 #include "mozilla/Logging.h"
+#include "mozilla/IntegerPrintfMacros.h"
 #include "nsNetAddr.h"
 
 #include "mozilla/StaticPrefs_network.h"
@@ -208,4 +209,9 @@ void nsNetworkLinkService::NotifyObservers(const char* aTopic,
         static_cast<nsINetworkLinkService*>(this), aTopic,
         aData ? NS_ConvertASCIItoUTF16(aData).get() : nullptr);
   }
+}
+
+// static
+bool nsINetworkLinkService::HasNonLocalIPv6Address() {
+  return mozilla::net::NetlinkService::HasNonLocalIPv6Address();
 }

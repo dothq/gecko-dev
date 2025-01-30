@@ -41,6 +41,7 @@
 #include "nsThreadUtils.h"
 #include "WebTransportSessionProxy.h"
 #include "mozilla/AppShutdown.h"
+#include "mozilla/Components.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/Services.h"
@@ -58,14 +59,24 @@
 #include "mozilla/net/SocketProcessHost.h"
 #include "mozilla/net/SocketProcessParent.h"
 #include "mozilla/net/SSLTokensCache.h"
+#include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/Unused.h"
 #include "nsContentSecurityManager.h"
 #include "nsContentUtils.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_security.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "nsNSSComponent.h"
+#include "IPv4Parser.h"
 #include "ssl.h"
 #include "StaticComponents.h"
+
+#ifdef MOZ_WIDGET_ANDROID
+#  include <regex>
+#  include "AndroidBridge.h"
+#  include "mozilla/java/GeckoAppShellWrappers.h"
+#  include "mozilla/jni/Utils.h"
+#endif
 
 namespace mozilla {
 namespace net {
@@ -171,6 +182,7 @@ int16_t gBadPortList[] = {
     2049,   // nfs
     3659,   // apple-sasl
     4045,   // lockd
+    4190,   // sieve
     5060,   // sip
     5061,   // sips
     6000,   // x11
@@ -180,6 +192,7 @@ int16_t gBadPortList[] = {
     6667,   // irc (default)
     6668,   // irc (alternate)
     6669,   // irc (alternate)
+    6679,   // osaut
     6697,   // irc+tls
     10080,  // amanda
     0,      // Sentinel value: This MUST be zero
@@ -211,6 +224,7 @@ static const char* gCallbackPrefs[] = {
     NECKO_BUFFER_CACHE_SIZE_PREF,
     NETWORK_CAPTIVE_PORTAL_PREF,
     FORCE_EXTERNAL_PREF_PREFIX,
+    SIMPLE_URI_SCHEMES_PREF,
     nullptr,
 };
 
@@ -227,6 +241,8 @@ static const char* gCallbackPrefsForSocketProcess[] = {
     "network.proxy.allow_hijacking_localhost",
     "network.connectivity-service.",
     "network.captive-portal-service.testMode",
+    "network.socket.ip_addr_any.disabled",
+    "network.socket.attach_mock_network_layer",
     nullptr,
 };
 
@@ -244,11 +260,6 @@ static const char* gCallbackSecurityPrefs[] = {
     "security.ssl.disable_session_identifiers",
     "security.tls.enable_post_handshake_auth",
     "security.tls.enable_delegated_credentials",
-    // Note the prefs listed below should be in sync with the code in
-    // SetValidationOptionsCommon().
-    "security.ssl.enable_ocsp_stapling",
-    "security.ssl.enable_ocsp_must_staple",
-    "security.pki.certificate_transparency.mode",
     nullptr,
 };
 
@@ -381,6 +392,39 @@ nsIOService::~nsIOService() {
   }
 }
 
+#ifdef MOZ_WIDGET_ANDROID
+bool nsIOService::ShouldAddAdditionalSearchHeaders(nsIURI* aURI,
+                                                   bool* aHeaderVal) {
+  if (!(mozilla::AndroidBridge::Bridge())) {
+    return false;
+  }
+
+  if (!aURI->SchemeIs("https")) {
+    return false;
+  }
+
+  // We need to improve below logic for matching google domains
+  // See Bug 1894642
+  // Is URI same as google ^https://www\\.google\\..+
+  nsAutoCString host;
+  aURI->GetHost(host);
+  LOG(("nsIOService::ShouldAddAdditionalSearchHeaders() checking host %s\n",
+       PromiseFlatCString(host).get()));
+
+  std::regex pattern("^www\\.google\\..+");
+  if (std::regex_match(host.get(), pattern)) {
+    LOG(("Google domain detected for host %s\n",
+         PromiseFlatCString(host).get()));
+    static bool ramAboveThreshold =
+        java::GeckoAppShell::IsDeviceRamThresholdOkay();
+    *aHeaderVal = ramAboveThreshold;
+    return true;
+  }
+
+  return false;
+}
+#endif
+
 // static
 void nsIOService::OnTLSPrefChange(const char* aPref, void* aSelf) {
   MOZ_ASSERT(IsSocketProcessChild());
@@ -392,13 +436,9 @@ void nsIOService::OnTLSPrefChange(const char* aPref, void* aSelf) {
 
   nsAutoCString pref(aPref);
   // The preferences listed in gCallbackSecurityPrefs need to be in sync with
-  // the code in HandleTLSPrefChange() and SetValidationOptionsCommon().
+  // the code in HandleTLSPrefChange().
   if (HandleTLSPrefChange(pref)) {
     LOG(("HandleTLSPrefChange done"));
-  } else if (pref.EqualsLiteral("security.ssl.enable_ocsp_stapling") ||
-             pref.EqualsLiteral("security.ssl.enable_ocsp_must_staple") ||
-             pref.EqualsLiteral("security.pki.certificate_transparency.mode")) {
-    SetValidationOptionsCommon();
   }
 }
 
@@ -408,9 +448,9 @@ nsresult nsIOService::InitializeCaptivePortalService() {
     return NS_OK;
   }
 
-  mCaptivePortalService = do_GetService(NS_CAPTIVEPORTAL_CID);
+  mCaptivePortalService = mozilla::components::CaptivePortal::Service();
   if (mCaptivePortalService) {
-    return static_cast<CaptivePortalService*>(mCaptivePortalService.get())
+    static_cast<CaptivePortalService*>(mCaptivePortalService.get())
         ->Initialize();
   }
 
@@ -433,7 +473,7 @@ nsresult nsIOService::InitializeSocketTransportService() {
 
   if (!mSocketTransportService) {
     mSocketTransportService =
-        do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
+        mozilla::components::SocketTransport::Service(&rv);
     if (NS_FAILED(rv)) {
       NS_WARNING("failed to get socket transport service");
     }
@@ -480,7 +520,7 @@ nsresult nsIOService::InitializeProtocolProxyService() {
 
   if (XRE_IsParentProcess()) {
     // for early-initialization
-    Unused << do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID, &rv);
+    Unused << mozilla::components::ProtocolProxy::Service(&rv);
   }
 
   return rv;
@@ -809,8 +849,8 @@ nsresult nsIOService::AsyncOnChannelRedirect(
   // This is silly. I wish there was a simpler way to get at the global
   // reference of the contentSecurityManager. But it lives in the XPCOM
   // service registry.
-  nsCOMPtr<nsIChannelEventSink> sink =
-      do_GetService(NS_CONTENTSECURITYMANAGER_CONTRACTID);
+  nsCOMPtr<nsIChannelEventSink> sink;
+  sink = mozilla::components::ContentSecurityManager::Service();
   if (sink) {
     nsresult rv =
         helper->DelegateOnChannelRedirect(sink, oldChan, newChan, flags);
@@ -840,13 +880,24 @@ nsresult nsIOService::AsyncOnChannelRedirect(
     newURI->GetScheme(scheme);
     MOZ_ASSERT(!scheme.IsEmpty());
 
-    Telemetry::AccumulateCategoricalKeyed(
-        scheme,
-        oldChan->IsDocument()
-            ? Telemetry::LABELS_NETWORK_HTTP_REDIRECT_TO_SCHEME::topLevel
-            : Telemetry::LABELS_NETWORK_HTTP_REDIRECT_TO_SCHEME::subresource);
+    if (oldChan->IsDocument()) {
+      Telemetry::AccumulateCategoricalKeyed(
+          scheme, Telemetry::LABELS_NETWORK_HTTP_REDIRECT_TO_SCHEME::topLevel);
+#ifndef ANDROID
+      mozilla::glean::networking::http_redirect_to_scheme_top_level.Get(scheme)
+          .Add(1);
+#endif
+    } else {
+      Telemetry::AccumulateCategoricalKeyed(
+          scheme,
+          Telemetry::LABELS_NETWORK_HTTP_REDIRECT_TO_SCHEME::subresource);
+#ifndef ANDROID
+      mozilla::glean::networking::http_redirect_to_scheme_subresource
+          .Get(scheme)
+          .Add(1);
+#endif
+    }
   }
-
   return NS_OK;
 }
 
@@ -940,6 +991,29 @@ nsIOService::HostnameIsLocalIPAddress(nsIURI* aURI, bool* aResult) {
 }
 
 NS_IMETHODIMP
+nsIOService::HostnameIsIPAddressAny(nsIURI* aURI, bool* aResult) {
+  NS_ENSURE_ARG_POINTER(aURI);
+
+  nsCOMPtr<nsIURI> innerURI = NS_GetInnermostURI(aURI);
+  NS_ENSURE_ARG_POINTER(innerURI);
+
+  nsAutoCString host;
+  nsresult rv = innerURI->GetAsciiHost(host);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  *aResult = false;
+
+  NetAddr addr;
+  if (NS_SUCCEEDED(addr.InitFromString(host)) && addr.IsIPAddrAny()) {
+    *aResult = true;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsIOService::HostnameIsSharedIPAddress(nsIURI* aURI, bool* aResult) {
   NS_ENSURE_ARG_POINTER(aURI);
 
@@ -964,8 +1038,29 @@ nsIOService::HostnameIsSharedIPAddress(nsIURI* aURI, bool* aResult) {
 
 NS_IMETHODIMP
 nsIOService::IsValidHostname(const nsACString& inHostname, bool* aResult) {
-  *aResult = net_IsValidHostName(inHostname);
+  if (!net_IsValidDNSHost(inHostname)) {
+    *aResult = false;
+    return NS_OK;
+  }
 
+  // hostname ending with a "." delimited octet that is a number
+  // must be IPv4 or IPv6 dual address
+  nsAutoCString host(inHostname);
+  if (IPv4Parser::EndsInANumber(host)) {
+    // ipv6 dual address; for example "::1.2.3.4"
+    if (net_IsValidIPv6Addr(host)) {
+      *aResult = true;
+      return NS_OK;
+    }
+
+    nsAutoCString normalized;
+    nsresult rv = IPv4Parser::NormalizeIPv4(host, normalized);
+    if (NS_FAILED(rv)) {
+      *aResult = false;
+      return NS_OK;
+    }
+  }
+  *aResult = true;
   return NS_OK;
 }
 
@@ -1146,8 +1241,8 @@ nsresult nsIOService::NewChannelFromURIWithProxyFlagsInternal(
   if (!gHasWarnedUploadChannel2 && scheme.EqualsLiteral("http")) {
     nsCOMPtr<nsIUploadChannel2> uploadChannel2 = do_QueryInterface(channel);
     if (!uploadChannel2) {
-      nsCOMPtr<nsIConsoleService> consoleService =
-          do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+      nsCOMPtr<nsIConsoleService> consoleService;
+      consoleService = mozilla::components::Console::Service();
       if (consoleService) {
         consoleService->LogStringMessage(
             u"Http channel implementation "
@@ -1203,6 +1298,22 @@ nsIOService::NewWebTransport(nsIWebTransport** result) {
   nsCOMPtr<nsIWebTransport> webTransport = new WebTransportSessionProxy();
 
   webTransport.forget(result);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsIOService::OriginAttributesForNetworkState(
+    nsIChannel* aChannel, JSContext* cx, JS::MutableHandle<JS::Value> _retval) {
+  OriginAttributes attrs;
+  if (!StoragePrincipalHelper::GetOriginAttributesForNetworkState(aChannel,
+                                                                  attrs)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (NS_WARN_IF(!mozilla::dom::ToJSValue(cx, attrs, _retval))) {
+    return NS_ERROR_FAILURE;
+  }
+
   return NS_OK;
 }
 
@@ -1528,6 +1639,13 @@ void nsIOService::PrefsChanged(const char* pref) {
     AutoWriteLock lock(mLock);
     mForceExternalSchemes = std::move(forceExternalSchemes);
   }
+
+  if (!pref || strncmp(pref, SIMPLE_URI_SCHEMES_PREF,
+                       strlen(SIMPLE_URI_SCHEMES_PREF)) == 0) {
+    LOG(("simple_uri_unknown_schemes pref changed, updating the scheme list"));
+    mSimpleURIUnknownSchemes.ParseAndMergePrefSchemes();
+    // runs on parent and child, no need to broadcast
+  }
 }
 
 void nsIOService::ParsePortList(const char* pref, bool remove) {
@@ -1700,6 +1818,9 @@ nsIOService::Observe(nsISupports* subject, const char* topic,
     // https://bugzilla.mozilla.org/show_bug.cgi?id=1152048#c19
     nsCOMPtr<nsIRunnable> wakeupNotifier = new nsWakeupNotifier(this);
     NS_DispatchToMainThread(wakeupNotifier);
+    mInSleepMode = false;
+  } else if (!strcmp(topic, NS_WIDGET_SLEEP_OBSERVER_TOPIC)) {
+    mInSleepMode = true;
   }
 
   return NS_OK;
@@ -1998,8 +2119,8 @@ nsresult nsIOService::SpeculativeConnectInternal(
   // speculative connect should not be performed because the potential
   // reward is slim with tcp peers closely located to the browser.
   nsresult rv;
-  nsCOMPtr<nsIProtocolProxyService> pps =
-      do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID, &rv);
+  nsCOMPtr<nsIProtocolProxyService> pps;
+  pps = mozilla::components::ProtocolProxy::Service(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIPrincipal> loadingPrincipal = aPrincipal;
@@ -2188,6 +2309,41 @@ nsIOService::UnregisterProtocolHandler(const nsACString& aScheme) {
   return mRuntimeProtocolHandlers.Remove(scheme)
              ? NS_OK
              : NS_ERROR_FACTORY_NOT_REGISTERED;
+}
+
+NS_IMETHODIMP
+nsIOService::SetSimpleURIUnknownRemoteSchemes(
+    const nsTArray<nsCString>& aRemoteSchemes) {
+  LOG(("nsIOService::SetSimpleUriUnknownRemoteSchemes"));
+  mSimpleURIUnknownSchemes.SetAndMergeRemoteSchemes(aRemoteSchemes);
+
+  if (XRE_IsParentProcess()) {
+    // since we only expect socket, parent and content processes to create URLs
+    // that need to check the bypass list
+    // we only broadcast the list to content processes
+    // (and leave socket process broadcast as todo if necessary)
+    //
+    // sending only the remote-settings schemes to the content,
+    // which already has the pref list
+    for (auto* cp : mozilla::dom::ContentParent::AllProcesses(
+             mozilla::dom::ContentParent::eLive)) {
+      Unused << cp->SendSimpleURIUnknownRemoteSchemes(aRemoteSchemes);
+    }
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsIOService::IsSimpleURIUnknownScheme(const nsACString& aScheme,
+                                      bool* _retval) {
+  *_retval = mSimpleURIUnknownSchemes.IsSimpleURIUnknownScheme(aScheme);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsIOService::GetSimpleURIUnknownRemoteSchemes(nsTArray<nsCString>& _retval) {
+  mSimpleURIUnknownSchemes.GetRemoteSchemes(_retval);
+  return NS_OK;
 }
 
 }  // namespace net

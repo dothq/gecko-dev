@@ -23,8 +23,20 @@ class QATests(SnapTestsBase):
         self._dir = "qa_tests"
 
         super(QATests, self).__init__(
-            exp=os.path.join(self._dir, "qa_expectations.json")
+            exp=os.path.join(
+                self._dir, "qa_expectations_{}.json".format(self._distro_release())
+            )
         )
+
+    def _distro_release(self):
+        with open("/etc/lsb-release") as lsb_release:
+            f = list(
+                filter(
+                    lambda x: x.startswith("DISTRIB_RELEASE"),
+                    lsb_release.read().split(),
+                )
+            )
+            return f[0].split("=")[1].replace(".", "")
 
     def _test_audio_playback(
         self, url, iframe_selector=None, click_to_play=False, video_selector=None
@@ -46,7 +58,7 @@ class QATests(SnapTestsBase):
                 (By.CSS_SELECTOR, video_selector or "video")
             )
         )
-        self._wait.until(lambda d: type(video.get_property("duration")) == float)
+        self._wait.until(lambda d: type(video.get_property("duration")) is float)
         assert video.get_property("duration") > 0.0, "<video> duration null"
 
         # For HE-AAC page, Google Drive does not like SPACE
@@ -56,8 +68,9 @@ class QATests(SnapTestsBase):
 
         # Mostly for Google Drive video, click()/play() seems not to really
         # work to trigger, but 'k' is required
-        if click_to_play:
+        if not click_to_play:
             self._driver.execute_script("arguments[0].click();", video)
+        else:
             video.send_keys("k")
 
         ref_volume = video.get_property("volume")
@@ -72,7 +85,9 @@ class QATests(SnapTestsBase):
         self._logger.info(
             "find video: check autoplay: {}".format(video.get_property("autoplay"))
         )
-        if not click_to_play and video.get_property("paused") is True:
+        if click_to_play or (
+            not click_to_play and video.get_property("paused") is True
+        ):
             self._driver.execute_script("arguments[0].play()", video)
 
         self._logger.info("find video: sleep")
@@ -87,26 +102,22 @@ class QATests(SnapTestsBase):
 
         # this should pause
         self._logger.info("find video: pause")
-        if click_to_play:
-            video.send_keys("k")
-        else:
-            self._driver.execute_script("arguments[0].pause()", video)
+        self._driver.execute_script("arguments[0].pause()", video)
         datum = video.get_property("currentTime")
+        paused = video.get_property("paused")
         time.sleep(1)
         datum_after_sleep = video.get_property("currentTime")
         self._logger.info(
             "datum={} datum_after_sleep={}".format(datum, datum_after_sleep)
         )
         assert datum == datum_after_sleep, "<video> is sleeping"
-        assert video.get_property("paused") is True, "<video> is paused"
+        assert paused is True, "<video> is paused"
 
         self._logger.info("find video: unpause")
         # unpause and verify playback
-        if click_to_play:
-            video.send_keys("k")
-        else:
-            self._driver.execute_script("arguments[0].play()", video)
-        assert video.get_property("paused") is False, "<video> is not paused"
+        self._driver.execute_script("arguments[0].play()", video)
+        paused = video.get_property("paused")
+        assert paused is False, "<video> is not paused"
         time.sleep(2)
         datum_after_resume = video.get_property("currentTime")
         self._logger.info(
@@ -132,6 +143,7 @@ class QATests(SnapTestsBase):
         self._logger.info("find video: done")
 
     def _test_audio_video_playback(self, url):
+        iframe_css_selector = "#ucc-1"
         self._logger.info("open url {}".format(url))
         self.open_tab(url)
         self._logger.info("find thumbnail")
@@ -143,21 +155,34 @@ class QATests(SnapTestsBase):
         self._logger.info("audio test")
         self._test_audio_playback(
             url=None,
-            iframe_selector="#drive-viewer-video-player-object-0",
+            iframe_selector=iframe_css_selector,
             click_to_play=True,
         )
 
+        # switch back
+        self._driver.switch_to.parent_frame()
+        self._logger.info("try fullscreen")
+
+        fullscreen_button = self._wait.until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "button[aria-label*='(f)']")
+            )
+        )
+        self._driver.execute_script("return arguments[0].click();", fullscreen_button)
+        time.sleep(1)
+        fullscreen = self._driver.execute_script("return document.fullscreen")
+        assert fullscreen, "<video> is fullscreen"
+
+        iframe = self._wait.until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, iframe_css_selector))
+        )
+        self._driver.switch_to.frame(iframe)
+        time.sleep(0.5)
+        # we are again in the iframe
         self._logger.info("find video again")
-        # we are still in the iframe
         video = self._wait.until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, "video"))
         )
-        self._logger.info("try fullscreen")
-        promise = self._driver.execute_script(
-            "return arguments[0].requestFullscreen().then(() => { return true; }).catch(() => { return false; })",
-            video,
-        )
-        assert promise is True, "<video> full screen promised fullfilled"
 
         self._driver.execute_script("arguments[0].pause();", video)
         self._driver.execute_script("document.exitFullscreen()")
@@ -167,8 +192,14 @@ class QATests(SnapTestsBase):
         C95233
         """
 
+        if self.version_major() == "134" and self.is_debug_build():
+            self._logger.info(
+                "Skip test due to https://bugzilla.mozilla.org/show_bug.cgi?id=1934358"
+            )
+            return True
+
         self._test_audio_video_playback(
-            "https://drive.google.com/file/d/0BwxFVkl63-lEY3l3ODJReDg3RzQ/view?resourcekey=0-5kDw2QbFk9eLrWE1N9M1rQ"
+            "https://drive.google.com/file/d/0BwxFVkl63-lEY3l3ODJReDg3RzQ/view?resourcekey=0-5kDw2QbFk9eLrWE1N9M1rQ&hl=en-US"
         )
 
         return True
@@ -261,15 +292,6 @@ class QATests(SnapTestsBase):
         self._wait.until(lambda d: pdf_div.is_displayed() is True)
         return pdf_div
 
-    def is_esr(self):
-        self._driver.set_context("chrome")
-        update_channel = self._driver.execute_script(
-            "return Services.prefs.getStringPref('app.update.channel');"
-        )
-        self._logger.info("Update channel: {}".format(update_channel))
-        self._driver.set_context("content")
-        return update_channel == "esr"
-
     def pdf_get_page(self, page, long=False):
         waiter = self._longwait if long is True else self._wait
         page = waiter.until(
@@ -278,7 +300,7 @@ class QATests(SnapTestsBase):
             )
         )
 
-        if not self.is_esr():
+        if not self.is_esr_115():
             self._wait.until(
                 lambda d: d.execute_script(
                     'return window.getComputedStyle(document.querySelector(".loadingInput.start"), "::after").getPropertyValue("visibility");'
@@ -408,13 +430,13 @@ class QATests(SnapTestsBase):
             button_to_test.click()
 
             # rotation does not close the menu?:
-            if menu_id == "pageRotateCw" or menu_id == "pageRotateCcw":
+            if self.is_esr_128() and menu_id in ("pageRotateCw", "pageRotateCcw"):
                 secondary_menu.click()
 
             time.sleep(0.75)
 
             self._logger.info("assert {}".format(menu_id))
-            if self.is_esr() and menu_id == "documentProperties":
+            if self.is_esr_115() and menu_id == "documentProperties":
                 # on ESR pdf.js misreports in mm instead of inches
                 title = self._wait.until(
                     EC.visibility_of_element_located((By.ID, "titleField"))
@@ -466,7 +488,21 @@ class QATests(SnapTestsBase):
         )
         action.drag_and_drop_by_offset(paragraph, 50, 10).perform()
         time.sleep(0.75)
-        self.assert_rendering(exp["select_text"], self._driver)
+        try:
+            ref_screen_source = "select_text_with_highlight"
+            self._wait.until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, "button.highlightButton")
+                )
+            )
+        except TimeoutException:
+            ref_screen_source = "select_text_without_highlight"
+            self._logger.info(
+                "Wait for pdf highlight button: timed out, maybe it is not there"
+            )
+        finally:
+            time.sleep(0.75)
+            self.assert_rendering(exp[ref_screen_source], self._driver)
 
         # release select selection
         action.move_by_offset(0, 150).perform()
@@ -563,9 +599,11 @@ class QATests(SnapTestsBase):
             EC.visibility_of_element_located(
                 (
                     By.ID,
-                    "context-copyimage-contents"
-                    if mime_type.startswith("image/")
-                    else "context-copy",
+                    (
+                        "context-copyimage-contents"
+                        if mime_type.startswith("image/")
+                        else "context-copy"
+                    ),
                 )
             )
         )
@@ -748,8 +786,18 @@ class QATests(SnapTestsBase):
         ), "download directory from pref should match new directory"
 
     def open_lafibre(self):
-        download_site = self.open_tab("https://ip.lafibre.info/test-debit.php")
+        download_site = self.open_tab("https://ip.lafibre.info/connectivite.php")
         return download_site
+
+    def get_lafibre_1M(self):
+        return self._wait.until(
+            EC.presence_of_element_located(
+                (
+                    By.CSS_SELECTOR,
+                    ".tableau tbody tr td a",
+                )
+            )
+        )
 
     def test_download_folder_change(self, exp):
         """
@@ -757,14 +805,7 @@ class QATests(SnapTestsBase):
         """
 
         download_site = self.open_lafibre()
-        extra_small = self._wait.until(
-            EC.presence_of_element_located(
-                (
-                    By.CSS_SELECTOR,
-                    ".tableau > tbody:nth-child(1) > tr:nth-child(6) > td:nth-child(2) > a:nth-child(1)",
-                )
-            )
-        )
+        extra_small = self.get_lafibre_1M()
         self._driver.execute_script("arguments[0].click();", extra_small)
 
         download_name = self.accept_download()
@@ -784,7 +825,9 @@ class QATests(SnapTestsBase):
         )
         if not os.path.isabs(previous_folder):
             previous_folder = os.path.join(os.environ.get("HOME", ""), previous_folder)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("HOME"), prefix="snap-test-download"
+        ) as tmpdir:
             assert os.path.isdir(tmpdir), "tmpdir download should exists"
 
             download_1 = os.path.abspath(os.path.join(previous_folder, download_name))
@@ -810,16 +853,11 @@ class QATests(SnapTestsBase):
         """
 
         download_site = self.open_lafibre()
-        extra_small = self._wait.until(
-            EC.presence_of_element_located(
-                (
-                    By.CSS_SELECTOR,
-                    ".tableau > tbody:nth-child(1) > tr:nth-child(6) > td:nth-child(2) > a:nth-child(1)",
-                )
-            )
-        )
+        extra_small = self.get_lafibre_1M()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("HOME"), prefix="snap-test-download-rm"
+        ) as tmpdir:
             self.change_download_folder(None, tmpdir)
 
             self._driver.switch_to.window(download_site)

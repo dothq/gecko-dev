@@ -123,7 +123,8 @@ xpcAccessibilityService::GetAccessibleFor(nsINode* aNode,
 
   DocAccessible* document = accService->GetDocAccessible(aNode->OwnerDoc());
   if (document) {
-    NS_IF_ADDREF(*aAccessible = ToXPC(document->GetAccessible(aNode)));
+    NS_IF_ADDREF(*aAccessible =
+                     ToXPC(document->GetAccessibleEvenIfNotInMap(aNode)));
   }
 
   return NS_OK;
@@ -225,6 +226,17 @@ xpcAccessibilityService::GetAccessibleFromCache(nsINode* aNode,
   }
 
   NS_IF_ADDREF(*aAccessible = ToXPC(accessible));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+xpcAccessibilityService::SetCacheDomains(uint64_t aCacheDomains) {
+  nsAccessibilityService* accService = GetAccService();
+  if (!accService) {
+    return NS_ERROR_SERVICE_NOT_AVAILABLE;
+  }
+
+  accService->SetCacheDomains(aCacheDomains);
   return NS_OK;
 }
 

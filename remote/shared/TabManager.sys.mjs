@@ -13,6 +13,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   MobileTabBrowser: "chrome://remote/content/shared/MobileTabBrowser.sys.mjs",
   UserContextManager:
     "chrome://remote/content/shared/UserContextManager.sys.mjs",
+  windowManager: "chrome://remote/content/shared/WindowManager.sys.mjs",
 });
 
 class TabManagerClass {
@@ -54,7 +55,7 @@ class TabManagerClass {
   get browsers() {
     const browsers = [];
 
-    for (const win of this.windows) {
+    for (const win of lazy.windowManager.windows) {
       for (const tab of this.getTabsForWindow(win)) {
         const contentBrowser = this.getBrowserForTab(tab);
         if (contentBrowser !== null) {
@@ -66,8 +67,21 @@ class TabManagerClass {
     return browsers;
   }
 
-  get windows() {
-    return Services.wm.getEnumerator(null);
+  /**
+   * Retrieve all the browser tabs in open windows.
+   *
+   * @returns {Array<Tab>}
+   *     All the open browser tabs. Will return an empty list if tab browser
+   *     is not available or tabs are undefined.
+   */
+  get tabs() {
+    const tabs = [];
+
+    for (const win of lazy.windowManager.windows) {
+      tabs.push(...this.getTabsForWindow(win));
+    }
+
+    return tabs;
   }
 
   /**
@@ -83,7 +97,7 @@ class TabManagerClass {
   get allBrowserUniqueIds() {
     const browserIds = [];
 
-    for (const win of this.windows) {
+    for (const win of lazy.windowManager.windows) {
       // Only return handles for browser windows
       for (const tab of this.getTabsForWindow(win)) {
         const contentBrowser = this.getBrowserForTab(tab);
@@ -200,7 +214,7 @@ class TabManagerClass {
    *     no matching browser element is found.
    */
   getBrowserById(id) {
-    for (const win of this.windows) {
+    for (const win of lazy.windowManager.windows) {
       for (const tab of this.getTabsForWindow(win)) {
         const contentBrowser = this.getBrowserForTab(tab);
         if (this.getIdForBrowser(contentBrowser) == id) {
@@ -313,7 +327,7 @@ class TabManagerClass {
 
   getTabCount() {
     let count = 0;
-    for (const win of this.windows) {
+    for (const win of lazy.windowManager.windows) {
       // For browser windows count the tabs. Otherwise take the window itself.
       const tabsLength = this.getTabsForWindow(win).length;
       count += tabsLength ? tabsLength : 1;
@@ -389,15 +403,23 @@ class TabManagerClass {
    *
    * @param {Tab} tab
    *     Tab to remove.
+   * @param {object=} options
+   * @param {boolean=} options.skipPermitUnload
+   *     Flag to indicate if a potential beforeunload prompt should be skipped
+   *     when closing the tab. Defaults to false.
    */
-  async removeTab(tab) {
+  async removeTab(tab, options = {}) {
+    const { skipPermitUnload = false } = options;
+
     if (!tab) {
       return;
     }
 
     const ownerWindow = this.getWindowForTab(tab);
     const tabBrowser = this.getTabBrowser(ownerWindow);
-    await tabBrowser.removeTab(tab);
+    await tabBrowser.removeTab(tab, {
+      skipPermitUnload,
+    });
   }
 
   /**

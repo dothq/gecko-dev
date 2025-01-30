@@ -50,7 +50,9 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                        public AudioSessionObserver,
                        public VoiceProcessingAudioUnitObserver {
  public:
-  explicit AudioDeviceIOS(bool bypass_voice_processing);
+  explicit AudioDeviceIOS(
+      bool bypass_voice_processing,
+      AudioDeviceModule::MutedSpeechEventHandler muted_speech_event_handler);
   ~AudioDeviceIOS() override;
 
   void AttachAudioBuffer(AudioDeviceBuffer* audioBuffer) override;
@@ -159,6 +161,8 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                             UInt32 bus_number,
                             UInt32 num_frames,
                             AudioBufferList* io_data) override;
+  void OnReceivedMutedSpeechActivity(
+      AUVoiceIOSpeechActivityEvent event) override;
 
   bool IsInterrupted();
 
@@ -210,6 +214,9 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
 
   // Determines whether voice processing should be enabled or disabled.
   const bool bypass_voice_processing_;
+
+  // Handle a user speaking during muted event
+  AudioDeviceModule::MutedSpeechEventHandler muted_speech_event_handler_;
 
   // Native I/O audio thread checker.
   SequenceChecker io_thread_checker_;
@@ -299,6 +306,10 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   // Avoids running pending task after `this` is Terminated.
   rtc::scoped_refptr<PendingTaskSafetyFlag> safety_ =
       PendingTaskSafetyFlag::Create();
+
+  // Ratio between mach tick units and nanosecond. Used to change mach tick
+  // units to nanoseconds.
+  double machTickUnitsToNanoseconds_;
 };
 }  // namespace ios_adm
 }  // namespace webrtc

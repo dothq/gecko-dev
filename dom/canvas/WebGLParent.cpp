@@ -6,6 +6,7 @@
 #include "WebGLParent.h"
 
 #include "WebGLChild.h"
+#include "mozilla/layers/SharedSurfacesParent.h"
 #include "mozilla/layers/TextureClientSharedSurface.h"
 #include "ImageContainer.h"
 #include "HostWebGLContext.h"
@@ -24,8 +25,9 @@ mozilla::ipc::IPCResult WebGLParent::RecvInitialize(
   return IPC_OK();
 }
 
-WebGLParent::WebGLParent(const dom::ContentParentId& aContentId)
-    : mContentId(aContentId) {}
+WebGLParent::WebGLParent(layers::SharedSurfacesHolder* aSharedSurfacesHolder,
+                         const dom::ContentParentId& aContentId)
+    : mSharedSurfacesHolder(aSharedSurfacesHolder), mContentId(aContentId) {}
 
 WebGLParent::~WebGLParent() = default;
 
@@ -459,15 +461,6 @@ IPCResult WebGLParent::RecvGetVertexAttrib(GLuint index, GLenum pname,
   }
 
   *ret = mHost->GetVertexAttrib(index, pname);
-  return IPC_OK();
-}
-
-IPCResult WebGLParent::RecvIsEnabled(GLenum cap, bool* const ret) {
-  if (!mHost) {
-    return IPC_FAIL(this, "HostWebGLContext is not initialized.");
-  }
-
-  *ret = mHost->IsEnabled(cap);
   return IPC_OK();
 }
 

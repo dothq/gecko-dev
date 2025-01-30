@@ -8,6 +8,7 @@
 #define NSSUBDOCUMENTFRAME_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/gfx/Matrix.h"
 #include "nsDisplayList.h"
 #include "nsAtomicContainerFrame.h"
 #include "nsIReflowCallback.h"
@@ -49,19 +50,11 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
 
   void Destroy(DestroyContext&) override;
 
-  nscoord GetMinISize(gfxContext* aRenderingContext) override;
-  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
+  nscoord IntrinsicISize(const mozilla::IntrinsicSizeInput& aInput,
+                         mozilla::IntrinsicISizeType aType) override;
 
   mozilla::IntrinsicSize GetIntrinsicSize() override;
   mozilla::AspectRatio GetIntrinsicRatio() const override;
-
-  mozilla::LogicalSize ComputeAutoSize(
-      gfxContext* aRenderingContext, mozilla::WritingMode aWritingMode,
-      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
-      const mozilla::LogicalSize& aMargin,
-      const mozilla::LogicalSize& aBorderPadding,
-      const mozilla::StyleSizeOverrides& aSizeOverrides,
-      mozilla::ComputeSizeFlags aFlags) override;
 
   SizeComputationResult ComputeSize(
       gfxContext* aRenderingContext, mozilla::WritingMode aWM,
@@ -93,6 +86,9 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   mozilla::a11y::AccType AccessibleType() override;
 #endif
 
+  mozilla::IntrinsicSize ComputeIntrinsicSize(
+      bool aIgnoreContainment = false) const;
+
   nsIDocShell* GetDocShell() const;
   nsresult BeginSwapDocShells(nsIFrame* aOther);
   void EndSwapDocShells(nsIFrame* aOther);
@@ -106,7 +102,10 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   enum { IGNORE_PAINT_SUPPRESSION = 0x1 };
   mozilla::PresShell* GetSubdocumentPresShellForPainting(uint32_t aFlags);
   nsRect GetDestRect();
-  mozilla::ScreenIntSize GetSubdocumentSize();
+  nsRect GetDestRect(const nsRect& aConstraintRect);
+  mozilla::LayoutDeviceIntSize GetSubdocumentSize();
+
+  bool ContentReactsToPointerEvents() const;
 
   // nsIReflowCallback
   bool ReflowFinished() override;
@@ -142,6 +141,15 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   RemoteFramePaintData GetRemotePaintData() const;
   bool HasRetainedPaintData() const { return mRetainedRemoteFrame.isSome(); }
 
+  const mozilla::gfx::MatrixScales& GetRasterScale() const {
+    return mRasterScale;
+  }
+  void SetRasterScale(const mozilla::gfx::MatrixScales& aScale) {
+    mRasterScale = aScale;
+  }
+  const Maybe<nsRect>& GetVisibleRect() const { return mVisibleRect; }
+  void SetVisibleRect(const Maybe<nsRect>& aRect) { mVisibleRect = aRect; }
+
  protected:
   friend class AsyncFrameInit;
 
@@ -150,24 +158,7 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   void PropagateIsUnderHiddenEmbedderElement(bool aValue);
   void UpdateEmbeddedBrowsingContextDependentData();
 
-  bool IsInline() { return mIsInline; }
-
-  nscoord GetIntrinsicBSize() {
-    auto size = GetIntrinsicSize();
-    Maybe<nscoord> bSize =
-        GetWritingMode().IsVertical() ? size.width : size.height;
-    return bSize.valueOr(0);
-  }
-
-  nscoord GetIntrinsicISize() {
-    if (Maybe<nscoord> containISize = ContainIntrinsicISize()) {
-      return *containISize;
-    }
-    auto size = GetIntrinsicSize();
-    Maybe<nscoord> iSize =
-        GetWritingMode().IsVertical() ? size.height : size.width;
-    return iSize.valueOr(0);
-  }
+  bool IsInline() const { return mIsInline; }
 
   // Show our document viewer. The document viewer is hidden via a script
   // runner, so that we can save and restore the presentation if we're
@@ -176,6 +167,7 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
 
   nsView* GetViewInternal() const override { return mOuterView; }
   void SetViewInternal(nsView* aView) override { mOuterView = aView; }
+  void CreateView();
 
   mutable RefPtr<nsFrameLoader> mFrameLoader;
 
@@ -185,6 +177,11 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   // When process-switching a remote tab, we might temporarily paint the old
   // one.
   Maybe<RemoteFramePaintData> mRetainedRemoteFrame;
+
+  // The raster scale from our last paint.
+  mozilla::gfx::MatrixScales mRasterScale;
+  // The visible rect from our last paint.
+  Maybe<nsRect> mVisibleRect;
 
   bool mIsInline : 1;
   bool mPostedReflowCallback : 1;

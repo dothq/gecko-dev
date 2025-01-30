@@ -28,6 +28,7 @@ There are two patterns for event structure supported in this environment:
 
 Therefore, unlike in other outputters, here we don't generate classes for each metric.
 """
+
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Optional, List
@@ -41,9 +42,12 @@ from . import util
 SUPPORTED_METRIC_TYPES = ["string", "event"]
 
 
-def event_class_name(ping_name: str, event_metric_exists: bool) -> str:
+def event_class_name(
+    ping_name: str, metrics_by_type: Dict[str, List[metrics.Metric]]
+) -> str:
     # For compatibility with FxA codebase we don't want to add "Logger" suffix
     # when custom pings without event metrics are used.
+    event_metric_exists = "event" in metrics_by_type
     suffix = "Logger" if event_metric_exists else ""
     return util.Camelize(ping_name) + "ServerEvent" + suffix
 
@@ -60,10 +64,13 @@ def generate_js_metric_type(metric: metrics.Metric) -> str:
     return metric.type
 
 
-def generate_ping_factory_method(ping: str, event_metric_exists: bool) -> str:
+def generate_ping_factory_method(
+    ping: str, metrics_by_type: Dict[str, List[metrics.Metric]]
+) -> str:
     # `ServerEventLogger` better describes role of the class that this factory
     # method generates, but for compatibility with existing FxA codebase
     # we use `Event` suffix if no event metrics are defined.
+    event_metric_exists = "event" in metrics_by_type
     suffix = "ServerEventLogger" if event_metric_exists else "Event"
     return f"create{util.Camelize(ping)}{suffix}"
 
@@ -80,6 +87,7 @@ def output(
     lang: str,
     objs: metrics.ObjectTree,
     output_dir: Path,
+    options: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Given a tree of objects, output Javascript or Typescript code to `output_dir`.
@@ -92,6 +100,16 @@ def output(
         `parser.parse_objects`.
     :param output_dir: Path to an output directory to write to.
     """
+
+    if options is None:
+        options = {}
+
+    module_spec = options.get("module_spec", "es")
+    accepted_module_specs = ["es", "commonjs"]
+    if module_spec not in accepted_module_specs:
+        raise ValueError(
+            f"Unknown module_spec: {module_spec}. Accepted specs are: {accepted_module_specs}."  # noqa
+        )
 
     template = util.get_jinja2_template(
         "javascript_server.jinja2",
@@ -135,6 +153,12 @@ def output(
                     metrics_list = metrics_by_type.setdefault(metric.type, [])
                     metrics_list.append(metric)
 
+    # Order pings_to_metrics for backwards compatibility with the existing FxA codebase.
+    # Put pings without `event` type metrics first.
+    ping_to_metrics = dict(
+        sorted(ping_to_metrics.items(), key=lambda item: "event" in item[1])
+    )
+
     PING_METRIC_ERROR_MSG = (
         " Server-side environment is simplified and this"
         + " parser doesn't generate individual metric files. Make sure to pass all"
@@ -171,6 +195,7 @@ def output(
                 parser_version=__version__,
                 pings=ping_to_metrics,
                 event_metric_exists=event_metric_exists,
+                module_spec=module_spec,
                 lang=lang,
             )
         )
@@ -185,9 +210,13 @@ def output_javascript(
     :param objects: A tree of objects (metrics and pings) as returned from
         `parser.parse_objects`.
     :param output_dir: Path to an output directory to write to.
+    :param options: options dictionary, with the following optional keys:
+
+        - `module_spec`: Module specification to use. Options are `es`, `commonjs`.
+                        Default is `es`.
     """
 
-    output("javascript", objs, output_dir)
+    output("javascript", objs, output_dir, options)
 
 
 def output_typescript(
@@ -201,4 +230,4 @@ def output_typescript(
     :param output_dir: Path to an output directory to write to.
     """
 
-    output("typescript", objs, output_dir)
+    output("typescript", objs, output_dir, options)

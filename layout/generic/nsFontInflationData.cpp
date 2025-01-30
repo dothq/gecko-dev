@@ -57,7 +57,9 @@ bool nsFontInflationData::UpdateFontInflationDataISizeFor(
 
   data->UpdateISize(aReflowInput);
 
-  if (oldInflationEnabled != data->mInflationEnabled) return true;
+  if (oldInflationEnabled != data->mInflationEnabled) {
+    return true;
+  }
 
   return oldInflationEnabled && oldUsableISize != data->mUsableISize;
 }
@@ -234,8 +236,7 @@ void nsFontInflationData::UpdateISize(const ReflowInput& aReflowInput) {
   // FIXME: Should probably only scan the text that's actually going to
   // be inflated!
 
-  nsIFormControlFrame* fcf = do_QueryFrame(aFrame);
-  if (fcf) {
+  if (aFrame->IsTextInputFrame()) {
     return aFrame;
   }
 
@@ -345,7 +346,8 @@ void nsFontInflationData::ScanTextIn(nsIFrame* aFrame) {
         // We don't want changes to the amount of text in a text input
         // to change what we count towards inflation.
         nscoord fontSize = kid->StyleFont()->mFont.size.ToAppUnits();
-        int32_t charCount = static_cast<nsTextControlFrame*>(kid)->GetCols();
+        int32_t charCount =
+            static_cast<nsTextControlFrame*>(kid)->GetColsOrDefault();
         mTextAmount += charCount * fontSize;
       } else if (fType == LayoutFrameType::ComboboxControl) {
         // See textInputFrame above (with s/amount of text/selected option/).

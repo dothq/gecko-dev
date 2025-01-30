@@ -48,12 +48,16 @@ activity_stream:
       "DRAG",
       "DROP",
       "IMPRESSION",
+      "FAKESPOT_CATEGORY",
+      "FAKESPOT_CLICK",
       "MIGRATION_CANCEL",
       "MIGRATION_START",
       "OPEN_NEWTAB_PREFS",
       "OPEN_NEW_WINDOW",
       "OPEN_PRIVATE_WINDOW",
       "PIN",
+      "POCKET_THUMBS_DOWN",
+      "POCKET_THUMBS_UP",
       "PREF_CHANGED",
       "PREVIEW_REQUEST",
       "SAVE_TO_POCKET",
@@ -125,11 +129,11 @@ aboutprivatebrowsing:
     record_in_processes: ["content"]
     description: >
       This is recorded when a user clicks a link on the private browsing newtab.
-    bug_numbers: [1709344, 1754635, 1781973, 1811146, 1841925, 1871197]
+    bug_numbers: [1709344, 1754635, 1781973, 1811146, 1841925, 1871197, 1922596]
     notification_emails:
-      - "pbz@mozilla.com"
+      - "emz@mozilla.com"
       - "tihuang@mozilla.com"
-    expiry_version: "134"
+    expiry_version: "139"
     products:
       - "firefox"
 
@@ -192,7 +196,7 @@ addonsManager:
         "about:debugging", "about:preferences", "amo", "browser-import", "disco", "distribution",
         "extension", "enterprise-policy", "file-url", "geckoview-app", "gmp-plugin",
         "internal", "plugin", "rtamo", "siteperm-addon-provider" "sync", "system-addon",
-        "temporary-addon", "unknown".
+        "temporary-addon", "unknown", "about:editprofile", "about:newprofile".
         For events with method set to "sideload", the source value is derived from the XPIProvider
         location name (e.g. possible values are "app-builtin", "app-global", "app-profile",
         "app-system-addons", "app-system-defaults", "app-system-local", "app-system-profile",
@@ -201,7 +205,7 @@ addonsManager:
         The method used by the source to install the add-on (included when the source can use more than one,
         e.g. install events with source "about:addons" may have "install-from-file" or "url" as method),
         one of "amWebAPI", "drag-and-drop", "installTrigger", "install-from-file", "link",
-        "management-webext-api", "sideload", "synthetic-install", "url", "product-updates".
+        "management-webext-api", "sideload", "onboarding" "synthetic-install", "url", "product-updates".
         e.g. install events with source "about:addons" may have "install-from-file" or "drag-and-drop" as method),
         one of "amWebAPI", "drag-and-drop", "installTrigger", "install-from-file", "link", "management-webext-api",
         "sideload", "synthetic-install", "url", "product-updates", "manager".
@@ -214,13 +218,13 @@ addonsManager:
           - site_warning, site_blocked, install_disabled_warning
           - download_started, download_completed, download_failed
     notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
+    expiry_version: "140"
     products:
       - "firefox"
       - "fennec"
       - "thunderbird"
     record_in_processes: ["main"]
-    bug_numbers: [1433335, 1515697, 1523641, 1549770, 1590736, 1630596, 1672570, 1714251, 1749878, 1781974, 1817100, 1861295]
+    bug_numbers: [1433335, 1515697, 1523641, 1549770, 1590736, 1630596, 1672570, 1714251, 1749878, 1781974, 1817100, 1861295, 1912166]
     release_channel_collection: opt-out
   install_stats:
     description: >
@@ -285,107 +289,36 @@ addonsManager:
         The method used by the source to install the add-on (included when the source can use more than one,
         e.g. install events with source "about:addons" may have "install-from-file" or "url" as method).
       num_strings: The number of permission description strings in the extension permission doorhanger
+      blocklist_state: >
+        The add-on blocklistState (0 not-blocked, 1 soft-blocked, 2
+        hard-blocked) at the time the manage event was being collected.
     notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
+    expiry_version: "140"
     products:
       - "firefox"
       - "fennec"
       - "thunderbird"
     record_in_processes: ["main"]
-    bug_numbers: [1433335, 1515697, 1523641, 1549770, 1590736, 1630596, 1672570, 1714251, 1749878, 1781974, 1817100, 1861295]
+    bug_numbers: [1433335, 1515697, 1523641, 1549770, 1590736, 1630596, 1672570, 1714251, 1749878, 1781974, 1817100, 1861295, 1912166, 1917859]
     release_channel_collection: opt-out
-  report:
-    description: >
-      An abuse report submitted by a user for a given extension. The object of the event
-      represent the report entry point, the value is the id of the addon being reported.
-    objects:
-      - amo
-      - menu
-      - toolbar_context_menu
-      - unified_context_menu
-      - uninstall
+addonsSearchDetection:
+  etld_change:
+    description: |
+      Recorded when a request for a search query is redirected to another
+      domain. This can be via the webRequest API, or through other means.
+    objects: ["webrequest", "other"]
+    methods: ["etld_change"]
     extra_keys:
-      addon_type: >
-        The type of the add-on being reported (missing on ERROR_ADDON_NOT_FOUND, ERROR_AMODETAILS_NOTFOUND
-        and ERROR_AMODETAILS_FAILURE).
-      error_type: >
-        AbuseReport Error Type (included in case of submission failures). The error types include
-        ERROR_ABORTED_SUBMIT, ERROR_ADDON_NOT_FOUND, ERROR_CLIENT, ERROR_NETWORK, ERROR_UNKNOWN,
-        ERROR_RECENT_SUBMIT, ERROR_SERVER, ERROR_AMODETAILS_NOTFOUND, ERROR_AMODETAILS_FAILURE.
-    notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
-    products:
-      - "firefox"
-      - "fennec"
-      - "thunderbird"
-    record_in_processes: ["main"]
-    bug_numbers: [1544927, 1580561, 1590736, 1630596, 1672570, 1714251, 1749878, 1780746, 1781974, 1817100, 1861295]
-    release_channel_collection: opt-out
-  reportSuspiciousSite:
-    description: >
-      Sent when a user clicks "Report Suspicious Site" on the dropdown menu of the third-
-      party xpinstall doorhanger. The object is always suspiciousSite. The value is the
-      site domain, or "(unknown)" if there is no site associated with the prompt.
-    objects:
-      - suspiciousSite
-    notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
+      addonId: The id of the addon, if available.
+      addonVersion: The version of the addon.
+      from: The original domain (eTLD+1) of the request that matched a search endpoint.
+      to: The domain (eTLD+1) of the final redirect target.
+    notification_emails: ["addons-dev-internal@mozilla.com", "tlong@mozilla.com"]
+    expiry_version: "never"
     products:
       - "firefox"
     record_in_processes: ["main"]
-    bug_numbers: [1806056, 1817100, 1861295]
-    release_channel_collection: opt-out
-
-blocklist:
-  addonBlockChange:
-    description: >
-      An add-on is blocked, or an installed add-on is unblocked.
-      When an add-on install/update is blocked, its installation is aborted and the
-      add-on is no longer listed in the activeAddons field of TelemetryEnvironment.
-      The value is the ID of the add-on.
-      The object represents the reason for triggering the blocklistState check:
-      "addon_install" is when an add-on is installed.
-      "addon_update" is when an add-on is updated after an update check.
-      "addon_update_check" is when an add-on is blocked during the update check.
-      "addon_db_modified" is when an add-on's blocklistState was altered between application restarts.
-      "blocklist_update" is when an add-on's blocklistState changed due to a blocklist update. This
-      may be due to the blocklist being disabled by preferences or enterprise policies, but it is
-      more commonly the result of updating entries in the blocklist.
-    objects: ["addon_install", "addon_update", "addon_update_check", "addon_db_modified", "blocklist_update"]
-    extra_keys:
-      blocklistState: >
-        The blocklistState of the add-on. 0 is unblocked, 2 is blocked.
-        1 is soft blocked (this state does not exist in blocklist v3).
-      addon_version: >
-        Version of the add-on. Used together with an add-on's ID (value) to identify
-        add-ons to block.
-      signed_date: >
-        Timestamp of the add-on (when it was signed via AMO).
-        This field is missing (0) for "addon_update_check".
-      hours_since: >
-        The number of hours that have passed since this version of the add-on was installed or updated.
-        At least zero when the blocklist is updated, -1 otherwise.
-      mlbf_last_time: >
-        The generation time of the most recent entry in the blocklist.
-        Time generated by AMO when the blocklist entry was created.
-        May be 0 when the blocklist is disabled.
-      mlbf_generation: >
-        The generation time to identify the bloomfilter that was used for this blocklist decision.
-        The bloomfilter is updated less frequently than the so-called stashes in the RemoteSettings
-        collection that holds the blocklist data. The stashes take precedence over the bloomfilter
-        in blocklist decisions.
-        Time generated by AMO when the blocklist entry was created.
-        May be 0 when the blocklist is disabled.
-      mlbf_source: >
-        The source of the RemoteSettings attachment that holds the bloom filter.
-        This field is documented in more detail in the definition of the blocklist.mlbf_source scalar.
-        Possible values are "dump_match", "cache_match", "remote_match", "dump_fallback", "cache_fallback", "unknown".
-    notification_emails: ["addons-dev-internal@mozilla.com", "rwu@mozilla.com"]
-    expiry_version: "132"
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    bug_numbers: [1662857, 1730037, 1763529, 1811159, 1861296]
+    bug_numbers: [1894526]
     release_channel_collection: opt-out
 
 downloads:
@@ -491,7 +424,7 @@ address:
     expiry_version: never
     products:
       - "firefox"
-    record_in_processes: ["content"]
+    record_in_processes: ["main"]
     release_channel_collection: opt-out
     extra_keys:
       street_address: street address result, filled when method is `detected`, `filled`, or `filled_modified`
@@ -514,7 +447,7 @@ address:
     expiry_version: never
     products:
       - "firefox"
-    record_in_processes: ["content"]
+    record_in_processes: ["main"]
     release_channel_collection: opt-out
     extra_keys:
       name: name
@@ -563,38 +496,6 @@ creditcard:
       - "firefox"
     record_in_processes: ["main"]
     release_channel_collection: opt-out
-  cc_form:
-    description: >-
-      User interactions for credit card autofill forms
-    objects:
-      - "cc_form"
-    methods:
-      - "detected"
-      - "popup_shown"
-      - "filled"
-      - "filled_modified"
-      - "submitted"
-    bug_numbers: [1653073, 1653162, 1720608, 1767907]
-    notification_emails: ["autofill@lists.mozilla.org", "passwords-dev@mozilla.org"]
-    expiry_version: never
-    products:
-      - "firefox"
-    record_in_processes: ["content"]
-    release_channel_collection: opt-out
-    extra_keys:
-      cc_name_found: Whether the cardholder name field was identified
-      cc_number_found: Whether the credit card number field was identified
-      cc_exp_found: Whether the expiration date was identified
-      cc_name: Whether the name was autofilled (autofilled / not_filled / user_filled / unavailable)
-      cc_number: Whether the credit card number field was autofilled (autofilled / not_filled / user_filled / unavailable)
-      cc_exp: Whether the expiration date was autofilled (autofilled / not_filled / user_filled / unavailable)
-      field_name: Name of the field being affected by the method
-      fields_not_auto: >-
-        Number of fields in a `submitted` event that were not autofilled.
-        Note that this number counts all fields in a form, even if some of those fields might have been identified as password and/or address fields.
-        Additionally, it may include input elements that are not rendered as user-modifiable, such as hidden fields as well as <button> elements.
-      fields_auto: Number of fields in the `submitted` event that were autofilled
-      fields_modified: Number of fields in a `submitted` event that were autofilled and later modified
   cc_form_v2:
     description: >-
       User interactions for credit card autofill forms
@@ -627,7 +528,7 @@ creditcard:
     expiry_version: never
     products:
       - "firefox"
-    record_in_processes: ["content"]
+    record_in_processes: ["main"]
     release_channel_collection: opt-out
     extra_keys:
       cc_name: cardholder name field result. Used by `detected`, `filled`, and `filled_modified` methods.
@@ -637,48 +538,6 @@ creditcard:
       cc_exp_month: credit card expiration month
       cc_exp_year: credit card expiration year
       field_name: Name of the field being affected by the method. Used by `popup_shown` and `filled_modified` methods.
-
-extensions.data:
-  migrateResult:
-    objects: ["storageLocal"]
-    bug_numbers: [1470213, 1553297, 1590736, 1630596, 1672570, 1714251, 1749878, 1781974, 1817100, 1861295]
-    notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
-    products:
-      - "firefox"
-      - "fennec"
-    record_in_processes: ["main"]
-    release_channel_collection: opt-out
-    extra_keys:
-      backend: The selected backend ("JSONFile" / "IndexedDB").
-      data_migrated: The old extension data has been migrated ("y" / "n").
-      error_name: >
-        A DOMException error name if any ("OtherError" for unknown errors).
-        The error has been fatal if the `backend` extra key is "JSONFile",
-        otherwise it is a non fatal error which didn't prevented the
-        extension from switching to the IndexedDB backend.
-      has_jsonfile: The extension has a JSONFile ("y" / "n").
-      has_olddata: The extension had some data stored in the JSONFile ("y" / "n").
-    description: >
-      These events are sent when an extension is migrating its data to the new IndexedDB backend,
-      the value of this event is the addon id.
-  storageLocalError:
-    objects: ["get", "set", "remove", "clear"]
-    bug_numbers: [1606903, 1649948, 1689255, 1730038, 1763523, 1811148, 1861297]
-    notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "132"
-    products:
-      - "firefox"
-    record_in_processes: ["main", "content"]
-    release_channel_collection: opt-out
-    extra_keys:
-      error_name: >
-        A DOMException error name if any ("OtherError" for unknown errors).
-    description: >
-      These events are collected when an extension triggers an unexpected error
-      while running a storage.local API call (e.g. because of some underlying
-      QuotaManager and/or IndexedDB error), the value of this event is the
-      addon id.
 
 homepage:
   preference:
@@ -703,29 +562,6 @@ homepage:
     expiry_version: never
     extra_keys:
       webExtensionId: The identifier of the webextension, if known.
-
-navigation:
-  search:
-    objects: ["about_home", "about_newtab", "contextmenu", "oneoff",
-              "suggestion", "alias", "enter", "searchbar", "urlbar",
-              "urlbar_handoff", "urlbar_persisted", "urlbar_searchmode",
-              "webextension"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-      - "fennec"
-    record_in_processes: ["main"]
-    description: >
-      This is recorded on each search navigation.
-      The value field records the action used to trigger the search:
-        "enter", "oneoff", "suggestion", "alias", null (for contextmenu and webextension)
-    bug_numbers: [1316281, 1496764]
-    notification_emails:
-      - "mdeboer@mozilla.com"
-      - "rharter@mozilla.com"
-    expiry_version: never
-    extra_keys:
-      engine: The id of the search engine used.
 
 upgrade_dialog:
   trigger:
@@ -870,8 +706,19 @@ normandy:
       changedPref: >
         For preference_study or nimbus_experiment, the preference that was
         detected to change that caused the unenrollment.
-    bug_numbers: [1443560, 1843126]
-    notification_emails: ["normandy-notifications@mozilla.com"]
+      conflictingSlug: >
+        For nimbus_experiment, if reason == "prefFlips-conflict", the conflicting
+        experiment that caused the unenrollment.
+      prefName: >
+        For nimbus_experiment, if reason == "prefFlips-failed", the name of the
+        pref that failed to set.
+      prefType: >
+        For nimbus_experiment, if reason = "prefFlips-failed", the type of the
+        existing pref value (one of "bool", "string", "int", or "invalid").
+    bug_numbers: [1443560, 1843126, 1896718, 1907649]
+    notification_emails:
+      - "normandy-notifications@mozilla.com"
+      - "nimbus-team@mozilla.com"
     products:
       - "firefox"
       - "fennec"
@@ -970,7 +817,7 @@ normandy:
     description: >
       This records when validation of a recipe fails.
     bug_numbers: [1762652]
-    notification_emails: ["barret@mozilla.com"]
+    notification_emails: ["beth@mozilla.com"]
     expiry_version: never
     extra_keys:
       reason: Why validation failed (one of "invalid-recipe", "invalid-branch", or "invalid-reason").
@@ -1507,6 +1354,7 @@ fxa_avatar_menu:
         The current state of the user. Possible states are "not_configured", "unverified",
         "signedin" and "login_failed".
       fxa_avatar: Boolean for whether or not account has set an avatar
+      fxa_sync_on: Boolean for whether or not sync was configured at the time the event fired
 
 fxa_app_menu:
   click:
@@ -1542,6 +1390,7 @@ fxa_app_menu:
         The current state of the user. Possible states are "not_configured", "unverified",
         "signedin" and "login_failed".
       fxa_avatar: Boolean for whether or not account has set an avatar
+      fxa_sync_on: Boolean for whether or not sync was configured at the time the event fired.
 
 messaging_experiments:
   reach:
@@ -1551,6 +1400,7 @@ messaging_experiments:
       "infobar",
       "spotlight",
       "featureCallout",
+      "fxms_bmb_button",
       "fxms_message_1",
       "fxms_message_2",
       "fxms_message_3",
@@ -1561,7 +1411,11 @@ messaging_experiments:
       "fxms_message_8",
       "fxms_message_9",
       "fxms_message_10",
-      "fxms_message_11"
+      "fxms_message_11",
+      "fxms_message_12",
+      "fxms_message_13",
+      "fxms_message_14",
+      "fxms_message_15"
     ]
     methods: ["reach"]
     release_channel_collection: opt-out
@@ -2400,7 +2254,7 @@ security.ui.protections:
     record_in_processes: ["content"]
     release_channel_collection: opt-out
     notification_emails:
-      - pbz@mozilla.com
+      - emz@mozilla.com
       - seceng-telemetry@mozilla.com
     products:
       - firefox
@@ -2424,7 +2278,7 @@ security.ui.protections:
     record_in_processes: ["content"]
     release_channel_collection: opt-out
     notification_emails:
-      - pbz@mozilla.com
+      - emz@mozilla.com
       - seceng-telemetry@mozilla.com
     products:
       - firefox
@@ -2465,36 +2319,12 @@ security.ui.protections:
     record_in_processes: ["content"]
     release_channel_collection: opt-out
     notification_emails:
-      - pbz@mozilla.com
+      - emz@mozilla.com
       - seceng-telemetry@mozilla.com
     products:
       - firefox
     extra_keys:
       category: The category of protections the user is in, standard, strict or custom.
-
-security.ui.app_menu:
-  click:
-    bug_numbers:
-      - 1603545
-      - 1616229
-      - 1643428
-      - 1678201
-      - 1739287
-      - 1787249
-    description: >
-      Privacy and Security click events on app menu.
-    objects: [
-      "open_full_report",
-    ]
-    expiry_version: never
-    record_in_processes:
-      - main
-    release_channel_collection: opt-out
-    notification_emails:
-      - pbz@mozilla.com
-      - seceng-telemetry@mozilla.com
-    products:
-      - firefox
 
 security.ui.protectionspopup:
   open:
@@ -2513,7 +2343,7 @@ security.ui.protectionspopup:
       How many times the protections panel was opened.
     expiry_version: never
     notification_emails:
-      - pbz@mozilla.com
+      - emz@mozilla.com
       - seceng-telemetry@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
@@ -2553,7 +2383,7 @@ security.ui.protectionspopup:
       User interaction by click events in the protections panel.
     expiry_version: never
     notification_emails:
-      - pbz@mozilla.com
+      - emz@mozilla.com
       - tihuang@mozilla.com
       - seceng-telemetry@mozilla.com
     release_channel_collection: opt-out
@@ -2584,6 +2414,9 @@ privacy.ui.fpp:
       - all
     products:
       - firefox
+    extra_keys:
+      checked: >
+        The checked state of the fingerprinting protection checkbox.
 
 uptake.remotecontent.result:
   uptake:
@@ -2646,12 +2479,14 @@ intl.ui.browserLanguage:
       - apply
       - accept
       - cancel
+      - set_fallback
     extra_keys:
       installId: The id for an install.
     products:
       - firefox
-    expiry_version: "135"
+    expiry_version: "148"
     notification_emails:
+      - earo@mozilla.com
       - flod@mozilla.com
       - mstriemer@mozilla.com
     release_channel_collection: opt-out
@@ -2664,6 +2499,8 @@ intl.ui.browserLanguage:
       - 1739288
       - 1796396
       - 1861299
+      - 1911321
+      - 1928262
 
 network.dns:
   trrConfirmation:
@@ -2906,7 +2743,7 @@ pictureinpicture:
     expiry_version: "never"
     release_channel_collection: opt-out
   opened_method:
-    objects: ["toggle", "contextMenu", "urlBar", "shortcut"]
+    objects: ["toggle", "contextMenu", "urlBar", "shortcut", "autoPip"]
     description: >
       Records the method for opening the Picture-in-Picture window.
     extra_keys:
@@ -2927,7 +2764,7 @@ pictureinpicture:
     expiry_version: "never"
     release_channel_collection: opt-out
   closed_method:
-    objects: ["closeButton", "unpip", "pagehide", "fullscreen", "setupFailure", "closePlayerShortcut", "contextMenu", "videoElRemove", "videoElEmptied", "urlBar", "shortcut"]
+    objects: ["closeButton", "unpip", "pagehide", "foregrounded", "fullscreen", "setupFailure", "closePlayerShortcut", "contextMenu", "videoElRemove", "videoElEmptied", "urlBar", "shortcut", "browserCrash"]
     description: >
       Records the method for closing the Picture-in-Picture window.
     notification_emails:
@@ -3022,6 +2859,20 @@ pictureinpicture.settings:
       - 1639774
     expiry_version: "never"
     release_channel_collection: opt-out
+  enable_autotrigger:
+    objects: ["settings"]
+    description: Recorded when the Picture-in-Picture auto-trigger is enabled.
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes:
+      - main
+    bug_numbers:
+      - 1647800
+      - 1910505
+    expiry_version: "never"
+    release_channel_collection: opt-out
 
 launch_on_login:
   last_profile_disable:
@@ -3071,37 +2922,6 @@ doh:
       networkID: An ID representing the network on which heuristics were run, unique to this client
       captiveState: The Captive Portal Service state - unknown, not_captive, locked, or unlocked
       platform: Comma-separated list of platform attributes that would cause split-horizon issues (vpn, proxy, nrpt)
-  evaluate:
-    methods: ["evaluate"]
-    objects: ["heuristics"]
-    bug_numbers:
-      - 1573840
-      - 1631609
-      - 1603779
-    description: >
-      Results of DoH heuristics at startup and after network changes. OLD FORMAT: here for documentation
-    expiry_version: never
-    record_in_processes:
-      - main
-    release_channel_collection: opt-out
-    notification_emails:
-      - nhnt11@mozilla.com
-      - ddamjanovic@mozilla.com
-      - seceng-telemetry@mozilla.com
-      - necko@mozilla.com
-    products:
-      - firefox
-    extra_keys:
-      google: Google safe search result
-      youtube: YouTube safe search result
-      zscalerCanary: ZScaler canary result
-      canary: Global canary result
-      modifiedRoots: Whether enterprise roots were enabled
-      browserParent: Whether OS parental controls were detected
-      thirdPartyRoots: Whether third party roots were installed
-      policy: Enterprise policy presence - no policy/with DoH/without DoH.
-      steeredProvider: Whether we detected a steering provider
-      evaluateReason: The reason for running heuristics - startup or netchange
   state:
     methods: ["state"]
     objects: [
@@ -3293,6 +3113,9 @@ security.ui.certerror:
     extra_keys:
       is_frame: If the error page is loaded in an iframe.
       has_sts: If the error page is for a site with HSTS headers or with a pinned key.
+      channel_status: The status of the failed channel, as an nsresult.
+      issued_by_cca: If trusting the CCA India roots would fix this error.
+      hyphen_compat: If the error is due to a domain label starting or ending with a hyphen.
   click:
     objects: [
       "advanced_button",
@@ -3343,6 +3166,7 @@ security.ui.tlserror:
     record_in_processes: ["content"]
     extra_keys:
       is_frame: If the error page is loaded in an iframe.
+      channel_status: The status of the failed channel, as an nsresult.
 
 slow_script_warning:
   shown:
@@ -3374,31 +3198,6 @@ slow_script_warning:
       n_tab_deselect: How many times the user switched away from a tab affected by this hang.
       uri_type: The kind of script URL that hung.
       uptime: How long the notification was up (ms).
-
-webrtc.ui:
-  share_display:
-    objects:
-      - screen
-      - window
-      - browser_window
-    description: >
-      Recorded when a display is shared. The value for this event is a unique
-      ID that differentiates different sharing sessions. A new sharing session
-      is created when the user transitions from not sharing a display to
-      sharing at least one display.
-    extra_keys:
-      silence_notifs: True if the user opted in to silencing DOM notifications.
-    notification_emails:
-      - mconley@mozilla.com
-      - vchin@mozilla.com
-    products:
-      - "firefox"
-    record_in_processes:
-      - main
-    bug_numbers:
-      - 1639283
-    expiry_version: "88"
-    release_channel_collection: opt-out
 
 ysod:
   shown:
@@ -3514,7 +3313,7 @@ avif:
 mfcdm:
   eme_playback:
     objects: ["gecko"]
-    bug_numbers: [1873394]
+    bug_numbers: [1873394, 1902169]
     description:
       Record the information about the EME playback when using the media engine.
       The value of this event is the key system name.
@@ -3522,7 +3321,7 @@ mfcdm:
       - firefox
     record_in_processes: ["all"]
     release_channel_collection: opt-out
-    expiry_version: "130"
+    expiry_version: "140"
     notification_emails:
       - media-alerts@mozilla.com
     extra_keys:
@@ -3534,7 +3333,7 @@ mfcdm:
       dropped_frames: The amount of video frames don't get rendered but dropped
   error:
     objects: ["gecko"]
-    bug_numbers: [1873394]
+    bug_numbers: [1873394, 1902169]
     description:
       Record the error or crash happened while using the media engine playback.
       The value of this event is the name of error.
@@ -3542,7 +3341,7 @@ mfcdm:
       - firefox
     record_in_processes: ["all"]
     release_channel_collection: opt-out
-    expiry_version: "130"
+    expiry_version: "140"
     notification_emails:
       - media-alerts@mozilla.com
     extra_keys:
@@ -3566,7 +3365,6 @@ installation:
     release_channel_collection: opt-out
     record_in_processes: ["main"]
     products: ["firefox"]
-    operating_systems: ["windows"]
     extra_keys:
       version: The application version installed by the installer (not necessarily the current version)
       build_id: The build ID of the application installed by the installer (not necessarily the current version)
@@ -3583,180 +3381,6 @@ installation:
       - application-update-telemetry-alerts@mozilla.com
       - rtestard@mozilla.com
     expiry_version: never
-
-contextservices.quicksuggest:
-  data_collect_toggled:
-    objects: ["enabled", "disabled"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    description: >
-      This is recorded when the
-      `browser.urlbar.quicksuggest.dataCollection.enabled` boolean pref is
-      toggled.
-    bug_numbers: [1735976]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-  enable_toggled:
-    objects: ["enabled", "disabled"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    description: >
-      This is recorded when the
-      `browser.urlbar.suggest.quicksuggest.nonsponsored` boolean pref is
-      toggled.
-    bug_numbers: [1693126]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-  sponsored_toggled:
-    objects: ["enabled", "disabled"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    description: >
-      This is recorded when the `browser.urlbar.suggest.quicksuggest.sponsored`
-      boolean pref is toggled.
-    bug_numbers: [1728430, 1733687]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-  opt_in_dialog:
-    objects: ["accept_2", "reject_2", "learn_more_1", "learn_more_2", "close_1", "not_now_2", "dismiss_1", "dismiss_2"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    description: >
-      This is recorded when the user responds to the Firefox Suggest opt-in
-      onboarding dialog. 'accept_2' is recorded when the user accepts the dialog
-      and opts in, 'reject_2' is recorded when the user rejects the dialog and
-      opts out, 'learn_more_1' is recorded when the user clicks "Learn more"
-      on the introduction section (the user remains opted out), 'learn_more_2' is
-      recorded when the user clicks "Learn more" on the main section (the user
-      remains opted out), 'close_1' is recorded when the user clicks close button
-      on the introduction section (the user remains opted out), 'not_now_2' is
-      recorded when the user clicks "Not now" link on main section (the user
-      remains opted out), 'dismiss_1' recorded when the user dismisses the dialog
-      on the introduction section (the user remains opted out), 'dismiss_2'
-      recorded when the user dismisses the dialog on main (the user remains opted
-      out),
-    bug_numbers: [1723860, 1745026, 1761171]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-  impression_cap:
-    description: >
-      This is recorded when an event related to an impression cap occurs. "hit"
-      is recorded when an impression cap is hit. "reset" is recorded when a
-      cap's counter is reset because its interval period has elapsed.
-    objects: ["hit", "reset"]
-    extra_keys:
-      type: >
-        The type of cap, one of: "sponsored", "nonsponsored"
-      intervalSeconds: >
-        The number of seconds in the cap's interval period. For lifetime caps,
-        this value will be "Infinity".
-      maxCount: >
-        The maximum number of impressions allowed in the cap's interval period.
-      startDate: >
-        The timestamp at which the cap's interval period started, in number of
-        seconds since Unix epoch.
-      count: >
-        The number of impressions in the cap's interval period.
-      impressionDate: >
-        The timestamp of the cap's most recent impression, in number of
-        milliseconds since Unix epoch.
-      eventDate: >
-        The event's timestamp, in number of milliseconds since Unix epoch. For
-        "reset" events, this is the timestamp at which the cap's interval period
-        ended. If eventCount is greater than 1, it's the timestamp at which the
-        last interval period ended. For "hit" events, this is the timestamp at
-        which the cap was hit.
-      eventCount: >
-        The number of impression cap events reported in the telemetry event.
-        This is necessary because the implementation may batch multiple
-        consecutive "reset" events for a cap in a single telemetry event. When
-        that occurs, this value will be greater than 1, startDate will be the
-        timestamp at which the first event's interval period started, eventDate
-        will be the timestamp at which the last event's interval period ended,
-        and count will be the number of impressions during the first event's
-        interval period. (The implementation guarantees that reset events are
-        batched only when the number of impressions for all subsequent interval
-        periods is zero.) For "hit" events, eventCount will always be 1.
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    bug_numbers: [1761058]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-  engagement:
-    description: >
-      This event is recorded when an engagement occurs in the address bar while
-      a Firefox Suggest suggestion is present. The event's objects are the
-      following possible values:
-      "block": The user dismissed ("blocked") the suggestion.
-      "click": The user picked the suggestion.
-      "help": The user picked the suggestion's help button.
-      "impression_only": The user picked some other row.
-      "other": The user engaged with the suggestion in some other way, for
-        example by picking a command in the result menu. This is a catch-all
-        category and going forward Glean telemetry should be preferred.
-    objects: ["block", "click", "help", "impression_only", "other"]
-    extra_keys:
-      match_type: >
-        "best-match" if the suggestion was a best match or "firefox-suggest" if
-        it was a non-best-match suggestion.
-      position: >
-        The index of the suggestion in the list of results (1-based).
-      suggestion_type: >
-        The type of suggestion, one of: "sponsored", "nonsponsored",
-        "dynamic-wikipedia", "weather", "navigational"
-      source: >
-        Where the suggestion came from, one of: "remote-settings", "merino"
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    bug_numbers: [1761059]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - adw@mozilla.com
-    expiry_version: never
-
-close_tab_warning:
-  shown:
-    description: >
-      Recorded whenever we show the 'Close Tabs' dialog, with details about
-      the reason it is shown and what choices the user makes (close or not).
-    objects: ["window", "application", "tabs"]
-    release_channel_collection: opt-out
-    expiry_version: "99"
-    record_in_processes: ["main"]
-    products: ["firefox"]
-    bug_numbers: [1712306, 1725296]
-    notification_emails:
-      - gkruitbosch@mozilla.com
-      - rtestard@mozilla.com
-    extra_keys:
-      source: The way in which the tabs were closed (shortcut, close button, menuitem, appmenu, etc.)
-      button: Which button the user clicked (Close tabs or Cancel)
-      warn_checkbox: Whether the checkbox to display the warning again was checked or not.
-      closing_wins: The number of windows being closed.
-      closing_tabs: The number of tabs being closed.
-      will_restore: Whether the session will be restored if closed now.
 
 memory_watcher:
   on_high_memory:
@@ -4120,53 +3744,6 @@ firefoxview_next:
     expiry_version: "never"
     release_channel_collection: opt-out
 
-search:
-  engine:
-    objects: ["change_default", "change_private"]
-    release_channel_collection: opt-out
-    products:
-      - "firefox"
-    record_in_processes: ["main"]
-    description: >
-      Recorded when the default search engine is changed, the value field
-      records the action used to trigger the change of default. For possible
-      values, see `REASON_CHANGE_MAP` in
-      https://searchfox.org/mozilla-central/source/toolkit/components/search/SearchService.sys.mjs
-    bug_numbers: [1634555]
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-      - rev-data@mozilla.com
-    expiry_version: never
-    extra_keys:
-      prev_id: The id of the previous default engine.
-      new_id: The id of the new default engine.
-      new_name: The display name of the new default engine.
-      new_load_path: The path relating to where the new default engine was installed/loaded from.
-      new_sub_url: The new submission URL of the new default engine.
-
-cookie_banner:
-  reload:
-    objects: ["browser"]
-    description: >
-      Recorded when the top-level page is reloaded. We use this event metric to
-      know whether or not the reloading domain has cookie banner rule.
-    record_in_processes: ["main"]
-    products:
-      - "firefox"
-      - "fennec"
-    release_channel_collection: opt-out
-    notification_emails:
-      - pbz@mozilla.com
-      - tihuang@mozilla.com
-    bug_numbers:
-      - 1797079
-      - 1861317
-    expiry_version: "128"
-    extra_keys:
-      no_rule: There is no cookie banner rule for the reloading domain.
-      has_cookie_rule: There is a matching cookie rule for the reloading domain.
-      has_click_rule: There is a matching click rule for the reloading domain.
-
 screenshots:
   download:
     objects: ["overlay_download", "preview_download"]
@@ -4270,3 +3847,177 @@ screenshots:
       - 1801019
     expiry_version: "never"
     release_channel_collection: opt-out
+
+session_restore:
+  backup_can_be_loaded:
+    objects: ["session_file"]
+    description: >
+      Recorded when a file is able to be successfully read on startup
+    record_in_processes:
+      - main
+    products:
+      - "firefox"
+    extra_keys:
+      can_load: Whether or not the startup file can be read/loaded
+      path_key: A symbolic name for the backup file, should be one of "clean", "recovery", "recoveryBackup", "cleanBackup", or "upgradeBackup"
+      loadfail_reason: Reason why the file cannot be loaded, N/A if can be loaded
+    notification_emails:
+      - "session-restore-telemetry-alerts@mozilla.com"
+    bug_numbers:
+      - 1874742
+    expiry_version: "never"
+    release_channel_collection: opt-out
+  shutdown_success:
+    objects: ["session_startup"]
+    description: >
+      Report shutdown success
+    record_in_processes:
+      - main
+    products:
+      - "firefox"
+    extra_keys:
+      shutdown_ok: Whether or not the shutdown happened successfully, unsuccessful if previous session crashed
+      shutdown_reason: Reason why shutdown didn't happen successfully, N/A if previous session didn't crashed
+    notification_emails:
+      - "session-restore-telemetry-alerts@mozilla.com"
+    bug_numbers:
+      - 1874742
+    expiry_version: "never"
+    release_channel_collection: opt-out
+
+browser.backup:
+  toggle_on:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when scheduled backups are enabled.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  toggle_off:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when scheduled backups are disabled.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  created:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when a backup is successfully created.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  change_location:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when the backup destination location is changed.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  password_changed:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when the backup encryption password is changed.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  password_added:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when the backup encryption is enabled.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  password_removed:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when the backup encryption is removed.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+  error:
+    objects: ["BackupService"]
+    description: >
+      Dispatched when a backup fails to be created. We encode the error code
+      as well as the stage the backup failed in in the extra data.
+    bug_numbers:
+      - 1908732
+    notification_emails:
+      - mconley@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes: [main]
+    release_channel_collection: opt-out
+    expiry_version: never
+    extra_keys:
+      error_code: The string representation of the error code.
+      backup_step: >
+        The string representation of the step that backup creation was in
+        when the error occurred.
+
+profiles:
+  default:
+    objects: ["updated"]
+    release_channel_collection: opt-out
+    record_in_processes:
+      - main
+    description: >
+      Recorded when a new profile from a profile group becomes the default
+      startup profile for the group. This may happen when a profile other
+      than the current default is launched from the profile selector window,
+      or when the user has multiple profiles running at the same time and
+      switches app focus to a profile other than the current default. An
+      event is not recorded if the current default profile is launched or
+      gains app focus.
+    bug_numbers: [1693362]
+    notification_emails:
+      - "jhirsch@mozilla.com"
+      - "dtownsend@mozilla.com"
+      - "nbaumgardner@mozilla.com"
+    bug_numbers:
+      - 1918813
+    expiry_version: never
+    products:
+      - "firefox"

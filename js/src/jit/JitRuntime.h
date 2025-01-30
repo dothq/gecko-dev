@@ -27,6 +27,7 @@
 #include "jit/JitCode.h"
 #include "jit/JitHints.h"
 #include "jit/shared/Assembler-shared.h"
+#include "jit/TrampolineNatives.h"
 #include "js/AllocPolicy.h"
 #include "js/ProfilingFrameIterator.h"
 #include "js/TypeDecls.h"
@@ -42,6 +43,7 @@ namespace js {
 
 class AutoLockHelperThreadState;
 class GCMarker;
+enum class ArraySortKind;
 
 namespace jit {
 
@@ -134,6 +136,7 @@ class JitRuntime {
 
   // Shared exception-handler tail.
   WriteOnceData<uint32_t> exceptionTailOffset_{0};
+  WriteOnceData<uint32_t> exceptionTailReturnValueCheckOffset_{0};
 
   // Shared profiler exit frame tail.
   WriteOnceData<uint32_t> profilerExitFrameTailOffset_{0};
@@ -160,9 +163,6 @@ class JitRuntime {
   WriteOnceData<uint32_t> objectPreBarrierOffset_{0};
   WriteOnceData<uint32_t> shapePreBarrierOffset_{0};
   WriteOnceData<uint32_t> wasmAnyRefPreBarrierOffset_{0};
-
-  // Thunk to call malloc/free.
-  WriteOnceData<uint32_t> freeStubOffset_{0};
 
   // Thunk called to finish compilation of an IonScript.
   WriteOnceData<uint32_t> lazyLinkStubOffset_{0};
@@ -225,14 +225,21 @@ class JitRuntime {
   // Number of Ion compilations which were finished off thread and are
   // waiting to be lazily linked. This is only set while holding the helper
   // thread state lock, but may be read from at other times.
-  typedef mozilla::Atomic<size_t, mozilla::SequentiallyConsistent>
-      NumFinishedOffThreadTasksType;
+  using NumFinishedOffThreadTasksType =
+      mozilla::Atomic<size_t, mozilla::SequentiallyConsistent>;
   NumFinishedOffThreadTasksType numFinishedOffThreadTasks_{0};
 
   // List of Ion compilation waiting to get linked.
   using IonCompileTaskList = mozilla::LinkedList<js::jit::IonCompileTask>;
   MainThreadData<IonCompileTaskList> ionLazyLinkList_;
   MainThreadData<size_t> ionLazyLinkListSize_{0};
+
+  // Pointer to trampoline code for each TrampolineNative. The JSFunction has
+  // a JitEntry pointer that points to an item in this array.
+  using TrampolineNativeJitEntryArray =
+      mozilla::EnumeratedArray<TrampolineNative, void*,
+                               size_t(TrampolineNative::Count)>;
+  TrampolineNativeJitEntryArray trampolineNativeJitEntries_{};
 
 #ifdef DEBUG
   // Flag that can be set from JIT code to indicate it's invalid to call
@@ -258,7 +265,6 @@ class JitRuntime {
   void generateInvalidator(MacroAssembler& masm, Label* bailoutTail);
   uint32_t generatePreBarrier(JSContext* cx, MacroAssembler& masm,
                               MIRType type);
-  void generateFreeStub(MacroAssembler& masm);
   void generateIonGenericCallStub(MacroAssembler& masm,
                                   IonGenericCallKind kind);
 
@@ -293,6 +299,15 @@ class JitRuntime {
   void generateBaselineInterpreterEntryTrampoline(MacroAssembler& masm);
   void generateInterpreterEntryTrampoline(MacroAssembler& masm);
 
+  using TrampolineNativeJitEntryOffsets =
+      mozilla::EnumeratedArray<TrampolineNative, uint32_t,
+                               size_t(TrampolineNative::Count)>;
+  void generateTrampolineNatives(MacroAssembler& masm,
+                                 TrampolineNativeJitEntryOffsets& offsets,
+                                 PerfSpewerRangeRecorder& rangeRecorder);
+  uint32_t generateArraySortTrampoline(MacroAssembler& masm,
+                                       ArraySortKind kind);
+
   void bindLabelToOffset(Label* label, uint32_t offset) {
     MOZ_ASSERT(!trampolineCode_);
     label->bind(offset);
@@ -322,6 +337,8 @@ class JitRuntime {
   }
   void maybeStartIonFreeTask(bool force);
 
+  UniquePtr<LifoAlloc> tryReuseIonLifoAlloc();
+
 #ifdef DEBUG
   bool disallowArbitraryCode() const { return disallowArbitraryCode_; }
   void clearDisallowArbitraryCode() { disallowArbitraryCode_ = false; }
@@ -338,9 +355,16 @@ class JitRuntime {
     return trampolineCode(functionWrapperOffsets_[size_t(funId)]);
   }
 
-  JitCode* debugTrapHandler(JSContext* cx, DebugTrapHandlerKind kind);
+  bool ensureDebugTrapHandler(JSContext* cx, DebugTrapHandlerKind kind);
+  JitCode* debugTrapHandler(DebugTrapHandlerKind kind) const {
+    MOZ_ASSERT(debugTrapHandlers_[kind]);
+    return debugTrapHandlers_[kind];
+  }
 
   BaselineInterpreter& baselineInterpreter() { return baselineInterpreter_; }
+  const BaselineInterpreter& baselineInterpreter() const {
+    return baselineInterpreter_;
+  }
 
   TrampolinePtr getGenericBailoutHandler() const {
     return trampolineCode(bailoutHandlerOffset_);
@@ -348,6 +372,9 @@ class JitRuntime {
 
   TrampolinePtr getExceptionTail() const {
     return trampolineCode(exceptionTailOffset_);
+  }
+  TrampolinePtr getExceptionTailReturnValueCheck() const {
+    return trampolineCode(exceptionTailReturnValueCheckOffset_);
   }
 
   TrampolinePtr getProfilerExitFrameTail() const {
@@ -401,8 +428,6 @@ class JitRuntime {
     }
   }
 
-  TrampolinePtr freeStub() const { return trampolineCode(freeStubOffset_); }
-
   TrampolinePtr lazyLinkStub() const {
     return trampolineCode(lazyLinkStubOffset_);
   }
@@ -416,6 +441,20 @@ class JitRuntime {
 
   TrampolinePtr getIonGenericCallStub(IonGenericCallKind kind) const {
     return trampolineCode(ionGenericCallStubOffset_[kind]);
+  }
+
+  void** trampolineNativeJitEntry(TrampolineNative native) {
+    void** jitEntry = &trampolineNativeJitEntries_[native];
+    MOZ_ASSERT(*jitEntry >= trampolineCode_->raw());
+    MOZ_ASSERT(*jitEntry <
+               trampolineCode_->raw() + trampolineCode_->instructionsSize());
+    return jitEntry;
+  }
+  TrampolineNative trampolineNativeForJitEntry(void** entry) {
+    MOZ_RELEASE_ASSERT(entry >= trampolineNativeJitEntries_.begin());
+    size_t index = entry - trampolineNativeJitEntries_.begin();
+    MOZ_RELEASE_ASSERT(index < size_t(TrampolineNative::Count));
+    return TrampolineNative(index);
   }
 
   bool hasJitcodeGlobalTable() const { return jitcodeGlobalTable_ != nullptr; }

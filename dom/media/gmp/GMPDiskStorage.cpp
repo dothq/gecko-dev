@@ -7,6 +7,7 @@
 #include "nsDirectoryServiceUtils.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsAppDirectoryServiceDefs.h"
+#include "GMPLog.h"
 #include "GMPParent.h"
 #include "gmp-storage.h"
 #include "mozilla/Unused.h"
@@ -16,6 +17,10 @@
 #include "nsServiceManagerUtils.h"
 
 namespace mozilla::gmp {
+
+#define LOG(msg, ...)                   \
+  MOZ_LOG(GetGMPLog(), LogLevel::Debug, \
+          ("GMPDiskStorage=%p, " msg, this, ##__VA_ARGS__))
 
 // We store the records for a given GMP as files in the profile dir.
 // $profileDir/gmp/$platform/$gmpName/storage/$nodeId/
@@ -72,7 +77,10 @@ static nsresult GetGMPStorageDir(nsIFile** aTempDir, const nsAString& aGMPName,
 class GMPDiskStorage : public GMPStorage {
  public:
   explicit GMPDiskStorage(const nsACString& aNodeId, const nsAString& aGMPName)
-      : mNodeId(aNodeId), mGMPName(aGMPName) {}
+      : mNodeId(aNodeId), mGMPName(aGMPName) {
+    LOG("Created GMPDiskStorage, nodeId=%s, gmpName=%s", mNodeId.BeginReading(),
+        NS_ConvertUTF16toUTF8(mGMPName).get());
+  }
 
   ~GMPDiskStorage() {
     // Close all open file handles.
@@ -82,6 +90,7 @@ class GMPDiskStorage : public GMPStorage {
         record->mFileDesc = nullptr;
       }
     }
+    LOG("Destroyed GMPDiskStorage");
   }
 
   nsresult Init() {
@@ -251,8 +260,8 @@ class GMPDiskStorage : public GMPStorage {
     int32_t bytesWritten = 0;
     char buf[sizeof(uint32_t)] = {0};
     LittleEndian::writeUint32(buf, aRecordName.Length());
-    bytesWritten = PR_Write(record->mFileDesc, buf, MOZ_ARRAY_LENGTH(buf));
-    if (bytesWritten != MOZ_ARRAY_LENGTH(buf)) {
+    bytesWritten = PR_Write(record->mFileDesc, buf, std::size(buf));
+    if (bytesWritten != std::size(buf)) {
       NS_WARNING("Failed to write GMPStorage record name length.");
       return GMPRecordCorrupted;
     }
@@ -449,5 +458,7 @@ already_AddRefed<GMPStorage> CreateGMPDiskStorage(const nsACString& aNodeId,
   }
   return storage.forget();
 }
+
+#undef LOG
 
 }  // namespace mozilla::gmp

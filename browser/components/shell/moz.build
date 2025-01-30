@@ -9,6 +9,9 @@ LOCAL_INCLUDES += ["/xpcom/build"]
 
 BROWSER_CHROME_MANIFESTS += ["test/browser.toml"]
 XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
+TEST_DIRS += [
+    "test/gtest",
+]
 
 JAR_MANIFESTS += ["jar.mn"]
 
@@ -32,8 +35,11 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     XPIDL_SOURCES += [
         "nsIGNOMEShellService.idl",
+        "nsIOpenTabsProvider.idl",
     ]
-
+    EXTRA_JS_MODULES += [
+        "OpenTabsProvider.sys.mjs",
+    ]
     SOURCES += [
         "nsGNOMEShellService.cpp",
     ]
@@ -50,6 +56,8 @@ elif CONFIG["OS_ARCH"] == "WINNT":
     ]
     SOURCES += [
         "nsWindowsShellService.cpp",
+        "Windows11LimitedAccessFeatures.cpp",
+        "Windows11TaskbarPinning.cpp",
         "WindowsDefaultBrowser.cpp",
         "WindowsUserChoice.cpp",
     ]
@@ -81,6 +89,7 @@ for var in (
     "MOZ_DEFAULT_BROWSER_AGENT",
 ):
     DEFINES[var] = '"%s"' % CONFIG[var]
+
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]

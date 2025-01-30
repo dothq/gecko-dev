@@ -31,10 +31,11 @@ import {
   stringifyPublicParamsUniquely } from
 '../internal/query/stringify_params.js';
 import { validQueryPart } from '../internal/query/validQueryPart.js';
+import { attemptGarbageCollection } from '../util/collect_garbage.js';
 
 import { assert, unreachable } from '../util/util.js';
 
-import { logToWebsocket } from './websocket_logger.js';
+import { logToWebSocket } from './websocket_logger.js';
 
 
 
@@ -294,9 +295,11 @@ class TestBuilder {
     (this.description ? this.description + '\n\n' : '') + 'TODO: .unimplemented()';
     this.isUnimplemented = true;
 
-    this.testFn = () => {
+    // Use the beforeFn to skip the test, so we don't have to iterate the subcases.
+    this.beforeFn = () => {
       throw new SkipTestCase('test unimplemented');
     };
+    this.testFn = () => {};
   }
 
   /** Perform various validation/"lint" chenks. */
@@ -350,7 +353,7 @@ class TestBuilder {
         const testcaseStringUnique = stringifyPublicParamsUniquely(params);
         assert(
           !seen.has(testcaseStringUnique),
-          `Duplicate public test case+subcase params for test ${testPathString}: ${testcaseString}`
+          `Duplicate public test case+subcase params for test ${testPathString}: ${testcaseString} (${caseQuery})`
         );
         seen.add(testcaseStringUnique);
       }
@@ -618,7 +621,7 @@ class RunCaseSpecific {
             const subcasePrefix = 'subcase: ' + stringifyPublicParams(subParams);
             const subRec = new Proxy(rec, {
               get: (target, k) => {
-                const prop = TestCaseRecorder.prototype[k];
+                const prop = rec[k] ?? TestCaseRecorder.prototype[k];
                 if (typeof prop === 'function') {
                   testHeartbeatCallback();
                   return function (...args) {
@@ -694,6 +697,7 @@ class RunCaseSpecific {
                 subRec.threw(ex);
               }
             }).
+            finally(attemptGarbageCollectionIfDue).
             finally(subcaseFinishedCallback);
 
             allPreviousSubcasesFinalizedPromise = allPreviousSubcasesFinalizedPromise.then(
@@ -709,13 +713,17 @@ class RunCaseSpecific {
             rec.skipped(new SkipTestCase('all subcases were skipped'));
           }
         } else {
-          await this.runTest(
-            rec,
-            sharedState,
-            this.params,
-            /* throwSkip */false,
-            getExpectedStatus(selfQuery)
-          );
+          try {
+            await this.runTest(
+              rec,
+              sharedState,
+              this.params,
+              /* throwSkip */false,
+              getExpectedStatus(selfQuery)
+            );
+          } finally {
+            await attemptGarbageCollectionIfDue();
+          }
         }
       } finally {
         testHeartbeatCallback();
@@ -737,7 +745,32 @@ class RunCaseSpecific {
         timems: rec.result.timems,
         nonskippedSubcaseCount: rec.nonskippedSubcaseCount
       };
-      logToWebsocket(JSON.stringify(msg));
+      logToWebSocket(JSON.stringify(msg));
     }
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+/** Every `subcasesBetweenAttemptingGC` calls to this function will `attemptGarbageCollection()`. */
+const attemptGarbageCollectionIfDue = (() => {
+  // This state is global because garbage is global.
+  let subcasesSinceLastGC = 0;
+
+  return async function attemptGarbageCollectionIfDue() {
+    subcasesSinceLastGC++;
+    if (subcasesSinceLastGC >= globalTestConfig.subcasesBetweenAttemptingGC) {
+      subcasesSinceLastGC = 0;
+      return attemptGarbageCollection();
+    }
+  };
+})();

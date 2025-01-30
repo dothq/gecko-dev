@@ -25,8 +25,9 @@ const MOZ_COMPATIBILITY_NIGHTLY = ![
 ].includes(AppConstants.MOZ_UPDATE_CHANNEL);
 
 const INTL_LOCALES_CHANGED = "intl:app-locales-changed";
+const XPIPROVIDER_BLOCKLIST_ATTENTION_UPDATED =
+  "xpi-provider:blocklist-attention-updated";
 
-const PREF_AMO_ABUSEREPORT = "extensions.abuseReport.amWebAPI.enabled";
 const PREF_BLOCKLIST_PINGCOUNTVERSION = "extensions.blocklist.pingCountVersion";
 const PREF_EM_UPDATE_ENABLED = "extensions.update.enabled";
 const PREF_EM_LAST_APP_VERSION = "extensions.lastAppVersion";
@@ -160,7 +161,7 @@ var PrefObserver = {
     this.observe(null, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID, PREF_LOGGING_ENABLED);
   },
 
-  observe(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic) {
     if (aTopic == "xpcom-shutdown") {
       Services.prefs.removeObserver(PREF_LOGGING_ENABLED, this);
       Services.obs.removeObserver(this, "xpcom-shutdown");
@@ -339,7 +340,7 @@ BrowserListener.prototype = {
     }
   },
 
-  observe(subject, topic, data) {
+  observe(subject) {
     if (subject != this.messageManager) {
       return;
     }
@@ -349,7 +350,7 @@ BrowserListener.prototype = {
     this.cancelInstall();
   },
 
-  onLocationChange(webProgress, request, location) {
+  onLocationChange() {
     if (
       this.browser.contentPrincipal &&
       this.principal.subsumes(this.browser.contentPrincipal)
@@ -361,19 +362,19 @@ BrowserListener.prototype = {
     this.cancelInstall();
   },
 
-  onDownloadCancelled(install) {
+  onDownloadCancelled() {
     this.unregister();
   },
 
-  onDownloadFailed(install) {
+  onDownloadFailed() {
     this.unregister();
   },
 
-  onInstallFailed(install) {
+  onInstallFailed() {
     this.unregister();
   },
 
-  onInstallEnded(install) {
+  onInstallEnded() {
     this.unregister();
   },
 
@@ -553,7 +554,7 @@ var AddonManagerInternal = {
           this.pendingProviders.add(aProvider);
         }
 
-        return new Promise((resolve, reject) => {
+        return new Promise(resolve => {
           logger.debug("Calling shutdown blocker for " + name);
           resolve(aProvider.shutdown());
         }).catch(err => {
@@ -595,9 +596,6 @@ var AddonManagerInternal = {
       }
 
       this.recordTimestamp("AMI_startup_begin");
-
-      // Enable the addonsManager telemetry event category.
-      AMTelemetry.init();
 
       // Enable the AMRemoteSettings client.
       AMRemoteSettings.init();
@@ -697,6 +695,9 @@ var AddonManagerInternal = {
       Services.obs.addObserver(this, AMBrowserExtensionsImport.TOPIC_CANCELLED);
       Services.obs.addObserver(this, AMBrowserExtensionsImport.TOPIC_COMPLETE);
       Services.obs.addObserver(this, AMBrowserExtensionsImport.TOPIC_PENDING);
+
+      // Watch for blocklist attention updates.
+      Services.obs.addObserver(this, XPIPROVIDER_BLOCKLIST_ATTENTION_UPDATED);
 
       // Ensure all default providers have had a chance to register themselves.
       const { XPIExports } = ChromeUtils.importESModule(
@@ -999,6 +1000,7 @@ var AddonManagerInternal = {
     );
     Services.obs.removeObserver(this, AMBrowserExtensionsImport.TOPIC_COMPLETE);
     Services.obs.removeObserver(this, AMBrowserExtensionsImport.TOPIC_PENDING);
+    Services.obs.removeObserver(this, XPIPROVIDER_BLOCKLIST_ATTENTION_UPDATED);
 
     AMRemoteSettings.shutdown();
 
@@ -1068,6 +1070,10 @@ var AddonManagerInternal = {
       case AMBrowserExtensionsImport.TOPIC_COMPLETE:
       case AMBrowserExtensionsImport.TOPIC_PENDING:
         this.callManagerListeners("onBrowserExtensionsImportChanged");
+        return;
+
+      case XPIPROVIDER_BLOCKLIST_ATTENTION_UPDATED:
+        this.callManagerListeners("onBlocklistAttentionUpdated");
         return;
     }
 
@@ -1311,7 +1317,7 @@ var AddonManagerInternal = {
           }
 
           updates.push(
-            new Promise((resolve, reject) => {
+            new Promise(resolve => {
               addon.findUpdates(
                 {
                   onUpdateAvailable(aAddon, aInstall) {
@@ -2178,7 +2184,9 @@ var AddonManagerInternal = {
     // we won't get any further events, detect those cases now.
     if (
       install.state == AddonManager.STATE_DOWNLOADED &&
-      install.addon.appDisabled
+      (install.addon.appDisabled ||
+        install.addon.blocklistState !=
+          Ci.nsIBlocklistService.STATE_NOT_BLOCKED)
     ) {
       install.cancel();
       this.installNotifyObservers(
@@ -2207,8 +2215,11 @@ var AddonManagerInternal = {
       },
 
       onDownloadEnded() {
-        if (install.addon.appDisabled) {
-          // App disabled items are not compatible and so fail to install.
+        if (
+          install.addon.appDisabled ||
+          install.addon.blocklistState !=
+            Ci.nsIBlocklistService.STATE_NOT_BLOCKED
+        ) {
           install.removeListener(listener);
           install.cancel();
           self.installNotifyObservers(
@@ -3048,6 +3059,30 @@ var AddonManagerInternal = {
     return this.getAddonsByTypes(null);
   },
 
+  shouldShowBlocklistAttention() {
+    if (!gStarted) {
+      throw Components.Exception(
+        "AddonManager is not initialized",
+        Cr.NS_ERROR_NOT_INITIALIZED
+      );
+    }
+
+    return this._getProviderByName(
+      "XPIProvider"
+    ).shouldShowBlocklistAttention();
+  },
+
+  getBlocklistAttentionInfo() {
+    if (!gStarted) {
+      throw Components.Exception(
+        "AddonManager is not initialized",
+        Cr.NS_ERROR_NOT_INITIALIZED
+      );
+    }
+
+    return this._getProviderByName("XPIProvider").getBlocklistAttentionInfo();
+  },
+
   /**
    * Adds a new AddonManagerListener if the listener is not already registered.
    *
@@ -3280,7 +3315,7 @@ var AddonManagerInternal = {
             // the customConfirmationUI preference and responding to the
             // "addon-install-confirmation" notification.  If the application
             // does not implement its own prompt, use the built-in xul dialog.
-            if (info.addon.userPermissions) {
+            if (info.addon.installPermissions) {
               let subject = {
                 wrappedJSObject: {
                   target: browser,
@@ -3288,7 +3323,7 @@ var AddonManagerInternal = {
                 },
               };
               subject.wrappedJSObject.info.permissions =
-                info.addon.userPermissions;
+                info.addon.installPermissions;
               Services.obs.notifyObservers(
                 subject,
                 "webextension-permission-prompt"
@@ -3460,8 +3495,11 @@ var AddonManagerInternal = {
               ) {
                 reject({ message: "install cancelled" });
               } else if (event == "onDownloadEnded") {
-                if (install.addon.appDisabled) {
-                  // App disabled items are not compatible and so fail to install
+                if (
+                  install.addon.appDisabled ||
+                  install.addon.blocklistState !=
+                    Ci.nsIBlocklistService.STATE_NOT_BLOCKED
+                ) {
                   install.cancel();
                   AddonManagerInternal.installNotifyObservers(
                     "addon-install-failed",
@@ -3555,6 +3593,10 @@ var AddonManagerInternal = {
       });
     },
 
+    async sendAbuseReport(target, addonId, data, options) {
+      return lazy.AbuseReporter.sendAbuseReport(addonId, data, options);
+    },
+
     async addonUninstall(target, id) {
       let addon = await AddonManager.getAddonByID(id);
       if (!addon) {
@@ -3627,54 +3669,6 @@ var AddonManagerInternal = {
           this.forgetInstall(id);
         }
       }
-    },
-
-    async addonReportAbuse(target, id) {
-      if (!Services.prefs.getBoolPref(PREF_AMO_ABUSEREPORT, false)) {
-        return Promise.reject({
-          message: "amWebAPI reportAbuse not supported",
-        });
-      }
-
-      let existingDialog = lazy.AbuseReporter.getOpenDialog();
-      if (existingDialog) {
-        existingDialog.close();
-      }
-
-      const dialog = await lazy.AbuseReporter.openDialog(
-        id,
-        "amo",
-        target
-      ).catch(err => {
-        Cu.reportError(err);
-        return Promise.reject({
-          message: "Error creating abuse report",
-        });
-      });
-
-      return dialog.promiseReport.then(
-        async report => {
-          if (!report) {
-            return false;
-          }
-
-          await report.submit().catch(err => {
-            Cu.reportError(err);
-            return Promise.reject({
-              message: "Error submitting abuse report",
-            });
-          });
-
-          return true;
-        },
-        err => {
-          Cu.reportError(err);
-          dialog.close();
-          return Promise.reject({
-            message: "Error creating abuse report",
-          });
-        }
-      );
     },
   },
 };
@@ -3892,7 +3886,7 @@ export var AddonManagerPrivate = {
    * This can be used as an implementation for Addon.findUpdates() when
    * no update mechanism is available.
    */
-  callNoUpdateListeners(addon, listener, reason, appVersion, platformVersion) {
+  callNoUpdateListeners(addon, listener) {
     if ("onNoCompatibilityUpdateAvailable" in listener) {
       safeCall(listener.onNoCompatibilityUpdateAvailable.bind(listener), addon);
     }
@@ -4051,6 +4045,10 @@ export var AddonManager = {
     ["ERROR_INCOMPATIBLE", -11],
     // The add-on type is not supported by the platform.
     ["ERROR_UNSUPPORTED_ADDON_TYPE", -12],
+    // The add-on can only be installed via enterprise policy.
+    ["ERROR_ADMIN_INSTALL_ONLY", -13],
+    // The add-on is soft-blocked (and so new installation are expected to fail).
+    ["ERROR_SOFT_BLOCKED", -14],
   ]),
   // The update check timed out
   ERROR_TIMEOUT: -1,
@@ -4334,6 +4332,14 @@ export var AddonManager = {
 
   getAllInstalls() {
     return AddonManagerInternal.getAllInstalls();
+  },
+
+  shouldShowBlocklistAttention() {
+    return AddonManagerInternal.shouldShowBlocklistAttention();
+  },
+
+  getBlocklistAttentionInfo() {
+    return AddonManagerInternal.getBlocklistAttentionInfo();
   },
 
   isInstallEnabled(aType) {
@@ -4712,13 +4718,6 @@ AMRemoteSettings = {
 AMTelemetry = {
   telemetrySetupDone: false,
 
-  init() {
-    // Enable the addonsManager telemetry event category before the AddonManager
-    // has completed its startup, otherwise telemetry events recorded during the
-    // AddonManager/XPIProvider startup will not be recorded.
-    Services.telemetry.setEventRecordingEnabled("addonsManager", true);
-  },
-
   // This method is called by the AddonManager, once it has been started, so that we can
   // init the telemetry event category and start listening for the events related to the
   // addons installation and management.
@@ -4739,7 +4738,7 @@ AMTelemetry = {
 
   // Observer Service notification callback.
 
-  observe(subject, topic, data) {
+  observe(subject, topic) {
     switch (topic) {
       case "addon-install-blocked": {
         const { installs } = subject.wrappedJSObject;
@@ -4845,7 +4844,7 @@ AMTelemetry = {
 
     const length = str.length;
 
-    // Trim the string to prevent a flood of warnings messages logged internally by recordEvent,
+    // Trim the string to prevent a flood of warnings messages logged internally by recordLegacyEvent,
     // the trimmed version is going to be composed by the first 40 chars and the last 37 and 3 dots
     // that joins the two parts, to visually indicate that the string has been trimmed.
     return `${str.slice(0, 40)}...${str.slice(length - 37, length)}`;
@@ -4940,6 +4939,8 @@ AMTelemetry = {
    *          The object for the given addon type.
    */
   getEventObjectFromAddonType(addonType) {
+    // NOTE: Telemetry events' object maximum length is 20 chars (See https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/collection/events.html#limits)
+    // and the value needs to matching the "^[a-zA-Z][a-zA-Z0-9_.]*[a-zA-Z0-9]$" pattern.
     switch (addonType) {
       case undefined:
         return "unknown";
@@ -4949,11 +4950,6 @@ AMTelemetry = {
       case "dictionary":
       case "sitepermission":
         return addonType;
-      // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-      case "sitepermission-deprecated":
-        // Telemetry events' object maximum length is 20 chars (See https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/collection/events.html#limits)
-        // and the value needs to matching the "^[a-zA-Z][a-zA-Z0-9_.]*[a-zA-Z0-9]$" pattern.
-        return "siteperm_deprecated";
       default:
         // Currently this should only include gmp-plugins ("plugin").
         return "other";
@@ -5056,7 +5052,12 @@ AMTelemetry = {
       };
     }
 
-    this.recordEvent({ method, object, value: install.hashedAddonId, extra });
+    this.recordLegacyEvent({
+      method,
+      object,
+      value: install.hashedAddonId,
+      extra,
+    });
     Glean.addonsManager.installStats.record(
       this.formatExtraVars({
         addon_id: extra.addon_id,
@@ -5076,12 +5077,7 @@ AMTelemetry = {
    * @param {object} extraVars
    * @returns {object} The formatted extra vars.
    */
-  formatExtraVars({ addon, ...extraVars }) {
-    if (addon) {
-      extraVars.addonId = addon.id;
-      extraVars.type = addon.type;
-    }
-
+  formatExtraVars(extraVars) {
     // All the extra_vars in a telemetry event have to be strings.
     for (var [key, value] of Object.entries(extraVars)) {
       if (value == undefined) {
@@ -5089,10 +5085,6 @@ AMTelemetry = {
       } else {
         extraVars[key] = this.convertToString(value);
       }
-    }
-
-    if (extraVars.addonId) {
-      extraVars.addonId = this.getTrimmedString(extraVars.addonId);
     }
 
     return extraVars;
@@ -5169,7 +5161,12 @@ AMTelemetry = {
     // All the extra vars in a telemetry event have to be strings.
     extra = this.formatExtraVars({ ...extraVars, ...extra });
 
-    this.recordEvent({ method: eventMethod, object, value: installId, extra });
+    this.recordLegacyEvent({
+      method: eventMethod,
+      object,
+      value: installId,
+      extra,
+    });
     Glean.addonsManager[eventMethod]?.record(
       this.formatExtraVars({
         addon_id: extra.addon_id,
@@ -5218,6 +5215,8 @@ AMTelemetry = {
       }
     }
 
+    extra.blocklist_state = `${addon.blocklistState}`;
+
     if (extra.source === "internal") {
       // Do not record the telemetry event for installation sources
       // that are marked as "internal".
@@ -5232,7 +5231,7 @@ AMTelemetry = {
     let hasExtraVars = !!Object.keys(extra).length;
     extra = this.formatExtraVars(extra);
 
-    this.recordEvent({
+    this.recordLegacyEvent({
       method,
       object,
       value,
@@ -5246,40 +5245,7 @@ AMTelemetry = {
         source: extra.source,
         source_method: extra.method,
         num_strings: extra.num_strings,
-      })
-    );
-  },
-
-  /**
-   * Record an event on abuse report submissions.
-   *
-   * @params {object} opts
-   * @params {string} opts.addonId
-   *         The id of the addon being reported.
-   * @params {string} [opts.addonType]
-   *         The type of the addon being reported  (only present for an existing
-   *         addonId).
-   * @params {string} [opts.errorType]
-   *         The AbuseReport errorType for a submission failure.
-   * @params {string} opts.reportEntryPoint
-   *         The entry point of the abuse report.
-   */
-  recordReportEvent({ addonId, addonType, errorType, reportEntryPoint }) {
-    this.recordEvent({
-      method: "report",
-      object: reportEntryPoint,
-      value: addonId,
-      extra: this.formatExtraVars({
-        addon_type: addonType,
-        error_type: errorType,
-      }),
-    });
-    Glean.addonsManager.report.record(
-      this.formatExtraVars({
-        addon_id: addonId,
-        addon_type: addonType,
-        entry_point: reportEntryPoint,
-        error_type: errorType,
+        blocklist_state: extra.blocklist_state,
       })
     );
   },
@@ -5290,36 +5256,22 @@ AMTelemetry = {
    */
   recordSuspiciousSiteEvent({ displayURI }) {
     let site = displayURI?.displayHost ?? "(unknown)";
-    this.recordEvent({
-      method: "reportSuspiciousSite",
-      object: "suspiciousSite",
-      value: site,
-      extra: {},
-    });
     Glean.addonsManager.reportSuspiciousSite.record(
-      this.formatExtraVars({ suspiciousSite: site })
+      this.formatExtraVars({ suspicious_site: site })
     );
   },
 
-  recordEvent({ method, object, value, extra }) {
-    if (typeof value != "string") {
-      // The value must be a string or null, make sure it's valid so sending
-      // the event doesn't fail.
-      value = null;
+  recordLegacyEvent({ method, object, value, extra }) {
+    if (typeof value == "string") {
+      if (!extra) {
+        extra = {};
+      }
+      extra.value = value;
     }
-    try {
-      Services.telemetry.recordEvent(
-        "addonsManager",
-        method,
-        object,
-        value,
-        extra
-      );
-    } catch (err) {
-      // If the telemetry throws just log the error so it doesn't break any
-      // functionality.
-      Cu.reportError(err);
-    }
+    const eventName = `${method}_${object}`.replace(/(_[a-z])/g, c =>
+      c[1].toUpperCase()
+    );
+    Glean.addonsManager[eventName].record(extra);
   },
 };
 

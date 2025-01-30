@@ -1,7 +1,7 @@
 export const description = `copyTextureToTexture operation tests`;
 
 import { makeTestGroup } from '../../../../common/framework/test_group.js';
-import { assert, memcpy, unreachable } from '../../../../common/util/util.js';
+import { assert, ErrorWithExtra, memcpy } from '../../../../common/util/util.js';
 import {
   kBufferSizeAlignment,
   kMinDynamicBufferOffsetAlignment,
@@ -18,14 +18,17 @@ import {
   ColorTextureFormat,
   isCompressedTextureFormat,
   viewCompatible,
+  RegularTextureFormat,
+  isRegularTextureFormat,
 } from '../../../format_info.js';
 import { GPUTest, TextureTestMixin } from '../../../gpu_test.js';
-import { makeBufferWithContents } from '../../../util/buffer.js';
-import { checkElementsEqual, checkElementsEqualEither } from '../../../util/check_contents.js';
+import { checkElementsEqual } from '../../../util/check_contents.js';
 import { align } from '../../../util/math.js';
 import { physicalMipSize } from '../../../util/texture/base.js';
 import { DataArrayGenerator } from '../../../util/texture/data_generation.js';
 import { kBytesPerRowAlignment, dataBytesForCopyOrFail } from '../../../util/texture/layout.js';
+import { TexelView } from '../../../util/texture/texel_view.js';
+import { findFailedPixels } from '../../../util/texture/texture_ok.js';
 
 const dataGenerator = new DataArrayGenerator();
 
@@ -95,8 +98,7 @@ class F extends TextureTestMixin(GPUTest) {
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
       mipLevelCount,
     };
-    const srcTexture = this.device.createTexture(srcTextureDesc);
-    this.trackForCleanup(srcTexture);
+    const srcTexture = this.createTextureTracked(srcTextureDesc);
     const dstTextureDesc: GPUTextureDescriptor = {
       dimension,
       size: dstTextureSize,
@@ -104,8 +106,7 @@ class F extends TextureTestMixin(GPUTest) {
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | extraTextureUsageFlags,
       mipLevelCount,
     };
-    const dstTexture = this.device.createTexture(dstTextureDesc);
-    this.trackForCleanup(dstTexture);
+    const dstTexture = this.createTextureTracked(dstTextureDesc);
 
     // Fill the whole subresource of srcTexture at srcCopyLevel with initialSrcData.
     const initialSrcData = this.GetInitialDataPerMipLevel(
@@ -207,11 +208,11 @@ class F extends TextureTestMixin(GPUTest) {
       align(dstBlocksPerRow * bytesPerBlock, 4);
 
     if (isCompressedTextureFormat(dstTexture.format) && this.isCompatibility) {
-      assert(viewCompatible(srcFormat, dstFormat));
+      assert(viewCompatible(this.isCompatibility, srcFormat, dstFormat));
       // compare by rendering. We need the expected texture to match
       // the dstTexture so we'll create a texture where we supply
       // all of the data in JavaScript.
-      const expectedTexture = this.device.createTexture({
+      const expectedTexture = this.createTextureTracked({
         size: [dstTexture.width, dstTexture.height, dstTexture.depthOrArrayLayers],
         mipLevelCount: dstTexture.mipLevelCount,
         format: dstTexture.format,
@@ -269,8 +270,7 @@ class F extends TextureTestMixin(GPUTest) {
       size: dstBufferSize,
       usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     };
-    const dstBuffer = this.device.createBuffer(dstBufferDesc);
-    this.trackForCleanup(dstBuffer);
+    const dstBuffer = this.createBufferTracked(dstBufferDesc);
 
     {
       const encoder = this.device.createCommandEncoder();
@@ -304,6 +304,7 @@ class F extends TextureTestMixin(GPUTest) {
       y: appliedDstOffset.y / blockHeight,
       z: appliedDstOffset.z,
     };
+    const bytesInRow = appliedCopyBlocksPerRow * bytesPerBlock;
 
     for (let z = 0; z < appliedCopyDepth; ++z) {
       const srcOffsetZ = srcCopyOffsetInBlocks.z + z;
@@ -321,7 +322,6 @@ class F extends TextureTestMixin(GPUTest) {
             (srcBlockRowsPerImage * srcOffsetZ + srcOffsetYInBlocks) +
           srcCopyOffsetInBlocks.x * bytesPerBlock;
 
-        const bytesInRow = appliedCopyBlocksPerRow * bytesPerBlock;
         memcpy(
           { src: expectedUint8Data, start: expectedDataOffset, length: bytesInRow },
           { dst: expectedUint8DataWithPadding, start: expectedDataWithPaddingOffset }
@@ -329,46 +329,69 @@ class F extends TextureTestMixin(GPUTest) {
       }
     }
 
-    let alternateExpectedData = expectedUint8DataWithPadding;
-    // For 8-byte snorm formats, allow an alternative encoding of -1.
-    // MAINTENANCE_TODO: Use textureContentIsOKByT2B with TexelView.
-    if (srcFormat.includes('snorm')) {
-      switch (srcFormat) {
-        case 'r8snorm':
-        case 'rg8snorm':
-        case 'rgba8snorm':
-          alternateExpectedData = alternateExpectedData.slice();
-          for (let i = 0; i < alternateExpectedData.length; ++i) {
-            if (alternateExpectedData[i] === 128) {
-              alternateExpectedData[i] = 129;
-            } else if (alternateExpectedData[i] === 129) {
-              alternateExpectedData[i] = 128;
-            }
-          }
-          break;
-        case 'bc4-r-snorm':
-        case 'bc5-rg-snorm':
-        case 'eac-r11snorm':
-        case 'eac-rg11snorm':
-          break;
-        default:
-          unreachable();
-      }
+    if (isCompressedTextureFormat(dstFormat)) {
+      this.expectGPUBufferValuesPassCheck(
+        dstBuffer,
+        vals => checkElementsEqual(vals, expectedUint8DataWithPadding),
+        {
+          srcByteOffset: 0,
+          type: Uint8Array,
+          typedLength: expectedUint8DataWithPadding.length,
+        }
+      );
+      return;
     }
 
+    assert(isRegularTextureFormat(dstFormat));
+    const regularDstFormat = dstFormat as RegularTextureFormat;
+
     // Verify the content of the whole subresource of dstTexture at dstCopyLevel (in dstBuffer) is expected.
-    this.expectGPUBufferValuesPassCheck(
-      dstBuffer,
-      alternateExpectedData === expectedUint8DataWithPadding
-        ? vals => checkElementsEqual(vals, expectedUint8DataWithPadding)
-        : vals =>
-            checkElementsEqualEither(vals, [expectedUint8DataWithPadding, alternateExpectedData]),
-      {
-        srcByteOffset: 0,
-        type: Uint8Array,
-        typedLength: expectedUint8DataWithPadding.length,
+    const checkByTextureFormat = (actual: Uint8Array) => {
+      const zero = { x: 0, y: 0, z: 0 };
+
+      const actTexelView = TexelView.fromTextureDataByReference(regularDstFormat, actual, {
+        bytesPerRow: bytesInRow,
+        rowsPerImage: dstBlockRowsPerImage,
+        subrectOrigin: zero,
+        subrectSize: dstTextureSizeAtLevel,
+      });
+      const expTexelView = TexelView.fromTextureDataByReference(
+        regularDstFormat,
+        expectedUint8DataWithPadding,
+        {
+          bytesPerRow: bytesInRow,
+          rowsPerImage: dstBlockRowsPerImage,
+          subrectOrigin: zero,
+          subrectSize: dstTextureSizeAtLevel,
+        }
+      );
+
+      const failedPixelsMessage = findFailedPixels(
+        regularDstFormat,
+        zero,
+        dstTextureSizeAtLevel,
+        { actTexelView, expTexelView },
+        {
+          maxFractionalDiff: 0,
+        }
+      );
+
+      if (failedPixelsMessage !== undefined) {
+        const msg = 'Texture level had unexpected contents:\n' + failedPixelsMessage;
+        return new ErrorWithExtra(msg, () => ({
+          expTexelView,
+          actTexelView,
+        }));
       }
-    );
+
+      return undefined;
+    };
+
+    this.expectGPUBufferValuesPassCheck(dstBuffer, checkByTextureFormat, {
+      srcByteOffset: 0,
+      type: Uint8Array,
+      typedLength: expectedUint8DataWithPadding.length,
+    });
   }
 
   InitializeStencilAspect(
@@ -409,11 +432,10 @@ class F extends TextureTestMixin(GPUTest) {
       }),
       kBufferSizeAlignment
     );
-    const outputBuffer = this.device.createBuffer({
+    const outputBuffer = this.createBufferTracked({
       size: outputBufferSize,
       usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
-    this.trackForCleanup(outputBuffer);
     const encoder = this.device.createCommandEncoder();
     encoder.copyTextureToBuffer(
       {
@@ -518,8 +540,7 @@ class F extends TextureTestMixin(GPUTest) {
     for (let i = 1; i < totalCopyArrayLayers; ++i) {
       uniformBufferData[(kMinDynamicBufferOffsetAlignment / 4) * i] = i;
     }
-    const uniformBuffer = makeBufferWithContents(
-      this.device,
+    const uniformBuffer = this.makeBufferWithContents(
       uniformBufferData,
       GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
     );
@@ -599,13 +620,11 @@ class F extends TextureTestMixin(GPUTest) {
     });
     const bindGroup = this.GetBindGroupForT2TCopyWithDepthTests(bindGroupLayout, copySize[2]);
 
-    const outputColorTexture = this.trackForCleanup(
-      this.device.createTexture({
-        format: 'rgba8unorm',
-        size: copySize,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      })
-    );
+    const outputColorTexture = this.createTextureTracked({
+      format: 'rgba8unorm',
+      size: copySize,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
     const hasStencil = kTextureFormatInfo[destinationTexture.format].stencil;
     const encoder = this.device.createCommandEncoder();
     for (let dstCopyLayer = 0; dstCopyLayer < copySize[2]; ++dstCopyLayer) {
@@ -1260,28 +1279,24 @@ g.test('copy_depth_stencil')
       srcTextureSize.height >> srcCopyLevel,
       srcTextureSize.depthOrArrayLayers - Math.max(srcCopyBaseArrayLayer, dstCopyBaseArrayLayer),
     ];
-    const sourceTexture = t.trackForCleanup(
-      t.device.createTexture({
-        format,
-        size: srcTextureSize,
-        usage:
-          GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-        mipLevelCount: srcCopyLevel + 1,
-      })
-    );
-    const destinationTexture = t.trackForCleanup(
-      t.device.createTexture({
-        format,
-        size: [
-          copySize[0] << dstCopyLevel,
-          copySize[1] << dstCopyLevel,
-          srcTextureSize.depthOrArrayLayers,
-        ] as const,
-        usage:
-          GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-        mipLevelCount: dstCopyLevel + 1,
-      })
-    );
+    const sourceTexture = t.createTextureTracked({
+      format,
+      size: srcTextureSize,
+      usage:
+        GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+      mipLevelCount: srcCopyLevel + 1,
+    });
+    const destinationTexture = t.createTextureTracked({
+      format,
+      size: [
+        copySize[0] << dstCopyLevel,
+        copySize[1] << dstCopyLevel,
+        srcTextureSize.depthOrArrayLayers,
+      ] as const,
+      usage:
+        GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+      mipLevelCount: dstCopyLevel + 1,
+    });
 
     let initialStencilData: undefined | Uint8Array = undefined;
     if (kTextureFormatInfo[format].stencil) {
@@ -1349,12 +1364,15 @@ g.test('copy_multisampled_color')
     texture can only be 1.
   `
   )
+  .beforeAllSubcases(t => {
+    t.skipIf(t.isCompatibility, 'multisample textures are not copyable in compatibility mode');
+  })
   .fn(t => {
     const textureSize = [32, 16, 1] as const;
     const kColorFormat = 'rgba8unorm';
     const kSampleCount = 4;
 
-    const sourceTexture = t.device.createTexture({
+    const sourceTexture = t.createTextureTracked({
       format: kColorFormat,
       size: textureSize,
       usage:
@@ -1363,8 +1381,7 @@ g.test('copy_multisampled_color')
         GPUTextureUsage.RENDER_ATTACHMENT,
       sampleCount: kSampleCount,
     });
-    t.trackForCleanup(sourceTexture);
-    const destinationTexture = t.device.createTexture({
+    const destinationTexture = t.createTextureTracked({
       format: kColorFormat,
       size: textureSize,
       usage:
@@ -1373,7 +1390,6 @@ g.test('copy_multisampled_color')
         GPUTextureUsage.RENDER_ATTACHMENT,
       sampleCount: kSampleCount,
     });
-    t.trackForCleanup(destinationTexture);
 
     // Initialize sourceTexture with a draw call.
     const renderPipelineForInit = t.device.createRenderPipeline({
@@ -1496,12 +1512,11 @@ g.test('copy_multisampled_color')
         },
       ],
     });
-    const expectedOutputTexture = t.device.createTexture({
+    const expectedOutputTexture = t.createTextureTracked({
       format: kColorFormat,
       size: textureSize,
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
     });
-    t.trackForCleanup(expectedOutputTexture);
     const validationEncoder = t.device.createCommandEncoder();
     const renderPassForValidation = validationEncoder.beginRenderPass({
       colorAttachments: [
@@ -1537,25 +1552,26 @@ g.test('copy_multisampled_depth')
     texture can only be 1.
   `
   )
+  .beforeAllSubcases(t => {
+    t.skipIf(t.isCompatibility, 'multisample textures are not copyable in compatibility mode');
+  })
   .fn(t => {
     const textureSize = [32, 16, 1] as const;
     const kDepthFormat = 'depth24plus';
     const kSampleCount = 4;
 
-    const sourceTexture = t.device.createTexture({
+    const sourceTexture = t.createTextureTracked({
       format: kDepthFormat,
       size: textureSize,
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
       sampleCount: kSampleCount,
     });
-    t.trackForCleanup(sourceTexture);
-    const destinationTexture = t.device.createTexture({
+    const destinationTexture = t.createTextureTracked({
       format: kDepthFormat,
       size: textureSize,
       usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       sampleCount: kSampleCount,
     });
-    t.trackForCleanup(destinationTexture);
 
     const vertexState: GPUVertexState = {
       module: t.device.createShaderModule({
@@ -1643,19 +1659,17 @@ g.test('copy_multisampled_depth')
         count: kSampleCount,
       },
     });
-    const multisampledColorTexture = t.device.createTexture({
+    const multisampledColorTexture = t.createTextureTracked({
       format: kColorFormat,
       size: textureSize,
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
       sampleCount: kSampleCount,
     });
-    t.trackForCleanup(multisampledColorTexture);
-    const colorTextureAsResolveTarget = t.device.createTexture({
+    const colorTextureAsResolveTarget = t.createTextureTracked({
       format: kColorFormat,
       size: textureSize,
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
     });
-    t.trackForCleanup(colorTextureAsResolveTarget);
 
     const encoderForVerify = t.device.createCommandEncoder();
     const renderPassForVerify = encoderForVerify.beginRenderPass({

@@ -32,7 +32,7 @@
 #include "js/ColumnNumber.h"  // JS::ColumnNumberOneOrigin, JS::ColumnNumberOffset
 #include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/friend/StackLimits.h"    // js::ReportOverRecursed
-#include "util/StringBuffer.h"
+#include "util/StringBuilder.h"
 #include "vm/MatchPairs.h"
 #include "vm/PlainObject.h"
 #include "vm/RegExpShared.h"
@@ -68,7 +68,7 @@ using v8::internal::Zone;
 using v8::internal::ZoneVector;
 
 using V8HandleString = v8::internal::Handle<v8::internal::String>;
-using V8HandleRegExp = v8::internal::Handle<v8::internal::JSRegExp>;
+using V8HandleRegExp = v8::internal::Handle<v8::internal::IrRegExpData>;
 
 using namespace v8::internal::regexp_compiler_constants;
 
@@ -109,13 +109,12 @@ static uint32_t ErrorNumber(RegExpError err) {
       return JSMSG_INVALID_QUANTIFIER;
     case RegExpError::kInvalidGroup:
       return JSMSG_INVALID_GROUP;
-    case RegExpError::kMultipleFlagDashes:
     case RegExpError::kRepeatedFlag:
+      return JSMSG_REPEATED_FLAG;
     case RegExpError::kInvalidFlagGroup:
-      // V8 contains experimental support for turning regexp flags on
-      // and off in the middle of a regular expression. Unless it
-      // becomes standardized, SM does not support this feature.
-      MOZ_CRASH("Mode modifiers not supported");
+      return JSMSG_INVALID_FLAG_GROUP;
+    case RegExpError::kMultipleFlagDashes:
+      return JSMSG_MULTIPLE_FLAG_DASHES;
     case RegExpError::kNotLinear:
       // V8 has an experimental non-backtracking engine. We do not
       // support it yet.
@@ -130,8 +129,6 @@ static uint32_t ErrorNumber(RegExpError err) {
       return JSMSG_INVALID_NAMED_REF;
     case RegExpError::kInvalidNamedCaptureReference:
       return JSMSG_INVALID_NAMED_CAPTURE_REF;
-    case RegExpError::kInvalidClassEscape:
-      return JSMSG_RANGE_WITH_CLASS_ESCAPE;
     case RegExpError::kInvalidClassPropertyName:
       return JSMSG_INVALID_CLASS_PROPERTY_NAME;
     case RegExpError::kInvalidCharacterClass:
@@ -260,12 +257,12 @@ static void ReportSyntaxError(TokenStreamAnyChars& ts,
 
   // Create the windowed string, not including the potential line
   // terminator.
-  StringBuffer windowBuf(ts.context());
+  StringBuilder windowBuf(ts.context());
   if (!windowBuf.append(windowStart, windowEnd)) {
     return;
   }
 
-  // The line of context must be null-terminated, and StringBuffer doesn't
+  // The line of context must be null-terminated, and StringBuilder doesn't
   // make that happen unless we force it to.
   if (!windowBuf.append('\0')) {
     return;
@@ -640,9 +637,24 @@ enum class AssembleResult {
   return AssembleResult::Success;
 }
 
-struct RegExpCaptureIndexLess {
-  bool operator()(const RegExpCapture* lhs, const RegExpCapture* rhs) const {
-    return lhs->index() < rhs->index();
+struct RegExpNamedCapture {
+  const ZoneVector<char16_t>* name;
+  js::Vector<uint32_t> indices;
+
+  RegExpNamedCapture(JSContext* cx, const ZoneVector<char16_t>* name)
+      : name(name), indices(cx) {}
+};
+
+struct RegExpNamedCaptureIndexLess {
+  bool operator()(const RegExpNamedCapture& lhs,
+                  const RegExpNamedCapture& rhs) const {
+    // Every name must have at least one corresponding capture index, and all
+    // the capture indices must be distinct. This allows us to sort on the
+    // lowest capture index.
+    MOZ_ASSERT(!lhs.indices.empty());
+    MOZ_ASSERT(!rhs.indices.empty());
+    MOZ_ASSERT_IF(&lhs != &rhs, lhs.indices[0] != rhs.indices[0]);
+    return lhs.indices[0] < rhs.indices[0];
   }
 };
 
@@ -655,10 +667,39 @@ bool InitializeNamedCaptures(JSContext* cx, HandleRegExpShared re,
   // the capture indices as a heap-allocated array.
   uint32_t numNamedCaptures = namedCaptures->size();
 
-  // Named captures are sorted by name (because the set is used to ensure
-  // name uniqueness). But the capture name map must be sorted by index.
-  std::sort(namedCaptures->begin(), namedCaptures->end(),
-            RegExpCaptureIndexLess{});
+  // The input vector of named captures is already sorted by name, and then by
+  // capture index if there are duplicates. We iterate through the captures,
+  // creating groups for each set of indices corresponding to a name. Usually,
+  // there will be a 1:1 mapping.
+  js::Vector<RegExpNamedCapture> groups(cx);
+  if (!groups.reserve(numNamedCaptures)) {
+    js::ReportOutOfMemory(cx);
+    return false;
+  }
+  const ZoneVector<char16_t>* prevName = nullptr;
+  uint32_t numDistinctNamedCaptures = 0;
+  for (uint32_t i = 0; i < numNamedCaptures; i++) {
+    RegExpCapture* capture = (*namedCaptures)[i];
+    const ZoneVector<char16_t>* name = capture->name();
+    if (!prevName || *name != *prevName) {
+      if (!groups.emplaceBack(RegExpNamedCapture(cx, name))) {
+        js::ReportOutOfMemory(cx);
+        return false;
+      }
+      numDistinctNamedCaptures++;
+      prevName = name;
+    }
+    // Make sure we're getting the indices in the order we expect
+    MOZ_ASSERT_IF(!groups.back().indices.empty(),
+                  groups.back().indices.back() < (uint32_t)capture->index());
+    if (!groups.back().indices.emplaceBack(capture->index())) {
+      js::ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  // The capture name map must be sorted by index.
+  std::sort(groups.begin(), groups.end(), RegExpNamedCaptureIndexLess{});
 
   // Create a plain template object.
   Rooted<js::PlainObject*> templateObject(
@@ -676,14 +717,29 @@ bool InitializeNamedCaptures(JSContext* cx, HandleRegExpShared re,
     return false;
   }
 
-  // Initialize the properties of the template and populate the
-  // capture index array.
+  // Allocate the capture slice index array, if necessary. We only use this
+  // if we have duplicate named capture groups.
+  bool hasDuplicateNames = numNamedCaptures != numDistinctNamedCaptures;
+  UniquePtr<uint32_t[], JS::FreePolicy> sliceIndices;
+  if (hasDuplicateNames) {
+    arraySize = numDistinctNamedCaptures * sizeof(uint32_t);
+    sliceIndices.reset(static_cast<uint32_t*>(js_malloc(arraySize)));
+    if (!sliceIndices) {
+      js::ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  // Initialize the properties of the template and store capture indices.
   RootedId id(cx);
   RootedValue dummyString(cx, StringValue(cx->runtime()->emptyString));
-  for (uint32_t i = 0; i < numNamedCaptures; i++) {
-    RegExpCapture* capture = (*namedCaptures)[i];
-    JSAtom* name =
-        js::AtomizeChars(cx, capture->name()->data(), capture->name()->size());
+  size_t insertIndex = 0;
+
+  for (size_t i = 0; i < numDistinctNamedCaptures; ++i) {
+    RegExpNamedCapture& group = groups[i];
+    // We store the names as properties on the template object, in the order of
+    // their lowest capture index.
+    JSAtom* name = js::AtomizeChars(cx, group.name->data(), group.name->size());
     if (!name) {
       return false;
     }
@@ -692,11 +748,24 @@ bool InitializeNamedCaptures(JSContext* cx, HandleRegExpShared re,
                                   JSPROP_ENUMERATE)) {
       return false;
     }
-    captureIndices[i] = capture->index();
+    // The slice index keeps track of the captureIndex where indices
+    // corresponding to a name start. The difference between the current slice
+    // index and the next slice index is used to calculate how many values to
+    // return in the slice. This is only needed when we have duplicate capture
+    // names, otherwise, there's a 1:1 mapping, and we don't need the extra
+    // data.
+    if (hasDuplicateNames) {
+      sliceIndices[i] = insertIndex;
+    }
+
+    for (uint32_t captureIndex : groups[i].indices) {
+      captureIndices[insertIndex++] = captureIndex;
+    }
   }
 
   RegExpShared::InitializeNamedCaptures(
-      cx, re, numNamedCaptures, templateObject, captureIndices.release());
+      cx, re, numNamedCaptures, numDistinctNamedCaptures, templateObject,
+      captureIndices.release(), sliceIndices.release());
   return true;
 }
 
@@ -812,7 +881,7 @@ RegExpRunStatus ExecuteRaw(jit::JitCode* code, const CharT* chars,
   static_assert(static_cast<int32_t>(RegExpRunStatus::Success_NotFound) ==
                 v8::internal::RegExp::kInternalRegExpFailure);
 
-  typedef int (*RegExpCodeSignature)(InputOutputData*);
+  using RegExpCodeSignature = int (*)(InputOutputData*);
   auto function = reinterpret_cast<RegExpCodeSignature>(code->raw());
   {
     JS::AutoSuppressGCAnalysis nogc;
@@ -826,7 +895,7 @@ RegExpRunStatus Interpret(JSContext* cx, MutableHandleRegExpShared re,
   MOZ_ASSERT(re->getByteCode(input->hasLatin1Chars()));
 
   HandleScope handleScope(cx->isolate);
-  V8HandleRegExp wrappedRegExp(v8::internal::JSRegExp(re), cx->isolate);
+  V8HandleRegExp wrappedRegExp(v8::internal::IrRegExpData(re), cx->isolate);
   V8HandleString wrappedInput(v8::internal::String(input), cx->isolate);
 
   static_assert(static_cast<int32_t>(RegExpRunStatus::Error) ==

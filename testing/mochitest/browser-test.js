@@ -380,7 +380,7 @@ Tester.prototype = {
 
   async promiseMainWindowReady() {
     if (window.gBrowserInit) {
-      await window.gBrowserInit.idleTasksFinishedPromise;
+      await window.gBrowserInit.idleTasksFinished.promise;
     }
   },
 
@@ -413,8 +413,8 @@ Tester.prototype = {
     let baseMsg = timedOut
       ? "Found a {elt} after previous test timed out"
       : this.currentTest
-      ? "Found an unexpected {elt} at the end of test run"
-      : "Found an unexpected {elt}";
+        ? "Found an unexpected {elt} at the end of test run"
+        : "Found an unexpected {elt}";
 
     // Remove stale tabs
     if (
@@ -636,6 +636,12 @@ Tester.prototype = {
         continue;
       }
 
+      // Ignore ScrollFrameActivityTracker, it's a 4s timer which could begin
+      // shortly after the end of a test and cause failure. See bug 1878627.
+      if (name == "ScrollFrameActivityTracker") {
+        continue;
+      }
+
       // Ignore nsHttpConnectionMgr timers which show up on browser mochitests
       // running with http3. See Bug 1829841.
       if (name == "nsHttpConnectionMgr") {
@@ -800,6 +806,8 @@ Tester.prototype = {
 
       // eslint-disable-next-line no-undef
       await new Promise(resolve => SpecialPowers.flushPrefEnv(resolve));
+
+      window.SpecialPowers.cleanupAllClipboard();
 
       if (gConfig.cleanupCrashes) {
         let gdir = Services.dirsvc.get("UAppData", Ci.nsIFile);
@@ -1261,7 +1269,6 @@ Tester.prototype = {
           err
             ? {
                 name: err.message,
-                ex: err.stack,
                 stack: err.stack,
                 allowFailure: currentTest.allowFailure,
               }

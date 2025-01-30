@@ -37,6 +37,24 @@ NS_IMETHODIMP nsOpenWindowInfo::GetForceNoOpener(bool* aForceNoOpener) {
   return NS_OK;
 }
 
+NS_IMETHODIMP nsOpenWindowInfo::GetIsTopLevelCreatedByWebContent(
+    bool* aIsTopLevelCreatedByWebContent) {
+  *aIsTopLevelCreatedByWebContent = mIsTopLevelCreatedByWebContent;
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsOpenWindowInfo::GetHasValidUserGestureActivation(
+    bool* aHasValidUserGestureActivation) {
+  *aHasValidUserGestureActivation = mHasValidUserGestureActivation;
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsOpenWindowInfo::GetTextDirectiveUserActivation(
+    bool* aTextDirectiveUserActivation) {
+  *aTextDirectiveUserActivation = mTextDirectiveUserActivation;
+  return NS_OK;
+}
+
 NS_IMETHODIMP nsOpenWindowInfo::GetScriptableOriginAttributes(
     JSContext* aCx, JS::MutableHandle<JS::Value> aAttrs) {
   bool ok = ToJSValue(aCx, mOriginAttributes, aAttrs);
@@ -55,6 +73,14 @@ mozilla::dom::BrowserParent* nsOpenWindowInfo::GetNextRemoteBrowser() {
 nsIBrowsingContextReadyCallback*
 nsOpenWindowInfo::BrowsingContextReadyCallback() {
   return mBrowsingContextReadyCallback;
+}
+
+NS_IMETHODIMP nsOpenWindowInfo::Cancel() {
+  if (mBrowsingContextReadyCallback) {
+    mBrowsingContextReadyCallback->BrowsingContextReady(nullptr);
+    mBrowsingContextReadyCallback = nullptr;
+  }
+  return NS_OK;
 }
 
 NS_IMPL_ISUPPORTS(nsBrowsingContextReadyCallback,

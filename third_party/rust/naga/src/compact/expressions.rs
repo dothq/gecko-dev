@@ -20,14 +20,14 @@ pub struct ExpressionTracer<'tracer> {
     /// the module's constant expression arena.
     pub expressions_used: &'tracer mut HandleSet<crate::Expression>,
 
-    /// The used set for the module's `const_expressions` arena.
+    /// The used set for the module's `global_expressions` arena.
     ///
     /// If `None`, we are already tracing the constant expressions,
     /// and `expressions_used` already refers to their handle set.
-    pub const_expressions_used: Option<&'tracer mut HandleSet<crate::Expression>>,
+    pub global_expressions_used: Option<&'tracer mut HandleSet<crate::Expression>>,
 }
 
-impl<'tracer> ExpressionTracer<'tracer> {
+impl ExpressionTracer<'_> {
     /// Propagate usage through `self.expressions`, starting with `self.expressions_used`.
     ///
     /// Treat `self.expressions_used` as the initial set of "known
@@ -39,11 +39,11 @@ impl<'tracer> ExpressionTracer<'tracer> {
     /// marked.
     ///
     /// [fe]: crate::Function::expressions
-    /// [ce]: crate::Module::const_expressions
+    /// [ce]: crate::Module::global_expressions
     pub fn trace_expressions(&mut self) {
         log::trace!(
             "entering trace_expression of {}",
-            if self.const_expressions_used.is_some() {
+            if self.global_expressions_used.is_some() {
                 "function expressions"
             } else {
                 "const expressions"
@@ -71,6 +71,7 @@ impl<'tracer> ExpressionTracer<'tracer> {
                 | Ex::GlobalVariable(_)
                 | Ex::LocalVariable(_)
                 | Ex::CallResult(_)
+                | Ex::SubgroupBallotResult
                 | Ex::RayQueryProceedResult => {}
 
                 Ex::Constant(handle) => {
@@ -83,26 +84,41 @@ impl<'tracer> ExpressionTracer<'tracer> {
                     // and the constant refers to the initializer, it must
                     // precede `expr` in the arena.
                     let init = self.constants[handle].init;
-                    match self.const_expressions_used {
+                    match self.global_expressions_used {
                         Some(ref mut used) => used.insert(init),
                         None => self.expressions_used.insert(init),
-                    }
+                    };
                 }
-                Ex::ZeroValue(ty) => self.types_used.insert(ty),
+                Ex::Override(_) => {
+                    // All overrides are considered used by definition. We mark
+                    // their types and initialization expressions as used in
+                    // `compact::compact`, so we have no more work to do here.
+                }
+                Ex::ZeroValue(ty) => {
+                    self.types_used.insert(ty);
+                }
                 Ex::Compose { ty, ref components } => {
                     self.types_used.insert(ty);
                     self.expressions_used
                         .insert_iter(components.iter().cloned());
                 }
                 Ex::Access { base, index } => self.expressions_used.insert_iter([base, index]),
-                Ex::AccessIndex { base, index: _ } => self.expressions_used.insert(base),
-                Ex::Splat { size: _, value } => self.expressions_used.insert(value),
+                Ex::AccessIndex { base, index: _ } => {
+                    self.expressions_used.insert(base);
+                }
+                Ex::Splat { size: _, value } => {
+                    self.expressions_used.insert(value);
+                }
                 Ex::Swizzle {
                     size: _,
                     vector,
                     pattern: _,
-                } => self.expressions_used.insert(vector),
-                Ex::Load { pointer } => self.expressions_used.insert(pointer),
+                } => {
+                    self.expressions_used.insert(vector);
+                }
+                Ex::Load { pointer } => {
+                    self.expressions_used.insert(pointer);
+                }
                 Ex::ImageSample {
                     image,
                     sampler,
@@ -116,14 +132,16 @@ impl<'tracer> ExpressionTracer<'tracer> {
                     self.expressions_used
                         .insert_iter([image, sampler, coordinate]);
                     self.expressions_used.insert_iter(array_index);
-                    match self.const_expressions_used {
+                    match self.global_expressions_used {
                         Some(ref mut used) => used.insert_iter(offset),
                         None => self.expressions_used.insert_iter(offset),
                     }
                     use crate::SampleLevel as Sl;
                     match *level {
                         Sl::Auto | Sl::Zero => {}
-                        Sl::Exact(expr) | Sl::Bias(expr) => self.expressions_used.insert(expr),
+                        Sl::Exact(expr) | Sl::Bias(expr) => {
+                            self.expressions_used.insert(expr);
+                        }
                         Sl::Gradient { x, y } => self.expressions_used.insert_iter([x, y]),
                     }
                     self.expressions_used.insert_iter(depth_ref);
@@ -149,7 +167,9 @@ impl<'tracer> ExpressionTracer<'tracer> {
                         Iq::NumLevels | Iq::NumLayers | Iq::NumSamples => {}
                     }
                 }
-                Ex::Unary { op: _, expr } => self.expressions_used.insert(expr),
+                Ex::Unary { op: _, expr } => {
+                    self.expressions_used.insert(expr);
+                }
                 Ex::Binary { op: _, left, right } => {
                     self.expressions_used.insert_iter([left, right]);
                 }
@@ -164,8 +184,12 @@ impl<'tracer> ExpressionTracer<'tracer> {
                     axis: _,
                     ctrl: _,
                     expr,
-                } => self.expressions_used.insert(expr),
-                Ex::Relational { fun: _, argument } => self.expressions_used.insert(argument),
+                } => {
+                    self.expressions_used.insert(expr);
+                }
+                Ex::Relational { fun: _, argument } => {
+                    self.expressions_used.insert(argument);
+                }
                 Ex::Math {
                     fun: _,
                     arg,
@@ -182,14 +206,23 @@ impl<'tracer> ExpressionTracer<'tracer> {
                     expr,
                     kind: _,
                     convert: _,
-                } => self.expressions_used.insert(expr),
-                Ex::AtomicResult { ty, comparison: _ } => self.types_used.insert(ty),
-                Ex::WorkGroupUniformLoadResult { ty } => self.types_used.insert(ty),
-                Ex::ArrayLength(expr) => self.expressions_used.insert(expr),
+                } => {
+                    self.expressions_used.insert(expr);
+                }
+                Ex::ArrayLength(expr) => {
+                    self.expressions_used.insert(expr);
+                }
+                Ex::AtomicResult { ty, comparison: _ }
+                | Ex::WorkGroupUniformLoadResult { ty }
+                | Ex::SubgroupOperationResult { ty } => {
+                    self.types_used.insert(ty);
+                }
                 Ex::RayQueryGetIntersection {
                     query,
                     committed: _,
-                } => self.expressions_used.insert(query),
+                } => {
+                    self.expressions_used.insert(query);
+                }
             }
         }
     }
@@ -217,7 +250,11 @@ impl ModuleMap {
             | Ex::GlobalVariable(_)
             | Ex::LocalVariable(_)
             | Ex::CallResult(_)
+            | Ex::SubgroupBallotResult
             | Ex::RayQueryProceedResult => {}
+
+            // All overrides are retained, so their handles never change.
+            Ex::Override(_) => {}
 
             // Expressions that contain handles that need to be adjusted.
             Ex::Constant(ref mut constant) => self.constants.adjust(constant),
@@ -267,7 +304,7 @@ impl ModuleMap {
                 adjust(coordinate);
                 operand_map.adjust_option(array_index);
                 if let Some(ref mut offset) = *offset {
-                    self.const_expressions.adjust(offset);
+                    self.global_expressions.adjust(offset);
                 }
                 self.adjust_sample_level(level, operand_map);
                 operand_map.adjust_option(depth_ref);
@@ -344,6 +381,7 @@ impl ModuleMap {
                 comparison: _,
             } => self.types.adjust(ty),
             Ex::WorkGroupUniformLoadResult { ref mut ty } => self.types.adjust(ty),
+            Ex::SubgroupOperationResult { ref mut ty } => self.types.adjust(ty),
             Ex::ArrayLength(ref mut expr) => adjust(expr),
             Ex::RayQueryGetIntersection {
                 ref mut query,

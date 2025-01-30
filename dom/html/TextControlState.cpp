@@ -9,12 +9,13 @@
 #include "mozilla/CaretAssociationHint.h"
 #include "mozilla/IMEContentObserver.h"
 #include "mozilla/IMEStateManager.h"
+#include "mozilla/TextComposition.h"
 #include "mozilla/TextInputListener.h"
 
 #include "nsCOMPtr.h"
 #include "nsView.h"
 #include "nsCaret.h"
-#include "nsITextControlFrame.h"
+#include "nsFocusManager.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsTextControlFrame.h"
 #include "nsIControllers.h"
@@ -33,11 +34,12 @@
 #include "mozilla/Preferences.h"
 #include "nsTextNode.h"
 #include "nsIController.h"
-#include "nsIScrollableFrame.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/InputEventOptions.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/NativeKeyBindingsType.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -59,7 +61,6 @@ namespace mozilla {
 using namespace dom;
 using ValueSetterOption = TextControlState::ValueSetterOption;
 using ValueSetterOptions = TextControlState::ValueSetterOptions;
-using SelectionDirection = nsITextControlFrame::SelectionDirection;
 
 /*****************************************************************************
  * TextControlElement
@@ -340,7 +341,7 @@ class TextInputSelectionController final : public nsSupportsWeakReference,
 
   TextInputSelectionController(PresShell* aPresShell, nsIContent* aLimiter);
 
-  void SetScrollableFrame(nsIScrollableFrame* aScrollableFrame);
+  void SetScrollContainerFrame(ScrollContainerFrame* aScrollContainerFrame);
   nsFrameSelection* GetConstFrameSelection() { return mFrameSelection; }
   // Will return null if !mFrameSelection.
   Selection* GetSelection(SelectionType aSelectionType);
@@ -354,7 +355,8 @@ class TextInputSelectionController final : public nsSupportsWeakReference,
                                     Selection** aSelection) override;
   Selection* GetSelection(RawSelectionType aRawSelectionType) override;
   NS_IMETHOD ScrollSelectionIntoView(RawSelectionType aRawSelectionType,
-                                     int16_t aRegion, int16_t aFlags) override;
+                                     SelectionRegion aRegion,
+                                     ControllerScrollFlags aFlags) override;
   NS_IMETHOD RepaintSelection(RawSelectionType aRawSelectionType) override;
   nsresult RepaintSelection(nsPresContext* aPresContext,
                             SelectionType aSelectionType);
@@ -380,10 +382,11 @@ class TextInputSelectionController final : public nsSupportsWeakReference,
   NS_IMETHOD ScrollCharacter(bool aRight) override;
   void SelectionWillTakeFocus() override;
   void SelectionWillLoseFocus() override;
+  using nsISelectionController::ScrollSelectionIntoView;
 
  private:
   RefPtr<nsFrameSelection> mFrameSelection;
-  nsIScrollableFrame* mScrollFrame;
+  ScrollContainerFrame* mScrollContainerFrame = nullptr;
   nsWeakPtr mPresShellWeak;
 };
 
@@ -398,8 +401,7 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTION_WEAK(TextInputSelectionController, mFrameSelection)
 
 TextInputSelectionController::TextInputSelectionController(
-    PresShell* aPresShell, nsIContent* aLimiter)
-    : mScrollFrame(nullptr) {
+    PresShell* aPresShell, nsIContent* aLimiter) {
   if (aPresShell) {
     bool accessibleCaretEnabled =
         PresShell::AccessibleCaretEnabled(aLimiter->OwnerDoc()->GetDocShell());
@@ -409,10 +411,10 @@ TextInputSelectionController::TextInputSelectionController(
   }
 }
 
-void TextInputSelectionController::SetScrollableFrame(
-    nsIScrollableFrame* aScrollableFrame) {
-  mScrollFrame = aScrollableFrame;
-  if (!mScrollFrame && mFrameSelection) {
+void TextInputSelectionController::SetScrollContainerFrame(
+    ScrollContainerFrame* aScrollContainerFrame) {
+  mScrollContainerFrame = aScrollContainerFrame;
+  if (!mScrollContainerFrame && mFrameSelection) {
     mFrameSelection->DisconnectFromPresShell();
     mFrameSelection = nullptr;
   }
@@ -482,7 +484,8 @@ Selection* TextInputSelectionController::GetSelection(
 
 NS_IMETHODIMP
 TextInputSelectionController::ScrollSelectionIntoView(
-    RawSelectionType aRawSelectionType, int16_t aRegion, int16_t aFlags) {
+    RawSelectionType aRawSelectionType, SelectionRegion aRegion,
+    ControllerScrollFlags aFlags) {
   if (!mFrameSelection) {
     return NS_ERROR_NULL_POINTER;
   }
@@ -547,10 +550,7 @@ TextInputSelectionController::SetCaretReadOnly(bool aReadOnly) {
     return NS_ERROR_FAILURE;
   }
 
-  Selection* selection = mFrameSelection->GetSelection(SelectionType::eNormal);
-  if (selection) {
-    caret->SetCaretReadOnly(aReadOnly);
-  }
+  caret->SetCaretReadOnly(aReadOnly);
   return NS_OK;
 }
 
@@ -592,10 +592,8 @@ TextInputSelectionController::SetCaretVisibilityDuringSelection(
   if (!caret) {
     return NS_ERROR_FAILURE;
   }
-  Selection* selection = mFrameSelection->GetSelection(SelectionType::eNormal);
-  if (selection) {
-    caret->SetVisibilityDuringSelection(aVisibility);
-  }
+
+  caret->SetVisibilityDuringSelection(aVisibility);
   return NS_OK;
 }
 
@@ -653,36 +651,33 @@ NS_IMETHODIMP
 TextInputSelectionController::PageMove(bool aForward, bool aExtend) {
   // expected behavior for PageMove is to scroll AND move the caret
   // and to remain relative position of the caret in view. see Bug 4302.
-  if (mScrollFrame) {
+  if (mScrollContainerFrame) {
     RefPtr<nsFrameSelection> frameSelection = mFrameSelection;
-    nsIFrame* scrollFrame = do_QueryFrame(mScrollFrame);
-    // We won't scroll parent scrollable element of mScrollFrame.  Therefore,
-    // this may be handled when mScrollFrame is completely outside of the view.
-    // In such case, user may be confused since they might have wanted to
-    // scroll a parent scrollable element.  For making clearer which element
-    // handles PageDown/PageUp, we should move selection into view even if
-    // selection is not changed.
-    return frameSelection->PageMove(aForward, aExtend, scrollFrame,
+    // We won't scroll parent scrollable element of mScrollContainerFrame.
+    // Therefore, this may be handled when mScrollContainerFrame is completely
+    // outside of the view. In such case, user may be confused since they might
+    // have wanted to scroll a parent scrollable element. For making clearer
+    // which element handles PageDown/PageUp, we should move selection into view
+    // even if selection is not changed.
+    return frameSelection->PageMove(aForward, aExtend, mScrollContainerFrame,
                                     nsFrameSelection::SelectionIntoView::Yes);
   }
   // Similarly, if there is no scrollable frame, we should move the editor
   // frame into the view for making it clearer which element handles
   // PageDown/PageUp.
-  return ScrollSelectionIntoView(
-      nsISelectionController::SELECTION_NORMAL,
-      nsISelectionController::SELECTION_FOCUS_REGION,
-      nsISelectionController::SCROLL_SYNCHRONOUS |
-          nsISelectionController::SCROLL_FOR_CARET_MOVE);
+  return ScrollSelectionIntoView(SelectionType::eNormal,
+                                 nsISelectionController::SELECTION_FOCUS_REGION,
+                                 SelectionScrollMode::SyncFlush);
 }
 
 NS_IMETHODIMP
 TextInputSelectionController::CompleteScroll(bool aForward) {
-  if (!mScrollFrame) {
+  if (!mScrollContainerFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::WHOLE,
-                         ScrollMode::Instant);
+  mScrollContainerFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
+                                  ScrollUnit::WHOLE, ScrollMode::Instant);
   return NS_OK;
 }
 
@@ -730,34 +725,34 @@ TextInputSelectionController::CompleteMove(bool aForward, bool aExtend) {
 
 NS_IMETHODIMP
 TextInputSelectionController::ScrollPage(bool aForward) {
-  if (!mScrollFrame) {
+  if (!mScrollContainerFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::PAGES,
-                         ScrollMode::Smooth);
+  mScrollContainerFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
+                                  ScrollUnit::PAGES, ScrollMode::Smooth);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 TextInputSelectionController::ScrollLine(bool aForward) {
-  if (!mScrollFrame) {
+  if (!mScrollContainerFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::LINES,
-                         ScrollMode::Smooth);
+  mScrollContainerFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
+                                  ScrollUnit::LINES, ScrollMode::Smooth);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 TextInputSelectionController::ScrollCharacter(bool aRight) {
-  if (!mScrollFrame) {
+  if (!mScrollContainerFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  mScrollFrame->ScrollBy(nsIntPoint(aRight ? 1 : -1, 0), ScrollUnit::LINES,
-                         ScrollMode::Smooth);
+  mScrollContainerFrame->ScrollBy(nsIntPoint(aRight ? 1 : -1, 0),
+                                  ScrollUnit::LINES, ScrollMode::Smooth);
   return NS_OK;
 }
 
@@ -860,7 +855,7 @@ void TextInputListener::OnSelectionChange(Selection& aSelection,
   mSelectionWasCollapsed = collapsed;
 
   if (!weakFrame.IsAlive() || !mFrame ||
-      !nsContentUtils::IsFocusedContent(mFrame->GetContent())) {
+      nsFocusManager::GetFocusedElementStatic() != mFrame->GetContent()) {
     return;
   }
 
@@ -1264,10 +1259,9 @@ class MOZ_STACK_CLASS AutoTextControlHandlingState {
     }
     // The new value never includes line breaks caused by hard-wrap.
     // So, mCachedValue can always cache the new value.
-    nsITextControlFrame* textControlFrame =
+    nsTextControlFrame* textControlFrame =
         do_QueryFrame(mTextControlFrame.GetFrame());
-    return static_cast<nsTextControlFrame*>(textControlFrame)
-                   ->CacheValue(mSettingValue, fallible)
+    return textControlFrame->CacheValue(mSettingValue, fallible)
                ? NS_OK
                : NS_ERROR_OUT_OF_MEMORY;
   }
@@ -1793,7 +1787,7 @@ nsresult TextControlState::PrepareEditor(const nsAString* aValue) {
 
     // What follows is a bit of a hack.  The editor uses the public DOM APIs
     // for its content manipulations, and it causes it to fail some security
-    // checks deep inside when initializing. So we explictly make it clear that
+    // checks deep inside when initializing. So we explicitly make it clear that
     // we're native code.
     // Note that any script that's directly trying to access our value
     // has to be going through some scriptable object to do that and that
@@ -2116,8 +2110,10 @@ void TextControlState::SetSelectionRange(uint32_t aStart, uint32_t aEnd,
   // XXX(krosylight): Shouldn't it fire before select event?
   // Currently Gecko and Blink both fire selectionchange after select.
   if (IsSelectionCached() &&
-      StaticPrefs::dom_select_events_textcontrols_selectionchange_enabled()) {
-    asyncDispatcher = new AsyncEventDispatcher(
+      StaticPrefs::dom_select_events_textcontrols_selectionchange_enabled() &&
+      !mTextCtrlElement->HasScheduledSelectionChangeEvent()) {
+    mTextCtrlElement->SetHasScheduledSelectionChangeEvent();
+    asyncDispatcher = new AsyncSelectionChangeEventDispatcher(
         mTextCtrlElement, eSelectionChange, CanBubble::eYes);
     asyncDispatcher->PostDOMEvent();
   }
@@ -2397,8 +2393,7 @@ void TextControlState::UnbindFromFrame(nsTextControlFrame* aFrame) {
     uint32_t start = 0, end = 0;
     GetSelectionRange(&start, &end, IgnoreErrors());
 
-    nsITextControlFrame::SelectionDirection direction =
-        GetSelectionDirection(IgnoreErrors());
+    SelectionDirection direction = GetSelectionDirection(IgnoreErrors());
 
     SelectionProperties& props = GetSelectionProperties();
     props.SetMaxLength(value.Length());
@@ -2447,7 +2442,7 @@ void TextControlState::UnbindFromFrame(nsTextControlFrame* aFrame) {
       mTextListener->EndListeningToSelectionChange();
     }
 
-    mSelCon->SetScrollableFrame(nullptr);
+    mSelCon->SetScrollContainerFrame(nullptr);
     mSelCon = nullptr;
   }
 
@@ -2639,7 +2634,9 @@ bool TextControlState::SetValue(const nsAString& aValue,
   //       bug must not be reproducible actually.
   if (aOptions.contains(ValueSetterOption::BySetUserInputAPI) ||
       aOptions.contains(ValueSetterOption::ByContentAPI)) {
-    if (EditorHasComposition()) {
+    RefPtr<TextComposition> compositionInEditor =
+        mTextEditor ? mTextEditor->GetComposition() : nullptr;
+    if (compositionInEditor && compositionInEditor->IsComposing()) {
       // When this is called recursively, there shouldn't be composition.
       if (handlingSetValue.IsHandling(TextControlAction::CommitComposition)) {
         // Don't request to commit composition again.  But if it occurs,
@@ -2674,10 +2671,34 @@ bool TextControlState::SetValue(const nsAString& aValue,
       AutoTextControlHandlingState handlingCommitComposition(
           *this, TextControlAction::CommitComposition);
       if (nsContentUtils::IsSafeToRunScript()) {
-        // WARNING: During this call, compositionupdate, compositionend, input
-        // events will be fired.  Therefore, everything can occur.  E.g., the
-        // document may be unloaded.
-        RefPtr<TextEditor> textEditor = mTextEditor;
+        // While we're committing composition, we don't want TextEditor
+        // dispatches nested `beforeinput`/`input` events if this is called by a
+        // `beforeinput`/`input` event listener since the commit value will be
+        // completely overwritten by the new value soon and the web app do not
+        // need to handle the temporary input caused by committing composition
+        // which is caused by updating the value by the web app itself  Note
+        // that `input` event listener may be async function and setting value
+        // may occur after the editor ends dispatching `input` event. Even in
+        // this case, to avoid nest call of the async `input` event listener, we
+        // need to suppress `input` events caused by committing composition.  On
+        // the other hand, we need to dispatch `input` event when the value is
+        // set by a `compositionupdate` event listener because once we suppress
+        // `input` event for it, the composition change won't cause dispatching
+        // `input` event.  Therefore, we should not suppress `input` events
+        // before the editor starts handling the composition change, but we need
+        // to suppress `input` events even after the editor ends handling the
+        // change.
+        // FYI: Even if we suppress `input` event dispatching,
+        // `compositionupdate` and `compositionend` caused by the committing
+        // composition will be fired.  Therefore, everything could occur during
+        // a the following call.  I.e., the document may be unloaded by the web
+        // app itself.
+        Maybe<AutoInputEventSuppresser> preventInputEventsDuringCommit;
+        if (mTextEditor->IsDispatchingInputEvent() ||
+            compositionInEditor->EditorHasHandledLatestChange()) {
+          preventInputEventsDuringCommit.emplace(mTextEditor);
+        }
+        OwningNonNull<TextEditor> textEditor(*mTextEditor);
         nsresult rv = textEditor->CommitComposition();
         if (handlingCommitComposition.IsTextControlStateDestroyed()) {
           return true;
@@ -2784,8 +2805,7 @@ bool TextControlState::SetValueWithTextEditor(
         aHandlingSetValue.GetSettingValue(), nullptr,
         StaticPrefs::dom_input_event_allow_to_cancel_set_user_input()
             ? TextEditor::AllowBeforeInputEventCancelable::Yes
-            : TextEditor::AllowBeforeInputEventCancelable::No,
-        nullptr);
+            : TextEditor::AllowBeforeInputEventCancelable::No);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "EditorBase::ReplaceTextAsAction() failed");
     return rv != NS_ERROR_OUT_OF_MEMORY;
@@ -2877,8 +2897,7 @@ bool TextControlState::SetValueWithoutTextEditor(
 
   // We can't just early-return here, because OnValueChanged below still need to
   // be called.
-  if (!mValue.Equals(aHandlingSetValue.GetSettingValue()) ||
-      !StaticPrefs::dom_input_skip_cursor_move_for_same_value_set()) {
+  if (!mValue.Equals(aHandlingSetValue.GetSettingValue())) {
     bool handleSettingValue = true;
     // If `SetValue()` call is nested, `GetSettingValue()` result will be
     // modified.  So, we need to store input event data value before
@@ -3036,7 +3055,7 @@ void TextControlState::InitializeKeyboardEventListeners() {
                                     TrustedEventsAtSystemGroupBubble());
   }
 
-  mSelCon->SetScrollableFrame(mBoundFrame->GetScrollTargetFrame());
+  mSelCon->SetScrollContainerFrame(mBoundFrame->GetScrollTargetFrame());
 }
 
 void TextControlState::SetPreviewText(const nsAString& aValue, bool aNotify) {

@@ -49,7 +49,7 @@ nsresult HTMLAreaElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
   return PostHandleEventForAnchors(aVisitor);
 }
 
-void HTMLAreaElement::GetLinkTarget(nsAString& aTarget) {
+void HTMLAreaElement::GetLinkTargetImpl(nsAString& aTarget) {
   GetAttr(nsGkAtoms::target, aTarget);
   if (aTarget.IsEmpty()) {
     GetBaseTarget(aTarget);
@@ -91,8 +91,6 @@ void HTMLAreaElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
   return nsGenericHTMLElement::AfterSetAttr(
       aNamespaceID, aName, aValue, aOldValue, aSubjectPrincipal, aNotify);
 }
-
-void HTMLAreaElement::ToString(nsAString& aSource) { GetHref(aSource); }
 
 already_AddRefed<nsIURI> HTMLAreaElement::GetHrefURI() const {
   if (nsCOMPtr<nsIURI> uri = GetCachedURI()) {

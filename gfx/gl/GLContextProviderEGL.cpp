@@ -30,6 +30,7 @@
 #  ifdef MOZ_WIDGET_ANDROID
 #    include <android/native_window.h>
 #    include <android/native_window_jni.h>
+#    include "mozilla/jni/Utils.h"
 #    include "mozilla/widget/AndroidCompositorWidget.h"
 #  endif
 
@@ -105,7 +106,7 @@ class WaylandOffscreenGLSurface {
   struct wl_egl_window* mEGLWindow = nullptr;
 };
 
-static nsTHashMap<nsPtrHashKey<void>, WaylandOffscreenGLSurface*>
+MOZ_RUNINIT static nsTHashMap<nsPtrHashKey<void>, WaylandOffscreenGLSurface*>
     sWaylandOffscreenGLSurfaces;
 
 void DeleteWaylandOffscreenGLSurface(EGLSurface surface) {
@@ -227,7 +228,7 @@ already_AddRefed<GLContext> GLContextEGLFactory::CreateImpl(
     gfxCriticalNote << "Failed[3] to load EGL library: " << failureId.get();
     return nullptr;
   }
-  const auto egl = lib->CreateDisplay(true, &failureId);
+  const auto egl = lib->CreateDisplay(true, false, &failureId);
   if (!egl) {
     gfxCriticalNote << "Failed[3] to create EGL library  display: "
                     << failureId.get();
@@ -336,23 +337,29 @@ EGLSurface GLContextEGL::CreateEGLSurfaceForCompositorWidget(
   }
 
   MOZ_ASSERT(aCompositorWidget);
-#ifdef MOZ_WAYLAND
-  // RenderCompositorEGL does not like EGL_NO_SURFACE as it fallbacks
-  // to SW rendering or claims itself as paused.
-  // In case we're missing valid native window because aCompositorWidget hidden,
-  // just create a fallback EGLSurface.
-  // Actual EGLSurface will be created by widget code later when
-  // aCompositorWidget becomes visible.
-  if (widget::GdkIsWaylandDisplay() && aCompositorWidget->IsHidden()) {
-    mozilla::gfx::IntSize pbSize(16, 16);
-    return CreateWaylandOffscreenSurface(*egl, aConfig, pbSize);
-  }
-#endif
   EGLNativeWindowType window =
       GET_NATIVE_WINDOW_FROM_COMPOSITOR_WIDGET(aCompositorWidget);
   if (!window) {
+#ifdef MOZ_WIDGET_GTK
+    // RenderCompositorEGL does not like EGL_NO_SURFACE as it fallbacks
+    // to SW rendering or claims itself as paused.
+    // In case we're missing valid native window because aCompositorWidget
+    // hidden, just create a fallback EGLSurface. Actual EGLSurface will be
+    // created by widget code later when aCompositorWidget becomes visible.
+    mozilla::gfx::IntSize pbSize(16, 16);
+#  ifdef MOZ_WAYLAND
+    if (GdkIsWaylandDisplay()) {
+      return CreateWaylandOffscreenSurface(*egl, aConfig, pbSize);
+    } else
+#  endif
+    {
+      return CreatePBufferSurfaceTryingPowerOfTwo(*egl, aConfig, LOCAL_EGL_NONE,
+                                                  pbSize);
+    }
+#else
     gfxCriticalNote << "window is null";
     return EGL_NO_SURFACE;
+#endif
   }
 
   return mozilla::gl::CreateSurfaceFromNativeWindow(*egl, window, aConfig);
@@ -411,6 +418,15 @@ bool GLContextEGL::Init() {
       mEgl->HasKHRImageBase() &&
       mEgl->IsExtensionSupported(EGLExtension::KHR_gl_texture_2D_image) &&
       IsExtensionSupported(OES_EGL_image);
+
+#if MOZ_WIDGET_ANDROID
+  // We see crashes in eglTerminate on devices with Xclipse GPUs running
+  // Android 14. Choose to leak the EGLDisplays in order to avoid the crashes.
+  // See bug 1868825 and bug 1903810.
+  if (Renderer() == GLRenderer::SamsungXclipse && jni::GetAPIVersion() >= 34) {
+    mEgl->SetShouldLeakEGLDisplay();
+  }
+#endif
 
   return true;
 }
@@ -486,16 +502,6 @@ bool GLContextEGL::RenewSurface(CompositorWidget* aWidget) {
 
   EGLNativeWindowType nativeWindow =
       GET_NATIVE_WINDOW_FROM_COMPOSITOR_WIDGET(aWidget);
-#ifdef MOZ_WAYLAND
-  // In case we're missing native window on Wayland CompositorWidget is hidden.
-  // Don't create a fallback EGL surface but fails here.
-  // We need to repeat RenewSurface() when native window is available
-  // (CompositorWidget becomes visible).
-  if (GdkIsWaylandDisplay()) {
-    NS_WARNING("Failed to get native window");
-    return false;
-  }
-#endif
   if (nativeWindow) {
     mSurface = mozilla::gl::CreateSurfaceFromNativeWindow(*mEgl, nativeWindow,
                                                           mSurfaceConfig);
@@ -875,7 +881,7 @@ bool CreateConfig(EglDisplay& aEgl, EGLConfig* aConfig, int32_t aDepth,
                   bool aEnableDepthBuffer, bool aUseGles, bool aAllowFallback) {
   EGLConfig configs[64];
   std::vector<EGLint> attribs;
-  EGLint ncfg = ArrayLength(configs);
+  EGLint ncfg = std::size(configs);
 
   switch (aDepth) {
     case 16:
@@ -974,7 +980,7 @@ bool CreateConfig(EglDisplay& aEgl, EGLConfig* aConfig, int32_t aDepth,
 static bool CreateConfigScreen(EglDisplay& egl, EGLConfig* const aConfig,
                                const bool aEnableDepthBuffer,
                                const bool aUseGles) {
-  int32_t depth = gfxVars::ScreenDepth();
+  int32_t depth = gfxVars::PrimaryScreenDepth();
   if (CreateConfig(egl, aConfig, depth, aEnableDepthBuffer, aUseGles)) {
     return true;
   }
@@ -1236,7 +1242,11 @@ void GLContextEGL::DestroySurface(EglDisplay& aEgl, const EGLSurface aSurface) {
 /*static*/
 already_AddRefed<GLContext> GLContextProviderEGL::CreateHeadless(
     const GLContextCreateDesc& desc, nsACString* const out_failureId) {
-  const auto display = DefaultEglDisplay(out_failureId);
+  bool useSoftwareDisplay =
+      static_cast<bool>(desc.flags & CreateContextFlags::FORBID_HARDWARE);
+  const auto display = useSoftwareDisplay
+                           ? CreateSoftwareEglDisplay(out_failureId)
+                           : DefaultEglDisplay(out_failureId);
   if (!display) {
     return nullptr;
   }

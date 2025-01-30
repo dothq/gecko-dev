@@ -11,6 +11,7 @@
 #include "jit/JitSpewer.h"
 #include "vm/JSContext.h"
 #include "vm/JSScript.h"
+#include "vm/Logging.h"
 
 #include "gc/StableCellHasher-inl.h"
 #include "vm/JSScript-inl.h"
@@ -22,7 +23,8 @@ js::DependentScriptSet::DependentScriptSet(JSContext* cx,
 bool js::InvalidatingRuntimeFuse::addFuseDependency(JSContext* cx,
                                                     Handle<JSScript*> script) {
   auto* zone = script->zone();
-  DependentScriptSet* dss = zone->getOrCreateDependentScriptSet(cx, this);
+  DependentScriptSet* dss =
+      zone->fuseDependencies.getOrCreateDependentScriptSet(cx, this);
   if (!dss) {
     return false;
   }
@@ -33,6 +35,8 @@ bool js::InvalidatingRuntimeFuse::addFuseDependency(JSContext* cx,
 void js::InvalidatingRuntimeFuse::popFuse(JSContext* cx) {
   // Pop the fuse in the base class
   GuardFuse::popFuse(cx);
+  JS_LOG(fuseInvalidation, mozilla::LogLevel::Verbose,
+         "Invalidating fuse popping: %s", name());
   // do invalidation.
   for (AllZonesIter z(cx->runtime()); !z.done(); z.next()) {
     // There's one dependent script set per fuse; just iterate over them all to
@@ -50,33 +54,73 @@ void js::DependentScriptSet::invalidateForFuse(JSContext* cx,
     return;
   }
 
-  for (auto r = weakScripts.all(); !r.empty(); r.popFront()) {
+  jit::InvalidateAndClearScriptSet(cx, weakScripts, "fuse");
+}
+
+void js::jit::InvalidateAndClearScriptSet(JSContext* cx,
+                                          WeakScriptCache& scripts,
+                                          const char* reason) {
+  // Move the cache contents into this local -- this clears the other one, and
+  // also protects from js::jit::Invalidate trying to modify scripts out from
+  // under us. See ClearPendingInvalidationDependencies.
+  WeakScriptSet localScripts = scripts.stealContents();
+  MOZ_ASSERT(scripts.empty());
+
+  for (auto r = localScripts.all(); !r.empty(); r.popFront()) {
     JSScript* script = r.front().get();
     // A script may have lost its ion script for other reasons
     // by the time this is invoked, so need to ensure it's still there
-    // before calling invaidate.
+    // before calling invalidate.
     if (script->hasIonScript()) {
-      JitSpew(jit::JitSpew_IonInvalidate, "Invalidating ion script %p",
-              script->ionScript());
+      JitSpew(jit::JitSpew_IonInvalidate, "Invalidating ion script %p for %s",
+              script->ionScript(), reason);
+      JS_LOG(fuseInvalidation, mozilla::LogLevel::Debug,
+             "Invalidating ion script %s:%d for reason %s", script->filename(),
+             script->lineno(), reason);
       js::jit::Invalidate(cx, script);
     }
   }
-
-  // Scripts are invalidated, flush them.
-  weakScripts.clear();
 }
 
 bool js::DependentScriptSet::addScriptForFuse(InvalidatingFuse* fuse,
                                               Handle<JSScript*> script) {
   MOZ_ASSERT(fuse == associatedFuse);
+  return jit::AddScriptToSet(weakScripts, script);
+}
 
-  WeakScriptSet::AddPtr p = weakScripts.lookupForAdd(script);
+js::DependentScriptSet* js::DependentScriptGroup::getOrCreateDependentScriptSet(
+    JSContext* cx, js::InvalidatingFuse* fuse) {
+  for (auto& dss : dependencies) {
+    if (dss.associatedFuse == fuse) {
+      return &dss;
+    }
+  }
+
+  if (!dependencies.emplaceBack(cx, fuse)) {
+    return nullptr;
+  }
+
+  auto& dss = dependencies.back();
+  MOZ_ASSERT(dss.associatedFuse == fuse);
+  return &dss;
+}
+
+bool js::jit::AddScriptToSet(WeakScriptCache& scripts,
+                             Handle<JSScript*> script) {
+  js::jit::WeakScriptSet::AddPtr p = scripts.lookupForAdd(script);
   if (!p) {
-    if (!weakScripts.add(p, script)) {
+    if (!scripts.add(p, script)) {
       return false;
     }
   }
 
   // Script is already in the set, no need to re-add.
   return true;
+}
+
+void js::jit::RemoveFromScriptSet(WeakScriptCache& scripts, JSScript* script) {
+  js::jit::WeakScriptSet::Ptr p = scripts.lookup(script);
+  if (p) {
+    scripts.remove(p);
+  }
 }

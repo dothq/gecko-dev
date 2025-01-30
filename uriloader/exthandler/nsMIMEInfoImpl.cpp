@@ -22,6 +22,7 @@
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "xpcpublic.h"
+#include "nsIGIOService.h"
 
 static bool sInitializedOurData = false;
 mozilla::StaticRefPtr<nsIFile> sOurAppFile;
@@ -231,6 +232,11 @@ nsMIMEInfoBase::GetDefaultDescription(nsAString& aDefaultDescription) {
 }
 
 NS_IMETHODIMP
+nsMIMEInfoBase::GetDefaultExecutable(nsIFile** aExecutable) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 nsMIMEInfoBase::GetPreferredApplicationHandler(
     nsIHandlerApp** aPreferredAppHandler) {
   *aPreferredAppHandler = mPreferredApplication;
@@ -321,6 +327,13 @@ nsMIMEInfoBase::LaunchWithFile(nsIFile* aFile) {
   if (mPreferredAction == useHelperApp) {
     if (!mPreferredApplication) return NS_ERROR_FILE_NOT_FOUND;
 
+#ifdef XP_UNIX
+    nsCOMPtr<nsIGIOHandlerApp> handler =
+        do_QueryInterface(mPreferredApplication, &rv);
+    if (NS_SUCCEEDED(rv)) {
+      return handler->LaunchFile(aFile->NativePath());
+    }
+#endif
     // at the moment, we only know how to hand files off to local handlers
     nsCOMPtr<nsILocalHandlerApp> localHandler =
         do_QueryInterface(mPreferredApplication, &rv);
@@ -481,6 +494,16 @@ nsMIMEInfoImpl::GetDefaultDescription(nsAString& aDefaultDescription) {
   aDefaultDescription = mDefaultAppDescription;
 
   return NS_OK;
+}
+
+NS_IMETHODIMP nsMIMEInfoImpl::GetDefaultExecutable(nsIFile** aExecutable) {
+  nsCOMPtr<nsIFile> defaultApp = GetDefaultApplication();
+  if (defaultApp) {
+    defaultApp.forget(aExecutable);
+    return NS_OK;
+  }
+
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP

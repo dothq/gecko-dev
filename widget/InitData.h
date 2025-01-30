@@ -17,11 +17,10 @@ enum class WindowType : uint8_t {
   TopLevel,   // default top level window
   Dialog,     // top level window but usually handled differently
               // by the OS
-  Sheet,      // MacOSX sheet (special dialog class)
   Popup,      // used for combo boxes, etc
   Child,      // child windows (contained inside a window on the
               // desktop (has no border))
-  Invisible,  // windows that are invisible or offscreen
+  Invisible,  // a special hidden window (not to be created by arbitrary code)
 };
 
 // Popup types for WindowType::Popup

@@ -23,16 +23,21 @@ type EventRecord = (u64, HashMap<String, String>);
 /// process.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct IPCPayload {
+    pub booleans: HashMap<MetricId, bool>,
+    pub labeled_booleans: HashMap<MetricId, HashMap<String, bool>>,
     pub counters: HashMap<MetricId, i32>,
     pub custom_samples: HashMap<MetricId, Vec<i64>>,
+    pub labeled_custom_samples: HashMap<MetricId, HashMap<String, Vec<i64>>>,
     pub denominators: HashMap<MetricId, i32>,
     pub events: HashMap<MetricId, Vec<EventRecord>>,
     pub labeled_counters: HashMap<MetricId, HashMap<String, i32>>,
     pub memory_samples: HashMap<MetricId, Vec<u64>>,
+    pub labeled_memory_samples: HashMap<MetricId, HashMap<String, Vec<u64>>>,
     pub numerators: HashMap<MetricId, i32>,
     pub rates: HashMap<MetricId, (i32, i32)>,
     pub string_lists: HashMap<MetricId, Vec<String>>,
     pub timing_samples: HashMap<MetricId, Vec<u64>>,
+    pub labeled_timing_samples: HashMap<MetricId, HashMap<String, Vec<u64>>>,
 }
 
 /// Global singleton: pending IPC payload.
@@ -51,7 +56,10 @@ static PAYLOAD_ACCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 // 1) Not be greedy
 // 2) Allow time for the dispatch to main thread which will actually perform the flush
 // "Why the -1?" Because fetch_add returns the value before the addition.
-const PAYLOAD_ACCESS_WATERMARK: usize = 100000 - 1;
+// bug 1936851 - Perhaps due to longer and more event extras, or object and text metrics,
+//               we're hitting the size limit before hitting the watermark.
+//               Change the watermark from 100k - 1 to 90k - 1.
+const PAYLOAD_ACCESS_WATERMARK: usize = 90000 - 1;
 
 pub fn with_ipc_payload<F, R>(f: F) -> R
 where
@@ -226,6 +234,34 @@ pub fn is_in_automation() -> bool {
 pub fn replay_from_buf(buf: &[u8]) -> Result<(), ()> {
     // TODO: Instrument failures to find metrics by id.
     let ipc_payload: IPCPayload = bincode::deserialize(buf).map_err(|_| ())?;
+    for (id, value) in ipc_payload.booleans.into_iter() {
+        if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
+            let map = crate::factory::__jog_metric_maps::BOOLEAN_MAP
+                .read()
+                .expect("Read lock for dynamic boolean map was poisoned");
+            if let Some(metric) = map.get(&id) {
+                metric.set(value);
+            }
+        } else if let Some(metric) = __glean_metric_maps::BOOLEAN_MAP.get(&id) {
+            metric.set(value);
+        }
+    }
+    for (id, labeled_bools) in ipc_payload.labeled_booleans.into_iter() {
+        if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
+            let map = crate::factory::__jog_metric_maps::LABELED_BOOLEAN_MAP
+                .read()
+                .expect("Read lock for dynamic labeled boolean map was poisoned");
+            if let Some(metric) = map.get(&id) {
+                for (label, value) in labeled_bools.into_iter() {
+                    metric.get(&label).set(value);
+                }
+            }
+        } else {
+            for (label, value) in labeled_bools.into_iter() {
+                __glean_metric_maps::labeled_boolean_get(id.0, &label).set(value);
+            }
+        }
+    }
     for (id, value) in ipc_payload.counters.into_iter() {
         if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
             let map = crate::factory::__jog_metric_maps::COUNTER_MAP
@@ -248,6 +284,23 @@ pub fn replay_from_buf(buf: &[u8]) -> Result<(), ()> {
             }
         } else if let Some(metric) = __glean_metric_maps::CUSTOM_DISTRIBUTION_MAP.get(&id) {
             metric.accumulate_samples_signed(samples);
+        }
+    }
+    for (id, labeled_custom_samples) in ipc_payload.labeled_custom_samples.into_iter() {
+        if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
+            let map = crate::factory::__jog_metric_maps::LABELED_CUSTOM_DISTRIBUTION_MAP
+                .read()
+                .expect("Read lock for dynamic labeled custom distribution map was poisoned");
+            if let Some(metric) = map.get(&id) {
+                for (label, samples) in labeled_custom_samples.into_iter() {
+                    metric.get(&label).accumulate_samples_signed(samples);
+                }
+            }
+        } else {
+            for (label, samples) in labeled_custom_samples.into_iter() {
+                __glean_metric_maps::labeled_custom_distribution_get(id.0, &label)
+                    .accumulate_samples_signed(samples);
+            }
         }
     }
     for (id, value) in ipc_payload.denominators.into_iter() {
@@ -300,14 +353,29 @@ pub fn replay_from_buf(buf: &[u8]) -> Result<(), ()> {
                 .read()
                 .expect("Read lock for dynamic memory dist map was poisoned");
             if let Some(metric) = map.get(&id) {
-                samples
-                    .into_iter()
-                    .for_each(|sample| metric.accumulate(sample));
+                metric.accumulate_samples(samples);
             }
         } else if let Some(metric) = __glean_metric_maps::MEMORY_DISTRIBUTION_MAP.get(&id) {
             samples
                 .into_iter()
                 .for_each(|sample| metric.accumulate(sample));
+        }
+    }
+    for (id, labeled_memory_samples) in ipc_payload.labeled_memory_samples.into_iter() {
+        if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
+            let map = crate::factory::__jog_metric_maps::LABELED_MEMORY_DISTRIBUTION_MAP
+                .read()
+                .expect("Read lock for dynamic labeled memory distribution map was poisoned");
+            if let Some(metric) = map.get(&id) {
+                for (label, samples) in labeled_memory_samples.into_iter() {
+                    metric.get(&label).accumulate_samples(samples);
+                }
+            }
+        } else {
+            for (label, samples) in labeled_memory_samples.into_iter() {
+                __glean_metric_maps::labeled_memory_distribution_get(id.0, &label)
+                    .accumulate_samples(samples);
+            }
         }
     }
     for (id, value) in ipc_payload.numerators.into_iter() {
@@ -358,6 +426,23 @@ pub fn replay_from_buf(buf: &[u8]) -> Result<(), ()> {
             }
         } else if let Some(metric) = __glean_metric_maps::TIMING_DISTRIBUTION_MAP.get(&id) {
             metric.accumulate_raw_samples_nanos(samples);
+        }
+    }
+    for (id, labeled_timing_samples) in ipc_payload.labeled_timing_samples.into_iter() {
+        if id.0 & (1 << crate::factory::DYNAMIC_METRIC_BIT) > 0 {
+            let map = crate::factory::__jog_metric_maps::LABELED_TIMING_DISTRIBUTION_MAP
+                .read()
+                .expect("Read lock for dynamic labeled timing distribution map was poisoned");
+            if let Some(metric) = map.get(&id) {
+                for (label, samples) in labeled_timing_samples.into_iter() {
+                    metric.get(&label).accumulate_raw_samples_nanos(samples);
+                }
+            }
+        } else {
+            for (label, samples) in labeled_timing_samples.into_iter() {
+                __glean_metric_maps::labeled_timing_distribution_get(id.0, &label)
+                    .accumulate_raw_samples_nanos(samples);
+            }
         }
     }
     Ok(())

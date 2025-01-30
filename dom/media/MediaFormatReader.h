@@ -21,6 +21,7 @@
 #  include "mozilla/StateMirroring.h"
 #  include "mozilla/StaticPrefs_media.h"
 #  include "mozilla/TaskQueue.h"
+#  include "mozilla/TimeStamp.h"
 #  include "mozilla/ThreadSafeWeakPtr.h"
 #  include "mozilla/dom/MediaDebugInfoBinding.h"
 
@@ -138,6 +139,12 @@ class MediaFormatReader final
   // Windows when the media engine playback is enabled.
   void UpdateMediaEngineId(uint64_t aMediaEngineId);
 
+  // This function will be called if the media key is set before playback
+  // starts, indicating the playback should be encrypted.
+  void SetEncryptedCustomIdent();
+
+  bool IsEncryptedCustomIdent() const { return mEncryptedCustomIdent; }
+
  protected:
   // Recomputes mBuffered.
   void UpdateBuffered();
@@ -193,8 +200,6 @@ class MediaFormatReader final
   // caller until the returned promise is resolved or rejected.
   RefPtr<GenericPromise> RequestDebugInfo(
       dom::MediaFormatReaderDebugInfo& aInfo);
-
-  Maybe<nsCString> GetAudioProcessPerCodec();
 
   // Switch the video decoder to NullDecoderModule. It might takes effective
   // since a few samples later depends on how much demuxed samples are already
@@ -370,7 +375,7 @@ class MediaFormatReader final
           mCodecName(""),
           mUpdateScheduled(false),
           mDemuxEOS(false),
-          mWaitingForData(false),
+          mWaitingForDataStartTime(Nothing()),
           mWaitingForKey(false),
           mReceivedNewData(false),
           mFlushing(false),
@@ -426,9 +431,10 @@ class MediaFormatReader final
     // Only accessed from reader's task queue.
     bool mUpdateScheduled;
     bool mDemuxEOS;
-    bool mWaitingForData;
+    Maybe<TimeStamp> mWaitingForDataStartTime;
     bool mWaitingForKey;
     bool mReceivedNewData;
+    UniquePtr<PerformanceRecorderMulti<PlaybackStage>> mDecodePerfRecorder;
 
     // Pending seek.
     MozPromiseRequestHolder<MediaTrackDemuxer::SeekPromise> mSeekRequest;
@@ -446,7 +452,7 @@ class MediaFormatReader final
 
     bool IsWaitingForData() const {
       MOZ_ASSERT(mOwner->OnTaskQueue());
-      return mWaitingForData;
+      return !!mWaitingForDataStartTime;
     }
 
     bool IsWaitingForKey() const {
@@ -472,6 +478,9 @@ class MediaFormatReader final
       MOZ_RELEASE_ASSERT(mDrainState == DrainState::None);
       mDrainState = DrainState::DrainRequested;
     }
+
+    void StartRecordDecodingPerf(const TrackType aTrack,
+                                 const MediaRawData* aSample);
 
     // Track decoding error and fail when we hit the limit.
     uint32_t mNumOfConsecutiveDecodingError;
@@ -551,7 +560,7 @@ class MediaFormatReader final
     // Rejecting the promise will stop the reader from decoding ahead.
     virtual bool HasPromise() const = 0;
     virtual void RejectPromise(const MediaResult& aError,
-                               const char* aMethodName) = 0;
+                               StaticString aMethodName) = 0;
 
     // Clear track demuxer related data.
     void ResetDemuxer() {
@@ -583,7 +592,7 @@ class MediaFormatReader final
     void ResetState() {
       MOZ_ASSERT(mOwner->OnTaskQueue());
       mDemuxEOS = false;
-      mWaitingForData = false;
+      mWaitingForDataStartTime.reset();
       mQueuedSamples.Clear();
       mDecodeRequest.DisconnectIfExists();
       mDrainRequest.DisconnectIfExists();
@@ -687,20 +696,20 @@ class MediaFormatReader final
 
     bool HasPromise() const override { return mHasPromise; }
 
-    RefPtr<DataPromise<Type>> EnsurePromise(const char* aMethodName) {
+    RefPtr<DataPromise<Type>> EnsurePromise(StaticString aMethodName) {
       MOZ_ASSERT(mOwner->OnTaskQueue());
       mHasPromise = true;
       return mPromise.Ensure(aMethodName);
     }
 
-    void ResolvePromise(Type* aData, const char* aMethodName) {
+    void ResolvePromise(Type* aData, StaticString aMethodName) {
       MOZ_ASSERT(mOwner->OnTaskQueue());
       mPromise.Resolve(aData, aMethodName);
       mHasPromise = false;
     }
 
     void RejectPromise(const MediaResult& aError,
-                       const char* aMethodName) override {
+                       StaticString aMethodName) override {
       MOZ_ASSERT(mOwner->OnTaskQueue());
       mPromise.Reject(aError, aMethodName);
       mHasPromise = false;
@@ -885,6 +894,22 @@ class MediaFormatReader final
   Maybe<uint64_t> mMediaEngineId;
 
   const Maybe<TrackingId> mTrackingId;
+
+  // The start time of reading the metdata and how long does it take. This
+  // measurement includes the time of downloading media resource over the
+  // internet.
+  Maybe<TimeStamp> mReadMetadataStartTime;
+  TimeDuration mReadMetaDataTime;
+
+  // The total amount of time we have been waiting for the video data due to
+  // lacking of data.
+  TimeDuration mTotalWaitingForVideoDataTime;
+
+  // https://github.com/w3c/encrypted-media/issues/251#issuecomment-819783073
+  // Treat playback as encrypted if the media key is set before playback starts,
+  // this allows websites to start with non-encrypted stream and switch to
+  // encrypted stream later.
+  Atomic<bool> mEncryptedCustomIdent;
 };
 
 }  // namespace mozilla

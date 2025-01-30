@@ -148,7 +148,9 @@ endif # MOZ_CODE_COVERAGE
 endif # WINNT
 
 ifeq (WINNT,$(HOST_OS_ARCH))
-normalize_sep = $(subst \,/,$(1))
+# //?/ is the long path prefix which seems to confuse make, so we remove it
+# (things should work without it).
+normalize_sep = $(patsubst //?/%,%,$(subst \,/,$(1)))
 else
 normalize_sep = $(1)
 endif
@@ -202,10 +204,13 @@ else
 # This means C code built by rust is not going to be covered by sanitizers
 # and coverage. But at least we control what compiler is being used,
 # rather than relying on cc-rs guesses, which, sometimes fail us.
+# -fno-sized-deallocation is important, though, as -fsized-deallocation may be the
+# compiler default and we don't want it to be used
+# (see build/moz.configure/flags.configure). Likewise with -fno-aligned-new.
 export CFLAGS_$(rust_host_cc_env_name)=$(HOST_CC_BASE_FLAGS)
 export CXXFLAGS_$(rust_host_cc_env_name)=$(HOST_CXX_BASE_FLAGS)
 export CFLAGS_$(rust_cc_env_name)=$(CC_BASE_FLAGS)
-export CXXFLAGS_$(rust_cc_env_name)=$(CXX_BASE_FLAGS)
+export CXXFLAGS_$(rust_cc_env_name)=$(CXX_BASE_FLAGS) $(filter -fno-aligned-new -fno-sized-deallocation,$(COMPUTED_CXXFLAGS))
 endif
 
 # When host == target, cargo will compile build scripts with sanitizers enabled
@@ -259,11 +264,14 @@ export IPHONEOS_SDK_DIR
 PATH := $(topsrcdir)/build/macosx:$(PATH)
 endif
 endif
+# Use the same prefix as set through modules/zlib/src/mozzconf.h
+# for libz-rs-sys, since we still use the headers from there.
+export LIBZ_RS_SYS_PREFIX=MOZ_Z_
 
 ifndef RUSTC_BOOTSTRAP
 RUSTC_BOOTSTRAP := mozglue_static,qcms
 ifdef MOZ_RUST_SIMD
-RUSTC_BOOTSTRAP := $(RUSTC_BOOTSTRAP),encoding_rs,packed_simd
+RUSTC_BOOTSTRAP := $(RUSTC_BOOTSTRAP),encoding_rs,any_all_workaround
 endif
 export RUSTC_BOOTSTRAP
 endif
@@ -342,7 +350,7 @@ endif
 #
 #   $(call CARGO_BUILD)
 define CARGO_BUILD
-$(call RUN_CARGO,rustc$(if $(BUILDSTATUS), --timings))
+$(call RUN_CARGO,rustc$(if $(BUILDSTATUS), --timings)$(if $(findstring k,$(filter-out --%, $(MAKEFLAGS))), --keep-going))
 endef
 
 cargo_host_linker_env_var := CARGO_TARGET_$(call varize,$(RUST_HOST_TARGET))_LINKER
@@ -415,7 +423,7 @@ endif
 ifeq (Darwin,$(OS_ARCH))
 ifeq (,$(filter -Zsanitizer=%,$(RUSTFLAGS)))
 ifneq (,$(filter -fsanitize=%,$(LDFLAGS)))
-force-cargo-program-build: CARGO_RUSTCFLAGS += -C default-linker-libraries=yes
+$(TARGET_RECIPES): RUSTFLAGS += -C default-linker-libraries=yes
 endif
 endif
 endif
@@ -467,12 +475,12 @@ endef
 # spaces with some unlikely string for the foreach, and replace them back in the
 # loop itself.
 define make_cargo_rule
-$(notdir $(1))_deps := $$(wordlist 2, 10000000, $$(if $$(wildcard $(basename $(1)).d),$$(shell cat $(basename $(1)).d)))
+$(notdir $(1))_deps := $$(call normalize_sep,$$(wordlist 2, 10000000, $$(if $$(wildcard $(basename $(1)).d),$$(shell cat $(basename $(1)).d))))
 $(1): $(CARGO_FILE) $(3) $(topsrcdir)/Cargo.lock $$(if $$($(notdir $(1))_deps),$$($(notdir $(1))_deps),$(2))
 	$$(REPORT_BUILD)
 	$$(if $$($(notdir $(1))_deps),+$(MAKE) $(2),:)
 
-$$(foreach dep, $$(call normalize_sep,$$(subst \ ,_^_^_^_,$$($(notdir $(1))_deps))),$$(eval $$(call make_default_rule,$$(subst _^_^_^_,\ ,$$(dep)))))
+$$(foreach dep, $$(subst \ ,_^_^_^_,$$($(notdir $(1))_deps)),$$(eval $$(call make_default_rule,$$(subst _^_^_^_,\ ,$$(dep)))))
 endef
 
 ifdef RUST_LIBRARY_FILE

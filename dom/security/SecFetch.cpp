@@ -30,6 +30,9 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_INTERNAL_FRAME_MESSAGEMANAGER_SCRIPT:
     case nsIContentPolicy::TYPE_SCRIPT:
       return "script"_ns;
+    case nsIContentPolicy::TYPE_JSON:
+    case nsIContentPolicy::TYPE_INTERNAL_JSON_PRELOAD:
+      return "json"_ns;
     case nsIContentPolicy::TYPE_INTERNAL_WORKER:
     case nsIContentPolicy::TYPE_INTERNAL_WORKER_STATIC_MODULE:
       return "worker"_ns;
@@ -66,7 +69,8 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_PING:
       return "empty"_ns;
     case nsIContentPolicy::TYPE_XMLHTTPREQUEST:
-    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST:
+    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC:
+    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_SYNC:
       return "empty"_ns;
     case nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE:
       return "empty"_ns;
@@ -111,6 +115,8 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
       return "webidentity"_ns;
     case nsIContentPolicy::TYPE_WEB_TRANSPORT:
       return "webtransport"_ns;
+    case nsIContentPolicy::TYPE_INTERNAL_EXTERNAL_RESOURCE:
+      return "image"_ns;
     case nsIContentPolicy::TYPE_END:
     case nsIContentPolicy::TYPE_INVALID:
       break;

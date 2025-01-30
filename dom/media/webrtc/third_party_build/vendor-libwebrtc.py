@@ -13,7 +13,7 @@ import tarfile
 import requests
 
 THIRDPARTY_USED_IN_FIREFOX = [
-    "abseil-cpp",
+    "crc32c",
     "pffft",
     "rnnoise",
 ]
@@ -27,7 +27,6 @@ def get_excluded_files():
         ".clang-format",
         ".git-blame-ignore-revs",
         ".gitignore",
-        ".vpython",
         "CODE_OF_CONDUCT.md",
         "ENG_REVIEW_OWNERS",
         "PRESUBMIT.py",

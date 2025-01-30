@@ -9,15 +9,9 @@
 
 add_common_setup();
 
-const HIGH_CONTRAST_MODE_OFF = [
-  [PREFS.USE_ACCESSIBILITY_THEME, 0],
-  [PREFS.PREFERS_CONTRAST_ENABLED, true],
-];
+const HIGH_CONTRAST_MODE_OFF = [[PREFS.USE_ACCESSIBILITY_THEME, 0]];
 
-const HIGH_CONTRAST_MODE_ON = [
-  [PREFS.USE_ACCESSIBILITY_THEME, 1],
-  [PREFS.PREFERS_CONTRAST_ENABLED, true],
-];
+const HIGH_CONTRAST_MODE_ON = [[PREFS.USE_ACCESSIBILITY_THEME, 1]];
 
 add_task(async function testReportSentViewBGColor() {
   ensureReportBrokenSitePreffedOn();
@@ -33,7 +27,7 @@ add_task(async function testReportSentViewBGColor() {
       await SpecialPowers.pushPrefEnv({ set: HIGH_CONTRAST_MODE_OFF });
       const rbs = await menu.openReportBrokenSite();
       const { mainView, sentView } = rbs;
-      mainView.style.backgroundColor = "var(--color-background-success)";
+      mainView.style.backgroundColor = "var(--background-color-success)";
       const expectedReportSentBGColor =
         defaultView.getComputedStyle(mainView).backgroundColor;
       mainView.style.backgroundColor = "";

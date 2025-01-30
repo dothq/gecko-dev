@@ -36,6 +36,7 @@ class StyleSheet;
 enum class PseudoStyleType : uint8_t;
 enum class PointerCapabilities : uint8_t;
 enum class UpdateAnimationsTasks : uint8_t;
+enum class StyleColorGamut : uint8_t;
 struct Keyframe;
 struct StyleStylesheetContents;
 
@@ -44,7 +45,6 @@ class LoaderReusableStyleSheets;
 }
 namespace dom {
 enum class CompositeOperationOrAuto : uint8_t;
-enum class ScreenColorGamut : uint8_t;
 }  // namespace dom
 }  // namespace mozilla
 
@@ -315,23 +315,6 @@ void Gecko_SetImageOrientationAsFromImage(nsStyleVisibility* aVisibility);
 void Gecko_CopyImageOrientationFrom(nsStyleVisibility* aDst,
                                     const nsStyleVisibility* aSrc);
 
-// Counter style.
-void Gecko_CounterStyle_ToPtr(const mozilla::StyleCounterStyle*,
-                              mozilla::CounterStylePtr*);
-
-void Gecko_SetCounterStyleToNone(mozilla::CounterStylePtr*);
-
-void Gecko_SetCounterStyleToString(mozilla::CounterStylePtr* ptr,
-                                   const nsACString* symbol);
-
-void Gecko_CopyCounterStyle(mozilla::CounterStylePtr* dst,
-                            const mozilla::CounterStylePtr* src);
-
-nsAtom* Gecko_CounterStyle_GetName(const mozilla::CounterStylePtr* ptr);
-
-const mozilla::AnonymousCounterStyle* Gecko_CounterStyle_GetAnonymous(
-    const mozilla::CounterStylePtr* ptr);
-
 // list-style-image style.
 void Gecko_SetListStyleImageNone(nsStyleList* style_struct);
 
@@ -350,9 +333,11 @@ bool Gecko_AnimationNameMayBeReferencedFromStyle(const nsPresContext*,
 
 float Gecko_GetScrollbarInlineSize(const nsPresContext*);
 
-// Incremental restyle.
-mozilla::PseudoStyleType Gecko_GetImplementedPseudo(
+// Retrive pseudo type from an element.
+mozilla::PseudoStyleType Gecko_GetImplementedPseudoType(
     const mozilla::dom::Element*);
+// Retrive pseudo identifier from an element if any.
+nsAtom* Gecko_GetImplementedPseudoIdentifier(const mozilla::dom::Element*);
 
 // We'd like to return `nsChangeHint` here, but bindgen bitfield enums don't
 // work as return values with the Linux 32-bit ABI at the moment because
@@ -374,20 +359,6 @@ const mozilla::ServoElementSnapshot* Gecko_GetElementSnapshot(
 
 // Have we seen this pointer before?
 bool Gecko_HaveSeenPtr(mozilla::SeenPtrs* table, const void* ptr);
-
-// `array` must be an nsTArray
-// If changing this signature, please update the
-// friend function declaration in nsTArray.h
-void Gecko_EnsureTArrayCapacity(void* array, size_t capacity, size_t elem_size);
-
-// Same here, `array` must be an nsTArray<T>, for some T.
-//
-// Important note: Only valid for POD types, since destructors won't be run
-// otherwise. This is ensured with rust traits for the relevant structs.
-void Gecko_ClearPODTArray(void* array, size_t elem_size, size_t elem_align);
-
-void Gecko_ResizeTArrayForStrings(nsTArray<nsString>* array, uint32_t length);
-void Gecko_ResizeAtomArray(nsTArray<RefPtr<nsAtom>>* array, uint32_t length);
 
 void Gecko_EnsureImageLayersLength(nsStyleImageLayers* layers, size_t len,
                                    nsStyleImageLayers::LayerType layer_type);
@@ -437,13 +408,6 @@ mozilla::Keyframe* Gecko_GetOrCreateFinalKeyframe(
     nsTArray<mozilla::Keyframe>* keyframes,
     const mozilla::StyleComputedTimingFunction* timingFunction,
     const mozilla::dom::CompositeOperationOrAuto composition);
-
-// Appends and returns a new PropertyValuePair to |aProperties| initialized with
-// its mProperty member set to |aProperty| and all other members initialized to
-// their default values.
-mozilla::PropertyValuePair* Gecko_AppendPropertyValuePair(
-    nsTArray<mozilla::PropertyValuePair>*,
-    const mozilla::AnimatedPropertyID* aProperty);
 
 void Gecko_ResetFilters(nsStyleEffects* effects, size_t new_len);
 
@@ -514,19 +478,26 @@ GeckoFontMetrics Gecko_GetFontMetrics(const nsPresContext*, bool is_vertical,
                                       bool use_user_font_set,
                                       bool retrieve_math_scales);
 
-mozilla::StyleSheet* Gecko_StyleSheet_Clone(
-    const mozilla::StyleSheet* aSheet,
-    const mozilla::StyleSheet* aNewParentSheet);
+mozilla::StyleSheet* Gecko_StyleSheet_Clone(const mozilla::StyleSheet* aSheet);
 
 void Gecko_StyleSheet_AddRef(const mozilla::StyleSheet* aSheet);
 void Gecko_StyleSheet_Release(const mozilla::StyleSheet* aSheet);
+
+struct GeckoImplicitScopeRoot {
+  const mozilla::dom::Element* mHost;
+  const mozilla::dom::Element* mRoot;
+  bool mConstructed;
+};
+GeckoImplicitScopeRoot Gecko_StyleSheet_ImplicitScopeRoot(
+    const mozilla::StyleSheet* aSheet);
+
 bool Gecko_IsDocumentBody(const mozilla::dom::Element* element);
 
 bool Gecko_IsDarkColorScheme(const mozilla::dom::Document*,
-                             const mozilla::StyleColorScheme*);
+                             const mozilla::StyleColorSchemeFlags*);
 nscolor Gecko_ComputeSystemColor(mozilla::StyleSystemColor,
                                  const mozilla::dom::Document*,
-                                 const mozilla::StyleColorScheme*);
+                                 const mozilla::StyleColorSchemeFlags*);
 
 // We use an int32_t here instead of a LookAndFeel::IntID/FloatID because
 // forward-declaring a nested enum/struct is impossible.
@@ -565,9 +536,8 @@ bool Gecko_ErrorReportingEnabled(const mozilla::StyleSheet* sheet,
 void Gecko_ReportUnexpectedCSSError(
     uint64_t windowId, nsIURI* uri, const char* message, const char* param,
     uint32_t paramLen, const char* prefix, const char* prefixParam,
-    uint32_t prefixParamLen, const char* suffix, const char* source,
-    uint32_t sourceLen, const char* selectors, uint32_t selectorsLen,
-    uint32_t lineNumber, uint32_t colNumber);
+    uint32_t prefixParamLen, const char* suffix, const char* selectors,
+    uint32_t selectorsLen, uint32_t lineNumber, uint32_t colNumber);
 
 // DOM APIs.
 void Gecko_ContentList_AppendAll(nsSimpleContentList* aContentList,
@@ -615,7 +585,7 @@ bool Gecko_MediaFeatures_UseOverlayScrollbars(const mozilla::dom::Document*);
 int32_t Gecko_MediaFeatures_GetColorDepth(const mozilla::dom::Document*);
 int32_t Gecko_MediaFeatures_GetMonochromeBitsPerPixel(
     const mozilla::dom::Document*);
-mozilla::dom::ScreenColorGamut Gecko_MediaFeatures_ColorGamut(
+mozilla::StyleColorGamut Gecko_MediaFeatures_ColorGamut(
     const mozilla::dom::Document*);
 
 void Gecko_MediaFeatures_GetDeviceSize(const mozilla::dom::Document*,

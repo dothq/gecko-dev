@@ -213,6 +213,7 @@ export var PageThumbs = {
    *   isImage - indicate that this should be treated as an image url.
    *   backgroundColor - background color to draw behind images.
    *   targetWidth - desired width for images.
+   *   preserveAspectRatio - resize image height based on targetWidth
    *   isBackgroundThumb - true if request is from the background thumb service.
    *   fullViewport - request that a screenshot for the viewport be
    *     captured. This makes it possible to get a screenshot that reflects
@@ -228,6 +229,7 @@ export var PageThumbs = {
         aArgs?.backgroundColor ?? lazy.PageThumbUtils.THUMBNAIL_BG_COLOR,
       targetWidth:
         aArgs?.targetWidth ?? lazy.PageThumbUtils.THUMBNAIL_DEFAULT_SIZE,
+      preserveAspectRatio: aArgs?.preserveAspectRatio ?? false,
       isBackgroundThumb: aArgs ? aArgs.isBackgroundThumb : false,
       fullViewport: aArgs?.fullViewport ?? false,
     };
@@ -262,7 +264,7 @@ export var PageThumbs = {
           aBrowser.browsingContext.currentWindowGlobal.getActor("Thumbnails");
         return thumbnailsActor
           .sendQuery("Browser:Thumbnail:CheckState")
-          .catch(err => {
+          .catch(() => {
             return false;
           });
       }
@@ -313,6 +315,7 @@ export var PageThumbs = {
    *   isImage - indicate that this should be treated as an image url.
    *   backgroundColor - background color to draw behind images.
    *   targetWidth - desired width for images.
+   *   preserveAspectRatio - resize image height based on targetWidth
    *   isBackgroundThumb - true if request is from the background thumb service.
    *   fullViewport - request that a screenshot for the viewport be
    *     captured. This makes it possible to get a screenshot that reflects
@@ -341,6 +344,7 @@ export var PageThumbs = {
     if (contentWidth == 0 || contentHeight == 0) {
       throw new Error("IMAGE_ZERO_DIMENSION");
     }
+    let aspectRatio = contentWidth / contentHeight;
 
     if (!aBrowser.isConnected) {
       return null;
@@ -363,9 +367,21 @@ export var PageThumbs = {
       });
     } else {
       let fullScale = aArgs ? aArgs.fullScale : false;
-      let scale = fullScale
-        ? 1
-        : Math.min(Math.max(aWidth / contentWidth, aHeight / contentHeight), 1);
+      let targetWidth = aArgs.targetWidth ? aArgs.targetWidth : aWidth;
+      let preserveAspectRatio = aArgs ? aArgs.preserveAspectRatio : false;
+      let scale = 1;
+      if (!fullScale) {
+        let targetScale;
+        if (preserveAspectRatio) {
+          targetScale = targetWidth / contentWidth;
+        } else {
+          targetScale = Math.max(
+            aWidth / contentWidth,
+            aHeight / contentHeight
+          );
+        }
+        scale = Math.min(targetScale, 1);
+      }
 
       image = await aBrowser.drawSnapshot(
         0,
@@ -380,8 +396,13 @@ export var PageThumbs = {
         return null;
       }
 
-      thumbnail.width = fullScale ? contentWidth : aWidth;
-      thumbnail.height = fullScale ? contentHeight : aHeight;
+      if (preserveAspectRatio) {
+        thumbnail.width = targetWidth;
+        thumbnail.height = targetWidth / aspectRatio;
+      } else {
+        thumbnail.width = fullScale ? contentWidth : aWidth;
+        thumbnail.height = fullScale ? contentHeight : aHeight;
+      }
     }
 
     thumbnail.getContext("2d").drawImage(image, 0, 0);
@@ -458,6 +479,71 @@ export var PageThumbs = {
       await this.captureAndStore(aBrowser);
     }
     return true;
+  },
+
+  /**
+   * Capture a thumbnail for tab previews and draw it to canvas
+   *
+   * @param aBrowser the content window of this browser will be captured.
+   * @param aCanvas the thumbnail will be rendered to this canvas.
+   */
+  async captureTabPreviewThumbnail(aBrowser, aCanvas) {
+    let desiredAspectRatio = aCanvas.width / aCanvas.height;
+
+    let thumbnailsActor =
+      aBrowser.browsingContext.currentWindowGlobal.getActor("Thumbnails");
+    let contentInfo = await thumbnailsActor.sendQuery(
+      "Browser:Thumbnail:ContentInfo"
+    );
+
+    // capture vars
+    let captureX = 0;
+    let captureY = contentInfo.scrollY;
+    let captureWidth = contentInfo.width;
+    let captureHeight = captureWidth / desiredAspectRatio;
+    let captureScale = aCanvas.width / captureWidth;
+
+    // render vars
+    let renderX = 0;
+    let renderY = 0;
+    let renderWidth = aCanvas.width;
+    let renderHeight = aCanvas.height;
+
+    // We're scaling based on width, so when the window is really wide,
+    // the screenshot will be really small.
+    // Some pages might not have enough content to vertically fill our canvas.
+    // In this case, we scale the capture based on height instead and crop
+    // the horizontal edges when rendering.
+    if (contentInfo.documentHeight < captureHeight) {
+      captureY = 0;
+      captureHeight = contentInfo.documentHeight;
+      captureScale = aCanvas.height / captureHeight;
+
+      renderWidth = captureWidth * captureScale;
+      renderHeight = aCanvas.height;
+
+      //canvasY = (aCanvas.height - eventualHeight) / 2;
+
+      renderX = (aCanvas.width - renderWidth) / 2;
+      renderY = (aCanvas.height - renderHeight) / 2;
+    }
+    // Avoid showing a blank space at the bottom of the thumbnail
+    // when the scroll position is  near the bottom of the document.
+    else if (contentInfo.documentHeight - captureY < captureHeight) {
+      captureY = contentInfo.documentHeight - captureHeight;
+    }
+    let snapshotResult = await aBrowser.drawSnapshot(
+      captureX,
+      captureY,
+      captureWidth,
+      captureHeight,
+      captureScale * 2,
+      "transparent",
+      false
+    );
+    aCanvas
+      .getContext("2d")
+      .drawImage(snapshotResult, renderX, renderY, renderWidth, renderHeight);
   },
 
   /**
@@ -835,7 +921,7 @@ export var PageThumbsExpiration = {
     }
   },
 
-  notify: function Expiration_notify(aTimer) {
+  notify: function Expiration_notify() {
     let urls = [];
     let filtersToWaitFor = this._filters.length;
 

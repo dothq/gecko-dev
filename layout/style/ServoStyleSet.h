@@ -31,6 +31,8 @@ namespace mozilla {
 enum class MediaFeatureChangeReason : uint8_t;
 enum class StylePageSizeOrientation : uint8_t;
 enum class StyleRuleChangeKind : uint32_t;
+enum class StyleRelativeSelectorNthEdgeInvalidateFor : uint8_t;
+struct StyleRuleChange;
 
 class ErrorResult;
 
@@ -134,9 +136,9 @@ class ServoStyleSet {
   // are mutated from CSSOM.
   void RuleAdded(StyleSheet&, css::Rule&);
   void RuleRemoved(StyleSheet&, css::Rule&);
-  void RuleChanged(StyleSheet&, css::Rule*, StyleRuleChangeKind);
+  void RuleChanged(StyleSheet&, css::Rule*, const StyleRuleChange&);
   void SheetCloned(StyleSheet&);
-  void ImportRuleLoaded(dom::CSSImportRule&, StyleSheet&);
+  void ImportRuleLoaded(StyleSheet&);
 
   // Runs style invalidation due to document state changes.
   void InvalidateStyleForDocumentStateChanges(
@@ -232,8 +234,7 @@ class ServoStyleSet {
   // was resolved, it is not stored in the DOM. (That is, the element remains
   // unstyled.)
   already_AddRefed<ComputedStyle> ResolveStyleLazily(
-      const dom::Element&, PseudoStyleType = PseudoStyleType::NotPseudo,
-      nsAtom* aFunctionalPseudoParameter = nullptr,
+      const dom::Element&, const PseudoStyleRequest& aPseudoRequest = {},
       StyleRuleInclusion = StyleRuleInclusion::All);
 
   // Get a ComputedStyle for an anonymous box. The pseudo type must be an
@@ -256,6 +257,10 @@ class ServoStyleSet {
   already_AddRefed<ComputedStyle> ResolveXULTreePseudoStyle(
       dom::Element* aParentElement, nsCSSAnonBoxPseudoStaticAtom* aPseudoTag,
       ComputedStyle* aParentStyle, const AtomArray& aInputWord);
+
+  // Try to resolve the staring style for a given element. Please call this
+  // function after checking if it may have rules inside @starting-style.
+  already_AddRefed<ComputedStyle> ResolveStartingStyle(dom::Element& aElement);
 
   size_t SheetCount(Origin) const;
   StyleSheet* SheetAt(Origin, size_t aIndex) const;
@@ -378,7 +383,7 @@ class ServoStyleSet {
 
   nsTArray<ComputedKeyframeValues> GetComputedKeyframeValuesFor(
       const nsTArray<Keyframe>& aKeyframes, dom::Element* aElement,
-      PseudoStyleType aPseudoType, const ComputedStyle* aStyle);
+      const PseudoStyleRequest& aPseudoRequest, const ComputedStyle* aStyle);
 
   void GetAnimationValues(
       StyleLockedDeclarationBlock* aDeclarations, dom::Element* aElement,
@@ -477,6 +482,14 @@ class ServoStyleSet {
       const dom::Element&, const ServoElementSnapshotTable& aSnapshots);
 
   /**
+   * Maybe invalidate if a modification to a Custom State might require us to
+   * restyle the relative selector it refers to.
+   */
+  void MaybeInvalidateRelativeSelectorCustomStateDependency(
+      const dom::Element&, nsAtom* state,
+      const ServoElementSnapshotTable& aSnapshots);
+
+  /**
    * Maybe invalidate if a modification to an ID might require us to restyle
    * the relative selector it refers to.
    */
@@ -503,7 +516,8 @@ class ServoStyleSet {
    * by a selector that can only selector first/last child, that
    * might require us to restyle the relative selector it refers to.
    */
-  void MaybeInvalidateRelativeSelectorForNthEdgeDependency(const dom::Element&);
+  void MaybeInvalidateRelativeSelectorForNthEdgeDependency(
+      const dom::Element&, StyleRelativeSelectorNthEdgeInvalidateFor);
 
   /**
    * Maybe invalidate if a state change on an element that might be selected by
@@ -511,7 +525,7 @@ class ServoStyleSet {
    * relative selector it refers to.
    */
   void MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-      const dom::Element*);
+      const dom::Element*, bool aForceRestyleSiblings);
 
   /**
    * Maybe invalidate if a DOM element insertion might require us to restyle
@@ -530,8 +544,7 @@ class ServoStyleSet {
    * Maybe invalidate if a DOM element removal might require us to restyle
    * the relative selector to ancestors/previous siblings.
    */
-  void MaybeInvalidateForElementRemove(const dom::Element& aElement,
-                                       const nsIContent* aFollowingSibling);
+  void MaybeInvalidateForElementRemove(const dom::Element& aElement);
 
   /**
    * Returns true if a change in event state on an element might require
@@ -548,6 +561,12 @@ class ServoStyleSet {
    * us to restyle the element's siblings.
    */
   bool HasNthOfStateDependency(const dom::Element&, dom::ElementState) const;
+
+  /**
+   * Returns true if a change in Custom State on an element might require
+   * us to restyle the element's siblings.
+   */
+  bool HasNthOfCustomStateDependency(const dom::Element&, nsAtom*) const;
 
   /**
    * Restyle this element's siblings in order to propagate any potential change
@@ -586,7 +605,7 @@ class ServoStyleSet {
 
   bool ShouldTraverseInParallel() const;
 
-  void RuleChangedInternal(StyleSheet&, css::Rule&, StyleRuleChangeKind);
+  void RuleChangedInternal(StyleSheet&, css::Rule&, const StyleRuleChange&);
 
   /**
    * Forces all the ShadowRoot styles to be dirty.
@@ -697,12 +716,13 @@ class ServoStyleSet {
 
     MOZ_ASSERT(mCachedAnonymousContentStyles.Length() + aStyles.Length() < 256,
                "(index, length) pairs must be bigger");
-    MOZ_ASSERT(mCachedAnonymousContentStyleIndexes[index].second == 0,
+    MOZ_ASSERT(mCachedAnonymousContentStyleIndexes[index].length == 0,
                "shouldn't need to overwrite existing cached styles");
     MOZ_ASSERT(!aStyles.IsEmpty(), "should have some styles to cache");
 
-    mCachedAnonymousContentStyleIndexes[index] = std::make_pair(
-        mCachedAnonymousContentStyles.Length(), aStyles.Length());
+    mCachedAnonymousContentStyleIndexes[index] = {
+        (uint8_t)mCachedAnonymousContentStyles.Length(),
+        (uint8_t)aStyles.Length()};
     mCachedAnonymousContentStyles.AppendElements(std::move(aStyles));
   }
 
@@ -710,18 +730,21 @@ class ServoStyleSet {
       AnonymousContentKey aKey, nsTArray<RefPtr<ComputedStyle>>& aStyles) {
     auto index = static_cast<size_t>(aKey);
     auto loc = mCachedAnonymousContentStyleIndexes[index];
-    aStyles.AppendElements(mCachedAnonymousContentStyles.Elements() + loc.first,
-                           loc.second);
+    aStyles.AppendElements(mCachedAnonymousContentStyles.Elements() + loc.index,
+                           loc.length);
   }
 
   void RegisterProperty(const dom::PropertyDefinition&, ErrorResult&);
 
  private:
+  struct Location {
+    uint8_t index, length;
+  };
   // Map of AnonymousContentKey values to an (index, length) pair pointing into
   // mCachedAnonymousContentStyles.
   //
   // We assert that the index and length values fit into uint8_ts.
-  Array<std::pair<uint8_t, uint8_t>, 1 << sizeof(AnonymousContentKey) * 8>
+  Array<Location, 1 << sizeof(AnonymousContentKey) * 8>
       mCachedAnonymousContentStyleIndexes;
 
   // Stores cached ComputedStyles for certain native anonymous content.

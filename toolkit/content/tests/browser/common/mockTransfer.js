@@ -16,6 +16,7 @@ var mockTransferCallback;
  */
 function MockTransfer() {
   this._downloadIsSuccessful = true;
+  this._whenSucceededPromise = Promise.withResolvers();
 }
 
 MockTransfer.prototype = {
@@ -44,6 +45,7 @@ MockTransfer.prototype = {
     ) {
       // Continue the test, reporting the success or failure condition.
       mockTransferCallback(this._downloadIsSuccessful);
+      this._whenSucceededPromise.resolve();
     }
   },
   onProgressChange() {},
@@ -51,8 +53,7 @@ MockTransfer.prototype = {
   onStatusChange: function MTFC_onStatusChange(
     aWebProgress,
     aRequest,
-    aStatus,
-    aMessage
+    aStatus
   ) {
     // If at least one notification reported an error, the download failed.
     if (!Components.isSuccessCode(aStatus)) {
@@ -69,6 +70,11 @@ MockTransfer.prototype = {
   /* nsITransfer */
   init() {},
   initWithBrowsingContext() {},
+  get downloadPromise() {
+    return Promise.resolve({
+      whenSucceeded: () => this._whenSucceededPromise.promise,
+    });
+  },
   setSha256Hash() {},
   setSignatureInfo() {},
 };

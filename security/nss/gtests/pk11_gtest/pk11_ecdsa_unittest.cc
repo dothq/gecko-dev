@@ -74,20 +74,45 @@ static const Pkcs11EcdsaTestParams kEcdsaVectors[] = {
       DataBuffer(kP256Data, sizeof(kP256Data)),
       DataBuffer(kP256Signature, sizeof(kP256Signature))}},
     {SEC_OID_SHA256,
-     {DataBuffer(kP256Pkcs8ZeroPad, sizeof(kP256Pkcs8ZeroPad)),
-      DataBuffer(kP256SpkiZeroPad, sizeof(kP256SpkiZeroPad)),
-      DataBuffer(kP256DataZeroPad, sizeof(kP256DataZeroPad)),
-      DataBuffer(kP256SignatureZeroPad, sizeof(kP256SignatureZeroPad))}},
+     {DataBuffer(kP256Pkcs8KeyLen30, sizeof(kP256Pkcs8KeyLen30)),
+      DataBuffer(kP256SpkiKeyLen, sizeof(kP256SpkiKeyLen)),
+      DataBuffer(kP256DataKeyLen, sizeof(kP256DataKeyLen)),
+      DataBuffer(kP256SignatureKeyLen, sizeof(kP256SignatureKeyLen))}},
+    {SEC_OID_SHA256,
+     {DataBuffer(kP256Pkcs8KeyLen33, sizeof(kP256Pkcs8KeyLen33)),
+      DataBuffer(kP256SpkiKeyLen, sizeof(kP256SpkiKeyLen)),
+      DataBuffer(kP256DataKeyLen, sizeof(kP256DataKeyLen)),
+      DataBuffer(kP256SignatureKeyLen, sizeof(kP256SignatureKeyLen))}},
     {SEC_OID_SHA384,
      {DataBuffer(kP384Pkcs8, sizeof(kP384Pkcs8)),
       DataBuffer(kP384Spki, sizeof(kP384Spki)),
       DataBuffer(kP384Data, sizeof(kP384Data)),
       DataBuffer(kP384Signature, sizeof(kP384Signature))}},
+    {SEC_OID_SHA256,
+     {DataBuffer(kP384Pkcs8KeyLen46, sizeof(kP384Pkcs8KeyLen46)),
+      DataBuffer(kP384SpkiKeyLen, sizeof(kP384SpkiKeyLen)),
+      DataBuffer(kP384DataKeyLen, sizeof(kP384DataKeyLen)),
+      DataBuffer(kP384SignatureKeyLen, sizeof(kP384SignatureKeyLen))}},
+    {SEC_OID_SHA256,
+     {DataBuffer(kP384Pkcs8KeyLen49, sizeof(kP384Pkcs8KeyLen49)),
+      DataBuffer(kP384SpkiKeyLen, sizeof(kP384SpkiKeyLen)),
+      DataBuffer(kP384DataKeyLen, sizeof(kP384DataKeyLen)),
+      DataBuffer(kP384SignatureKeyLen, sizeof(kP384SignatureKeyLen))}},
     {SEC_OID_SHA512,
      {DataBuffer(kP521Pkcs8, sizeof(kP521Pkcs8)),
       DataBuffer(kP521Spki, sizeof(kP521Spki)),
       DataBuffer(kP521Data, sizeof(kP521Data)),
-      DataBuffer(kP521Signature, sizeof(kP521Signature))}}};
+      DataBuffer(kP521Signature, sizeof(kP521Signature))}},
+    {SEC_OID_SHA256,
+     {DataBuffer(kP521Pkcs8KeyLen64, sizeof(kP521Pkcs8KeyLen64)),
+      DataBuffer(kP521SpkiKeyLen, sizeof(kP521SpkiKeyLen)),
+      DataBuffer(kP521DataKeyLen, sizeof(kP521DataKeyLen)),
+      DataBuffer(kP521SignatureKeyLen, sizeof(kP521SignatureKeyLen))}},
+    {SEC_OID_SHA256,
+     {DataBuffer(kP521Pkcs8KeyLen67, sizeof(kP521Pkcs8KeyLen67)),
+      DataBuffer(kP521SpkiKeyLen, sizeof(kP521SpkiKeyLen)),
+      DataBuffer(kP521DataKeyLen, sizeof(kP521DataKeyLen)),
+      DataBuffer(kP521SignatureKeyLen, sizeof(kP521SignatureKeyLen))}}};
 
 INSTANTIATE_TEST_SUITE_P(EcdsaSignVerify, Pkcs11EcdsaTest,
                          ::testing::ValuesIn(kEcdsaVectors));
@@ -174,11 +199,17 @@ TEST_F(Pkcs11EcdsaSha256Test, ImportPointNotOnCurve) {
   EXPECT_EQ(handle, static_cast<decltype(handle)>(CK_INVALID_HANDLE));
 };
 
-// Importing a private key in PKCS#8 format must fail when no point is given.
-// PK11 currently offers no APIs to derive raw public keys from private values.
+// Importing a private key in PKCS#8 without a public key will succeed
+// if NSS supports public key derivation for this curve (P-256, P-384, P-521).
 TEST_F(Pkcs11EcdsaSha256Test, ImportNoPublicKey) {
   DataBuffer k(kP256Pkcs8NoPublicKey, sizeof(kP256Pkcs8NoPublicKey));
-  EXPECT_FALSE(ImportPrivateKey(k));
+  ScopedSECKEYPrivateKey privKey(ImportPrivateKey(k));
+  ASSERT_TRUE(privKey);
+
+  ScopedSECKEYPublicKey pubKey(SECKEY_ConvertToPublicKey(privKey.get()));
+  ASSERT_TRUE(pubKey);
+
+  ASSERT_NE(pubKey->u.ec.publicValue.len, 0ul);
 };
 
 // Importing a public key in SPKI format must fail when id-ecPublicKey is
@@ -326,4 +357,56 @@ INSTANTIATE_TEST_SUITE_P(Pkcs11EcdsaRoundtripTest, Pkcs11EcdsaRoundtripTest,
                                            SEC_OID_SECG_EC_SECP521R1,
                                            SEC_OID_CURVE25519));
 
+class Pkcs11EcdsaUnpaddedSignatureTest
+    : public Pkcs11EcdsaTestBase,
+      public ::testing::WithParamInterface<Pkcs11EcdsaTestParams> {
+ public:
+  Pkcs11EcdsaUnpaddedSignatureTest()
+      : Pkcs11EcdsaTestBase(GetParam().hash_oid_) {}
+};
+
+static const Pkcs11EcdsaTestParams kEcdsaUnpaddedSignaturesVectors[] = {
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP256SpkiUnpaddedSig, sizeof(kP256SpkiUnpaddedSig)),
+      DataBuffer(kP256DataUnpaddedSigLong, sizeof(kP256DataUnpaddedSigLong)),
+      DataBuffer(kP256SignatureUnpaddedSigLong,
+                 sizeof(kP256SignatureUnpaddedSigLong))}},
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP256SpkiUnpaddedSig, sizeof(kP256SpkiUnpaddedSig)),
+      DataBuffer(kP256DataUnpaddedSigShort, sizeof(kP256DataUnpaddedSigShort)),
+      DataBuffer(kP256SignatureUnpaddedSigShort,
+                 sizeof(kP256SignatureUnpaddedSigShort))}},
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP384SpkiUnpaddedSig, sizeof(kP384SpkiUnpaddedSig)),
+      DataBuffer(kP384DataUnpaddedSigLong, sizeof(kP384DataUnpaddedSigLong)),
+      DataBuffer(kP384SignatureUnpaddedSigLong,
+                 sizeof(kP384SignatureUnpaddedSigLong))}},
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP384SpkiUnpaddedSig, sizeof(kP384SpkiUnpaddedSig)),
+      DataBuffer(kP384DataUnpaddedSigShort, sizeof(kP384DataUnpaddedSigShort)),
+      DataBuffer(kP384SignatureUnpaddedSigShort,
+                 sizeof(kP384SignatureUnpaddedSigShort))}},
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP521SpkiUnpaddedSig, sizeof(kP521SpkiUnpaddedSig)),
+      DataBuffer(kP521DataUnpaddedSigLong, sizeof(kP521DataUnpaddedSigLong)),
+      DataBuffer(kP521SignatureUnpaddedSigLong,
+                 sizeof(kP521SignatureUnpaddedSigLong))}},
+    {SEC_OID_SHA512,
+     {DataBuffer(NULL, 0),
+      DataBuffer(kP521SpkiUnpaddedSig, sizeof(kP521SpkiUnpaddedSig)),
+      DataBuffer(kP521DataUnpaddedSigShort, sizeof(kP521DataUnpaddedSigShort)),
+      DataBuffer(kP521SignatureUnpaddedSigShort,
+                 sizeof(kP521SignatureUnpaddedSigShort))}}};
+
+TEST_P(Pkcs11EcdsaUnpaddedSignatureTest, Verify) {
+  Verify(GetParam().sig_params_);
+}
+INSTANTIATE_TEST_SUITE_P(EcdsaVerifyUnpaddedSignatures,
+                         Pkcs11EcdsaUnpaddedSignatureTest,
+                         ::testing::ValuesIn(kEcdsaUnpaddedSignaturesVectors));
 }  // namespace nss_test

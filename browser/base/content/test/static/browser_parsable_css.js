@@ -14,12 +14,6 @@ let ignoreList = [
   { sourceName: /codemirror\.css$/i, isFromDevTools: true },
   // UA-only media features.
   {
-    sourceName: /\b(autocomplete-item)\.css$/,
-    errorMessage: /Expected media feature name but found \u2018-moz.*/i,
-    isFromDevTools: false,
-    platforms: ["windows"],
-  },
-  {
     sourceName:
       /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua)\.css$/i,
     errorMessage: /Unknown pseudo-class.*-moz-/i,
@@ -27,7 +21,7 @@ let ignoreList = [
   },
   {
     sourceName:
-      /\b(scrollbars|xul|html|mathml|ua|forms|svg|manageDialog|autocomplete-item-shared|formautofill)\.css$/i,
+      /\b(scrollbars|xul|html|mathml|ua|EditorOverride|contenteditable|forms|svg|manageDialog|formautofill)\.css$/i,
     errorMessage: /Unknown property.*-moz-/i,
     isFromDevTools: false,
   },
@@ -36,10 +30,10 @@ let ignoreList = [
     errorMessage: /Unknown pseudo-class.*-moz-/i,
     isFromDevTools: false,
   },
-  // Reserved to UA sheets unless layout.css.overflow-clip-box.enabled flipped to true.
+  // content: -moz-alt-content is UA-only.
   {
-    sourceName: /(?:res|gre-resources)\/forms\.css$/i,
-    errorMessage: /Unknown property.*overflow-clip-box/i,
+    sourceName: /\b(html)\.css$/i,
+    errorMessage: /Error in parsing value for ‘content’/i,
     isFromDevTools: false,
   },
   // These variables are declared somewhere else, and error when we load the
@@ -51,7 +45,6 @@ let ignoreList = [
     errorMessage: /Property contained reference to invalid variable.*color/i,
     isFromDevTools: true,
   },
-  // PDF.js uses a property that is currently only supported in chrome.
   {
     sourceName: /web\/viewer\.css$/i,
     errorMessage:
@@ -59,6 +52,13 @@ let ignoreList = [
     isFromDevTools: false,
   },
 ];
+
+if (AppConstants.platform != "macosx") {
+  ignoreList.push({
+    errorMessage: /Unknown property.*-moz-osx-font-smoothing/i,
+    isFromDevTools: false,
+  });
+}
 
 if (!Services.prefs.getBoolPref("layout.css.zoom.enabled")) {
   ignoreList.push({
@@ -73,24 +73,6 @@ if (!Services.prefs.getBoolPref("layout.css.scroll-anchoring.enabled")) {
     sourceName: /webconsole\.css$/i,
     errorMessage: /Unknown property .*\boverflow-anchor\b/i,
     isFromDevTools: true,
-  });
-}
-
-if (!Services.prefs.getBoolPref("layout.css.forced-colors.enabled")) {
-  ignoreList.push({
-    sourceName: /pdf\.js\/web\/viewer\.css$/,
-    errorMessage: /Expected media feature name but found ‘forced-colors’*/i,
-    isFromDevTools: false,
-  });
-}
-
-if (!Services.prefs.getBoolPref("layout.css.forced-color-adjust.enabled")) {
-  // PDF.js uses a property that is currently not enabled.
-  ignoreList.push({
-    sourceName: /web\/viewer\.css$/i,
-    errorMessage:
-      /Unknown property ‘forced-color-adjust’\. {2}Declaration dropped\./i,
-    isFromDevTools: false,
   });
 }
 
@@ -132,6 +114,61 @@ let propNameAllowlist = [
   { propName: "--panel-border-color", isFromDevTools: true },
   { propName: "--panel-shadow", isFromDevTools: true },
   { propName: "--panel-shadow-margin", isFromDevTools: true },
+
+  // These variables are used in JS in viewer.mjs (PDF.js).
+  {
+    propName: "--scale-round-x",
+    isFromDevTools: false,
+  },
+  {
+    propName: "--scale-round-y",
+    isFromDevTools: false,
+  },
+
+  // These variables define accent colors for tab group chrome
+  // and are used in JS in tabgroup.js
+  { propName: "--tab-group-color-blue", isFromDevTools: false },
+  { propName: "--tab-group-color-blue-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-blue-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-purple", isFromDevTools: false },
+  { propName: "--tab-group-color-purple-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-purple-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-cyan", isFromDevTools: false },
+  { propName: "--tab-group-color-cyan-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-cyan-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-orange", isFromDevTools: false },
+  { propName: "--tab-group-color-orange-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-orange-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-yellow", isFromDevTools: false },
+  { propName: "--tab-group-color-yellow-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-yellow-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-pink", isFromDevTools: false },
+  { propName: "--tab-group-color-pink-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-pink-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-green", isFromDevTools: false },
+  { propName: "--tab-group-color-green-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-green-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-red", isFromDevTools: false },
+  { propName: "--tab-group-color-red-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-red-pale", isFromDevTools: false },
+
+  { propName: "--tab-group-color-gray", isFromDevTools: false },
+  { propName: "--tab-group-color-gray-invert", isFromDevTools: false },
+  { propName: "--tab-group-color-gray-pale", isFromDevTools: false },
+
+  /* Allow design tokens in devtools without all variables being used there */
+  { sourceName: /\/design-system\/tokens-.*\.css$/, isFromDevTools: true },
+
+  /* Temporary exceptions for unused variables in pdf.js */
+  { propName: "--toggle-background-color-disabled", isFromDevTools: false },
+  { propName: "--toggle-border-color-disabled", isFromDevTools: false },
 ];
 
 // Add suffix to stylesheets' URI so that we always load them here and
@@ -267,6 +304,7 @@ function messageIsCSSError(msg) {
 
 let imageURIsToReferencesMap = new Map();
 let customPropsToReferencesMap = new Map();
+let customPropsDefinitionFileMap = new Map();
 
 function neverMatches(mediaList) {
   const perPlatformMediaQueryMap = {
@@ -351,6 +389,12 @@ function processCSSRules(container) {
         }
         if (!customPropsToReferencesMap.has(prop)) {
           customPropsToReferencesMap.set(prop, undefined);
+          if (!customPropsDefinitionFileMap.has(prop)) {
+            customPropsDefinitionFileMap.set(prop, new Set());
+          }
+          customPropsDefinitionFileMap
+            .get(prop)
+            .add(container.href || container.parentStyleSheet.href);
         }
       }
     }
@@ -378,6 +422,16 @@ function chromeFileExists(aURI) {
     }
   }
   return available > 0;
+}
+
+function shouldIgnorePropSource(item, prop) {
+  if (!item.sourceName || !customPropsDefinitionFileMap.has(prop)) {
+    return false;
+  }
+  return customPropsDefinitionFileMap
+    .get(prop)
+    .values()
+    .some(f => item.sourceName.test(f));
 }
 
 add_task(async function checkAllTheCSS() {
@@ -434,13 +488,13 @@ add_task(async function checkAllTheCSS() {
   let loadCSS = chromeUri =>
     new Promise(resolve => {
       let linkEl, onLoad, onError;
-      onLoad = e => {
+      onLoad = () => {
         processCSSRules(linkEl.sheet);
         resolve();
         linkEl.removeEventListener("load", onLoad);
         linkEl.removeEventListener("error", onError);
       };
-      onError = e => {
+      onError = () => {
         ok(
           false,
           "Loading " + linkEl.getAttribute("href") + " threw an error!"
@@ -503,7 +557,10 @@ add_task(async function checkAllTheCSS() {
     if (!refCount) {
       let ignored = false;
       for (let item of propNameAllowlist) {
-        if (item.propName == prop && isDevtools == item.isFromDevTools) {
+        if (
+          isDevtools == item.isFromDevTools &&
+          (item.propName == prop || shouldIgnorePropSource(item, prop))
+        ) {
           item.used = true;
           if (
             !item.platforms ||

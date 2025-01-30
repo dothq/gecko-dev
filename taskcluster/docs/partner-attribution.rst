@@ -27,7 +27,7 @@ partner repacks.
 logic. It's usually looked up during the release promotion action task, using the Github
 GraphQL API in the `get_partner_config_by_url()
 <python/taskgraph.util.html#taskgraph.util.partners.get_partner_config_by_url>`_ function, with the
-url defined in `taskcluster/ci/config.yml <https://searchfox.org/mozilla-central/search?q=partner-urls&path=taskcluster%2Fci%2Fconfig.yml&case=true&regexp=false&redirect=true>`_.
+url defined in `taskcluster/config.yml <https://searchfox.org/mozilla-central/search?q=partner-urls&path=taskcluster%2Fconfig.yml&case=true&regexp=false&redirect=true>`_.
 
 ``release_partner_build_number`` is an integer used to create unique upload paths in the firefox
 candidates directory, while ``release_partners`` is a list of partners that should be
@@ -99,7 +99,7 @@ target.exe full installers. The ``ATTRIBUTION_CONFIG`` environment variable cont
 It produces more target.exe installers.
 
 The size of ``ATTRIBUTION_CONFIG`` variable may grow large if the number of configurations
-increases, and it may be necesssary to pass the content of ``attribution_config.yml`` to the
+increases, and it may be necessary to pass the content of ``attribution_config.yml`` to the
 script instead, or via an artifact of the promotion task.
 
 Beetmover

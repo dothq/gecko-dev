@@ -5,11 +5,11 @@
         height="300"
         width="300"
         sizemode="normal"
-        chromemargin="0,2,2,2"
+        customtitlebar="true"
         id="window"
         persist="height width sizemode">
 <script type="application/javascript"><![CDATA[
-  window.addEventListener("sizemodechange", evt => {
+  window.addEventListener("sizemodechange", () => {
     window.arguments[0].postMessage("sizemodechange", "*");
   });
 ]]></script>

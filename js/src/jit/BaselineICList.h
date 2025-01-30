@@ -15,6 +15,7 @@ namespace jit {
 #define IC_BASELINE_FALLBACK_CODE_KIND_LIST(_) \
   _(NewArray)                                  \
   _(NewObject)                                 \
+  _(Lambda)                                    \
   _(ToBool)                                    \
   _(UnaryArith)                                \
   _(Call)                                      \
@@ -29,12 +30,13 @@ namespace jit {
   _(CheckPrivateField)                         \
   _(GetName)                                   \
   _(BindName)                                  \
-  _(GetIntrinsic)                              \
+  _(LazyConstant)                              \
   _(SetProp)                                   \
   _(GetIterator)                               \
   _(OptimizeSpreadCall)                        \
   _(InstanceOf)                                \
   _(TypeOf)                                    \
+  _(TypeOfEq)                                  \
   _(ToPropertyKey)                             \
   _(Rest)                                      \
   _(BinaryArith)                               \

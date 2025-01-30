@@ -8,6 +8,14 @@ const permissionError =
   "error: NotAllowedError: The request is not allowed " +
   "by the user agent or the platform in the current context.";
 
+const getPerm = name =>
+  PermissionTestUtils.testExactPermission(gBrowser.contentPrincipal, name);
+
+function clearPermissions() {
+  PermissionTestUtils.remove(gBrowser.contentPrincipal, "camera");
+  PermissionTestUtils.remove(gBrowser.contentPrincipal, "microphone");
+}
+
 var gTests = [
   {
     desc: "getUserMedia audio+video",
@@ -46,6 +54,9 @@ var gTests = [
 
       await indicator;
       await checkSharingUI({ audio: true, video: true });
+      is(getPerm("microphone"), Services.perms.PROMPT_ACTION, "mic once");
+      is(getPerm("camera"), Services.perms.PROMPT_ACTION, "cam once");
+      clearPermissions();
       await closeStream();
     },
   },
@@ -86,6 +97,9 @@ var gTests = [
 
       await indicator;
       await checkSharingUI({ audio: true });
+      is(getPerm("microphone"), Services.perms.PROMPT_ACTION, "mic once");
+      is(getPerm("camera"), Services.perms.UNKNOWN_ACTION, "no cam once");
+      clearPermissions();
       await closeStream();
     },
   },
@@ -124,6 +138,9 @@ var gTests = [
 
       await indicator;
       await checkSharingUI({ video: true });
+      is(getPerm("microphone"), Services.perms.UNKNOWN_ACTION, "no mic once");
+      is(getPerm("camera"), Services.perms.PROMPT_ACTION, "cam once");
+      clearPermissions();
       await closeStream();
     },
   },
@@ -236,7 +253,13 @@ var gTests = [
       await indicator;
       await checkSharingUI({ video: true, audio: true });
 
+      is(getPerm("microphone"), Services.perms.PROMPT_ACTION, "mic once");
+      is(getPerm("camera"), Services.perms.PROMPT_ACTION, "cam once");
+
       await stopSharing();
+
+      is(getPerm("microphone"), Services.perms.UNKNOWN_ACTION, "mic revoked");
+      is(getPerm("camera"), Services.perms.UNKNOWN_ACTION, "cam revoked");
 
       // the stream is already closed, but this will do some cleanup anyway
       await closeStream(true);
@@ -307,6 +330,25 @@ var gTests = [
 
       await reloadAndAssertClosedStreams();
 
+      await checkSharingUI(
+        { video: false, audio: false },
+        undefined,
+        undefined,
+        {
+          audio: {
+            state: SitePermissions.PROMPT,
+            scope: SitePermissions.SCOPE_PERSISTENT,
+          },
+          video: {
+            state: SitePermissions.PROMPT,
+            scope: SitePermissions.SCOPE_PERSISTENT,
+          },
+        }
+      );
+
+      is(getPerm("microphone"), Services.perms.PROMPT_ACTION, "mic once");
+      is(getPerm("camera"), Services.perms.PROMPT_ACTION, "cam once");
+
       observerPromise = expectObserverCalled("getUserMedia:request");
       // After the reload, gUM(audio+camera) causes a prompt.
       promise = promisePopupNotificationShown("webRTC-shareDevices");
@@ -360,6 +402,23 @@ var gTests = [
         await promiseRequestDevice(aRequestAudio, aRequestVideo);
         await promise;
         await observerPromise;
+
+        let rememberCheckBoxLabel = "Remember this decision";
+        if (aRequestVideo) {
+          rememberCheckBoxLabel = "Remember for all cameras";
+          if (aRequestAudio) {
+            rememberCheckBoxLabel = "Remember for all cameras and microphones";
+          }
+        } else if (aRequestAudio) {
+          rememberCheckBoxLabel = "Remember for all microphones";
+        }
+
+        is(
+          PopupNotifications.getNotification("webRTC-shareDevices").options
+            .checkbox.label,
+          rememberCheckBoxLabel,
+          "Correct string used for decision checkbox"
+        );
 
         is(
           elt("webRTC-selectMicrophone").hidden,

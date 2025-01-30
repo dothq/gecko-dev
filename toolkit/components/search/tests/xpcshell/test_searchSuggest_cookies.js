@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
- * Test that search suggestions from SearchSuggestionController.jsm don't store
+ * Test that search suggestions from SearchSuggestionController.sys.mjs don't store
  * cookies.
  */
 
@@ -14,7 +14,7 @@ const { SearchSuggestionController } = ChromeUtils.importESModule(
 
 // We must make sure the FormHistoryStartup component is
 // initialized in order for it to respond to FormHistory
-// requests from nsFormAutoComplete.js.
+// requests from FormHistoryAutoComplete.sys.mjs.
 var formHistoryStartup = Cc[
   "@mozilla.org/satchel/form-history-startup;1"
 ].getService(Ci.nsIObserver);
@@ -60,8 +60,6 @@ function countCookieEntries() {
 let engines;
 
 add_setup(async function () {
-  await AddonTestUtils.promiseStartupManager();
-
   Services.prefs.setBoolPref("browser.search.suggest.enabled", true);
   Services.prefs.setBoolPref("browser.search.suggest.enabled.private", true);
 
@@ -79,16 +77,16 @@ add_setup(async function () {
 
   let unicodeName = ["\u30a8", "\u30c9"].join("");
   engines = [
-    await SearchTestUtils.promiseNewSearchEngine({
-      url: `${gDataUrl}engineMaker.sjs?${JSON.stringify({
-        baseURL: gDataUrl,
+    await SearchTestUtils.installOpenSearchEngine({
+      url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify({
+        baseURL: `${gHttpURL}/sjs/`,
         name: unicodeName,
         method: "GET",
       })}`,
     }),
-    await SearchTestUtils.promiseNewSearchEngine({
-      url: `${gDataUrl}engineMaker.sjs?${JSON.stringify({
-        baseURL: gDataUrl,
+    await SearchTestUtils.installOpenSearchEngine({
+      url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify({
+        baseURL: `${gHttpURL}/sjs/`,
         name: "engine two",
         method: "GET",
       })}`,

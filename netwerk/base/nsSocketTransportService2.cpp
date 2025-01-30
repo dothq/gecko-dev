@@ -5,9 +5,9 @@
 
 #include "nsSocketTransportService2.h"
 
-#include "IOActivityMonitor.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/ChaosMode.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Likely.h"
 #include "mozilla/PodOperations.h"
@@ -408,6 +408,18 @@ bool nsSocketTransportService::CanAttachSocket() {
   uint32_t total = mActiveList.Length() + mIdleList.Length();
   bool rv = total < gMaxCount;
 
+  if (!rv) {
+    static bool reported_socket_limit_reached = false;
+    if (!reported_socket_limit_reached) {
+      mozilla::glean::networking::os_socket_limit_reached.Add(1);
+      reported_socket_limit_reached = true;
+    }
+    SOCKET_LOG(
+        ("nsSocketTransportService::CanAttachSocket failed -  total: %d, "
+         "maxCount: %d\n",
+         total, gMaxCount));
+  }
+
   MOZ_ASSERT(mInitialized);
   return rv;
 }
@@ -784,7 +796,6 @@ nsSocketTransportService::Init() {
   // socket process. We have to make sure the topics registered below are also
   // registered in nsIObserver::Init().
   if (obsSvc) {
-    obsSvc->AddObserver(this, "profile-initial-state", false);
     obsSvc->AddObserver(this, "last-pb-context-exited", false);
     obsSvc->AddObserver(this, NS_WIDGET_SLEEP_OBSERVER_TOPIC, true);
     obsSvc->AddObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC, true);
@@ -860,7 +871,6 @@ nsresult nsSocketTransportService::ShutdownThread() {
 
   nsCOMPtr<nsIObserverService> obsSvc = services::GetObserverService();
   if (obsSvc) {
-    obsSvc->RemoveObserver(this, "profile-initial-state");
     obsSvc->RemoveObserver(this, "last-pb-context-exited");
     obsSvc->RemoveObserver(this, NS_WIDGET_SLEEP_OBSERVER_TOPIC);
     obsSvc->RemoveObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC);
@@ -872,8 +882,6 @@ nsresult nsSocketTransportService::ShutdownThread() {
     mAfterWakeUpTimer->Cancel();
     mAfterWakeUpTimer = nullptr;
   }
-
-  IOActivityMonitor::Shutdown();
 
   mInitialized = false;
   mShuttingDown = false;
@@ -1495,7 +1503,7 @@ nsresult nsSocketTransportService::UpdatePrefs() {
   nsresult rv =
       Preferences::GetInt(KEEPALIVE_IDLE_TIME_PREF, &keepaliveIdleTimeS);
   if (NS_SUCCEEDED(rv)) {
-    mKeepaliveIdleTimeS = clamped(keepaliveIdleTimeS, 1, kMaxTCPKeepIdle);
+    mKeepaliveIdleTimeS = std::clamp(keepaliveIdleTimeS, 1, kMaxTCPKeepIdle);
   }
 
   int32_t keepaliveRetryIntervalS;
@@ -1503,13 +1511,13 @@ nsresult nsSocketTransportService::UpdatePrefs() {
                            &keepaliveRetryIntervalS);
   if (NS_SUCCEEDED(rv)) {
     mKeepaliveRetryIntervalS =
-        clamped(keepaliveRetryIntervalS, 1, kMaxTCPKeepIntvl);
+        std::clamp(keepaliveRetryIntervalS, 1, kMaxTCPKeepIntvl);
   }
 
   int32_t keepaliveProbeCount;
   rv = Preferences::GetInt(KEEPALIVE_PROBE_COUNT_PREF, &keepaliveProbeCount);
   if (NS_SUCCEEDED(rv)) {
-    mKeepaliveProbeCount = clamped(keepaliveProbeCount, 1, kMaxTCPKeepCount);
+    mKeepaliveProbeCount = std::clamp(keepaliveProbeCount, 1, kMaxTCPKeepCount);
   }
   bool keepaliveEnabled = false;
   rv = Preferences::GetBool(KEEPALIVE_ENABLED_PREF, &keepaliveEnabled);
@@ -1612,13 +1620,6 @@ nsSocketTransportService::Observe(nsISupports* subject, const char* topic,
                                   const char16_t* data) {
   SOCKET_LOG(("nsSocketTransportService::Observe topic=%s", topic));
 
-  if (!strcmp(topic, "profile-initial-state")) {
-    if (!Preferences::GetBool(IO_ACTIVITY_ENABLED_PREF, false)) {
-      return NS_OK;
-    }
-    return net::IOActivityMonitor::Init();
-  }
-
   if (!strcmp(topic, "last-pb-context-exited")) {
     nsCOMPtr<nsIRunnable> ev = NewRunnableMethod(
         "net::nsSocketTransportService::ClosePrivateConnections", this,
@@ -1673,8 +1674,6 @@ void nsSocketTransportService::ClosePrivateConnections() {
       DetachSocket(mIdleList, &mIdleList[i]);
     }
   }
-
-  ClearPrivateSSLState();
 }
 
 NS_IMETHODIMP
@@ -1864,11 +1863,20 @@ void nsSocketTransportService::EndPolling() {
 
 #endif
 
-void nsSocketTransportService::TryRepairPollableEvent() {
+void nsSocketTransportService::TryRepairPollableEvent() MOZ_REQUIRES(mLock) {
   mLock.AssertCurrentThreadOwns();
 
+  PollableEvent* pollable = nullptr;
+  {
+    // Bug 1719046: In certain cases PollableEvent constructor can hang
+    // when callign PR_NewTCPSocketPair.
+    // We unlock the mutex to prevent main thread hangs acquiring the lock.
+    MutexAutoUnlock unlock(mLock);
+    pollable = new PollableEvent();
+  }
+
   NS_WARNING("Trying to repair mPollableEvent");
-  mPollableEvent.reset(new PollableEvent());
+  mPollableEvent.reset(pollable);
   if (!mPollableEvent->Valid()) {
     mPollableEvent = nullptr;
   }

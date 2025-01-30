@@ -31,11 +31,14 @@ class DatabaseFileManager final
   const quota::OriginMetadata mOriginMetadata;
   const nsString mDatabaseName;
   const nsCString mDatabaseID;
+  const nsString mDatabaseFilePath;
 
   RefPtr<IndexedDBCipherKeyManager> mCipherKeyManager;
 
   LazyInitializedOnce<const nsString> mDirectoryPath;
   LazyInitializedOnce<const nsString> mJournalDirectoryPath;
+
+  uint64_t mDatabaseVersion;
 
   const bool mEnforcingQuota;
   const bool mIsInPrivateBrowsingMode;
@@ -68,7 +71,8 @@ class DatabaseFileManager final
   DatabaseFileManager(PersistenceType aPersistenceType,
                       const quota::OriginMetadata& aOriginMetadata,
                       const nsAString& aDatabaseName,
-                      const nsCString& aDatabaseID, bool aEnforcingQuota,
+                      const nsCString& aDatabaseID,
+                      const nsAString& aDatabaseFilePath, bool aEnforcingQuota,
                       bool aIsInPrivateBrowsingMode);
 
   PersistenceType Type() const { return mPersistenceType; }
@@ -83,6 +87,12 @@ class DatabaseFileManager final
 
   const nsCString& DatabaseID() const { return mDatabaseID; }
 
+  const nsAString& DatabaseFilePath() const { return mDatabaseFilePath; }
+
+  uint64_t DatabaseVersion() const;
+
+  void UpdateDatabaseVersion(uint64_t aDatabaseVersion);
+
   IndexedDBCipherKeyManager& MutableCipherKeyManagerRef() const {
     MOZ_ASSERT(mIsInPrivateBrowsingMode);
     MOZ_ASSERT(mCipherKeyManager);
@@ -96,7 +106,8 @@ class DatabaseFileManager final
 
   bool Initialized() const { return mInitialized; }
 
-  nsresult Init(nsIFile* aDirectory, mozIStorageConnection& aConnection);
+  nsresult Init(nsIFile* aDirectory, const uint64_t aDatabaseVersion,
+                mozIStorageConnection& aConnection);
 
   [[nodiscard]] nsCOMPtr<nsIFile> GetDirectory();
 
@@ -119,7 +130,9 @@ class DatabaseFileManager final
 
   MOZ_DECLARE_REFCOUNTED_TYPENAME(DatabaseFileManager)
 
-  static StaticMutex& Mutex() { return sMutex; }
+  static StaticMutex& MutexInstance() MOZ_RETURN_CAPABILITY(sMutex) {
+    return sMutex;
+  }
 
   ~DatabaseFileManager() = default;
 };

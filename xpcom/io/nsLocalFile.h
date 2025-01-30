@@ -9,12 +9,8 @@
 
 #include "nscore.h"
 
-#define NS_LOCAL_FILE_CID                            \
-  {                                                  \
-    0x2e23e220, 0x60be, 0x11d3, {                    \
-      0x8c, 0x4a, 0x00, 0x00, 0x64, 0x65, 0x73, 0x74 \
-    }                                                \
-  }
+#define NS_LOCAL_FILE_CID \
+  {0x2e23e220, 0x60be, 0x11d3, {0x8c, 0x4a, 0x00, 0x00, 0x64, 0x65, 0x73, 0x74}}
 
 #define NS_DECL_NSLOCALFILE_UNICODE_METHODS                           \
   nsresult AppendUnicode(const char16_t* aNode);                      \
@@ -89,19 +85,11 @@ inline nsresult nsresultForErrno(int aErr) {
     case EROFS: /*     Read-only file system. */
       return NS_ERROR_FILE_READ_ONLY;
 #endif
-      /*
-       * On AIX 4.3, ENOTEMPTY is defined as EEXIST,
-       * so there can't be cases for both without
-       * preprocessing.
-       */
-#if ENOTEMPTY != EEXIST
     case ENOTEMPTY:
       return NS_ERROR_FILE_DIR_NOT_EMPTY;
-#endif /* ENOTEMPTY != EEXIST */
     /* Note that nsIFile.createUnique() returns
        NS_ERROR_FILE_TOO_BIG when it cannot create a temporary
        file with a unique filename.
-       See https://developer.mozilla.org/en-US/docs/Table_Of_Errors
        Other usages of NS_ERROR_FILE_TOO_BIG in the source tree
        are in line with the POSIX semantics of EFBIG.
        So this is a reasonably good approximation.

@@ -8,13 +8,16 @@
 #define DOM_SECURITY_TRUSTED_TYPES_TRUSTEDTYPEPOLICYFACTORY_H_
 
 #include "js/TypeDecls.h"
+#include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/TrustedHTML.h"
 #include "mozilla/dom/TrustedScript.h"
+#include "mozilla/dom/TrustedScriptURL.h"
+#include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/UniquePtr.h"
 #include "nsIGlobalObject.h"
 #include "nsISupportsImpl.h"
 #include "nsStringFwd.h"
+#include "nsTArray.h"
 #include "nsWrapperCache.h"
 
 template <typename T>
@@ -22,8 +25,10 @@ struct already_AddRefed;
 
 class DOMString;
 
-namespace mozilla::dom {
+namespace mozilla {
+class ErrorResult;
 
+namespace dom {
 class TrustedTypePolicy;
 
 // https://w3c.github.io/trusted-types/dist/spec/#trusted-type-policy-factory
@@ -32,8 +37,7 @@ class TrustedTypePolicyFactory : public nsWrapperCache {
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(TrustedTypePolicyFactory)
   NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(TrustedTypePolicyFactory)
 
-  explicit TrustedTypePolicyFactory(nsIGlobalObject* aGlobalObject)
-      : mGlobalObject{aGlobalObject} {}
+  explicit TrustedTypePolicyFactory(nsIGlobalObject* aGlobalObject);
 
   // Required for Web IDL binding.
   nsIGlobalObject* GetParentObject() const { return mGlobalObject; }
@@ -44,62 +48,56 @@ class TrustedTypePolicyFactory : public nsWrapperCache {
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-createpolicy
   already_AddRefed<TrustedTypePolicy> CreatePolicy(
-      const nsAString& aPolicyName,
-      const TrustedTypePolicyOptions& aPolicyOptions);
+      JSContext* aJSContext, const nsAString& aPolicyName,
+      const TrustedTypePolicyOptions& aPolicyOptions, ErrorResult& aRv);
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-ishtml
-  bool IsHTML(JSContext* aJSContext,
-              const JS::Handle<JS::Value>& aValue) const {
-    // TODO: impl.
-    return false;
-  }
+  bool IsHTML(JSContext* aJSContext, const JS::Handle<JS::Value>& aValue) const;
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-isscript
   bool IsScript(JSContext* aJSContext,
-                const JS::Handle<JS::Value>& aValue) const {
-    // TODO: impl.
-    return false;
-  }
+                const JS::Handle<JS::Value>& aValue) const;
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-isscripturl
   bool IsScriptURL(JSContext* aJSContext,
-                   const JS::Handle<JS::Value>& aValue) const {
-    // TODO: impl.
-    return false;
-  }
+                   const JS::Handle<JS::Value>& aValue) const;
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-emptyhtml
-  UniquePtr<TrustedHTML> EmptyHTML();
+  already_AddRefed<TrustedHTML> EmptyHTML();
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-emptyscript
-  UniquePtr<TrustedScript> EmptyScript();
+  already_AddRefed<TrustedScript> EmptyScript();
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-getattributetype
   void GetAttributeType(const nsAString& aTagName, const nsAString& aAttribute,
                         const nsAString& aElementNs, const nsAString& aAttrNs,
-                        DOMString& aResult) {
-    // TODO: impl.
-  }
+                        DOMString& aResult);
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-getpropertytype
   void GetPropertyType(const nsAString& aTagName, const nsAString& aProperty,
-                       const nsAString& aElementNs, DOMString& aResult) {
-    // TODO: impl
-  }
+                       const nsAString& aElementNs, DOMString& aResult);
 
   // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-defaultpolicy
-  TrustedTypePolicy* GetDefaultPolicy() const {
-    // TODO: impl
-    return nullptr;
-  }
+  TrustedTypePolicy* GetDefaultPolicy() const { return mDefaultPolicy; }
 
  private:
-  // Required because this class is ref-counted.
-  virtual ~TrustedTypePolicyFactory() = default;
+  // Virtual destructor required because this class is ref-counted.
+  virtual ~TrustedTypePolicyFactory();
+
+  enum class PolicyCreation { Blocked, Allowed };
+
+  // https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-should-trusted-type-policy-creation-be-blocked-by-content-security-policy
+  PolicyCreation ShouldTrustedTypePolicyCreationBeBlockedByCSP(
+      JSContext* aJSContext, const nsAString& aPolicyName) const;
 
   RefPtr<nsIGlobalObject> mGlobalObject;
+
+  nsTArray<nsString> mCreatedPolicyNames;
+
+  RefPtr<TrustedTypePolicy> mDefaultPolicy;
 };
 
-}  // namespace mozilla::dom
+}  // namespace dom
+}  // namespace mozilla
 
 #endif  // DOM_SECURITY_TRUSTED_TYPES_TRUSTEDTYPEPOLICYFACTORY_H_

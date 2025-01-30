@@ -12,7 +12,10 @@
 #include "GeckoProfiler.h"
 #ifdef XP_LINUX
 #  include "dlfcn.h"
-#endif
+#  if defined(MOZ_SANDBOX)
+#    include "mozilla/Sandbox.h"
+#  endif  // defined(MOZ_SANDBOX)
+#endif    // defined (XP_LINUX)
 #include "gmp-video-decode.h"
 #include "gmp-video-encode.h"
 #include "GMPContentChild.h"
@@ -41,6 +44,7 @@
 #include "nsXULAppAPI.h"
 #include "nsIXULRuntime.h"
 #include "nsXPCOM.h"
+#include "nsXPCOMPrivate.h"  // for XUL_DLL
 #include "prio.h"
 #ifdef XP_WIN
 #  include <stdlib.h>  // for _exit()
@@ -172,6 +176,7 @@ mozilla::ipc::IPCResult GMPChild::RecvPreloadLibs(const nsCString& aLibs) {
       u"ole32.dll",        // required for OPM
       u"oleaut32.dll",     // For _bstr_t use in libwebrtc, see bug 1788592
       u"psapi.dll",        // For GetMappedFileNameW, see bug 1383611
+      u"shell32.dll",      // Dependency for widevine
       u"softokn3.dll",     // NSS for clearkey CDM
       u"winmm.dll",        // Dependency for widevine
   };
@@ -248,7 +253,7 @@ bool GMPChild::GetUTF8LibPath(nsACString& aOutLibPath) {
     MOZ_CRASH(explain);                                   \
   } while (false)
 
-  nsresult rv = NS_NewLocalFile(mPluginPath, true, getter_AddRefs(libFile));
+  nsresult rv = NS_NewLocalFile(mPluginPath, getter_AddRefs(libFile));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     GMP_PATH_CRASH("Failed to create file for plugin path");
     return false;
@@ -305,7 +310,7 @@ bool GMPChild::GetUTF8LibPath(nsACString& aOutLibPath) {
 bool GMPChild::GetPluginName(nsACString& aPluginName) const {
   // Extract the plugin directory name if possible.
   nsCOMPtr<nsIFile> libFile;
-  nsresult rv = NS_NewLocalFile(mPluginPath, true, getter_AddRefs(libFile));
+  nsresult rv = NS_NewLocalFile(mPluginPath, getter_AddRefs(libFile));
   NS_ENSURE_SUCCESS(rv, false);
 
   nsCOMPtr<nsIFile> parent;
@@ -348,15 +353,11 @@ static bool IsFileLeafEqualToASCII(const nsCOMPtr<nsIFile>& aFile,
 #endif
 
 #if defined(XP_WIN)
-#  define FIREFOX_FILE u"firefox.exe"_ns
-#  define XUL_LIB_FILE u"xul.dll"_ns
-#elif defined(XP_MACOSX)
-#  define FIREFOX_FILE u"firefox"_ns
-#  define XUL_LIB_FILE u"XUL"_ns
+#  define FIREFOX_FILE MOZ_APP_NAME u".exe"_ns
 #else
-#  define FIREFOX_FILE u"firefox"_ns
-#  define XUL_LIB_FILE u"libxul.so"_ns
+#  define FIREFOX_FILE MOZ_APP_NAME u""_ns
 #endif
+#define XUL_LIB_FILE XUL_DLL u""_ns
 
 static nsCOMPtr<nsIFile> GetFirefoxAppPath(
     nsCOMPtr<nsIFile> aPluginContainerPath) {
@@ -462,8 +463,7 @@ GMPChild::MakeCDMHostVerificationPaths(const nsACString& aPluginLibPath) {
 
   CopyUTF8toUTF16(nsDependentCString(pluginContainer.c_str()), str);
   nsCOMPtr<nsIFile> path;
-  if (NS_FAILED(NS_NewLocalFile(str, true, /* aFollowLinks */
-                                getter_AddRefs(path))) ||
+  if (NS_FAILED(NS_NewLocalFile(str, getter_AddRefs(path))) ||
       !AppendHostPath(path, paths)) {
     // Without successfully determining plugin-container's path, we can't
     // determine libxul's or Firefox's. So give up.
@@ -570,6 +570,10 @@ MessageLoop* GMPChild::GMPMessageLoop() { return mGMPMessageLoop; }
 void GMPChild::ActorDestroy(ActorDestroyReason aWhy) {
   GMP_CHILD_LOG_DEBUG("%s reason=%d", __FUNCTION__, aWhy);
 
+#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
+  DestroySandboxProfiler();
+#endif
+
   for (uint32_t i = mGMPContentChildren.Length(); i > 0; i--) {
     MOZ_ASSERT_IF(aWhy == NormalShutdown,
                   !mGMPContentChildren[i - 1]->IsUsed());
@@ -579,6 +583,9 @@ void GMPChild::ActorDestroy(ActorDestroyReason aWhy) {
   if (mGMPLoader) {
     mGMPLoader->Shutdown();
   }
+
+  ShutdownPlatformAPI();
+
   if (AbnormalShutdown == aWhy) {
     NS_WARNING("Abnormal shutdown of GMP process!");
     ProcessChild::QuickExit();
@@ -610,8 +617,6 @@ void GMPChild::ProcessingError(Result aCode, const char* aReason) {
       MOZ_CRASH("aborting because of MsgPayloadError");
     case MsgProcessingError:
       MOZ_CRASH("aborting because of MsgProcessingError");
-    case MsgRouteError:
-      MOZ_CRASH("aborting because of MsgRouteError");
     case MsgValueError:
       MOZ_CRASH("aborting because of MsgValueError");
     default:

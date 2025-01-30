@@ -443,7 +443,7 @@ void nsHtml5StreamParser::SetupDecodingFromBom(
   mTreeBuilder->SetDocumentCharset(mEncoding, mCharsetSource, false);
   mBomState = BOM_SNIFFING_OVER;
   if (mMode == VIEW_SOURCE_HTML) {
-    mTokenizer->StartViewSourceCharacters();
+    mTokenizer->StartViewSourceBodyContents();
   }
 }
 
@@ -460,7 +460,7 @@ void nsHtml5StreamParser::SetupDecodingFromUtf16BogoXml(
   mTreeBuilder->SetDocumentCharset(mEncoding, mCharsetSource, false);
   mBomState = BOM_SNIFFING_OVER;
   if (mMode == VIEW_SOURCE_HTML) {
-    mTokenizer->StartViewSourceCharacters();
+    mTokenizer->StartViewSourceBodyContents();
   }
   auto dst = mLastBuffer->TailAsSpan(READ_BUFFER_SIZE);
   dst[0] = '<';
@@ -782,7 +782,7 @@ nsresult nsHtml5StreamParser::SniffStreamBytes(Span<const uint8_t> aFromSegment,
       MOZ_ASSERT(!mFlushTimerArmed, "How did we end up arming the timer?");
       if (mMode == VIEW_SOURCE_HTML) {
         mTokenizer->SetViewSourceOpSink(speculation);
-        mTokenizer->StartViewSourceCharacters();
+        mTokenizer->StartViewSourceBodyContents();
       } else {
         MOZ_ASSERT(mMode != VIEW_SOURCE_XML);
         mTreeBuilder->SetOpSink(speculation);
@@ -794,7 +794,7 @@ nsresult nsHtml5StreamParser::SniffStreamBytes(Span<const uint8_t> aFromSegment,
       mBufferingBytes = false;
       mDecodingLocalFileWithoutTokenizing = false;
       if (mMode == VIEW_SOURCE_HTML) {
-        mTokenizer->StartViewSourceCharacters();
+        mTokenizer->StartViewSourceBodyContents();
       }
     }
     mTreeBuilder->SetDocumentCharset(mEncoding, mCharsetSource, false);
@@ -1149,7 +1149,7 @@ nsresult nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest) {
     // pre element start.
     mTokenizer->StartViewSource(NS_ConvertUTF8toUTF16(mViewSourceTitle));
     if (mMode == VIEW_SOURCE_XML) {
-      mTokenizer->StartViewSourceCharacters();
+      mTokenizer->StartViewSourceBodyContents();
     }
     // Flush the ops to put them where ContinueAfterScriptsOrEncodingCommitment
     // can find them.
@@ -1385,27 +1385,25 @@ nsresult nsHtml5StreamParser::OnStopRequest(
     const mozilla::ReentrantMonitorAutoEnter& aProofOfLock) {
   MOZ_ASSERT_IF(aRequest, mRequest == aRequest);
   if (mOnStopCalled) {
+    // OnStopRequest already executed (probably OMT).
+    MOZ_ASSERT(NS_IsMainThread(), "Expected to run on main thread");
     if (mOnDataFinishedTime) {
       mOnStopRequestTime = TimeStamp::Now();
-    } else {
-      mOnDataFinishedTime = TimeStamp::Now();
     }
   } else {
     mOnStopCalled = true;
 
     if (MOZ_UNLIKELY(NS_IsMainThread())) {
-      mOnStopRequestTime = TimeStamp::Now();
+      MOZ_ASSERT(mOnDataFinishedTime.IsNull(), "stale mOnDataFinishedTime");
       nsCOMPtr<nsIRunnable> stopper = new nsHtml5RequestStopper(this);
       if (NS_FAILED(
               mEventTarget->Dispatch(stopper, nsIThread::DISPATCH_NORMAL))) {
         NS_WARNING("Dispatching StopRequest event failed.");
       }
     } else {
-      mOnDataFinishedTime = TimeStamp::Now();
-
       if (StaticPrefs::network_send_OnDataFinished_html5parser()) {
         MOZ_ASSERT(IsParserThread(), "Wrong thread!");
-
+        mOnDataFinishedTime = TimeStamp::Now();
         mozilla::MutexAutoLock autoLock(mTokenizerMutex);
         DoStopRequest();
         PostLoadFlusher();
@@ -1421,16 +1419,10 @@ nsresult nsHtml5StreamParser::OnStopRequest(
   }
   if (!mOnStopRequestTime.IsNull() && !mOnDataFinishedTime.IsNull()) {
     TimeDuration delta = (mOnStopRequestTime - mOnDataFinishedTime);
-    if (delta.ToMilliseconds() < 0) {
-      // Because Telemetry can't handle negatives
-      delta = -delta;
-      glean::networking::
-          http_content_html5parser_ondatafinished_to_onstop_delay_negative
-              .AccumulateRawDuration(delta);
-    } else {
-      glean::networking::http_content_html5parser_ondatafinished_to_onstop_delay
-          .AccumulateRawDuration(delta);
-    }
+    MOZ_ASSERT((delta.ToMilliseconds() >= 0),
+               "OnDataFinished after OnStopRequest");
+    glean::networking::http_content_html5parser_ondatafinished_to_onstop_delay
+        .AccumulateRawDuration(delta);
   }
   return NS_OK;
 }
@@ -2027,7 +2019,7 @@ void nsHtml5StreamParser::DiscardMetaSpeculation() {
   MOZ_ASSERT(!mFlushTimerArmed, "How did we end up arming the timer?");
   if (mMode == VIEW_SOURCE_HTML) {
     mTokenizer->SetViewSourceOpSink(speculation);
-    mTokenizer->StartViewSourceCharacters();
+    mTokenizer->StartViewSourceBodyContents();
   } else {
     MOZ_ASSERT(mMode != VIEW_SOURCE_XML);
     mTreeBuilder->SetOpSink(speculation);
@@ -2679,9 +2671,10 @@ void nsHtml5StreamParser::ContinueAfterScriptsOrEncodingCommitment(
       nsContentUtils::ReportToConsole(
           nsIScriptError::warningFlag, "DOM Events"_ns,
           mExecutor->GetDocument(), nsContentUtils::eDOM_PROPERTIES,
-          "SpeculationFailed2", nsTArray<nsString>(), nullptr, u""_ns,
-          speculation->GetStartLineNumber(),
-          speculation->GetStartColumnNumber());
+          "SpeculationFailed2", nsTArray<nsString>(),
+          SourceLocation(mExecutor->GetDocument()->GetDocumentURI(),
+                         speculation->GetStartLineNumber(),
+                         speculation->GetStartColumnNumber()));
 
       nsHtml5OwningUTF16Buffer* buffer = mFirstBuffer->next;
       while (buffer) {

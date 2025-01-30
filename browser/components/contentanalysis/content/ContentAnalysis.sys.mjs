@@ -25,6 +25,7 @@ XPCOMUtils.defineLazyServiceGetter(
 
 ChromeUtils.defineESModuleGetters(lazy, {
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
+  PanelMultiView: "resource:///modules/PanelMultiView.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
 });
 
@@ -42,120 +43,69 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "A DLP agent"
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "showBlockedResult",
+  "browser.contentanalysis.show_blocked_result",
+  true
+);
+
 /**
  * A class that groups browsing contexts by their top-level one.
  * This is necessary because if there may be a subframe that
  * is showing a "DLP request busy" dialog when another subframe
- * (other the outer frame) wants to show one. This class makes it
- * convenient to find if another frame with the same top browsing
- * context is currently showing a dialog, and also to find if there
- * are any pending dialogs to show when one closes.
+ * (other than the outer frame) wants to show one. This is also needed
+ * because there may be multiple requests active for a given top-level
+ * or subframe.
+ *
+ * This class makes it convenient to find if another frame with
+ * the same top browsing context is currently showing a dialog, and
+ * also to find if there are any pending dialogs to show when one closes.
  */
 class MapByTopBrowsingContext {
+  /**
+   * A map from top-level browsing context to
+   *    a map from browsing context to a list of entries
+   *
+   * @type {Map<BrowsingContext, Map<BrowsingContext, Array<object>>>}
+   */
   #map;
   constructor() {
     this.#map = new Map();
   }
   /**
-   * Gets any existing data associated with the browsing context
+   * Gets a specific request associated with the browsing context
    *
    * @param {BrowsingContext} aBrowsingContext the browsing context to search for
+   * @param {string} aRequestToken the request token to search for
    * @returns {object | undefined} the existing data, or `undefined` if there is none
    */
-  getEntry(aBrowsingContext) {
+  getAndRemoveEntry(aBrowsingContext, aRequestToken) {
     const topEntry = this.#map.get(aBrowsingContext.top);
     if (!topEntry) {
       return undefined;
     }
-    return topEntry.get(aBrowsingContext);
-  }
-  /**
-   * Returns whether the browsing context has any data associated with it
-   *
-   * @param {BrowsingContext} aBrowsingContext the browsing context to search for
-   * @returns {boolean} Whether the browsing context has any associated data
-   */
-  hasEntry(aBrowsingContext) {
-    const topEntry = this.#map.get(aBrowsingContext.top);
-    if (!topEntry) {
-      return false;
-    }
-    return topEntry.has(aBrowsingContext);
-  }
-  /**
-   * Whether the tab containing the browsing context has a dialog
-   * currently showing
-   *
-   * @param {BrowsingContext} aBrowsingContext the browsing context to search for
-   * @returns {boolean} whether the tab has a dialog currently showing
-   */
-  hasEntryDisplayingNotification(aBrowsingContext) {
-    const topEntry = this.#map.get(aBrowsingContext.top);
-    if (!topEntry) {
-      return false;
-    }
-    for (const otherEntry in topEntry.values()) {
-      if (otherEntry.notification?.dialogBrowsingContext) {
-        return true;
-      }
-    }
-    return false;
-  }
-  /**
-   * Gets another browsing context in the same tab that has pending "DLP busy" dialog
-   * info to show, if any.
-   *
-   * @param {BrowsingContext} aBrowsingContext the browsing context to search for
-   * @returns {BrowsingContext} Another browsing context in the same tab that has pending "DLP busy" dialog info, or `undefined` if there aren't any.
-   */
-  getBrowsingContextWithPendingNotification(aBrowsingContext) {
-    const topEntry = this.#map.get(aBrowsingContext.top);
-    if (!topEntry) {
+    const browsingContextEntries = topEntry.get(aBrowsingContext);
+    if (!browsingContextEntries) {
       return undefined;
     }
-    if (aBrowsingContext.top.isDiscarded) {
-      // The top-level tab has already been closed, so remove
-      // the top-level entry and return there are no pending dialogs.
-      this.#map.delete(aBrowsingContext.top);
-      return undefined;
-    }
-    for (const otherContext in topEntry.keys()) {
-      if (
-        topEntry.get(otherContext).notification?.dialogBrowsingContextArgs &&
-        otherContext !== aBrowsingContext
-      ) {
-        return otherContext;
+    for (let i = 0; i < browsingContextEntries.length; i++) {
+      if (browsingContextEntries[i].request.requestToken === aRequestToken) {
+        // Remove and return this entry
+        return browsingContextEntries.splice(i, 1)[0];
       }
     }
     return undefined;
   }
+
   /**
-   * Deletes the entry for the browsing context, if any
-   *
-   * @param {BrowsingContext} aBrowsingContext the browsing context to delete
-   * @returns {boolean} Whether an entry was deleted or not
-   */
-  deleteEntry(aBrowsingContext) {
-    const topEntry = this.#map.get(aBrowsingContext.top);
-    if (!topEntry) {
-      return false;
-    }
-    const toReturn = topEntry.delete(aBrowsingContext);
-    if (!topEntry.size || aBrowsingContext.top.isDiscarded) {
-      // Either the inner Map is now empty, or the whole tab
-      // has been closed. Either way, remove the top-level entry.
-      this.#map.delete(aBrowsingContext.top);
-    }
-    return toReturn;
-  }
-  /**
-   * Sets the associated data for the browsing context
+   * Adds or replaces the associated entry for the browsing context
    *
    * @param {BrowsingContext} aBrowsingContext the browsing context to set the data for
    * @param {object} aValue the data to associated with the browsing context
    * @returns {MapByTopBrowsingContext} this
    */
-  setEntry(aBrowsingContext, aValue) {
+  addOrReplaceEntry(aBrowsingContext, aValue) {
     if (!aValue.request) {
       console.error(
         "MapByTopBrowsingContext.setEntry() called with a value without a request!"
@@ -166,15 +116,37 @@ class MapByTopBrowsingContext {
       topEntry = new Map();
       this.#map.set(aBrowsingContext.top, topEntry);
     }
-    topEntry.set(aBrowsingContext, aValue);
+
+    let existingEntries = topEntry.get(aBrowsingContext);
+    if (existingEntries) {
+      for (let i = 0; i < existingEntries.length; ++i) {
+        let existingEntry = existingEntries[i];
+        if (
+          existingEntry.request.requestToken === aValue.request.requestToken
+        ) {
+          existingEntries[i] = aValue;
+          return this;
+        }
+      }
+      existingEntries.push(aValue);
+    } else {
+      topEntry.set(aBrowsingContext, [aValue]);
+    }
     return this;
   }
 
+  /**
+   * Gets all requests across all browsing contexts
+   *
+   * @returns {Array<object>} all the requests
+   */
   getAllRequests() {
     let requests = [];
-    this.#map.forEach(topEntry => {
-      for (let entry of topEntry.values()) {
-        requests.push(entry.request);
+    this.#map.forEach(topBrowsingContext => {
+      for (const entries of topBrowsingContext.values()) {
+        for (const entry of entries) {
+          requests.push(entry.request);
+        }
       }
     });
     return requests;
@@ -194,17 +166,26 @@ export const ContentAnalysis = {
 
   _RESULT_NOTIFICATION_FAST_TIMEOUT_MS: 60 * 1000, // 1 min
 
+  PROMPTID_PREFIX: "ContentAnalysisDialog-",
+
   isInitialized: false,
 
   dlpBusyViewsByTopBrowsingContext: new MapByTopBrowsingContext(),
 
+  /**
+   * @type {Map<string, {browsingContext: BrowsingContext, resourceNameOrOperationType: object}>}
+   */
   requestTokenToRequestInfo: new Map(),
 
   /**
    * Registers for various messages/events that will indicate the
    * need for communicating something to the user.
    */
-  initialize() {
+  initialize(window) {
+    if (!lazy.gContentAnalysis.isActive) {
+      return;
+    }
+    let doc = window.document;
     if (!this.isInitialized) {
       this.isInitialized = true;
       this.initializeDownloadCA();
@@ -216,6 +197,15 @@ export const ContentAnalysis = {
         );
       });
     }
+
+    // Do this even if initialized so the icon shows up on new windows, not just the
+    // first one.
+    doc.l10n.setAttributes(
+      doc.getElementById("content-analysis-indicator"),
+      "content-analysis-indicator-tooltip",
+      { agentName: lazy.agentName }
+    );
+    doc.documentElement.setAttribute("contentanalysisactive", "true");
   },
 
   async uninitialize() {
@@ -236,9 +226,10 @@ export const ContentAnalysis = {
   },
 
   // nsIObserver
-  async observe(aSubj, aTopic, aData) {
+  async observe(aSubj, aTopic, _aData) {
     switch (aTopic) {
       case "quit-application-requested": {
+        let quitCancelled = false;
         let pendingRequests =
           this.dlpBusyViewsByTopBrowsingContext.getAllRequests();
         if (pendingRequests.length) {
@@ -272,11 +263,17 @@ export const ContentAnalysis = {
             null,
             { value: 0 }
           );
-          if (buttonSelected === 0) {
-            lazy.gContentAnalysis.cancelAllRequests();
-          } else {
+          if (buttonSelected === 1) {
             aSubj.data = true;
+            quitCancelled = true;
           }
+        }
+        if (!quitCancelled) {
+          // Ideally we would wait until "quit-application" to cancel outstanding
+          // DLP requests, but the "DLP busy" or "DLP blocked" dialog can block the
+          // main thread, thus preventing the "quit-application" from being sent,
+          // which causes a shutdownhang. (bug 1899703)
+          lazy.gContentAnalysis.cancelAllRequests();
         }
         break;
       }
@@ -293,10 +290,10 @@ export const ContentAnalysis = {
             );
             return;
           }
-          const operation = request.analysisType;
+          const analysisType = request.analysisType;
           // For operations that block browser interaction, show the "slow content analysis"
           // dialog faster
-          let slowTimeoutMs = this._shouldShowBlockingNotification(operation)
+          let slowTimeoutMs = this._shouldShowBlockingNotification(analysisType)
             ? this._SLOW_DLP_NOTIFICATION_BLOCKING_TIMEOUT_MS
             : this._SLOW_DLP_NOTIFICATION_NONBLOCKING_TIMEOUT_MS;
           let browsingContext = request.windowGlobalParent?.browsingContext;
@@ -308,37 +305,35 @@ export const ContentAnalysis = {
 
           // Start timer that, when it expires,
           // presents a "slow CA check" message.
-          // Note that there should only be one DLP request
-          // at a time per browsingContext (since we block the UI and
-          // the content process waits synchronously for the result).
-          if (this.dlpBusyViewsByTopBrowsingContext.hasEntry(browsingContext)) {
-            throw new Error(
-              "Got dlp-request-made message for a browsingContext that already has a busy view!"
-            );
-          }
           let resourceNameOrOperationType =
             this._getResourceNameOrOperationTypeFromRequest(request, false);
           this.requestTokenToRequestInfo.set(request.requestToken, {
             browsingContext,
             resourceNameOrOperationType,
           });
-          this.dlpBusyViewsByTopBrowsingContext.setEntry(browsingContext, {
-            timer: lazy.setTimeout(() => {
-              this.dlpBusyViewsByTopBrowsingContext.setEntry(browsingContext, {
-                notification: this._showSlowCAMessage(
-                  operation,
-                  request,
-                  resourceNameOrOperationType,
-                  browsingContext
-                ),
-                request,
-              });
-            }, slowTimeoutMs),
-            request,
-          });
+          this.dlpBusyViewsByTopBrowsingContext.addOrReplaceEntry(
+            browsingContext,
+            {
+              timer: lazy.setTimeout(() => {
+                this.dlpBusyViewsByTopBrowsingContext.addOrReplaceEntry(
+                  browsingContext,
+                  {
+                    notification: this._showSlowCAMessage(
+                      analysisType,
+                      request,
+                      resourceNameOrOperationType,
+                      browsingContext
+                    ),
+                    request,
+                  }
+                );
+              }, slowTimeoutMs),
+              request,
+            }
+          );
         }
         break;
-      case "dlp-response":
+      case "dlp-response": {
         const request = aSubj.QueryInterface(Ci.nsIContentAnalysisResponse);
         // Cancels timer or slow message UI,
         // if present, and possibly presents the CA verdict.
@@ -357,47 +352,39 @@ export const ContentAnalysis = {
           return;
         }
         this.requestTokenToRequestInfo.delete(request.requestToken);
-        let dlpBusyView = this.dlpBusyViewsByTopBrowsingContext.getEntry(
-          windowAndResourceNameOrOperationType.browsingContext
-        );
-        if (dlpBusyView) {
-          this._disconnectFromView(dlpBusyView);
-          this.dlpBusyViewsByTopBrowsingContext.deleteEntry(
-            windowAndResourceNameOrOperationType.browsingContext
+        let dlpBusyView =
+          this.dlpBusyViewsByTopBrowsingContext.getAndRemoveEntry(
+            windowAndResourceNameOrOperationType.browsingContext,
+            request.requestToken
           );
-        }
+        this._disconnectFromView(dlpBusyView);
         const responseResult =
           request?.action ?? Ci.nsIContentAnalysisResponse.eUnspecified;
-        await this._showCAResult(
-          windowAndResourceNameOrOperationType.resourceNameOrOperationType,
-          windowAndResourceNameOrOperationType.browsingContext,
-          request.requestToken,
-          responseResult
-        );
-        this._showAnotherPendingDialog(
-          windowAndResourceNameOrOperationType.browsingContext
-        );
+        // Don't show dialog if this is a cached response
+        if (!request?.isCachedResponse) {
+          await this._showCAResult(
+            windowAndResourceNameOrOperationType.resourceNameOrOperationType,
+            windowAndResourceNameOrOperationType.browsingContext,
+            request.requestToken,
+            responseResult,
+            request.cancelError
+          );
+        }
         break;
+      }
     }
   },
 
-  _showAnotherPendingDialog(aBrowsingContext) {
-    const otherBrowsingContext =
-      this.dlpBusyViewsByTopBrowsingContext.getBrowsingContextWithPendingNotification(
-        aBrowsingContext
-      );
-    if (otherBrowsingContext) {
-      const args =
-        this.dlpBusyViewsByTopBrowsingContext.getEntry(otherBrowsingContext);
-      this.dlpBusyViewsByTopBrowsingContext.setEntry(otherBrowsingContext, {
-        notification: this._showSlowCABlockingMessage(
-          otherBrowsingContext,
-          args.requestToken,
-          args.resourceNameOrOperationType
-        ),
-        request: args.request,
-      });
-    }
+  async showPanel(element, panelUI) {
+    element.ownerDocument.l10n.setAttributes(
+      lazy.PanelMultiView.getViewNode(
+        element.ownerDocument,
+        "content-analysis-panel-description"
+      ),
+      "content-analysis-panel-text-styled",
+      { agentName: lazy.agentName }
+    );
+    panelUI.showSubView("content-analysis-panel", element);
   },
 
   _disconnectFromView(caView) {
@@ -418,9 +405,13 @@ export const ContentAnalysis = {
         let win = browser?.ownerGlobal;
         if (win) {
           let dialogBox = win.gBrowser.getTabDialogBox(browser);
-          // Don't close any content-modal dialogs, because we could be doing
-          // content analysis on something like a prompt() call.
-          dialogBox.getTabDialogManager().abortDialogs();
+          // Just close the dialog associated with this CA request.
+          dialogBox.getTabDialogManager().abortDialogs(dialog => {
+            return (
+              dialog.promptID ==
+              this.PROMPTID_PREFIX + caView.request.requestToken
+            );
+          });
         }
       } else {
         console.error(
@@ -441,7 +432,10 @@ export const ContentAnalysis = {
     }
 
     if (this._SHOW_NOTIFICATIONS) {
-      const notification = new aBrowsingContext.topChromeWindow.Notification(
+      let topWindow =
+        aBrowsingContext.topChromeWindow ??
+        aBrowsingContext.embedderWindowGlobal.browsingContext.topChromeWindow;
+      const notification = new topWindow.Notification(
         this.l10n.formatValueSync("contentanalysis-notification-title"),
         {
           body: aMessage,
@@ -460,10 +454,10 @@ export const ContentAnalysis = {
     return null;
   },
 
-  _shouldShowBlockingNotification(aOperation) {
+  _shouldShowBlockingNotification(aAnalysisType) {
     return !(
-      aOperation == Ci.nsIContentAnalysisRequest.eFileDownloaded ||
-      aOperation == Ci.nsIContentAnalysisRequest.ePrint
+      aAnalysisType == Ci.nsIContentAnalysisRequest.eFileDownloaded ||
+      aAnalysisType == Ci.nsIContentAnalysisRequest.ePrint
     );
   },
 
@@ -478,6 +472,9 @@ export const ContentAnalysis = {
           break;
         case Ci.nsIContentAnalysisRequest.eDroppedText:
           l10nId = "contentanalysis-operationtype-dropped-text";
+          break;
+        case Ci.nsIContentAnalysisRequest.eOperationPrint:
+          l10nId = "contentanalysis-operationtype-print";
           break;
       }
       if (!l10nId) {
@@ -546,22 +543,6 @@ export const ContentAnalysis = {
       );
     }
 
-    if (
-      this.dlpBusyViewsByTopBrowsingContext.hasEntryDisplayingNotification(
-        aBrowsingContext
-      )
-    ) {
-      // This tab already has a frame displaying a "DLP in progress" message, so we can't
-      // show another one right now. Record the arguments we will need to show another
-      // "DLP in progress" message when the existing message goes away.
-      return {
-        requestToken: aRequest.requestToken,
-        dialogBrowsingContextArgs: {
-          resourceNameOrOperationType: aResourceNameOrOperationType,
-        },
-      };
-    }
-
     return this._showSlowCABlockingMessage(
       aBrowsingContext,
       aRequest.requestToken,
@@ -587,10 +568,14 @@ export const ContentAnalysis = {
       case Ci.nsIContentAnalysisRequest.eDroppedText:
         l10nId = "contentanalysis-slow-agent-dialog-body-dropped-text";
         break;
+      case Ci.nsIContentAnalysisRequest.eOperationPrint:
+        l10nId = "contentanalysis-slow-agent-dialog-body-print";
+        break;
     }
     if (!l10nId) {
       console.error(
-        "Unknown operationTypeForDisplay: " + aResourceNameOrOperationType
+        "Unknown operationTypeForDisplay: ",
+        aResourceNameOrOperationType
       );
       return "";
     }
@@ -599,12 +584,45 @@ export const ContentAnalysis = {
     });
   },
 
+  _getErrorDialogMessage(aResourceNameOrOperationType) {
+    if (aResourceNameOrOperationType.name) {
+      return this.l10n.formatValueSync(
+        "contentanalysis-error-message-upload-file",
+        {
+          filename: aResourceNameOrOperationType.name,
+        }
+      );
+    }
+    let l10nId = undefined;
+    switch (aResourceNameOrOperationType.operationType) {
+      case Ci.nsIContentAnalysisRequest.eClipboard:
+        l10nId = "contentanalysis-error-message-clipboard";
+        break;
+      case Ci.nsIContentAnalysisRequest.eDroppedText:
+        l10nId = "contentanalysis-error-message-dropped-text";
+        break;
+      case Ci.nsIContentAnalysisRequest.eOperationPrint:
+        l10nId = "contentanalysis-error-message-print";
+        break;
+    }
+    if (!l10nId) {
+      console.error(
+        "Unknown operationTypeForDisplay: ",
+        aResourceNameOrOperationType
+      );
+      return "";
+    }
+    return this.l10n.formatValueSync(l10nId);
+  },
   _showSlowCABlockingMessage(
     aBrowsingContext,
     aRequestToken,
     aResourceNameOrOperationType
   ) {
     let bodyMessage = this._getSlowDialogMessage(aResourceNameOrOperationType);
+    // Note that TabDialogManager maintains a list of displaying dialogs, and so
+    // we can pop up multiple of these and the first one will keep displaying until
+    // it is closed, at which point the next one will display, etc.
     let promise = Services.prompt.asyncConfirmEx(
       aBrowsingContext,
       Ci.nsIPromptService.MODAL_TYPE_TAB,
@@ -618,7 +636,8 @@ export const ContentAnalysis = {
       null,
       null,
       null,
-      false
+      false,
+      { promptID: this.PROMPTID_PREFIX + aRequestToken }
     );
     promise
       .catch(() => {
@@ -631,13 +650,16 @@ export const ContentAnalysis = {
         // This is also be called if the tab/window is closed while a request is in progress,
         // in which case we need to cancel the request.
         if (this.requestTokenToRequestInfo.delete(aRequestToken)) {
-          lazy.gContentAnalysis.cancelContentAnalysisRequest(aRequestToken);
+          lazy.gContentAnalysis.cancelContentAnalysisRequest(
+            aRequestToken,
+            false
+          );
           let dlpBusyView =
-            this.dlpBusyViewsByTopBrowsingContext.getEntry(aBrowsingContext);
-          if (dlpBusyView) {
-            this._disconnectFromView(dlpBusyView);
-            this.dlpBusyViewsByTopBrowsingContext.deleteEntry(aBrowsingContext);
-          }
+            this.dlpBusyViewsByTopBrowsingContext.getAndRemoveEntry(
+              aBrowsingContext,
+              aRequestToken
+            );
+          this._disconnectFromView(dlpBusyView);
         }
       });
     return {
@@ -655,7 +677,8 @@ export const ContentAnalysis = {
     aResourceNameOrOperationType,
     aBrowsingContext,
     aRequestToken,
-    aCAResult
+    aCAResult,
+    aRequestCancelError
   ) {
     let message = null;
     let timeoutMs = 0;
@@ -676,49 +699,172 @@ export const ContentAnalysis = {
         );
         timeoutMs = this._RESULT_NOTIFICATION_FAST_TIMEOUT_MS;
         break;
-      case Ci.nsIContentAnalysisResponse.eWarn:
-        const result = await Services.prompt.asyncConfirmEx(
-          aBrowsingContext,
-          Ci.nsIPromptService.MODAL_TYPE_TAB,
-          await this.l10n.formatValue("contentanalysis-warndialogtitle"),
-          await this.l10n.formatValue("contentanalysis-warndialogtext", {
-            content: this._getResourceNameFromNameOrOperationType(
-              aResourceNameOrOperationType
-            ),
-          }),
-          Ci.nsIPromptService.BUTTON_POS_0 *
-            Ci.nsIPromptService.BUTTON_TITLE_IS_STRING +
-            Ci.nsIPromptService.BUTTON_POS_1 *
+      case Ci.nsIContentAnalysisResponse.eWarn: {
+        let allow = false;
+        try {
+          const result = await Services.prompt.asyncConfirmEx(
+            aBrowsingContext,
+            Ci.nsIPromptService.MODAL_TYPE_TAB,
+            await this.l10n.formatValue("contentanalysis-warndialogtitle"),
+            await this._warnDialogText(aResourceNameOrOperationType),
+            Ci.nsIPromptService.BUTTON_POS_0 *
               Ci.nsIPromptService.BUTTON_TITLE_IS_STRING +
-            Ci.nsIPromptService.BUTTON_POS_1_DEFAULT,
-          await this.l10n.formatValue(
-            "contentanalysis-warndialog-response-allow"
-          ),
-          await this.l10n.formatValue(
-            "contentanalysis-warndialog-response-deny"
-          ),
-          null,
-          null,
-          {}
-        );
-        const allow = result.get("buttonNumClicked") === 0;
+              Ci.nsIPromptService.BUTTON_POS_1 *
+                Ci.nsIPromptService.BUTTON_TITLE_IS_STRING +
+              Ci.nsIPromptService.BUTTON_POS_2_DEFAULT,
+            await this.l10n.formatValue(
+              "contentanalysis-warndialog-response-allow"
+            ),
+            await this.l10n.formatValue(
+              "contentanalysis-warndialog-response-deny"
+            ),
+            null,
+            null,
+            {}
+          );
+          allow = result.get("buttonNumClicked") === 0;
+        } catch {
+          // This can happen if the dialog is closed programmatically, for
+          // example if the tab is moved to a new window.
+          // In this case just pretend the user clicked deny, as this
+          // emulates the behavior of cancelling when
+          // the request is still active.
+          allow = false;
+        }
         lazy.gContentAnalysis.respondToWarnDialog(aRequestToken, allow);
         return null;
-      case Ci.nsIContentAnalysisResponse.eBlock:
-        message = await this.l10n.formatValue("contentanalysis-block-message", {
-          content: this._getResourceNameFromNameOrOperationType(
-            aResourceNameOrOperationType
-          ),
-        });
+      }
+      case Ci.nsIContentAnalysisResponse.eBlock: {
+        if (!lazy.showBlockedResult) {
+          // Don't show anything
+          return null;
+        }
+        let titleId = undefined;
+        let body = undefined;
+        if (aResourceNameOrOperationType.name) {
+          titleId = "contentanalysis-block-dialog-title-upload-file";
+          body = this.l10n.formatValueSync(
+            "contentanalysis-block-dialog-body-upload-file",
+            {
+              filename: aResourceNameOrOperationType.name,
+            }
+          );
+        } else {
+          let bodyId = undefined;
+          let bodyHasContent = false;
+          switch (aResourceNameOrOperationType.operationType) {
+            case Ci.nsIContentAnalysisRequest.eClipboard: {
+              // Unlike the cases below, this can be shown when the DLP
+              // agent is not available.  We use a different message for that.
+              const caInfo = await lazy.gContentAnalysis.getDiagnosticInfo();
+              titleId = "contentanalysis-block-dialog-title-clipboard";
+              bodyId = caInfo.connectedToAgent
+                ? "contentanalysis-block-dialog-body-clipboard"
+                : "contentanalysis-no-agent-connected-message-content";
+              bodyHasContent = true;
+              break;
+            }
+            case Ci.nsIContentAnalysisRequest.eDroppedText:
+              titleId = "contentanalysis-block-dialog-title-dropped-text";
+              bodyId = "contentanalysis-block-dialog-body-dropped-text";
+              break;
+            case Ci.nsIContentAnalysisRequest.eOperationPrint:
+              titleId = "contentanalysis-block-dialog-title-print";
+              bodyId = "contentanalysis-block-dialog-body-print";
+              break;
+          }
+          if (!titleId || !bodyId) {
+            console.error(
+              "Unknown operationTypeForDisplay: ",
+              aResourceNameOrOperationType
+            );
+            return null;
+          }
+          if (bodyHasContent) {
+            body = this.l10n.formatValueSync(bodyId, {
+              agent: lazy.agentName,
+              content: "",
+            });
+          } else {
+            body = this.l10n.formatValueSync(bodyId);
+          }
+        }
+        let alertBrowsingContext = aBrowsingContext;
+        if (aBrowsingContext.embedderElement?.getAttribute("printpreview")) {
+          // If we're in a print preview dialog, things are tricky.
+          // The window itself is about to close (because of the thrown NS_ERROR_CONTENT_BLOCKED),
+          // so using an async call would just immediately make the dialog disappear. (bug 1899714)
+          // Using a blocking version can cause a hang if the window is resizing while
+          // we show the dialog. (bug 1900798)
+          // So instead, try to find the browser that this print preview dialog is on top of
+          // and show the dialog there.
+          let printPreviewBrowser = aBrowsingContext.embedderElement;
+          let win = printPreviewBrowser.ownerGlobal;
+          for (let browser of win.gBrowser.browsers) {
+            if (
+              win.PrintUtils.getPreviewBrowser(browser)?.browserId ===
+              printPreviewBrowser.browserId
+            ) {
+              alertBrowsingContext = browser.browsingContext;
+              break;
+            }
+          }
+        }
+        await Services.prompt.asyncAlert(
+          alertBrowsingContext,
+          Ci.nsIPromptService.MODAL_TYPE_TAB,
+          this.l10n.formatValueSync(titleId),
+          body
+        );
+        return null;
+      }
+      case Ci.nsIContentAnalysisResponse.eUnspecified:
+        message = await this.l10n.formatValue(
+          "contentanalysis-unspecified-error-message-content",
+          {
+            agent: lazy.agentName,
+            content: this._getErrorDialogMessage(aResourceNameOrOperationType),
+          }
+        );
         timeoutMs = this._RESULT_NOTIFICATION_TIMEOUT_MS;
         break;
-      case Ci.nsIContentAnalysisResponse.eUnspecified:
-        message = await this.l10n.formatValue("contentanalysis-error-message", {
-          content: this._getResourceNameFromNameOrOperationType(
-            aResourceNameOrOperationType
-          ),
-        });
-        timeoutMs = this._RESULT_NOTIFICATION_TIMEOUT_MS;
+      case Ci.nsIContentAnalysisResponse.eCanceled:
+        {
+          let messageId;
+          switch (aRequestCancelError) {
+            case Ci.nsIContentAnalysisResponse.eUserInitiated:
+              console.error(
+                "Got unexpected cancel response with eUserInitiated"
+              );
+              return null;
+            case Ci.nsIContentAnalysisResponse.eOtherRequestInGroupCancelled:
+              return null;
+            case Ci.nsIContentAnalysisResponse.eNoAgent:
+              messageId = "contentanalysis-no-agent-connected-message-content";
+              break;
+            case Ci.nsIContentAnalysisResponse.eInvalidAgentSignature:
+              messageId =
+                "contentanalysis-invalid-agent-signature-message-content";
+              break;
+            case Ci.nsIContentAnalysisResponse.eErrorOther:
+              messageId = "contentanalysis-unspecified-error-message-content";
+              break;
+            case Ci.nsIContentAnalysisResponse.eShutdown:
+              // we're shutting down, no need to show a dialog
+              return null;
+            default:
+              console.error(
+                "Unexpected CA cancelError value: " + aRequestCancelError
+              );
+              messageId = "contentanalysis-unspecified-error-message-content";
+              break;
+          }
+          message = await this.l10n.formatValue(messageId, {
+            agent: lazy.agentName,
+            content: this._getErrorDialogMessage(aResourceNameOrOperationType),
+          });
+          timeoutMs = this._RESULT_NOTIFICATION_TIMEOUT_MS;
+        }
         break;
       default:
         throw new Error("Unexpected CA result value: " + aCAResult);
@@ -733,5 +879,26 @@ export const ContentAnalysis = {
     }
 
     return this._showMessage(message, aBrowsingContext, timeoutMs);
+  },
+
+  /**
+   * Returns the correct text for warn dialog contents.
+   */
+  async _warnDialogText(aResourceNameOrOperationType) {
+    const caInfo = await lazy.gContentAnalysis.getDiagnosticInfo();
+    if (caInfo.connectedToAgent) {
+      return await this.l10n.formatValue("contentanalysis-warndialogtext", {
+        content: this._getResourceNameFromNameOrOperationType(
+          aResourceNameOrOperationType
+        ),
+      });
+    }
+    return await this.l10n.formatValue(
+      "contentanalysis-no-agent-connected-message-content",
+      {
+        agent: lazy.agentName,
+        content: "",
+      }
+    );
   },
 };

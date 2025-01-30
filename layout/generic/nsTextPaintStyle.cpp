@@ -96,14 +96,15 @@ nscolor nsTextPaintStyle::GetTextColor() {
       case StyleSVGPaintKind::Tag::None:
         return NS_RGBA(0, 0, 0, 0);
       case StyleSVGPaintKind::Tag::Color:
-        return nsLayoutUtils::GetColor(mFrame, &nsStyleSVG::mFill);
+        return nsLayoutUtils::GetTextColor(mFrame, &nsStyleSVG::mFill);
       default:
         NS_ERROR("cannot resolve SVG paint to nscolor");
         return NS_RGBA(0, 0, 0, 255);
     }
   }
 
-  return nsLayoutUtils::GetColor(mFrame, &nsStyleText::mWebkitTextFillColor);
+  return nsLayoutUtils::GetTextColor(mFrame,
+                                     &nsStyleText::mWebkitTextFillColor);
 }
 
 bool nsTextPaintStyle::GetSelectionColors(nscolor* aForeColor,
@@ -213,6 +214,30 @@ void nsTextPaintStyle::GetHighlightColors(nscolor* aForeColor,
   *aBackColor = NS_TRANSPARENT;
 }
 
+void nsTextPaintStyle::GetTargetTextColors(nscolor* aForeColor,
+                                           nscolor* aBackColor) {
+  NS_ASSERTION(aForeColor, "aForeColor is null");
+  NS_ASSERTION(aBackColor, "aBackColor is null");
+  const RefPtr<const ComputedStyle> targetTextStyle =
+      mFrame->ComputeTargetTextStyle();
+  if (targetTextStyle) {
+    *aForeColor = targetTextStyle->GetVisitedDependentColor(
+        &nsStyleText::mWebkitTextFillColor);
+    *aBackColor = targetTextStyle->GetVisitedDependentColor(
+        &nsStyleBackground::mBackgroundColor);
+    return;
+  }
+  if (PresContext()->ForcingColors()) {
+    *aBackColor = LookAndFeel::Color(LookAndFeel::ColorID::Mark, mFrame);
+    *aForeColor = LookAndFeel::Color(LookAndFeel::ColorID::Marktext, mFrame);
+  } else {
+    *aBackColor =
+        LookAndFeel::Color(LookAndFeel::ColorID::TargetTextBackground, mFrame);
+    *aForeColor =
+        LookAndFeel::Color(LookAndFeel::ColorID::TargetTextForeground, mFrame);
+  }
+}
+
 bool nsTextPaintStyle::GetCustomHighlightTextColor(nsAtom* aHighlightName,
                                                    nscolor* aForeColor) {
   NS_ASSERTION(aForeColor, "aForeColor is null");
@@ -285,8 +310,9 @@ bool nsTextPaintStyle::GetSelectionUnderlineForPaint(
   nsSelectionStyle* selectionStyle = SelectionStyle(aIndex);
   if (selectionStyle->mUnderlineStyle == StyleTextDecorationStyle::None ||
       selectionStyle->mUnderlineColor == NS_TRANSPARENT ||
-      selectionStyle->mUnderlineRelativeSize <= 0.0f)
+      selectionStyle->mUnderlineRelativeSize <= 0.0f) {
     return false;
+  }
 
   *aLineColor = selectionStyle->mUnderlineColor;
   *aRelativeSize = selectionStyle->mUnderlineRelativeSize;

@@ -3,6 +3,8 @@
 **/import { assert, unreachable } from '../../../common/util/util.js';import { kTextureFormatInfo } from '../../format_info.js';import { align } from '../../util/math.js';
 import { reifyExtent3D } from '../../util/unions.js';
 
+
+
 /**
  * Compute the maximum mip level count allowed for a given texture size and texture dimension.
  */
@@ -76,13 +78,19 @@ level)
           () =>
           `level (${level}) too large for base size (${baseSize.width}x${baseSize.height}x${baseSize.depthOrArrayLayers})`
         );
-        assert(
-          kTextureFormatInfo[format].blockWidth === 1 && kTextureFormatInfo[format].blockHeight === 1,
-          'not implemented for 3d block formats'
+        const virtualWidthAtLevel = Math.max(baseSize.width >> level, 1);
+        const virtualHeightAtLevel = Math.max(baseSize.height >> level, 1);
+        const physicalWidthAtLevel = align(
+          virtualWidthAtLevel,
+          kTextureFormatInfo[format].blockWidth
+        );
+        const physicalHeightAtLevel = align(
+          virtualHeightAtLevel,
+          kTextureFormatInfo[format].blockHeight
         );
         return {
-          width: Math.max(baseSize.width >> level, 1),
-          height: Math.max(baseSize.height >> level, 1),
+          width: physicalWidthAtLevel,
+          height: physicalHeightAtLevel,
           depthOrArrayLayers: Math.max(baseSize.depthOrArrayLayers >> level, 1)
         };
       }
@@ -104,22 +112,22 @@ mipLevel)
 /**
  * Compute the "virtual size" of a mip level of a texture (not accounting for texel block rounding).
  *
- * MAINTENANCE_TODO: Change input/output to Required<GPUExtent3DDict> for consistency.
+ * MAINTENANCE_TODO: Change output to Required<GPUExtent3DDict> for consistency.
  */
 export function virtualMipSize(
 dimension,
 size,
 mipLevel)
 {
+  const { width, height, depthOrArrayLayers } = reifyExtent3D(size);
   const shiftMinOne = (n) => Math.max(1, n >> mipLevel);
   switch (dimension) {
     case '1d':
-      assert(size[2] === 1);
-      return [shiftMinOne(size[0]), size[1], size[2]];
+      return [shiftMinOne(width), height, depthOrArrayLayers];
     case '2d':
-      return [shiftMinOne(size[0]), shiftMinOne(size[1]), size[2]];
+      return [shiftMinOne(width), shiftMinOne(height), depthOrArrayLayers];
     case '3d':
-      return [shiftMinOne(size[0]), shiftMinOne(size[1]), shiftMinOne(size[2])];
+      return [shiftMinOne(width), shiftMinOne(height), shiftMinOne(depthOrArrayLayers)];
     default:
       unreachable();
   }
@@ -157,20 +165,50 @@ export function viewDimensionsForTextureDimension(textureDimension) {
   }
 }
 
-/** Returns the default view dimension for a given texture descriptor. */
-export function defaultViewDimensionsForTexture(textureDescriptor) {
-  switch (textureDescriptor.dimension) {
+/** Returns the effective view dimension for a given texture dimension and depthOrArrayLayers */
+export function effectiveViewDimensionForDimension(
+viewDimension,
+dimension,
+depthOrArrayLayers)
+{
+  if (viewDimension) {
+    return viewDimension;
+  }
+
+  switch (dimension || '2d') {
     case '1d':
       return '1d';
-    case '2d':{
-        const sizeDict = reifyExtent3D(textureDescriptor.size);
-        return sizeDict.depthOrArrayLayers > 1 ? '2d-array' : '2d';
-      }
+    case '2d':
+    case undefined:
+      return depthOrArrayLayers > 1 ? '2d-array' : '2d';
+      break;
     case '3d':
       return '3d';
     default:
       unreachable();
   }
+}
+
+/** Returns the effective view dimension for a given texture */
+export function effectiveViewDimensionForTexture(
+texture,
+viewDimension)
+{
+  return effectiveViewDimensionForDimension(
+    viewDimension,
+    texture.dimension,
+    texture.depthOrArrayLayers
+  );
+}
+
+/** Returns the default view dimension for a given texture descriptor. */
+export function defaultViewDimensionsForTexture(textureDescriptor) {
+  const sizeDict = reifyExtent3D(textureDescriptor.size);
+  return effectiveViewDimensionForDimension(
+    undefined,
+    textureDescriptor.dimension,
+    sizeDict.depthOrArrayLayers
+  );
 }
 
 /** Reifies the optional fields of `GPUTextureDescriptor`.
@@ -201,6 +239,7 @@ view)
   const format = view.format ?? texture.format;
   const mipLevelCount = view.mipLevelCount ?? texture.mipLevelCount - baseMipLevel;
   const dimension = view.dimension ?? defaultViewDimensionsForTexture(texture);
+  const usage = (view.usage ?? 0) === 0 ? texture.usage : view.usage;
 
   let arrayLayerCount = view.arrayLayerCount;
   if (arrayLayerCount === undefined) {
@@ -217,6 +256,7 @@ view)
     format,
     dimension,
     aspect,
+    usage,
     baseMipLevel,
     mipLevelCount,
     baseArrayLayer,
@@ -231,12 +271,15 @@ view)
  */
 export function* fullSubrectCoordinates(
 subrectOrigin,
-subrectSize)
+subrectSize,
+sampleCount = 1)
 {
   for (let z = subrectOrigin.z; z < subrectOrigin.z + subrectSize.depthOrArrayLayers; ++z) {
     for (let y = subrectOrigin.y; y < subrectOrigin.y + subrectSize.height; ++y) {
       for (let x = subrectOrigin.x; x < subrectOrigin.x + subrectSize.width; ++x) {
-        yield { x, y, z };
+        for (let sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+          yield { x, y, z, sampleIndex };
+        }
       }
     }
   }

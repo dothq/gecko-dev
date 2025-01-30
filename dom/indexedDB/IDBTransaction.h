@@ -9,6 +9,7 @@
 
 #include "FlippedOnce.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/SourceLocation.h"
 #include "mozilla/dom/IDBTransactionBinding.h"
 #include "mozilla/dom/quota/CheckedUnsafePtr.h"
 #include "mozilla/DOMEventTargetHelper.h"
@@ -63,6 +64,15 @@ class IDBTransaction final
     Invalid
   };
 
+  enum struct Durability {
+    Default = 0,
+    Strict,
+    Relaxed,
+
+    // Only needed for IPC serialization helper, should never be used in code.
+    Invalid
+  };
+
   enum struct ReadyState { Active, Inactive, Committing, Finished };
 
  private:
@@ -90,6 +100,11 @@ class IDBTransaction final
   int64_t mNextObjectStoreId;
   int64_t mNextIndexId;
 
+  // Request ids are issued starting from 0 and incremented by one as we send
+  // actor creation messages to the parent process. Used to support the
+  // explicit commit() request.
+  int64_t mNextRequestId;
+
   nsresult mAbortCode;  ///< The result that caused the transaction to be
                         ///< aborted, or NS_OK if not aborted.
                         ///< NS_ERROR_DOM_INDEXEDDB_ABORT_ERR indicates that the
@@ -101,13 +116,12 @@ class IDBTransaction final
                                   ///< transaction can auto-commit when the last
                                   ///< pending request finished.
 
-  const nsString mFilename;
-  const uint32_t mLineNo;
-  const uint32_t mColumn;
+  const JSCallingLocation mCallerLocation;
 
   ReadyState mReadyState = ReadyState::Active;
   FlippedOnce<false> mStarted;
   const Mode mMode;
+  const Durability mDurability;
 
   bool mRegistered;  ///< Whether mDatabase->RegisterTransaction() has been
                      ///< called (which may not be the case if construction was
@@ -130,7 +144,8 @@ class IDBTransaction final
 
   [[nodiscard]] static SafeRefPtr<IDBTransaction> Create(
       JSContext* aCx, IDBDatabase* aDatabase,
-      const nsTArray<nsString>& aObjectStoreNames, Mode aMode);
+      const nsTArray<nsString>& aObjectStoreNames, Mode aMode,
+      Durability aDurability);
 
   static Maybe<IDBTransaction&> MaybeCurrent();
 
@@ -223,13 +238,20 @@ class IDBTransaction final
     return mAbortCode;
   }
 
-  void GetCallerLocation(nsAString& aFilename, uint32_t* aLineNo,
-                         uint32_t* aColumn) const;
+  const JSCallingLocation& GetCallerLocation() const {
+    AssertIsOnOwningThread();
+    return mCallerLocation;
+  }
 
   // 'Get' prefix is to avoid name collisions with the enum
   Mode GetMode() const {
     AssertIsOnOwningThread();
     return mMode;
+  }
+
+  Durability GetDurability() const {
+    AssertIsOnOwningThread();
+    return mDurability;
   }
 
   uint32_t GetPendingRequestCount() const { return mPendingRequestCount; }
@@ -280,6 +302,9 @@ class IDBTransaction final
   // Only for Mode::VersionChange transactions.
   int64_t NextIndexId();
 
+  // See the comment for mNextRequestId.
+  int64_t NextRequestId();
+
   void InvalidateCursorCaches();
   void RegisterCursor(IDBCursor& aCursor);
   void UnregisterCursor(IDBCursor& aCursor);
@@ -298,6 +323,8 @@ class IDBTransaction final
   IDBDatabase* Db() const { return Database(); }
 
   IDBTransactionMode GetMode(ErrorResult& aRv) const;
+
+  IDBTransactionDurability GetDurability(ErrorResult& aRv) const;
 
   DOMException* GetError() const;
 
@@ -323,7 +350,7 @@ class IDBTransaction final
  public:
   IDBTransaction(IDBDatabase* aDatabase,
                  const nsTArray<nsString>& aObjectStoreNames, Mode aMode,
-                 nsString aFilename, uint32_t aLineNo, uint32_t aColumn,
+                 Durability aDurability, JSCallingLocation&& aCallerLocation,
                  CreatedFromFactoryFunction aDummy);
 
  private:

@@ -149,9 +149,16 @@ void ColumnSetWrapperFrame::MarkIntrinsicISizesDirty() {
   }
 }
 
-nscoord ColumnSetWrapperFrame::GetMinISize(gfxContext* aRenderingContext) {
+nscoord ColumnSetWrapperFrame::IntrinsicISize(const IntrinsicSizeInput& aInput,
+                                              IntrinsicISizeType aType) {
+  return mCachedIntrinsics.GetOrSet(*this, aType, aInput, [&] {
+    return aType == IntrinsicISizeType::MinISize ? MinISize(aInput)
+                                                 : PrefISize(aInput);
+  });
+}
+
+nscoord ColumnSetWrapperFrame::MinISize(const IntrinsicSizeInput& aInput) {
   nscoord iSize = 0;
-  DISPLAY_MIN_INLINE_SIZE(this, iSize);
 
   if (Maybe<nscoord> containISize =
           ContainIntrinsicISize(NS_UNCONSTRAINEDSIZE)) {
@@ -163,7 +170,7 @@ nscoord ColumnSetWrapperFrame::GetMinISize(gfxContext* aRenderingContext) {
 
     // In the 'none' case, we determine our minimum intrinsic size purely from
     // our column styling, as if we had no descendants. This should match what
-    // happens in nsColumnSetFrame::GetMinISize in an actual no-descendants
+    // happens in nsColumnSetFrame::MinISize in an actual no-descendants
     // scenario.
     const nsStyleColumn* colStyle = StyleColumn();
     if (colStyle->mColumnWidth.IsLength()) {
@@ -173,27 +180,29 @@ nscoord ColumnSetWrapperFrame::GetMinISize(gfxContext* aRenderingContext) {
       // size, either. Just use 0 because we're size-contained.
       iSize = 0;
     } else {
-      MOZ_ASSERT(colStyle->mColumnCount != nsStyleColumn::kColumnCountAuto,
+      MOZ_ASSERT(!colStyle->mColumnCount.IsAuto(),
                  "column-count and column-width can't both be auto!");
       // As available inline size reduces to zero, we still have mColumnCount
       // columns, so compute our minimum intrinsic size based on N zero-width
       // columns, with specified gap size between them.
       const nscoord colGap =
           ColumnUtils::GetColumnGap(this, NS_UNCONSTRAINEDSIZE);
-      iSize = ColumnUtils::IntrinsicISize(colStyle->mColumnCount, colGap, 0);
+      iSize = ColumnUtils::IntrinsicISize(colStyle->mColumnCount.AsInteger(),
+                                          colGap, 0);
     }
   } else {
     for (nsIFrame* f : PrincipalChildList()) {
-      iSize = std::max(iSize, f->GetMinISize(aRenderingContext));
+      const IntrinsicSizeInput childInput(aInput, f->GetWritingMode(),
+                                          GetWritingMode());
+      iSize = std::max(iSize, f->GetMinISize(childInput));
     }
   }
 
   return iSize;
 }
 
-nscoord ColumnSetWrapperFrame::GetPrefISize(gfxContext* aRenderingContext) {
+nscoord ColumnSetWrapperFrame::PrefISize(const IntrinsicSizeInput& aInput) {
   nscoord iSize = 0;
-  DISPLAY_PREF_INLINE_SIZE(this, iSize);
 
   if (Maybe<nscoord> containISize =
           ContainIntrinsicISize(NS_UNCONSTRAINEDSIZE)) {
@@ -207,22 +216,23 @@ nscoord ColumnSetWrapperFrame::GetPrefISize(gfxContext* aRenderingContext) {
       colISize =
           ColumnUtils::ClampUsedColumnWidth(colStyle->mColumnWidth.AsLength());
     } else {
-      MOZ_ASSERT(colStyle->mColumnCount != nsStyleColumn::kColumnCountAuto,
+      MOZ_ASSERT(!colStyle->mColumnCount.IsAuto(),
                  "column-count and column-width can't both be auto!");
       colISize = 0;
     }
 
     // If column-count is auto, assume one column.
-    const uint32_t numColumns =
-        colStyle->mColumnCount == nsStyleColumn::kColumnCountAuto
-            ? 1
-            : colStyle->mColumnCount;
+    const uint32_t numColumns = colStyle->mColumnCount.IsAuto()
+                                    ? 1
+                                    : colStyle->mColumnCount.AsInteger();
     const nscoord colGap =
         ColumnUtils::GetColumnGap(this, NS_UNCONSTRAINEDSIZE);
     iSize = ColumnUtils::IntrinsicISize(numColumns, colGap, colISize);
   } else {
     for (nsIFrame* f : PrincipalChildList()) {
-      iSize = std::max(iSize, f->GetPrefISize(aRenderingContext));
+      const IntrinsicSizeInput childInput(aInput, f->GetWritingMode(),
+                                          GetWritingMode());
+      iSize = std::max(iSize, f->GetPrefISize(childInput));
     }
   }
 

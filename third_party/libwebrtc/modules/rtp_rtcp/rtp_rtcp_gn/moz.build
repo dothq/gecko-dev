@@ -10,7 +10,6 @@ COMPILE_FLAGS["OS_INCLUDES"] = []
 AllowCompilerWarnings()
 
 DEFINES["ABSL_ALLOCATOR_NOTHROW"] = "1"
-DEFINES["BWE_TEST_LOGGING_COMPILE_TIME_ENABLE"] = "0"
 DEFINES["RTC_DAV1D_IN_INTERNAL_DECODER_FACTORY"] = True
 DEFINES["RTC_ENABLE_VP9"] = True
 DEFINES["WEBRTC_ENABLE_PROTOBUF"] = "0"
@@ -19,15 +18,15 @@ DEFINES["WEBRTC_MOZILLA_BUILD"] = True
 DEFINES["WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS"] = "0"
 DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 
@@ -70,6 +69,7 @@ UNIFIED_SOURCES += [
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_format_vp9.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_header_extension_size.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_packet_history.cc",
+    "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_packet_send_info.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_packetizer_av1.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_sender.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_sender_audio.cc",
@@ -77,7 +77,6 @@ UNIFIED_SOURCES += [
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_sequence_number_map.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/rtp_video_stream_receiver_frame_transformer_delegate.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/source_tracker.cc",
-    "/third_party/libwebrtc/modules/rtp_rtcp/source/time_util.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/tmmbr_help.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/ulpfec_header_reader_writer.cc",
     "/third_party/libwebrtc/modules/rtp_rtcp/source/ulpfec_receiver.cc",

@@ -103,10 +103,10 @@ impl Default for InfoConfiguration {
         InfoConfiguration {
             max_request_bytes: default_max_request_bytes(),
             max_record_payload_bytes: default_max_record_payload_bytes(),
-            max_post_records: usize::max_value(),
-            max_post_bytes: usize::max_value(),
-            max_total_records: usize::max_value(),
-            max_total_bytes: usize::max_value(),
+            max_post_records: usize::MAX,
+            max_post_bytes: usize::MAX,
+            max_total_records: usize::MAX,
+            max_total_bytes: usize::MAX,
         }
     }
 }
@@ -718,7 +718,7 @@ mod test {
             )).unwrap();
             serde_json::to_string(&val).unwrap().len()
         };
-        // There's some subtlety in how we calulate this having to do with the fact that
+        // There's some subtlety in how we calculate this having to do with the fact that
         // the quotes in the payload are escaped but the escape chars count to the request len
         // and *not* to the payload len (the payload len check happens after json parsing the
         // top level object).

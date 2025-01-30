@@ -13,6 +13,7 @@
 
 #include "js/ArrayBuffer.h"
 #include "js/ArrayBufferMaybeShared.h"
+#include "js/Context.h"
 #include "js/experimental/TypedData.h"  // js::Unwrap(Ui|I)nt(8|16|32)Array, js::Get(Ui|I)nt(8|16|32)ArrayLengthAndData, js::UnwrapUint8ClampedArray, js::GetUint8ClampedArrayLengthAndData, js::UnwrapFloat(32|64)Array, js::GetFloat(32|64)ArrayLengthAndData, JS_GetArrayBufferViewType
 #include "js/GCAPI.h"                   // JS::AutoCheckCannotGC
 #include "js/RootingAPI.h"              // JS::Rooted
@@ -162,12 +163,12 @@ namespace mozilla::dom {
  *       … // Getting offset value from somewhere.
  *       uint32_t data[3];
  *       if (!aUint32Array.CopyDataTo(data, [&](const size_t& aLength) {
- *         if (aLength - offset != ArrayLength(data)) {
+ *         if (aLength - offset != std::size(data)) {
  *           aError.ThrowTypeError("Typed array doesn't contain the right"
  *                                 " amount of data");
  *           return Maybe<std::pair<size_t, size_t>>();
  *         }
- *         return Some(std::make_pair(offset, ArrayLength(data)));
+ *         return Some(std::make_pair(offset, std::size(data)));
  *       }) {
  *         return;
  *       }
@@ -212,12 +213,12 @@ namespace mozilla::dom {
  *       Maybe<Buffer<uint8_t>> buffer =
  *         aUint8Array.CreateFromData<Buffer<uint8_t>>([&](
  *             const size_t& aLength) {
- *         if (aLength - offset != ArrayLength(data)) {
+ *         if (aLength - offset != std::size(data)) {
  *           aError.ThrowTypeError(
  *               "Typed array doesn't contain the right amount" of data");
  *           return Maybe<std::pair<size_t, size_t>>();
  *         }
- *         return Some(std::make_pair(offset, ArrayLength(data)));
+ *         return Some(std::make_pair(offset, std::size(data)));
  *       });
  *       if (buffer.isNothing()) {
  *         return;
@@ -474,6 +475,25 @@ struct TypedArray_base : public SpiderMonkeyInterfaceObjectStorage,
         std::forward<Calculator>(aCalculator)...);
   }
 
+  template <typename T, size_t N, typename... Calculator>
+  [[nodiscard]] bool CopyDataTo(std::array<T, N>* const aResult,
+                                Calculator&&... aCalculator) const {
+    static_assert(sizeof...(aCalculator) <= 1,
+                  "CopyDataTo takes at most one aCalculator");
+
+    return ProcessDataHelper(
+        [&](const Span<const element_type>& aData, JS::AutoCheckCannotGC&&) {
+          if (aData.Length() != N) {
+            return false;
+          }
+          for (size_t i = 0; i < N; ++i) {
+            (*aResult).at(i) = aData[i];
+          }
+          return true;
+        },
+        std::forward<Calculator>(aCalculator)...);
+  }
+
   /**
    * Helper functions to copy this typed array's data to a newly created
    * container. Returns Nothing() if creating the container with the right size
@@ -618,21 +638,23 @@ struct TypedArray_base : public SpiderMonkeyInterfaceObjectStorage,
                              std::move(nogc));
   }
 
-  template <typename Processor>
+  template <bool AllowLargeTypedArrays = false, typename Processor>
   [[nodiscard]] ProcessNoGCReturnType<Processor> ProcessDataHelper(
       Processor&& aProcessor) const {
     LengthPinner pinner(this);
     // The data from GetCurrentData() is GC sensitive.
     JS::AutoCheckCannotGC nogc;
-    return CallProcessorNoGC(
-        GetCurrentData(), std::forward<Processor>(aProcessor), std::move(nogc));
+    return CallProcessorNoGC(GetCurrentData<AllowLargeTypedArrays>(),
+                             std::forward<Processor>(aProcessor),
+                             std::move(nogc));
   }
 
  public:
-  template <typename Processor>
+  template <bool AllowLargeTypedArrays = false, typename Processor>
   [[nodiscard]] ProcessNoGCReturnType<Processor> ProcessData(
       Processor&& aProcessor) const {
-    return ProcessDataHelper(std::forward<Processor>(aProcessor));
+    return ProcessDataHelper<AllowLargeTypedArrays>(
+        std::forward<Processor>(aProcessor));
   }
 
   template <typename Processor>
@@ -671,80 +693,9 @@ struct TypedArray_base : public SpiderMonkeyInterfaceObjectStorage,
           MOZ_CRASH("Null js::CheckedUnwrapStatic(mImplObj)");
         }
       }
-      if (!JS::IsArrayBufferViewShared(view)) {
-        JSAutoRealm ar(jsapi.cx(), view);
-        bool unused;
-        bool noBuffer;
-        {
-          JSObject* buffer =
-              JS_GetArrayBufferViewBuffer(jsapi.cx(), view, &unused);
-          noBuffer = !buffer;
-        }
-        if (noBuffer) {
-          if (JS_IsTypedArrayObject(view)) {
-            JS::Value bufferSlot =
-                JS::GetReservedSlot(view, /* BUFFER_SLOT */ 0);
-            if (bufferSlot.isNull()) {
-              MOZ_CRASH("TypedArrayObject with bufferSlot containing null");
-            } else if (bufferSlot.isBoolean()) {
-              // If we're here then TypedArrayObject::ensureHasBuffer must have
-              // failed in the call to JS_GetArrayBufferViewBuffer.
-              if (JS_IsThrowingOutOfMemory(jsapi.cx())) {
-                size_t length = JS_GetTypedArrayByteLength(view);
-                if (!JS::GetReservedSlot(view, /* DATA_SLOT */ 3)
-                         .isUndefined() &&
-                    length <= JS_MaxMovableTypedArraySize()) {
-                  MOZ_CRASH(
-                      "We did run out of memory, maybe trying to uninline the "
-                      "buffer");
-                }
-                if (length < INT32_MAX) {
-                  MOZ_CRASH(
-                      "We did run out of memory trying to create a buffer "
-                      "smaller than 2GB - 1");
-                } else if (length < UINT32_MAX) {
-                  MOZ_CRASH(
-                      "We did run out of memory trying to create a between 2GB "
-                      "and 4GB - 1");
-                } else {
-                  MOZ_CRASH(
-                      "We did run out of memory trying to create a buffer "
-                      "bigger than 4GB - 1");
-                }
-              } else if (JS_IsExceptionPending(jsapi.cx())) {
-                JS::Rooted<JS::Value> exn(jsapi.cx());
-                if (JS_GetPendingException(jsapi.cx(), &exn) &&
-                    exn.isObject()) {
-                  JS::Rooted<JSObject*> exnObj(jsapi.cx(), &exn.toObject());
-                  JSErrorReport* err =
-                      JS_ErrorFromException(jsapi.cx(), exnObj);
-                  if (err && err->errorNumber == JSMSG_BAD_ARRAY_LENGTH) {
-                    MOZ_CRASH("Length was too big");
-                  }
-                }
-              }
-              // Did ArrayBufferObject::createBufferAndData fail without OOM?
-              MOZ_CRASH("TypedArrayObject with bufferSlot containing boolean");
-            } else if (bufferSlot.isObject()) {
-              if (!bufferSlot.toObjectOrNull()) {
-                MOZ_CRASH(
-                    "TypedArrayObject with bufferSlot containing null object");
-              } else {
-                MOZ_CRASH(
-                    "JS_GetArrayBufferViewBuffer failed but bufferSlot "
-                    "contains a non-null object");
-              }
-            } else {
-              MOZ_CRASH(
-                  "TypedArrayObject with bufferSlot containing weird value");
-            }
-          } else {
-            MOZ_CRASH("JS_GetArrayBufferViewBuffer failed for DataViewObject");
-          }
-        }
-      }
     }
 #endif
+    JS::AutoBrittleMode abm(jsapi.cx());
     if (!JS::EnsureNonInlineArrayBufferOrView(jsapi.cx(), mImplObj)) {
       MOZ_CRASH("small oom when moving inline data out-of-line");
     }
@@ -754,6 +705,7 @@ struct TypedArray_base : public SpiderMonkeyInterfaceObjectStorage,
   }
 
  private:
+  template <bool AllowLargeTypedArrays = false>
   Span<element_type> GetCurrentData() const {
     MOZ_ASSERT(inited());
     MOZ_RELEASE_ASSERT(
@@ -766,8 +718,10 @@ struct TypedArray_base : public SpiderMonkeyInterfaceObjectStorage,
     bool shared;
     Span<element_type> span =
         ArrayT::fromObject(mImplObj).getData(&shared, nogc);
-    MOZ_RELEASE_ASSERT(span.Length() <= INT32_MAX,
-                       "Bindings must have checked ArrayBuffer{View} length");
+    if constexpr (!AllowLargeTypedArrays) {
+      MOZ_RELEASE_ASSERT(span.Length() <= INT32_MAX,
+                         "Bindings must have checked ArrayBuffer{View} length");
+    }
     return span;
   }
 
@@ -846,6 +800,7 @@ struct TypedArray : public TypedArray_base<ArrayT> {
   }
   static inline ArrayT CreateCommon(JSContext* cx, size_t length,
                                     ErrorResult& error) {
+    error.MightThrowJSException();
     ArrayT array = CreateCommon(cx, length);
     if (array) {
       return array;
@@ -925,23 +880,25 @@ using ArrayBuffer = TypedArray<JS::ArrayBuffer>;
 //       things that understand TypedArray, as with ToJSValue.
 template <typename TypedArrayType>
 class MOZ_STACK_CLASS TypedArrayCreator {
-  typedef nsTArray<typename TypedArrayType::element_type> ArrayType;
+  using ValuesType = typename TypedArrayType::element_type;
+  using ArrayType = nsTArray<ValuesType>;
 
  public:
-  explicit TypedArrayCreator(const ArrayType& aArray) : mArray(aArray) {}
+  explicit TypedArrayCreator(const ArrayType& aArray) : mValues(aArray) {}
+  explicit TypedArrayCreator(const nsCString& aString) : mValues(aString) {}
 
   // NOTE: this leaves any exceptions on the JSContext, and the caller is
   //       required to deal with them.
   JSObject* Create(JSContext* aCx) const {
-    auto array = TypedArrayType::CreateCommon(aCx, mArray.Length());
+    auto array = TypedArrayType::CreateCommon(aCx, mValues.Length());
     if (array) {
-      TypedArrayType::CopyFrom(aCx, mArray, array);
+      TypedArrayType::CopyFrom(aCx, mValues, array);
     }
     return array.asObject();
   }
 
  private:
-  const ArrayType& mArray;
+  Span<const ValuesType> mValues;
 };
 
 namespace binding_detail {

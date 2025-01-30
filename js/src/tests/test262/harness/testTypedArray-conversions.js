@@ -1,3 +1,4 @@
+// |reftest| shell-option(--enable-float16array)
 // Copyright (c) 2017 Rick Waldron.  All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---
@@ -34,6 +35,9 @@ var bcv = {
       127,
     ],
     Uint32: [
+      127,
+    ],
+    Float16: [
       127,
     ],
     Float32: [

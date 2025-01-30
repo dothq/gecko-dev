@@ -99,7 +99,8 @@ AutoSaveLiveRegisters::~AutoSaveLiveRegisters() {
              "Must have pushed JitCode* pointer");
   compiler_.allocator.restoreIonLiveRegisters(compiler_.masm,
                                               compiler_.liveRegs_.ref());
-  MOZ_ASSERT(compiler_.masm.framePushed() == compiler_.ionScript_->frameSize());
+  MOZ_ASSERT_IF(!compiler_.masm.oom(), compiler_.masm.framePushed() ==
+                                           compiler_.ionScript_->frameSize());
 }
 
 }  // namespace jit
@@ -225,8 +226,8 @@ void CacheRegisterAllocator::saveIonLiveRegisters(MacroAssembler& masm,
   freePayloadSlots_.clear();
   freeValueSlots_.clear();
 
-  MOZ_ASSERT(masm.framePushed() ==
-             ionScript->frameSize() + sizeOfLiveRegsInBytes);
+  MOZ_ASSERT_IF(!masm.oom(), masm.framePushed() == ionScript->frameSize() +
+                                                       sizeOfLiveRegsInBytes);
 
   // Step 7. All live registers and non-input operands are stored on the stack
   // now, so at this point all registers except for the input registers are
@@ -564,10 +565,12 @@ bool IonCacheIRCompiler::init() {
     }
     case CacheKind::Call:
     case CacheKind::TypeOf:
+    case CacheKind::TypeOfEq:
     case CacheKind::ToBool:
-    case CacheKind::GetIntrinsic:
+    case CacheKind::LazyConstant:
     case CacheKind::NewArray:
     case CacheKind::NewObject:
+    case CacheKind::Lambda:
       MOZ_CRASH("Unsupported IC");
   }
 
@@ -677,10 +680,12 @@ void IonCacheIRCompiler::assertFloatRegisterAvailable(FloatRegister reg) {
       break;
     case CacheKind::Call:
     case CacheKind::TypeOf:
+    case CacheKind::TypeOfEq:
     case CacheKind::ToBool:
-    case CacheKind::GetIntrinsic:
+    case CacheKind::LazyConstant:
     case CacheKind::NewArray:
     case CacheKind::NewObject:
+    case CacheKind::Lambda:
       MOZ_CRASH("Unsupported IC");
   }
 }
@@ -835,8 +840,7 @@ bool IonCacheIRCompiler::emitGuardSpecificAtom(StringOperandId strId,
     return false;
   }
 
-  LiveRegisterSet volatileRegs(GeneralRegisterSet::Volatile(),
-                               liveVolatileFloatRegs());
+  LiveRegisterSet volatileRegs = liveVolatileRegs();
   volatileRegs.takeUnchecked(scratch);
 
   masm.guardSpecificAtom(str, atom, scratch, volatileRegs, failure->label());
@@ -961,11 +965,9 @@ bool IonCacheIRCompiler::emitCallScriptedGetterResult(
 
 #ifdef JS_PUNBOX64
 template <typename IdType>
-bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
-                                                        ObjOperandId receiverId,
-                                                        ObjOperandId handlerId,
-                                                        uint32_t trapOffset,
-                                                        IdType id) {
+bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(
+    ValOperandId targetId, ObjOperandId receiverId, ObjOperandId handlerId,
+    ObjOperandId trapId, IdType id, uint32_t nargsAndFlags) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
   AutoSaveLiveRegisters save(*this);
   AutoOutputRegister output(*this);
@@ -973,12 +975,13 @@ bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
   ValueOperand target = allocator.useValueRegister(masm, targetId);
   Register receiver = allocator.useRegister(masm, receiverId);
   Register handler = allocator.useRegister(masm, handlerId);
+  Register callee = allocator.useRegister(masm, trapId);
   ValueOperand idVal;
   if constexpr (std::is_same_v<IdType, ValOperandId>) {
     idVal = allocator.useValueRegister(masm, id);
   }
+  size_t nargs = nargsAndFlags >> JSFunction::ArgCountShift;
 
-  JSFunction* trap = &objectStubField(trapOffset)->as<JSFunction>();
   AutoScratchRegister scratch(allocator, masm);
   AutoScratchRegister scratch2(allocator, masm);
   ValueOperand scratchVal(scratch);
@@ -1001,14 +1004,14 @@ bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
   // The JitFrameLayout pushed below will be aligned to JitStackAlignment,
   // so we just have to make sure the stack is aligned after we push the
   // |this| + argument Values.
-  uint32_t argSize = (std::max(trap->nargs(), (size_t)3) + 1) * sizeof(Value);
+  uint32_t argSize = (std::max(nargs, (size_t)3) + 1) * sizeof(Value);
   uint32_t padding =
       ComputeByteAlignment(masm.framePushed() + argSize, JitStackAlignment);
   MOZ_ASSERT(padding % sizeof(uintptr_t) == 0);
   MOZ_ASSERT(padding < JitStackAlignment);
   masm.reserveStack(padding);
 
-  for (size_t i = 3; i < trap->nargs(); i++) {
+  for (size_t i = 3; i < nargs; i++) {
     masm.Push(UndefinedValue());
   }
 
@@ -1028,9 +1031,7 @@ bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
   masm.tagValue(JSVAL_TYPE_OBJECT, handler, scratchVal);
   masm.Push(scratchVal);
 
-  masm.movePtr(ImmGCPtr(trap), scratch);
-
-  masm.Push(scratch);
+  masm.Push(callee);
   masm.PushFrameDescriptorForJitCall(FrameType::IonICCall, /* argc = */ 3);
 
   // Check stack alignment. Add 2 * sizeof(uintptr_t) for the return address and
@@ -1038,8 +1039,7 @@ bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
   MOZ_ASSERT(
       ((masm.framePushed() + 2 * sizeof(uintptr_t)) % JitStackAlignment) == 0);
 
-  MOZ_ASSERT(trap->hasJitEntry());
-  masm.loadJitCodeRaw(scratch, scratch);
+  masm.loadJitCodeRaw(callee, scratch);
   masm.callJit(scratch);
 
   masm.storeCallResultValue(output);
@@ -1083,18 +1083,18 @@ bool IonCacheIRCompiler::emitCallScriptedProxyGetShared(ValOperandId targetId,
 
 bool IonCacheIRCompiler::emitCallScriptedProxyGetResult(
     ValOperandId targetId, ObjOperandId receiverId, ObjOperandId handlerId,
-    uint32_t trapOffset, uint32_t id, uint32_t nargsAndFlags) {
+    ObjOperandId trapId, uint32_t id, uint32_t nargsAndFlags) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
-  return emitCallScriptedProxyGetShared(targetId, receiverId, handlerId,
-                                        trapOffset, id);
+  return emitCallScriptedProxyGetShared(targetId, receiverId, handlerId, trapId,
+                                        id, nargsAndFlags);
 }
 
 bool IonCacheIRCompiler::emitCallScriptedProxyGetByValueResult(
     ValOperandId targetId, ObjOperandId receiverId, ObjOperandId handlerId,
-    ValOperandId idId, uint32_t trapOffset, uint32_t nargsAndFlags) {
+    ValOperandId idId, ObjOperandId trapId, uint32_t nargsAndFlags) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
-  return emitCallScriptedProxyGetShared(targetId, receiverId, handlerId,
-                                        trapOffset, idId);
+  return emitCallScriptedProxyGetShared(targetId, receiverId, handlerId, trapId,
+                                        idId, nargsAndFlags);
 }
 #endif
 
@@ -1417,8 +1417,7 @@ bool IonCacheIRCompiler::emitAddAndStoreSlotShared(
     int32_t numNewSlots = int32StubField(*numNewSlotsOffset);
     MOZ_ASSERT(numNewSlots > 0);
 
-    LiveRegisterSet save(GeneralRegisterSet::Volatile(),
-                         liveVolatileFloatRegs());
+    LiveRegisterSet save = liveVolatileRegs();
     masm.PushRegsInMask(save);
 
     using Fn = bool (*)(JSContext* cx, NativeObject* obj, uint32_t newCount);
@@ -1545,8 +1544,7 @@ bool IonCacheIRCompiler::emitLoadStringCharResult(StringOperandId strId,
     // modifying the stack and expect that no other stack manipulations are
     // made. Therefore we need to use an ABI call instead of a VM call here.
 
-    LiveRegisterSet volatileRegs(GeneralRegisterSet::Volatile(),
-                                 liveVolatileFloatRegs());
+    LiveRegisterSet volatileRegs = liveVolatileRegs();
     volatileRegs.takeUnchecked(scratch1);
     volatileRegs.takeUnchecked(scratch2);
     volatileRegs.takeUnchecked(scratch3);
@@ -2153,6 +2151,13 @@ bool IonCacheIRCompiler::emitCallDOMFunction(
     CallFlags flags, uint32_t argcFixed, uint32_t targetOffset) {
   MOZ_CRASH("Call ICs not used in ion");
 }
+
+bool IonCacheIRCompiler::emitCallDOMFunctionWithAllocSite(
+    ObjOperandId calleeId, Int32OperandId argcId, ObjOperandId thisObjId,
+    CallFlags flags, uint32_t argcFixed, uint32_t siteOffset,
+    uint32_t targetOffset) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
 #else
 bool IonCacheIRCompiler::emitCallNativeFunction(ObjOperandId calleeId,
                                                 Int32OperandId argcId,
@@ -2167,6 +2172,12 @@ bool IonCacheIRCompiler::emitCallDOMFunction(ObjOperandId calleeId,
                                              ObjOperandId thisObjId,
                                              CallFlags flags,
                                              uint32_t argcFixed) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
+
+bool IonCacheIRCompiler::emitCallDOMFunctionWithAllocSite(
+    ObjOperandId calleeId, Int32OperandId argcId, ObjOperandId thisObjId,
+    CallFlags flags, uint32_t argcFixed, uint32_t siteOffset) {
   MOZ_CRASH("Call ICs not used in ion");
 }
 #endif
@@ -2288,6 +2299,11 @@ bool IonCacheIRCompiler::emitNewPlainObjectResult(uint32_t numFixedSlots,
                                                   uint32_t shapeOffset,
                                                   uint32_t siteOffset) {
   MOZ_CRASH("NewObject ICs not used in ion");
+}
+
+bool IonCacheIRCompiler::emitNewFunctionCloneResult(uint32_t canonicalOffset,
+                                                    gc::AllocKind allocKind) {
+  MOZ_CRASH("Lambda ICs not used in ion");
 }
 
 bool IonCacheIRCompiler::emitCallRegExpMatcherResult(ObjOperandId regexpId,

@@ -4,13 +4,12 @@
 
 use anyhow::Result;
 use askama::Template;
+
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::collections::HashMap;
 
 use crate::interface::*;
-use crate::BindingsConfig;
 
 const RESERVED_WORDS: &[&str] = &[
     "alias", "and", "BEGIN", "begin", "break", "case", "class", "def", "defined?", "do", "else",
@@ -57,7 +56,6 @@ pub fn canonical_name(t: &Type) -> String {
         Type::CallbackInterface { name, .. } => format!("CallbackInterface{name}"),
         Type::Timestamp => "Timestamp".into(),
         Type::Duration => "Duration".into(),
-        Type::ForeignExecutor => "ForeignExecutor".into(),
         // Recursive types.
         // These add a prefix to the name of the underlying type.
         // The component API definition cannot give names to recursive types, so as long as the
@@ -83,7 +81,7 @@ pub fn canonical_name(t: &Type) -> String {
 // since the details of the underlying component are entirely determined by the `ComponentInterface`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
-    cdylib_name: Option<String>,
+    pub(super) cdylib_name: Option<String>,
     cdylib_path: Option<String>,
 }
 
@@ -101,20 +99,6 @@ impl Config {
     pub fn cdylib_path(&self) -> String {
         self.cdylib_path.clone().unwrap_or_default()
     }
-}
-
-impl BindingsConfig for Config {
-    fn update_from_ci(&mut self, ci: &ComponentInterface) {
-        self.cdylib_name
-            .get_or_insert_with(|| format!("uniffi_{}", ci.namespace()));
-    }
-
-    fn update_from_cdylib_name(&mut self, cdylib_name: &str) {
-        self.cdylib_name
-            .get_or_insert_with(|| cdylib_name.to_string());
-    }
-
-    fn update_from_dependency_configs(&mut self, _config_map: HashMap<&str, &Self>) {}
 }
 
 #[derive(Template)]
@@ -150,20 +134,20 @@ mod filters {
             FfiType::UInt64 => ":uint64".to_string(),
             FfiType::Float32 => ":float".to_string(),
             FfiType::Float64 => ":double".to_string(),
+            FfiType::Handle => ":uint64".to_string(),
             FfiType::RustArcPtr(_) => ":pointer".to_string(),
             FfiType::RustBuffer(_) => "RustBuffer.by_value".to_string(),
+            FfiType::RustCallStatus => "RustCallStatus".to_string(),
             FfiType::ForeignBytes => "ForeignBytes".to_string(),
-            FfiType::ForeignCallback => unimplemented!("Callback interfaces are not implemented"),
-            FfiType::ForeignExecutorCallback => {
-                unimplemented!("Foreign executors are not implemented")
-            }
-            FfiType::ForeignExecutorHandle => {
-                unimplemented!("Foreign executors are not implemented")
-            }
-            FfiType::RustFutureHandle
-            | FfiType::RustFutureContinuationCallback
-            | FfiType::RustFutureContinuationData => {
-                unimplemented!("Async functions are not implemented")
+            FfiType::Callback(_) => unimplemented!("FFI Callbacks not implemented"),
+            // Note: this can't just be `unimplemented!()` because some of the FFI function
+            // definitions use references.  Those FFI functions aren't actually used, so we just
+            // pick something that runs and makes some sense.  Revisit this once the references
+            // are actually implemented.
+            FfiType::Reference(_) => ":pointer".to_string(),
+            FfiType::VoidPointer => ":pointer".to_string(),
+            FfiType::Struct(_) => {
+                unimplemented!("Structs are not implemented")
             }
         })
     }
@@ -179,7 +163,8 @@ mod filters {
             }
             // use the double-quote form to match with the other languages, and quote escapes.
             Literal::String(s) => format!("\"{s}\""),
-            Literal::Null => "nil".into(),
+            Literal::None => "nil".into(),
+            Literal::Some { inner } => literal_rb(inner)?,
             Literal::EmptySequence => "[]".into(),
             Literal::EmptyMap => "{}".into(),
             Literal::Enum(v, type_) => match type_ {
@@ -264,7 +249,24 @@ mod filters {
             }
             Type::External { .. } => panic!("No support for external types, yet"),
             Type::Custom { .. } => panic!("No support for custom types, yet"),
-            Type::ForeignExecutor => unimplemented!("Foreign executors are not implemented"),
+        })
+    }
+
+    pub fn check_lower_rb(nm: &str, type_: &Type) -> Result<String, askama::Error> {
+        Ok(match type_ {
+            Type::Object { name, .. } => {
+                format!("({}.uniffi_check_lower {nm})", class_name_rb(name)?)
+            }
+            Type::Enum { .. }
+            | Type::Record { .. }
+            | Type::Optional { .. }
+            | Type::Sequence { .. }
+            | Type::Map { .. } => format!(
+                "RustBuffer.check_lower_{}({})",
+                class_name_rb(&canonical_name(type_))?,
+                nm
+            ),
+            _ => "".to_owned(),
         })
     }
 
@@ -283,7 +285,7 @@ mod filters {
             Type::Boolean => format!("({nm} ? 1 : 0)"),
             Type::String => format!("RustBuffer.allocFromString({nm})"),
             Type::Bytes => format!("RustBuffer.allocFromBytes({nm})"),
-            Type::Object { name, .. } => format!("({}._uniffi_lower {nm})", class_name_rb(name)?),
+            Type::Object { name, .. } => format!("({}.uniffi_lower {nm})", class_name_rb(name)?),
             Type::CallbackInterface { .. } => {
                 panic!("No support for lowering callback interfaces yet")
             }
@@ -300,7 +302,6 @@ mod filters {
             ),
             Type::External { .. } => panic!("No support for lowering external types, yet"),
             Type::Custom { .. } => panic!("No support for lowering custom types, yet"),
-            Type::ForeignExecutor => unimplemented!("Foreign executors are not implemented"),
         })
     }
 
@@ -318,7 +319,7 @@ mod filters {
             Type::Boolean => format!("1 == {nm}"),
             Type::String => format!("{nm}.consumeIntoString"),
             Type::Bytes => format!("{nm}.consumeIntoBytes"),
-            Type::Object { name, .. } => format!("{}._uniffi_allocate({nm})", class_name_rb(name)?),
+            Type::Object { name, .. } => format!("{}.uniffi_allocate({nm})", class_name_rb(name)?),
             Type::CallbackInterface { .. } => {
                 panic!("No support for lifting callback interfaces, yet")
             }
@@ -341,7 +342,6 @@ mod filters {
             ),
             Type::External { .. } => panic!("No support for lifting external types, yet"),
             Type::Custom { .. } => panic!("No support for lifting custom types, yet"),
-            Type::ForeignExecutor => unimplemented!("Foreign executors are not implemented"),
         })
     }
 }

@@ -33,12 +33,10 @@
 #include "nsIDownloader.h"
 #include "nsIURI.h"
 #include "nsIWidget.h"
-#include "nsIThread.h"
+#include "nsWindowsHelpers.h"
 
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
-#include "mozilla/HalScreenConfiguration.h"
-#include "mozilla/HashTable.h"
 #include "mozilla/LazyIdleThread.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
@@ -308,7 +306,7 @@ class WinUtils {
    * |                         |         TRUE          |         FALSE         |
    + +-----------------+-------+-----------------------+-----------------------+
    * |                 |       |  * an independent top level window            |
-   * |                 | TRUE  |  * a pupup window (WS_POPUP)                  |
+   * |                 | TRUE  |  * a popup window (WS_POPUP)                  |
    * |                 |       |  * an owned top level window (like dialog)    |
    * | aStopIfNotChild +-------+-----------------------+-----------------------+
    * |                 |       |  * independent window | * only an independent |
@@ -416,6 +414,8 @@ class WinUtils {
    * returns the LayoutDeviceIntRegion.
    */
   static LayoutDeviceIntRegion ConvertHRGNToRegion(HRGN aRgn);
+  /** Performs the inverse of ConvertHRGNToRegion. */
+  static nsAutoRegion RegionToHRGN(const LayoutDeviceIntRegion&);
 
   /**
    * ToIntRect converts a Windows RECT to a LayoutDeviceIntRect.
@@ -424,6 +424,8 @@ class WinUtils {
    * returns the LayoutDeviceIntRect.
    */
   static LayoutDeviceIntRect ToIntRect(const RECT& aRect);
+  /** Performs the inverse of ToIntRect */
+  static RECT ToWinRect(const LayoutDeviceIntRect& aRect);
 
   /**
    * Returns true if the context or IME state is enabled.  Otherwise, false.
@@ -461,9 +463,11 @@ class WinUtils {
   static PointerCapabilities GetPrimaryPointerCapabilities();
   // For any-pointer and any-hover media queries features.
   static PointerCapabilities GetAllPointerCapabilities();
-  // Returns a string containing a comma-separated list of Fluent IDs
-  // representing the currently active pointing devices
-  static void GetPointerExplanation(nsAString* aExplanation);
+
+  // Returns whether the system has any active device for each pointer type.
+  static bool SystemHasMouse();
+  static bool SystemHasTouch();
+  static bool SystemHasPen();
 
   /**
    * Fully resolves a path to its final path name. So if path contains
@@ -553,6 +557,8 @@ class WinUtils {
 
   static bool GetClassName(HWND aHwnd, nsAString& aName);
 
+  static bool MicaEnabled();
+
   static void EnableWindowOcclusion(const bool aEnable);
 
   static bool GetTimezoneName(wchar_t* aBuffer);
@@ -566,6 +572,8 @@ class WinUtils {
 
   static void GetClipboardFormatAsString(UINT aFormat, nsAString& aOutput);
 
+  static nsresult GetProcessImageName(DWORD aProcessId, nsAString& aName);
+
  private:
   static WhitelistVec BuildWhitelist();
 
@@ -575,23 +583,32 @@ class WinUtils {
 #endif
 };
 
+typedef MozPromise<nsString, nsresult, true> ObtainCachedIconFileAsyncPromise;
+
 #ifdef MOZ_PLACES
 class AsyncFaviconDataReady final : public nsIFaviconDataCallback {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIFAVICONDATACALLBACK
 
-  AsyncFaviconDataReady(nsIURI* aNewURI, RefPtr<LazyIdleThread>& aIOThread,
-                        const bool aURLShortcut,
-                        already_AddRefed<nsIRunnable> aRunnable);
+  AsyncFaviconDataReady(
+      nsIURI* aNewURI, RefPtr<nsISerialEventTarget> aIOThread,
+      const bool aURLShortcut, already_AddRefed<nsIRunnable> aRunnable,
+      UniquePtr<MozPromiseHolder<ObtainCachedIconFileAsyncPromise>>
+          aPromiseHolder = nullptr);
   nsresult OnFaviconDataNotAvailable(void);
 
  private:
-  ~AsyncFaviconDataReady() {}
+  ~AsyncFaviconDataReady() {
+    if (mPromiseHolder) {
+      mPromiseHolder->RejectIfExists(NS_ERROR_FAILURE, __func__);
+    }
+  }
 
   nsCOMPtr<nsIURI> mNewURI;
-  RefPtr<LazyIdleThread> mIOThread;
+  RefPtr<nsISerialEventTarget> mIOThread;
   nsCOMPtr<nsIRunnable> mRunnable;
+  UniquePtr<MozPromiseHolder<ObtainCachedIconFileAsyncPromise>> mPromiseHolder;
   const bool mURLShortcut;
 };
 #endif
@@ -606,10 +623,12 @@ class AsyncEncodeAndWriteIcon : public nsIRunnable {
 
   // Warning: AsyncEncodeAndWriteIcon assumes ownership of the aData buffer
   // passed in
-  AsyncEncodeAndWriteIcon(const nsAString& aIconPath,
-                          UniquePtr<uint8_t[]> aData, uint32_t aStride,
-                          uint32_t aWidth, uint32_t aHeight,
-                          already_AddRefed<nsIRunnable> aRunnable);
+  AsyncEncodeAndWriteIcon(
+      const nsAString& aIconPath, UniquePtr<uint8_t[]> aData, uint32_t aStride,
+      uint32_t aWidth, uint32_t aHeight,
+      already_AddRefed<nsIRunnable> aRunnable,
+      UniquePtr<MozPromiseHolder<ObtainCachedIconFileAsyncPromise>>
+          aPromiseHolder = nullptr);
 
  private:
   virtual ~AsyncEncodeAndWriteIcon();
@@ -617,6 +636,7 @@ class AsyncEncodeAndWriteIcon : public nsIRunnable {
   nsAutoString mIconPath;
   UniquePtr<uint8_t[]> mBuffer;
   nsCOMPtr<nsIRunnable> mRunnable;
+  UniquePtr<MozPromiseHolder<ObtainCachedIconFileAsyncPromise>> mPromiseHolder;
   uint32_t mStride;
   uint32_t mWidth;
   uint32_t mHeight;
@@ -639,12 +659,20 @@ class AsyncDeleteAllFaviconsFromDisk : public nsIRunnable {
 
 class FaviconHelper {
  public:
+  enum class IconCacheDir : uint8_t {
+    JumpListCacheDir = 1,
+    ShortcutCacheDir = 2
+  };
+
   static const char kJumpListCacheDir[];
   static const char kShortcutCacheDir[];
   static nsresult ObtainCachedIconFile(
       nsCOMPtr<nsIURI> aFaviconPageURI, nsString& aICOFilePath,
       RefPtr<LazyIdleThread>& aIOThread, bool aURLShortcut,
       already_AddRefed<nsIRunnable> aRunnable = nullptr);
+  static RefPtr<ObtainCachedIconFileAsyncPromise> ObtainCachedIconFileAsync(
+      nsCOMPtr<nsIURI> aFaviconPageURI, RefPtr<LazyIdleThread>& aIOThread,
+      IconCacheDir aCacheDir);
 
   static nsresult GetOutputIconPath(nsCOMPtr<nsIURI> aFaviconPageURI,
                                     nsCOMPtr<nsIFile>& aICOFile,
@@ -652,8 +680,10 @@ class FaviconHelper {
 
   static nsresult CacheIconFileFromFaviconURIAsync(
       nsCOMPtr<nsIURI> aFaviconPageURI, nsCOMPtr<nsIFile> aICOFile,
-      RefPtr<LazyIdleThread>& aIOThread, bool aURLShortcut,
-      already_AddRefed<nsIRunnable> aRunnable);
+      RefPtr<nsISerialEventTarget> aIOThread, bool aURLShortcut,
+      already_AddRefed<nsIRunnable> aRunnable,
+      UniquePtr<MozPromiseHolder<ObtainCachedIconFileAsyncPromise>>
+          aPromiseHolder);
 
   static int32_t GetICOCacheSecondsTimeout();
 };

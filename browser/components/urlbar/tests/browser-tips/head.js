@@ -135,19 +135,21 @@ async function initUpdate(params) {
     getVersionParams();
   if (params.backgroundUpdate) {
     setUpdateURL(updateURL);
-    gAUS.checkForBackgroundUpdates();
+    await gAUS.checkForBackgroundUpdates();
     if (params.continueFile) {
       await continueFileHandler(params.continueFile);
     }
     if (params.waitForUpdateState) {
-      let whichUpdate =
+      let whichUpdateFn =
         params.waitForUpdateState == STATE_DOWNLOADING
-          ? "downloadingUpdate"
-          : "readyUpdate";
+          ? "getDownloadingUpdate"
+          : "getReadyUpdate";
+      let update;
       await TestUtils.waitForCondition(
-        () =>
-          gUpdateManager[whichUpdate] &&
-          gUpdateManager[whichUpdate].state == params.waitForUpdateState,
+        async () => {
+          update = await gUpdateManager[whichUpdateFn]();
+          return update && update.state == params.waitForUpdateState;
+        },
         "Waiting for update state: " + params.waitForUpdateState,
         undefined,
         200
@@ -158,7 +160,7 @@ async function initUpdate(params) {
       });
       // Display the UI after the update state equals the expected value.
       Assert.equal(
-        gUpdateManager[whichUpdate].state,
+        update.state,
         params.waitForUpdateState,
         "The update state value should equal " + params.waitForUpdateState
       );
@@ -209,30 +211,28 @@ async function processUpdateStep(step) {
   }
 
   if (checkActiveUpdate) {
-    let whichUpdate =
+    let whichUpdateFn =
       checkActiveUpdate.state == STATE_DOWNLOADING
-        ? "downloadingUpdate"
-        : "readyUpdate";
-    await TestUtils.waitForCondition(
-      () => gUpdateManager[whichUpdate],
-      "Waiting for active update"
-    );
-    Assert.ok(
-      !!gUpdateManager[whichUpdate],
-      "There should be an active update"
-    );
+        ? "getDownloadingUpdate"
+        : "getReadyUpdate";
+    let update;
+    await TestUtils.waitForCondition(async () => {
+      update = await gUpdateManager[whichUpdateFn]();
+      return update;
+    }, "Waiting for active update");
+    Assert.ok(!!update, "There should be an active update");
     Assert.equal(
-      gUpdateManager[whichUpdate].state,
+      update.state,
       checkActiveUpdate.state,
       "The active update state should equal " + checkActiveUpdate.state
     );
   } else {
     Assert.ok(
-      !gUpdateManager.readyUpdate,
+      !(await gUpdateManager.getReadyUpdate()),
       "There should not be a ready update"
     );
     Assert.ok(
-      !gUpdateManager.downloadingUpdate,
+      !(await gUpdateManager.getDownloadingUpdate()),
       "There should not be a downloadingUpdate update"
     );
   }
@@ -244,7 +244,7 @@ async function processUpdateStep(step) {
       await continueFileHandler(continueFile);
       let patch = getPatchOfType(
         data.patchType,
-        gUpdateManager.downloadingUpdate
+        await gUpdateManager.getDownloadingUpdate()
       );
       // The update is removed early when the last download fails so check
       // that there is a patch before proceeding.
@@ -577,21 +577,12 @@ async function checkTip(win, expectedTip, closeView = true) {
         `Start your search in the address bar to see suggestions from ` +
         `${name} and your browsing history.`;
       break;
-    case UrlbarProviderSearchTips.TIP_TYPE.PERSIST:
-      heuristic = false;
-      title =
-        "Searching just got simpler." +
-        " Try making your search more specific here in the address bar." +
-        " To show the URL instead, visit Search, in settings.";
-      break;
   }
   Assert.equal(result.heuristic, heuristic, "Result is heuristic");
   Assert.equal(result.displayed.title, title, "Title");
   Assert.equal(
     result.element.row._buttons.get("0").textContent,
-    expectedTip == UrlbarProviderSearchTips.TIP_TYPE.PERSIST
-      ? `Got it`
-      : `Okay, Got It`,
+    "Okay, Got It",
     "Button text"
   );
   Assert.ok(
@@ -739,9 +730,6 @@ async function withDNSRedirect(domain, path, callback) {
 function resetSearchTipsProvider() {
   Services.prefs.clearUserPref(
     `browser.urlbar.tipShownCount.${UrlbarProviderSearchTips.TIP_TYPE.ONBOARD}`
-  );
-  Services.prefs.clearUserPref(
-    `browser.urlbar.tipShownCount.${UrlbarProviderSearchTips.TIP_TYPE.PERSIST}`
   );
   Services.prefs.clearUserPref(
     `browser.urlbar.tipShownCount.${UrlbarProviderSearchTips.TIP_TYPE.REDIRECT}`

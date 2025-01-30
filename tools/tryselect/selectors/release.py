@@ -87,6 +87,7 @@ def run(
     message="{msg}",
     closed_tree=False,
     push_to_lando=False,
+    push_to_vcs=False,
 ):
     app_version = attr.evolve(version, beta_number=None, is_esr=False)
 
@@ -94,6 +95,7 @@ def run(
         "browser/config/version.txt": "{}\n".format(app_version),
         "browser/config/version_display.txt": "{}\n".format(version),
         "config/milestone.txt": "{}\n".format(app_version),
+        "mobile/android/version.txt": "{}\n".format(version),
     }
     with open("browser/config/version.txt") as f:
         current_version = FirefoxVersion.parse(f.read())
@@ -125,7 +127,7 @@ def run(
         }
     )
 
-    with open(os.path.join(vcs.path, "taskcluster/ci/config.yml")) as f:
+    with open(os.path.join(vcs.path, "taskcluster/config.yml")) as f:
         migration_configs = yaml.safe_load(f)
     for migration in migrations:
         migration_config = migration_configs["merge-automation"]["behaviors"][migration]
@@ -156,4 +158,5 @@ def run(
         try_task_config=task_config,
         files_to_change=files_to_change,
         push_to_lando=push_to_lando,
+        push_to_vcs=push_to_vcs,
     )

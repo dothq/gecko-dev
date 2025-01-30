@@ -34,8 +34,7 @@ class WrappedControlRunnable final : public WorkerControlRunnable {
  public:
   WrappedControlRunnable(WorkerPrivate* aWorkerPrivate,
                          nsCOMPtr<nsIRunnable>&& aInner)
-      : WorkerControlRunnable(aWorkerPrivate, "WrappedControlRunnable",
-                              WorkerThread),
+      : WorkerControlRunnable("WrappedControlRunnable"),
         mInner(std::move(aInner)) {}
 
   virtual bool PreDispatch(WorkerPrivate* aWorkerPrivate) override {
@@ -68,6 +67,21 @@ class WrappedControlRunnable final : public WorkerControlRunnable {
     // Cancel() being called.
     return cr->Cancel();
   }
+
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
+  NS_IMETHOD GetName(nsACString& aName) override {
+    aName.AssignLiteral("WrappedControlRunnable(");
+    if (nsCOMPtr<nsINamed> named = do_QueryInterface(mInner)) {
+      nsAutoCString containedName;
+      named->GetName(containedName);
+      aName.Append(containedName);
+    } else {
+      aName.AppendLiteral("?");
+    }
+    aName.AppendLiteral(")");
+    return NS_OK;
+  }
+#endif
 };
 
 }  // anonymous namespace
@@ -119,7 +133,7 @@ WorkerEventTarget::Dispatch(already_AddRefed<nsIRunnable> aRunnable,
 
     RefPtr<WorkerRunnable> r =
         mWorkerPrivate->MaybeWrapAsWorkerRunnable(runnable.forget());
-    if (r->Dispatch()) {
+    if (r->Dispatch(mWorkerPrivate)) {
       return NS_OK;
     }
     runnable = std::move(r);
@@ -134,7 +148,7 @@ WorkerEventTarget::Dispatch(already_AddRefed<nsIRunnable> aRunnable,
       ("WorkerEventTarget::Dispatch [%p] Wrapped runnable as control "
        "runnable(%p)",
        this, r.get()));
-  if (!r->Dispatch()) {
+  if (!r->Dispatch(mWorkerPrivate)) {
     LOGV(
         ("WorkerEventTarget::Dispatch [%p] Dispatch as control runnable(%p) "
          "fail",

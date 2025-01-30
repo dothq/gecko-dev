@@ -57,7 +57,7 @@ class ClipboardItem final : public nsWrapperCache {
     RefPtr<GetDataPromise> GetData();
 
     //  Load data from system clipboard.
-    void LoadDataFromSystemClipboard(nsIAsyncGetClipboardData* aDataGetter);
+    void LoadDataFromSystemClipboard(nsIClipboardDataSnapshot* aDataGetter);
     void LoadDataFromDataPromise(Promise& aDataPromise);
 
     // If clipboard data is in the process of loading from either system
@@ -106,6 +106,8 @@ class ClipboardItem final : public nsWrapperCache {
       const GlobalObject& aGlobal,
       const Record<nsString, OwningNonNull<Promise>>& aItems,
       const ClipboardItemOptions& aOptions, ErrorResult& aRv);
+
+  static bool Supports(const GlobalObject& aGlobal, const nsAString& aType);
 
   dom::PresentationStyle PresentationStyle() const {
     return mPresentationStyle;

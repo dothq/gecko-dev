@@ -21,8 +21,12 @@ use crate::Checksum;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Checksum, Ord, PartialOrd)]
 pub enum ObjectImpl {
+    // A single Rust type
     Struct,
+    // A trait that's can be implemented by Rust types
     Trait,
+    // A trait + a callback interface -- can be implemented by both Rust and foreign types.
+    CallbackTrait,
 }
 
 impl ObjectImpl {
@@ -31,27 +35,26 @@ impl ObjectImpl {
     /// Includes `r#`, traits get a leading `dyn`. If we ever supported associated types, then
     /// this would also include them.
     pub fn rust_name_for(&self, name: &str) -> String {
-        if self == &ObjectImpl::Trait {
+        if self.is_trait_interface() {
             format!("dyn r#{name}")
         } else {
             format!("r#{name}")
         }
     }
 
-    // uniffi_meta and procmacro support tend to carry around `is_trait` bools. This makes that
-    // mildly less painful
-    pub fn from_is_trait(is_trait: bool) -> Self {
-        if is_trait {
-            ObjectImpl::Trait
-        } else {
-            ObjectImpl::Struct
-        }
+    pub fn is_trait_interface(&self) -> bool {
+        matches!(self, Self::Trait | Self::CallbackTrait)
+    }
+
+    pub fn has_callback_interface(&self) -> bool {
+        matches!(self, Self::CallbackTrait)
     }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Checksum, Ord, PartialOrd)]
 pub enum ExternalKind {
     Interface,
+    Trait,
     // Either a record or enum
     DataClass,
 }
@@ -85,7 +88,6 @@ pub enum Type {
         // How the object is implemented.
         imp: ObjectImpl,
     },
-    ForeignExecutor,
     // Types defined in the component API, each of which has a string name.
     Record {
         module_path: String,
@@ -141,10 +143,59 @@ impl Type {
         };
         Box::new(std::iter::once(self).chain(nested_types))
     }
+
+    pub fn name(&self) -> Option<String> {
+        match self {
+            Type::Object { name, .. } => Some(name.to_string()),
+            Type::Record { name, .. } => Some(name.to_string()),
+            Type::Enum { name, .. } => Some(name.to_string()),
+            Type::External { name, .. } => Some(name.to_string()),
+            Type::Custom { name, .. } => Some(name.to_string()),
+            Type::Optional { inner_type } | Type::Sequence { inner_type } => inner_type.name(),
+            _ => None,
+        }
+    }
+
+    fn rename(&mut self, new_name: String) {
+        match self {
+            Type::Object { name, .. } => *name = new_name,
+            Type::Record { name, .. } => *name = new_name,
+            Type::Enum { name, .. } => *name = new_name,
+            Type::External { name, .. } => *name = new_name,
+            Type::Custom { name, .. } => *name = new_name,
+            _ => {}
+        }
+    }
+
+    pub fn rename_recursive(&mut self, name_transformer: &impl Fn(&str) -> String) {
+        // Rename the current type if it has a name
+        if let Some(name) = self.name() {
+            self.rename(name_transformer(&name));
+        }
+
+        // Recursively rename nested types
+        match self {
+            Type::Optional { inner_type } | Type::Sequence { inner_type } => {
+                inner_type.rename_recursive(name_transformer);
+            }
+            Type::Map {
+                key_type,
+                value_type,
+                ..
+            } => {
+                key_type.rename_recursive(name_transformer);
+                value_type.rename_recursive(name_transformer);
+            }
+            Type::Custom { builtin, .. } => {
+                builtin.rename_recursive(name_transformer);
+            }
+            _ => {}
+        }
+    }
 }
 
 // A trait so various things can turn into a type.
-pub trait AsType: core::fmt::Debug {
+pub trait AsType: ::core::fmt::Debug {
     fn as_type(&self) -> Type;
 }
 

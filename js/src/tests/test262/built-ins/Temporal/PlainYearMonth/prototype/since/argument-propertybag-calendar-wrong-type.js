@@ -1,4 +1,4 @@
-// |reftest| skip-if(!this.hasOwnProperty('Temporal')) -- Temporal is not enabled unconditionally
+// |reftest| shell-option(--enable-temporal) skip-if(!this.hasOwnProperty('Temporal')||!xulRuntime.shell) -- Temporal is not enabled unconditionally, requires shell-options
 // Copyright (C) 2022 Igalia, S.L. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
@@ -10,7 +10,6 @@ description: >
 features: [BigInt, Symbol, Temporal]
 ---*/
 
-const timeZone = new Temporal.TimeZone("UTC");
 const instance = new Temporal.PlainYearMonth(2000, 5);
 
 const primitiveTests = [
@@ -32,10 +31,8 @@ for (const [calendar, description] of primitiveTests) {
 
 const typeErrorTests = [
   [Symbol(), "symbol"],
-  [{}, "plain object that doesn't implement the protocol"],
-  [new Temporal.TimeZone("UTC"), "time zone instance"],
-  [Temporal.Calendar, "Temporal.Calendar, object"],
-  [Temporal.Calendar.prototype, "Temporal.Calendar.prototype, object"],  // fails brand check in dateFromFields()
+  [{}, "object"],
+  [new Temporal.Duration(), "duration instance"],
 ];
 
 for (const [calendar, description] of typeErrorTests) {

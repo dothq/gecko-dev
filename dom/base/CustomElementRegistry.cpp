@@ -730,7 +730,7 @@ DocGroup* CustomElementRegistry::GetDocGroup() const {
 int32_t CustomElementRegistry::InferNamespace(
     JSContext* aCx, JS::Handle<JSObject*> constructor) {
   JS::Rooted<JSObject*> XULConstructor(
-      aCx, XULElement_Binding::GetConstructorObject(aCx));
+      aCx, XULElement_Binding::GetConstructorObjectHandle(aCx));
 
   JS::Rooted<JSObject*> proto(aCx, constructor);
   while (proto) {
@@ -1155,7 +1155,15 @@ void CustomElementRegistry::SetElementCreationCallback(
   }
 
   RefPtr<CustomElementCreationCallback> callback = &aCallback;
-  mElementCreationCallbacks.InsertOrUpdate(nameAtom, std::move(callback));
+
+  if (mCandidatesMap.Contains(nameAtom)) {
+    mElementCreationCallbacksUpgradeCandidatesMap.GetOrInsertNew(nameAtom);
+    RefPtr<Runnable> runnable =
+        new RunCustomElementCreationCallback(this, nameAtom, callback);
+    nsContentUtils::AddScriptRunner(runnable.forget());
+  } else {
+    mElementCreationCallbacks.InsertOrUpdate(nameAtom, std::move(callback));
+  }
 }
 
 void CustomElementRegistry::Upgrade(nsINode& aRoot) {
@@ -1230,9 +1238,10 @@ already_AddRefed<Promise> CustomElementRegistry::WhenDefined(
   uint32_t nameSpaceID =
       doc ? doc->GetDefaultNamespaceID() : kNameSpaceID_XHTML;
   if (!nsContentUtils::IsCustomElementName(nameAtom, nameSpaceID)) {
-    return createPromise([](const RefPtr<Promise>& promise) {
-      promise->MaybeReject(NS_ERROR_DOM_SYNTAX_ERR);
-    });
+    aRv.ThrowSyntaxError(
+        nsPrintfCString("'%s' is not a valid custom element name",
+                        NS_ConvertUTF16toUTF8(aName).get()));
+    return nullptr;
   }
 
   if (CustomElementDefinition* definition =

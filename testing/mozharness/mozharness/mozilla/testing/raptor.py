@@ -190,12 +190,12 @@ class Raptor(
                         "firefox",
                         "chrome",
                         "chrome-m",
-                        "chromium",
                         "fennec",
                         "geckoview",
                         "refbrow",
                         "fenix",
                         "safari",
+                        "safari-tp",
                         "custom-car",
                         "cstm-car-m",
                     ],
@@ -291,7 +291,7 @@ class Raptor(
                 ["--gecko-profile-interval"],
                 {
                     "dest": "gecko_profile_interval",
-                    "type": "int",
+                    "type": "float",
                     "help": "The interval between samples taken by the profiler (ms).",
                 },
             ],
@@ -464,15 +464,6 @@ class Raptor(
                 },
             ],
             [
-                ["--noinstall"],
-                {
-                    "dest": "noinstall",
-                    "action": "store_true",
-                    "default": False,
-                    "help": "Do not offer to install Android APK.",
-                },
-            ],
-            [
                 ["--disable-e10s"],
                 {
                     "dest": "e10s",
@@ -628,6 +619,15 @@ class Raptor(
                     "help": "Take a screenshot when the test fails.",
                 },
             ],
+            [
+                ["--power-test"],
+                {
+                    "action": "store_true",
+                    "dest": "power_test",
+                    "default": False,
+                    "help": "Run power usage testing on mobile tests using a USB power meter.",
+                },
+            ],
         ]
         + testing_config_options
         + copy.deepcopy(code_coverage_config_options)
@@ -644,7 +644,9 @@ class Raptor(
                 "populate-webroot",
                 "create-virtualenv",
                 "install-chrome-android",
+                "install-chromium-android",
                 "install-chromium-distribution",
+                "install-safari-technology-preview",
                 "install",
                 "run-tests",
             ],
@@ -804,7 +806,7 @@ class Raptor(
 
     def install_chrome_android(self):
         """Install Google Chrome for Android in production from tooltool"""
-        if self.app not in ("chrome-m", "cstm-car-m"):
+        if self.app != "chrome-m":
             self.info("Google Chrome for Android not required")
             return
         if self.config.get("run_local"):
@@ -813,9 +815,29 @@ class Raptor(
                 "from tooltool when running locally"
             )
             return
+
         self.info("Fetching and installing Google Chrome for Android")
         self.device.shell_output("cmd package install-existing com.android.chrome")
         self.info("Google Chrome for Android successfully installed")
+
+    def install_chromium_android(self):
+        """Install custom Chromium-as-Release for Android from toolchain fetch"""
+        if self.app != "cstm-car-m":
+            self.info("Chromium-as-Release for Android not required")
+            return
+        if self.config.get("run_local"):
+            self.info(
+                "Chromium-as-Release for Android will not be installed "
+                "when running locally"
+            )
+            return
+
+        self.info("Installing Custom Chromium-as-Release for Android")
+        cstm_car_m_apk = pathlib.Path(
+            os.environ["MOZ_FETCHES_DIR"], "chromium", "apks", "ChromePublic.apk"
+        )
+        self.device.install_app(str(cstm_car_m_apk))
+        self.info("Custom Chromium-as-Release for Android successfully installed")
 
     def download_chrome_android(self):
         # Fetch the APK
@@ -845,35 +867,36 @@ class Raptor(
         self.device.shell_output("settings put global verifier_verify_adb_installs 1")
         rmtree(tmpdir)
 
+    def install_safari_technology_preview(self):
+        """Ensure latest version of Safari TP binary is running in CI"""
+
+        if self.app != "safari-tp" or self.run_local:
+            return
+
+        import mozprocess
+
+        self.info("Checking for Safari Technology Preview updates...")
+        install_script = "/usr/local/bin/install_safari_softwareupdate_updates.py"
+        cmd = [sys.executable, install_script]
+        mozprocess.run_and_wait(cmd)
+
     def install_chromium_distribution(self):
         """Install Google Chromium distribution in production"""
         linux, mac, win = "linux", "mac", "win"
-        chrome, chromium, chromium_release, chromium_release_android = (
+        chrome, chromium_release = (
             "chrome",
-            "chromium",
             "custom-car",
-            "cstm-car-m",
         )
 
         available_chromium_dists = [
             chrome,
-            chromium,
             chromium_release,
-            chromium_release_android,
         ]
         binary_location = {
-            chromium: {
-                linux: ["chrome-linux", "chrome"],
-                mac: ["chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"],
-                win: ["chrome-win", "Chrome.exe"],
-            },
             chromium_release: {
                 linux: ["chromium", "Default", "chrome"],
                 win: ["chromium", "Default", "chrome.exe"],
                 mac: ["chromium", "Chromium.app", "Contents", "MacOS", "chromium"],
-            },
-            chromium_release_android: {
-                linux: ["chromium", "apks", "ChromePublic.apk"],
             },
         }
 
@@ -979,6 +1002,12 @@ class Raptor(
         elif self.app == "safari" and not self.run_local:
             binary_path = "/Applications/Safari.app/Contents/MacOS/Safari"
             kw_options["binary"] = binary_path
+        elif self.app == "safari-tp" and not self.run_local:
+            binary_path = "/Applications/Safari Technology Preview.app/Contents/MacOS/Safari Technology Preview"
+            kw_options["binary"] = binary_path
+        # Custom Chromium-as-Release for Android
+        elif self.app == "cstm-car-m":
+            kw_options["binary"] = "org.chromium.chrome"
         # Running on Chromium
         elif not self.run_local:
             # When running locally we already set the Chromium binary above, in init.
@@ -1023,7 +1052,8 @@ class Raptor(
         if os.getenv("PERF_FLAGS"):
             for option in os.getenv("PERF_FLAGS").split():
                 if "=" in option:
-                    kw_option, value = option.split("=")
+                    eq_index = option.find("=")
+                    kw_option, value = option[:eq_index], option[eq_index + 1 :]
                     kw_options[kw_option] = value
                 else:
                     options.extend(["--" + option])
@@ -1084,6 +1114,8 @@ class Raptor(
             or os.environ.get("MOZ_AUTOMATION", None) is not None
         ):
             options.extend(["--screenshot-on-failure"])
+        if self.config.get("power_test", False):
+            options.extend(["--power-test"])
 
         for (arg,), details in Raptor.browsertime_options:
             # Allow overriding defaults on the `./mach raptor-test ...` command-line
@@ -1134,6 +1166,7 @@ class Raptor(
     def download_and_extract(self, extract_dirs=None, suite_categories=None):
         # Use in-tree wptserve for Python 3.10 compatibility
         extract_dirs = [
+            "bin/*",
             "tools/wptserve/*",
             "tools/wpt_third_party/h2/*",
             "tools/wpt_third_party/pywebsocket3/*",
@@ -1275,7 +1308,7 @@ class Raptor(
             )
 
     def install(self):
-        if not self.config.get("noinstall", False):
+        if not self.config.get("no_install", False):
             if self.app in self.firefox_android_browsers:
                 self.device.uninstall_app(self.binary_path)
 
@@ -1334,6 +1367,18 @@ class Raptor(
         # mitmproxy needs path to mozharness when installing the cert, and tooltool
         env["SCRIPTSPATH"] = scripts_path
         env["EXTERNALTOOLSPATH"] = external_tools_path
+        env["XPCSHELL_PATH"] = os.path.join(
+            self.query_abs_dirs()["abs_test_install_dir"], "bin", "xpcshell.exe"
+        )
+        if os.path.exists(env["XPCSHELL_PATH"]) and not self.run_local:
+            dest = os.path.join(
+                self.query_abs_dirs()["abs_work_dir"],
+                "application",
+                "firefox",
+                "xpcshell.exe",
+            )
+            copyfile(env["XPCSHELL_PATH"], dest)
+            env["XPCSHELL_PATH"] = dest
 
         # Needed to load unsigned Raptor WebExt on release builds
         if self.is_release_build:
@@ -1473,5 +1518,15 @@ class RaptorOutputParser(OutputParser):
             )
             return  # skip base parse_single_line
         if line.startswith("raptor-browsertime Info: "):
-            SystemResourceMonitor.record_event(line[len("raptor-browsertime Info: ") :])
+            raptor_line = line[len("raptor-browsertime Info: ") :]
+            if raptor_line.startswith("BEGIN: "):
+                SystemResourceMonitor.begin_marker(
+                    "test", raptor_line[len("BEGIN: ") :]
+                )
+                return
+            elif raptor_line.startswith("END: "):
+                SystemResourceMonitor.end_marker("test", raptor_line[len("END: ") :])
+                return
+            else:
+                SystemResourceMonitor.record_event(raptor_line)
         super(RaptorOutputParser, self).parse_single_line(line)

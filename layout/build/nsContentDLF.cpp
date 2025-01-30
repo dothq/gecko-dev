@@ -29,6 +29,7 @@
 
 #undef NOISY_REGISTRY
 
+using namespace mozilla;
 using mozilla::dom::Document;
 
 already_AddRefed<nsIDocumentViewer> NS_NewDocumentViewer();
@@ -63,7 +64,7 @@ nsresult NS_NewContentDocumentLoaderFactory(
   if (!aResult) {
     return NS_ERROR_NULL_POINTER;
   }
-  RefPtr<nsContentDLF> it = new nsContentDLF();
+  auto it = MakeRefPtr<nsContentDLF>();
   it.forget(aResult);
   return NS_OK;
 }
@@ -100,8 +101,7 @@ nsContentDLF::CreateInstance(const char* aCommand, nsIChannel* aChannel,
                       IsTypeInList(type, gHTMLTypes)) ||
                      nsContentUtils::IsPlainTextType(type) ||
                      IsTypeInList(type, gXMLTypes) ||
-                     IsTypeInList(type, gSVGTypes) ||
-                     IsTypeInList(type, gXMLTypes);
+                     IsTypeInList(type, gSVGTypes);
 
     if (knownType) {
       viewSourceChannel->SetContentType(type);
@@ -294,7 +294,9 @@ nsresult nsContentDLF::CreateDocument(
 
   nsCOMPtr<nsIURI> aURL;
   rv = aChannel->GetURI(getter_AddRefs(aURL));
-  if (NS_FAILED(rv)) return rv;
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
 #ifdef NOISY_CREATE_DOC
   if (nullptr != aURL) {

@@ -330,7 +330,7 @@ _cairo_quartz_font_face_scaled_font_create (void *abstract_face,
 	fs_metrics.max_x_advance = CGRectGetMaxX(bbox) / ems;
 	fs_metrics.max_y_advance = 0.0;
     } else {
-	CGGlyph wGlyph;
+	CGGlyph wGlyph = 0;
 	UniChar u;
 
 	quartz_CGFontMetrics *m;

@@ -108,6 +108,9 @@ already_AddRefed<nsDocShellLoadState> LocationBase::CheckURL(
   loadState->SetHasValidUserGestureActivation(
       doc->HasValidTransientUserGestureActivation());
 
+  loadState->SetTextDirectiveUserActivation(
+      doc->ConsumeTextDirectiveUserActivation() ||
+      loadState->HasValidUserGestureActivation());
   loadState->SetTriggeringWindowId(doc->InnerWindowID());
   loadState->SetTriggeringStorageAccess(doc->UsingStorageAccess());
 
@@ -125,7 +128,7 @@ void LocationBase::SetURI(nsIURI* aURI, nsIPrincipal& aSubjectPrincipal,
                               ? CallerType::System
                               : CallerType::NonSystem;
 
-  nsresult rv = bc->CheckLocationChangeRateLimit(callerType);
+  nsresult rv = bc->CheckNavigationRateLimit(callerType);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return;

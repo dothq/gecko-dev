@@ -180,7 +180,7 @@ impl SpecNewSessionParameters {
                 "proxy" => SpecNewSessionParameters::validate_proxy(value)?,
                 "timeouts" => SpecNewSessionParameters::validate_timeouts(value)?,
                 "unhandledPromptBehavior" => {
-                    SpecNewSessionParameters::validate_unhandled_prompt_behaviour(value)?
+                    SpecNewSessionParameters::validate_unhandled_prompt_behavior(value)?
                 }
                 x => {
                     if !x.contains(':') {
@@ -415,19 +415,65 @@ impl SpecNewSessionParameters {
         Ok(())
     }
 
-    fn validate_unhandled_prompt_behaviour(value: &Value) -> WebDriverResult<()> {
-        let behaviour = try_opt!(
-            value.as_str(),
-            ErrorStatus::InvalidArgument,
-            format!("unhandledPromptBehavior is not a string: {}", value)
-        );
+    fn validate_unhandled_prompt_behavior(value: &Value) -> WebDriverResult<()> {
+        match value {
+            Value::Object(obj) => {
+                // Unhandled Prompt Behavior type as used by WebDriver BiDi
+                for (key, value) in obj {
+                    match &**key {
+                        x @ "alert"
+                        | x @ "beforeUnload"
+                        | x @ "confirm"
+                        | x @ "default"
+                        | x @ "prompt" => {
+                            let behavior = try_opt!(
+                                value.as_str(),
+                                ErrorStatus::InvalidArgument,
+                                format!(
+                                    "'{}' unhandledPromptBehavior value is not a string: {}",
+                                    x, value
+                                )
+                            );
 
-        match behaviour {
-            "accept" | "accept and notify" | "dismiss" | "dismiss and notify" | "ignore" => {}
-            x => {
+                            match behavior {
+                                "accept" | "accept and notify" | "dismiss"
+                                | "dismiss and notify" | "ignore" => {}
+                                x => {
+                                    return Err(WebDriverError::new(
+                                        ErrorStatus::InvalidArgument,
+                                        format!(
+                                            "'{}' unhandledPromptBehavior value is invalid: {}",
+                                            x, behavior
+                                        ),
+                                    ))
+                                }
+                            }
+                        }
+                        x => {
+                            return Err(WebDriverError::new(
+                                ErrorStatus::InvalidArgument,
+                                format!("Invalid unhandledPromptBehavior entry: {}", x),
+                            ))
+                        }
+                    }
+                }
+            }
+            Value::String(behavior) => match behavior.as_str() {
+                "accept" | "accept and notify" | "dismiss" | "dismiss and notify" | "ignore" => {}
+                x => {
+                    return Err(WebDriverError::new(
+                        ErrorStatus::InvalidArgument,
+                        format!("Invalid unhandledPromptBehavior value: {}", x),
+                    ))
+                }
+            },
+            _ => {
                 return Err(WebDriverError::new(
                     ErrorStatus::InvalidArgument,
-                    format!("Invalid unhandledPromptBehavior value: {}", x),
+                    format!(
+                        "unhandledPromptBehavior is neither an object nor a string: {}",
+                        value
+                    ),
                 ))
             }
         }
@@ -624,37 +670,6 @@ impl CapabilitiesMatching for SpecNewSessionParameters {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct LegacyNewSessionParameters {
-    #[serde(rename = "desiredCapabilities", default = "Capabilities::default")]
-    pub desired: Capabilities,
-    #[serde(rename = "requiredCapabilities", default = "Capabilities::default")]
-    pub required: Capabilities,
-}
-
-impl CapabilitiesMatching for LegacyNewSessionParameters {
-    fn match_browser<T: BrowserCapabilities>(
-        &self,
-        browser_capabilities: &mut T,
-    ) -> WebDriverResult<Option<Capabilities>> {
-        // For now don't do anything much, just merge the
-        // desired and required and return the merged list.
-
-        let mut capabilities: Capabilities = Map::new();
-        self.required.iter().chain(self.desired.iter()).fold(
-            &mut capabilities,
-            |caps, (key, value)| {
-                if !caps.contains_key(key) {
-                    caps.insert(key.clone(), value.clone());
-                }
-                caps
-            },
-        );
-        browser_capabilities.init(&capabilities);
-        Ok(Some(capabilities))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,69 +743,38 @@ mod tests {
     }
 
     #[test]
-    fn test_json_spec_legacy_new_session_parameters_desired_only() {
-        let caps = LegacyNewSessionParameters {
-            desired: Capabilities::new(),
-            required: Capabilities::new(),
-        };
-        assert_de(&caps, json!({"desiredCapabilities": {}}));
-    }
+    fn test_validate_unhandled_prompt_behavior() {
+        fn validate_prompt_behavior(v: Value) -> WebDriverResult<()> {
+            SpecNewSessionParameters::validate_unhandled_prompt_behavior(&v)
+        }
 
-    #[test]
-    fn test_json_spec_legacy_new_session_parameters_required_only() {
-        let caps = LegacyNewSessionParameters {
-            desired: Capabilities::new(),
-            required: Capabilities::new(),
-        };
-        assert_de(&caps, json!({"requiredCapabilities": {}}));
-    }
+        // capability as string
+        validate_prompt_behavior(json!("accept")).unwrap();
+        validate_prompt_behavior(json!("accept and notify")).unwrap();
+        validate_prompt_behavior(json!("dismiss")).unwrap();
+        validate_prompt_behavior(json!("dismiss and notify")).unwrap();
+        validate_prompt_behavior(json!("ignore")).unwrap();
+        assert!(validate_prompt_behavior(json!("foo")).is_err());
 
-    #[test]
-    fn test_json_spec_legacy_new_session_parameters_desired_null() {
-        let json = json!({
-            "desiredCapabilities": null,
-            "requiredCapabilities": {},
-        });
-        assert!(serde_json::from_value::<LegacyNewSessionParameters>(json).is_err());
-    }
+        // capability as object
+        let types = ["alert", "beforeUnload", "confirm", "default", "prompt"];
+        let handlers = [
+            "accept",
+            "accept and notify",
+            "dismiss",
+            "dismiss and notify",
+            "ignore",
+        ];
+        for promptType in types {
+            assert!(validate_prompt_behavior(json!({promptType: "foo"})).is_err());
+            for handler in handlers {
+                validate_prompt_behavior(json!({promptType: handler})).unwrap();
+            }
+        }
 
-    #[test]
-    fn test_json_spec_legacy_new_session_parameters_required_null() {
-        let json = json!({
-            "desiredCapabilities": {},
-            "requiredCapabilities": null,
-        });
-        assert!(serde_json::from_value::<LegacyNewSessionParameters>(json).is_err());
-    }
-
-    #[test]
-    fn test_json_spec_legacy_new_session_parameters_both_empty() {
-        let json = json!({
-            "desiredCapabilities": {},
-            "requiredCapabilities": {},
-        });
-        let caps = LegacyNewSessionParameters {
-            desired: Capabilities::new(),
-            required: Capabilities::new(),
-        };
-
-        assert_de(&caps, json);
-    }
-
-    #[test]
-    fn test_json_spec_legacy_new_session_parameters_both_with_capabilities() {
-        let json = json!({
-            "desiredCapabilities": {"foo": "bar"},
-            "requiredCapabilities": {"foo2": "bar2"},
-        });
-        let mut caps = LegacyNewSessionParameters {
-            desired: Capabilities::new(),
-            required: Capabilities::new(),
-        };
-        caps.desired.insert("foo".into(), "bar".into());
-        caps.required.insert("foo2".into(), "bar2".into());
-
-        assert_de(&caps, json);
+        for handler in handlers {
+            assert!(validate_prompt_behavior(json!({"foo": handler})).is_err());
+        }
     }
 
     #[test]

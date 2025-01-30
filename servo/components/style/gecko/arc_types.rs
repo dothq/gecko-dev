@@ -16,7 +16,8 @@ use crate::stylesheets::keyframes_rule::Keyframe;
 use crate::stylesheets::{
     ContainerRule, CounterStyleRule, CssRules, DocumentRule, FontFaceRule, FontFeatureValuesRule,
     FontPaletteValuesRule, ImportRule, KeyframesRule, LayerBlockRule, LayerStatementRule,
-    MediaRule, NamespaceRule, PageRule, PropertyRule, StyleRule, StylesheetContents, SupportsRule,
+    MarginRule, MediaRule, NamespaceRule, PageRule, PositionTryRule, PropertyRule, ScopeRule,
+    StartingStyleRule, StyleRule, StylesheetContents, SupportsRule, NestedDeclarationsRule,
 };
 use servo_arc::Arc;
 
@@ -100,6 +101,11 @@ impl_simple_arc_ffi!(
     Servo_NamespaceRule_AddRef,
     Servo_NamespaceRule_Release
 );
+impl_simple_arc_ffi!(
+    MarginRule,
+    Servo_MarginRule_AddRef,
+    Servo_MarginRule_Release
+);
 impl_locked_arc_ffi!(
     PageRule,
     LockedPageRule,
@@ -168,4 +174,23 @@ impl_simple_arc_ffi!(
     AnimationValue,
     Servo_AnimationValue_AddRef,
     Servo_AnimationValue_Release
+);
+impl_simple_arc_ffi!(ScopeRule, Servo_ScopeRule_AddRef, Servo_ScopeRule_Release);
+impl_simple_arc_ffi!(
+    StartingStyleRule,
+    Servo_StartingStyleRule_AddRef,
+    Servo_StartingStyleRule_Release
+);
+
+impl_locked_arc_ffi!(
+    PositionTryRule,
+    LockedPositionTryRule,
+    Servo_PositionTryRule_AddRef,
+    Servo_PositionTryRule_Release
+);
+impl_locked_arc_ffi!(
+    NestedDeclarationsRule,
+    LockedNestedDeclarationsRule,
+    Servo_NestedDeclarationsRule_AddRef,
+    Servo_NestedDeclarationsRule_Release
 );

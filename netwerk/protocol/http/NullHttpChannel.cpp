@@ -247,6 +247,16 @@ NS_IMETHODIMP
 NullHttpChannel::UpgradeToSecure() { return NS_ERROR_NOT_IMPLEMENTED; }
 
 NS_IMETHODIMP
+NullHttpChannel::GetRequestObserversCalled(bool* aCalled) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::SetRequestObserversCalled(bool aCalled) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 NullHttpChannel::GetRequestContextID(uint64_t* _retval) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -487,18 +497,6 @@ NullHttpChannel::GetIsDocument(bool* aIsDocument) {
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
-NullHttpChannel::GetTimingEnabled(bool* aTimingEnabled) {
-  // We don't want to report timing for null channels.
-  *aTimingEnabled = false;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-NullHttpChannel::SetTimingEnabled(bool aTimingEnabled) {
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 NullHttpChannel::GetRedirectCount(uint8_t* aRedirectCount) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -732,6 +730,13 @@ NullHttpChannel::SetAllRedirectsPassTimingAllowCheck(
 }
 
 NS_IMETHODIMP
+NullHttpChannel::BodyInfoAccessAllowedCheck(nsIPrincipal* aOrigin,
+                                            BodyInfoAccess* _retval) {
+  *_retval = BodyInfoAccess::DISALLOWED;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 NullHttpChannel::TimingAllowCheck(nsIPrincipal* aOrigin, bool* _retval) {
   *_retval = false;
   return NS_OK;
@@ -818,6 +823,16 @@ NS_IMETHODIMP NullHttpChannel::SetDocumentCharacterSet(
 
 NS_IMETHODIMP NullHttpChannel::GetDocumentCharacterSet(
     nsAString& aDocumentCharacterSet) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::SetRenderBlocking(bool aRenderBlocking) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::GetRenderBlocking(bool* aRenderBlocking) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

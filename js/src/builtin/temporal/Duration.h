@@ -7,10 +7,11 @@
 #ifndef builtin_temporal_Duration_h
 #define builtin_temporal_Duration_h
 
+#include "mozilla/Assertions.h"
+
 #include <stdint.h>
 
 #include "builtin/temporal/TemporalTypes.h"
-#include "builtin/temporal/Wrapped.h"
 #include "js/RootingAPI.h"
 #include "js/TypeDecls.h"
 #include "js/Value.h"
@@ -74,20 +75,22 @@ inline Duration ToDuration(const DurationObject* duration) {
 }
 
 class Increment;
-class CalendarRecord;
-class PlainDateObject;
-class TimeZoneRecord;
-class ZonedDateTime;
-class ZonedDateTimeObject;
+class CalendarValue;
+class TimeZoneValue;
 enum class TemporalRoundingMode;
 enum class TemporalUnit;
 
 /**
- * DurationSign ( years, months, weeks, days, hours, minutes, seconds,
- * milliseconds, microseconds, nanoseconds )
+ * DurationSign ( duration )
  */
 int32_t DurationSign(const Duration& duration);
 
+/**
+ * DateDurationSign ( dateDuration )
+ */
+int32_t DateDurationSign(const DateDuration& duration);
+
+#ifdef DEBUG
 /**
  * IsValidDuration ( years, months, weeks, days, hours, minutes, seconds,
  * milliseconds, microseconds, nanoseconds )
@@ -98,7 +101,123 @@ bool IsValidDuration(const Duration& duration);
  * IsValidDuration ( years, months, weeks, days, hours, minutes, seconds,
  * milliseconds, microseconds, nanoseconds )
  */
+bool IsValidDuration(const DateDuration& duration);
+
+/**
+ * IsValidDuration ( years, months, weeks, days, hours, minutes, seconds,
+ * milliseconds, microseconds, nanoseconds )
+ */
+bool IsValidDuration(const InternalDuration& duration);
+#endif
+
+/**
+ * IsValidDuration ( years, months, weeks, days, hours, minutes, seconds,
+ * milliseconds, microseconds, nanoseconds )
+ */
 bool ThrowIfInvalidDuration(JSContext* cx, const Duration& duration);
+
+/**
+ * IsValidDuration ( years, months, weeks, days, hours, minutes, seconds,
+ * milliseconds, microseconds, nanoseconds )
+ */
+inline bool IsValidTimeDuration(const TimeDuration& duration) {
+  MOZ_ASSERT(0 <= duration.nanoseconds && duration.nanoseconds <= 999'999'999);
+
+  // The absolute value of the seconds part of a time duration must be
+  // less-or-equal to `2**53 - 1` and the nanoseconds part must be less or equal
+  // to `999'999'999`.
+  //
+  // Add ±1 nanosecond to make the nanoseconds part zero, which enables faster
+  // codegen.
+
+  constexpr auto max = TimeDuration::max() + TimeDuration::fromNanoseconds(1);
+  static_assert(max.nanoseconds == 0);
+
+  constexpr auto min = TimeDuration::min() - TimeDuration::fromNanoseconds(1);
+  static_assert(min.nanoseconds == 0);
+
+  // Step 4.
+  return min < duration && duration < max;
+}
+
+/**
+ * TimeDurationFromComponents ( hours, minutes, seconds, milliseconds,
+ * microseconds, nanoseconds )
+ */
+TimeDuration TimeDurationFromComponents(const Duration& duration);
+
+/**
+ * CompareTimeDuration ( one, two )
+ */
+inline int32_t CompareTimeDuration(const TimeDuration& one,
+                                   const TimeDuration& two) {
+  MOZ_ASSERT(IsValidTimeDuration(one));
+  MOZ_ASSERT(IsValidTimeDuration(two));
+
+  // Step 1.
+  if (one > two) {
+    return 1;
+  }
+
+  // Step 2.
+  if (one < two) {
+    return -1;
+  }
+
+  // Step 3.
+  return 0;
+}
+
+/**
+ * TimeDurationSign ( d )
+ */
+inline int32_t TimeDurationSign(const TimeDuration& d) {
+  MOZ_ASSERT(IsValidTimeDuration(d));
+
+  // Steps 1-3.
+  return CompareTimeDuration(d, TimeDuration{});
+}
+
+/**
+ * ToInternalDurationRecord ( duration )
+ */
+inline InternalDuration ToInternalDurationRecord(const Duration& duration) {
+  MOZ_ASSERT(IsValidDuration(duration));
+
+  // Steps 1-3.
+  return {duration.toDateDuration(), TimeDurationFromComponents(duration)};
+}
+
+/**
+ * ToInternalDurationRecordWith24HourDays ( duration )
+ */
+InternalDuration ToInternalDurationRecordWith24HourDays(
+    const Duration& duration);
+
+/**
+ * ToDateDurationRecordWithoutTime ( duration )
+ */
+DateDuration ToDateDurationRecordWithoutTime(const Duration& duration);
+
+/**
+ * TemporalDurationFromInternal ( internalDuration, largestUnit )
+ */
+bool TemporalDurationFromInternal(JSContext* cx,
+                                  const TimeDuration& timeDuration,
+                                  TemporalUnit largestUnit, Duration* result);
+
+/**
+ * TemporalDurationFromInternal ( internalDuration, largestUnit )
+ */
+bool TemporalDurationFromInternal(JSContext* cx,
+                                  const InternalDuration& internalDuration,
+                                  TemporalUnit largestUnit, Duration* result);
+
+/**
+ * TimeDurationFromEpochNanosecondsDifference ( one, two )
+ */
+TimeDuration TimeDurationFromEpochNanosecondsDifference(
+    const EpochNanoseconds& one, const EpochNanoseconds& two);
 
 /**
  * CreateTemporalDuration ( years, months, weeks, days, hours, minutes, seconds,
@@ -109,101 +228,42 @@ DurationObject* CreateTemporalDuration(JSContext* cx, const Duration& duration);
 /**
  * ToTemporalDuration ( item )
  */
-Wrapped<DurationObject*> ToTemporalDuration(JSContext* cx,
-                                            JS::Handle<JS::Value> item);
-
-/**
- * ToTemporalDuration ( item )
- */
 bool ToTemporalDuration(JSContext* cx, JS::Handle<JS::Value> item,
                         Duration* result);
 
 /**
- * ToTemporalDurationRecord ( temporalDurationLike )
+ * RoundTimeDuration ( duration, increment, unit, roundingMode )
  */
-bool ToTemporalDurationRecord(JSContext* cx,
-                              JS::Handle<JS::Value> temporalDurationLike,
-                              Duration* result);
-
-/**
- * BalanceTimeDuration ( days, hours, minutes, seconds, milliseconds,
- * microseconds, nanoseconds, largestUnit )
- */
-bool BalanceTimeDuration(JSContext* cx, const Duration& duration,
-                         TemporalUnit largestUnit, TimeDuration* result);
-
-/**
- * BalanceTimeDuration ( days, hours, minutes, seconds, milliseconds,
- * microseconds, nanoseconds, largestUnit )
- */
-bool BalanceTimeDuration(JSContext* cx, const InstantSpan& nanoseconds,
-                         TemporalUnit largestUnit, TimeDuration* result);
-
-/**
- * BalanceDateDurationRelative ( years, months, weeks, days, largestUnit,
- * smallestUnit, plainRelativeTo, calendarRec )
- */
-bool BalanceDateDurationRelative(
-    JSContext* cx, const Duration& duration, TemporalUnit largestUnit,
-    TemporalUnit smallestUnit,
-    JS::Handle<Wrapped<PlainDateObject*>> plainRelativeTo,
-    JS::Handle<CalendarRecord> calendar, DateDuration* result);
-
-/**
- * AdjustRoundedDurationDays ( years, months, weeks, days, hours, minutes,
- * seconds, milliseconds, microseconds, nanoseconds, increment, unit,
- * roundingMode, zonedRelativeTo, calendarRec, timeZoneRec,
- * precalculatedPlainDateTime )
- */
-bool AdjustRoundedDurationDays(JSContext* cx, const Duration& duration,
+TimeDuration RoundTimeDuration(const TimeDuration& duration,
                                Increment increment, TemporalUnit unit,
-                               TemporalRoundingMode roundingMode,
-                               JS::Handle<ZonedDateTime> relativeTo,
-                               JS::Handle<CalendarRecord> calendar,
-                               JS::Handle<TimeZoneRecord> timeZone,
-                               const PlainDateTime& precalculatedPlainDateTime,
-                               Duration* result);
+                               TemporalRoundingMode roundingMode);
 
 /**
- * RoundDuration ( years, months, weeks, days, hours, minutes, seconds,
- * milliseconds, microseconds, nanoseconds, increment, unit, roundingMode [ ,
- * plainRelativeTo [ , calendarRec [ , zonedRelativeTo [ , timeZoneRec [ ,
- * precalculatedPlainDateTime ] ] ] ] ] )
+ * RoundRelativeDuration ( duration, destEpochNs, isoDateTime, timeZone,
+ * calendar, largestUnit, increment, smallestUnit, roundingMode )
  */
-bool RoundDuration(JSContext* cx, const Duration& duration, Increment increment,
-                   TemporalUnit unit, TemporalRoundingMode roundingMode,
-                   Duration* result);
+bool RoundRelativeDuration(
+    JSContext* cx, const InternalDuration& duration,
+    const EpochNanoseconds& destEpochNs, const ISODateTime& isoDateTime,
+    JS::Handle<TimeZoneValue> timeZone, JS::Handle<CalendarValue> calendar,
+    TemporalUnit largestUnit, Increment increment, TemporalUnit smallestUnit,
+    TemporalRoundingMode roundingMode, InternalDuration* result);
 
 /**
- * RoundDuration ( years, months, weeks, days, hours, minutes, seconds,
- * milliseconds, microseconds, nanoseconds, increment, unit, roundingMode [ ,
- * plainRelativeTo [ , calendarRec [ , zonedRelativeTo [ , timeZoneRec [ ,
- * precalculatedPlainDateTime ] ] ] ] ] )
+ * TotalRelativeDuration ( duration, destEpochNs, isoDateTime, timeZone,
+ * calendar, unit )
  */
-bool RoundDuration(JSContext* cx, const Duration& duration, Increment increment,
-                   TemporalUnit unit, TemporalRoundingMode roundingMode,
-                   JS::Handle<Wrapped<PlainDateObject*>> plainRelativeTo,
-                   JS::Handle<CalendarRecord> calendar, Duration* result);
+bool TotalRelativeDuration(JSContext* cx, const InternalDuration& duration,
+                           const EpochNanoseconds& destEpochNs,
+                           const ISODateTime& isoDateTime,
+                           JS::Handle<TimeZoneValue> timeZone,
+                           JS::Handle<CalendarValue> calendar,
+                           TemporalUnit unit, double* result);
 
 /**
- * RoundDuration ( years, months, weeks, days, hours, minutes, seconds,
- * milliseconds, microseconds, nanoseconds, increment, unit, roundingMode [ ,
- * plainRelativeTo [ , calendarRec [ , zonedRelativeTo [ , timeZoneRec [ ,
- * precalculatedPlainDateTime ] ] ] ] ] )
+ * TotalTimeDuration ( timeDuration, unit )
  */
-bool RoundDuration(JSContext* cx, const Duration& duration, Increment increment,
-                   TemporalUnit unit, TemporalRoundingMode roundingMode,
-                   JS::Handle<PlainDateObject*> plainRelativeTo,
-                   JS::Handle<CalendarRecord> calendar,
-                   JS::Handle<ZonedDateTime> zonedRelativeTo,
-                   JS::Handle<TimeZoneRecord> timeZone,
-                   const PlainDateTime& precalculatedPlainDateTime,
-                   Duration* result);
-
-/**
- * DaysUntil ( earlier, later )
- */
-int32_t DaysUntil(const PlainDate& earlier, const PlainDate& later);
+double TotalTimeDuration(const TimeDuration& duration, TemporalUnit unit);
 
 } /* namespace js::temporal */
 

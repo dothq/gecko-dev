@@ -118,7 +118,7 @@ nsresult AppendAppNotesToCrashReport(const nsACString& data) {
 
 bool GetAnnotation(const nsACString& key, nsACString& data) { return false; }
 
-void GetAnnotation(uint32_t childPid, Annotation annotation,
+void GetAnnotation(ProcessId childPid, Annotation annotation,
                    nsACString& outStr) {
   return;
 }
@@ -205,36 +205,18 @@ bool WriteExtraFile(const nsAString& id, const AnnotationTable& annotations) {
 
 void OOPInit() {}
 
-#if defined(XP_WIN) || defined(XP_MACOSX)
-const char* GetChildNotificationPipe() { return nullptr; }
-#endif
-
-#ifdef MOZ_CRASHREPORTER_INJECTOR
-void InjectCrashReporterIntoProcess(DWORD processID,
-                                    InjectorCrashCallback* cb) {}
-
-void UnregisterInjectorCallback(DWORD processID) {}
-
-#endif  // MOZ_CRASHREPORTER_INJECTOR
+CrashPipeType GetChildNotificationPipe() { return nullptr; }
 
 bool GetLastRunCrashID(nsAString& id) { return false; }
 
-#if !defined(XP_WIN) && !defined(XP_MACOSX)
+bool SetRemoteExceptionHandler(CrashPipeType aCrashPipe) { return false; }
 
-bool CreateNotificationPipeForChild(int* childCrashFd, int* childCrashRemapFd) {
+bool TakeMinidumpForChild(ProcessId childPid, nsIFile** dump,
+                          AnnotationTable& aAnnotations) {
   return false;
 }
 
-#endif  // !defined(XP_WIN) && !defined(XP_MACOSX)
-
-bool SetRemoteExceptionHandler(const char* aCrashPipe) { return false; }
-
-bool TakeMinidumpForChild(uint32_t childPid, nsIFile** dump,
-                          AnnotationTable& aAnnotations, uint32_t* aSequence) {
-  return false;
-}
-
-bool FinalizeOrphanedMinidump(uint32_t aChildPid, GeckoProcessType aType,
+bool FinalizeOrphanedMinidump(ProcessId aChildPid, GeckoProcessType aType,
                               nsString* aDumpId) {
   return false;
 }

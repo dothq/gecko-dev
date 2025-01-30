@@ -38,8 +38,12 @@ window.onload = function() {
     ok(!cssProperties.isKnown("--foo bar"),
       "A CSS variable with spaces fails");
 
+    const marginProps = ["auto", "inherit", "initial", "unset", "revert", "revert-layer"];
+    if(SpecialPowers.getBoolPref("layout.css.anchor-positioning.enabled")) {
+      marginProps.push("anchor-size");
+    }
     is(toSortedString(cssProperties.getValues("margin")),
-       toSortedString(["auto", "inherit", "initial", "unset", "revert", "revert-layer"]),
+       toSortedString(marginProps),
        "Can get values for the CSS margin.");
     is(cssProperties.getValues("foobar").length, 0,
       "Unknown values return an empty array.");
@@ -51,6 +55,17 @@ window.onload = function() {
       "A property with color values includes papayawhip.");
     ok(bgColorValues.includes("rgb"),
       "A property with color values includes non-colors.");
+
+    // Check that the "special" shorthands for white-space are exposed.
+    const whiteSpaceValues = cssProperties.getValues("white-space");
+    ok(whiteSpaceValues.includes("normal"),
+       "Values for the white-space shorthand include normal.");
+    ok(whiteSpaceValues.includes("pre"),
+       "Values for the white-space shorthand include pre.");
+    ok(whiteSpaceValues.includes("pre-line"),
+       "Values for the white-space shorthand include pre-line.");
+    ok(whiteSpaceValues.includes("pre-wrap"),
+       "Values for the white-space shorthand include pre-wrap.");
   };
 
   addAsyncTest(async function setup() {

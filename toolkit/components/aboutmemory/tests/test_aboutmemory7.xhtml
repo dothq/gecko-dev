@@ -30,7 +30,7 @@
   const BYTES = Ci.nsIMemoryReporter.UNITS_BYTES;
 
   let fakeReporters = [
-    { collectReports(aCbObj, aClosure, aAnonymize) {
+    { collectReports(aCbObj, aClosure) {
         function f(aP, aK, aA) {
           aCbObj.callback("Main Process", aP, aK, BYTES, aA, "Desc.", aClosure);
         }
@@ -105,7 +105,7 @@
       SimpleTest.waitForClipboard(
         function(aActual) {
           mostRecentActual = aActual;
-          let rslt = aActual.trim() === aExpected.trim();
+          let rslt = aActual.trim().startsWith(aExpected.trim());
           if (!rslt) {
             // Try copying again.
             synthesizeKey("A", {accelKey: true});

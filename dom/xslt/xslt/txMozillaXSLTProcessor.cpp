@@ -330,9 +330,8 @@ class txXSLTParamContext : public txIParseContext, public txIEvalContext {
       : mResolver(aResolver), mContext(aContext), mRecycler(aRecycler) {}
 
   // txIParseContext
-  nsresult resolveNamespacePrefix(nsAtom* aPrefix, int32_t& aID) override {
-    aID = mResolver->lookupNamespace(aPrefix);
-    return aID == kNameSpaceID_Unknown ? NS_ERROR_DOM_NAMESPACE_ERR : NS_OK;
+  int32_t resolveNamespacePrefix(nsAtom* aPrefix) override {
+    return mResolver->lookupNamespace(aPrefix);
   }
   nsresult resolveFunctionCall(nsAtom* aName, int32_t aID,
                                FunctionCall** aFunction) override {
@@ -501,6 +500,10 @@ void txMozillaXSLTProcessor::ImportStylesheet(nsINode& aStyle,
     aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
     return;
   }
+
+  MOZ_ASSERT(!mEmbeddedStylesheetRoot);
+
+  mCompileResult = NS_OK;
 
   if (!nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller()->Subsumes(
           aStyle.NodePrincipal())) {
@@ -1083,8 +1086,7 @@ void txMozillaXSLTProcessor::ContentInserted(nsIContent* aChild) {
   mStylesheet = nullptr;
 }
 
-void txMozillaXSLTProcessor::ContentRemoved(nsIContent* aChild,
-                                            nsIContent* aPreviousSibling) {
+void txMozillaXSLTProcessor::ContentWillBeRemoved(nsIContent* aChild) {
   mStylesheet = nullptr;
 }
 

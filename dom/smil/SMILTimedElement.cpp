@@ -84,6 +84,11 @@ class AsyncTimeEventRunner : public Runnable {
 
   // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230, bug 1535398)
   MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD Run() override {
+    nsPIDOMWindowInner* inner = mTarget->OwnerDoc()->GetInnerWindow();
+    if (inner && !inner->HasSMILTimeEventListeners()) {
+      return NS_OK;
+    }
+
     InternalSMILTimeEvent event(true, mMsg);
     event.mDetail = mDetail;
 
@@ -196,9 +201,6 @@ const nsAttrValue::EnumTable SMILTimedElement::sRestartModeTable[] = {
     {"never", RESTART_NEVER},
     {nullptr, 0}};
 
-const SMILMilestone SMILTimedElement::sMaxMilestone(
-    std::numeric_limits<SMILTime>::max(), false);
-
 // The thresholds at which point we start filtering intervals and instance times
 // indiscriminately.
 // See FilterIntervals and FilterInstanceTimes.
@@ -297,7 +299,8 @@ nsresult SMILTimedElement::BeginElementAt(double aOffsetSeconds) {
   if (!container) return NS_ERROR_FAILURE;
 
   SMILTime currentTime = container->GetCurrentTimeAsSMILTime();
-  return AddInstanceTimeFromCurrentTime(currentTime, aOffsetSeconds, true);
+  AddInstanceTimeFromCurrentTime(currentTime, aOffsetSeconds, true);
+  return NS_OK;
 }
 
 nsresult SMILTimedElement::EndElementAt(double aOffsetSeconds) {
@@ -305,7 +308,8 @@ nsresult SMILTimedElement::EndElementAt(double aOffsetSeconds) {
   if (!container) return NS_ERROR_FAILURE;
 
   SMILTime currentTime = container->GetCurrentTimeAsSMILTime();
-  return AddInstanceTimeFromCurrentTime(currentTime, aOffsetSeconds, false);
+  AddInstanceTimeFromCurrentTime(currentTime, aOffsetSeconds, false);
+  return NS_OK;
 }
 
 //----------------------------------------------------------------------
@@ -1500,7 +1504,7 @@ bool SMILTimedElement::GetNextInterval(const SMILInterval* aPrevInterval,
     prevIntervalWasZeroDur =
         aPrevInterval->End()->Time() == aPrevInterval->Begin()->Time();
   } else {
-    beginAfter.SetMillis(INT64_MIN);
+    beginAfter.SetMillis(std::numeric_limits<SMILTime>::min());
   }
 
   RefPtr<SMILInstanceTime> tempBegin;
@@ -1730,17 +1734,7 @@ SMILTimeValue SMILTimedElement::ApplyMinAndMax(
     return aDuration;
   }
 
-  SMILTimeValue result;
-
-  if (aDuration > mMax) {
-    result = mMax;
-  } else if (aDuration < mMin) {
-    result = mMin;
-  } else {
-    result = aDuration;
-  }
-
-  return result;
+  return std::clamp(aDuration, mMin, mMax);
 }
 
 SMILTime SMILTimedElement::ActiveTimeToSimpleTime(SMILTime aActiveTime,
@@ -1956,23 +1950,18 @@ void SMILTimedElement::SampleFillValue() {
   }
 }
 
-nsresult SMILTimedElement::AddInstanceTimeFromCurrentTime(SMILTime aCurrentTime,
-                                                          double aOffsetSeconds,
-                                                          bool aIsBegin) {
+void SMILTimedElement::AddInstanceTimeFromCurrentTime(SMILTime aCurrentTime,
+                                                      double aOffsetSeconds,
+                                                      bool aIsBegin) {
   double offset = NS_round(aOffsetSeconds * PR_MSEC_PER_SEC);
 
-  // Check we won't overflow the range of SMILTime
-  if (aCurrentTime + offset > double(std::numeric_limits<SMILTime>::max()))
-    return NS_ERROR_ILLEGAL_VALUE;
-
-  SMILTimeValue timeVal(aCurrentTime + int64_t(offset));
+  SMILTimeValue timeVal(std::clamp<SMILTime>(
+      aCurrentTime + offset, 0, std::numeric_limits<SMILTime>::max()));
 
   RefPtr<SMILInstanceTime> instanceTime =
       new SMILInstanceTime(timeVal, SMILInstanceTime::SOURCE_DOM);
 
   AddInstanceTime(instanceTime, aIsBegin);
-
-  return NS_OK;
 }
 
 void SMILTimedElement::RegisterMilestone() {
@@ -2112,9 +2101,18 @@ void SMILTimedElement::NotifyChangedInterval(SMILInterval* aInterval,
 void SMILTimedElement::FireTimeEventAsync(EventMessage aMsg, int32_t aDetail) {
   if (!mAnimationElement) return;
 
+  Document* ownerDoc = mAnimationElement->OwnerDoc();
+  if (ownerDoc->IsBeingUsedAsImage() || !ownerDoc->IsScriptEnabled()) {
+    // Without scripting the only listeners would be from SMIL itself
+    // and they would exist for the life of the document.
+    nsPIDOMWindowInner* inner = ownerDoc->GetInnerWindow();
+    if (inner && !inner->HasSMILTimeEventListeners()) {
+      return;
+    }
+  }
   nsCOMPtr<nsIRunnable> event =
       new AsyncTimeEventRunner(mAnimationElement, aMsg, aDetail);
-  mAnimationElement->OwnerDoc()->Dispatch(event.forget());
+  ownerDoc->Dispatch(event.forget());
 }
 
 const SMILInstanceTime* SMILTimedElement::GetEffectiveBeginInstance() const {

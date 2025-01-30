@@ -50,6 +50,7 @@ module.exports = {
       },
       globals: {
         assert: true,
+        expect: true,
         chai: true,
         sinon: true,
       },
@@ -63,8 +64,6 @@ module.exports = {
     },
   ],
   rules: {
-    "fetch-options/no-fetch-credentials": "error",
-
     "react/jsx-boolean-value": ["error", "always"],
     "react/jsx-key": "error",
     "react/jsx-no-bind": [
@@ -118,7 +117,6 @@ module.exports = {
     "no-prototype-builtins": "error",
     "no-return-assign": ["error", "except-parens"],
     "no-script-url": "error",
-    "no-shadow": "error",
     "no-template-curly-in-string": "error",
     "no-undef-init": "error",
     "no-unmodified-loop-condition": "error",

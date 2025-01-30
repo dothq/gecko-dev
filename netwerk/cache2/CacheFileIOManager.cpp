@@ -1311,7 +1311,7 @@ nsresult CacheFileIOManager::OnProfile() {
   nsCOMPtr<nsIFile> profilelessDirectory;
   char* cachePath = getenv("CACHE_DIRECTORY");
   if (!directory && cachePath && *cachePath) {
-    rv = NS_NewNativeLocalFile(nsDependentCString(cachePath), true,
+    rv = NS_NewNativeLocalFile(nsDependentCString(cachePath),
                                getter_AddRefs(directory));
     if (NS_SUCCEEDED(rv)) {
       // Save this directory as the profileless path.
@@ -2026,26 +2026,46 @@ nsresult CacheFileIOManager::Write(CacheFileHandle* aHandle, int64_t aOffset,
        "validate=%d, truncate=%d, listener=%p]",
        aHandle, aOffset, aCount, aValidate, aTruncate, aCallback));
 
-  nsresult rv;
+  MOZ_ASSERT(aCallback);
+
   RefPtr<CacheFileIOManager> ioMan = gInstance;
 
-  if (aHandle->IsClosed() || (aCallback && aCallback->IsKilled()) || !ioMan) {
-    if (!aCallback) {
-      // When no callback is provided, CacheFileIOManager is responsible for
-      // releasing the buffer. We must release it even in case of failure.
-      free(const_cast<char*>(aBuf));
-    }
+  if (aHandle->IsClosed() || aCallback->IsKilled() || !ioMan) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
   RefPtr<WriteEvent> ev = new WriteEvent(aHandle, aOffset, aBuf, aCount,
                                          aValidate, aTruncate, aCallback);
-  rv = ioMan->mIOThread->Dispatch(ev, aHandle->mPriority
-                                          ? CacheIOThread::WRITE_PRIORITY
-                                          : CacheIOThread::WRITE);
-  NS_ENSURE_SUCCESS(rv, rv);
+  return ioMan->mIOThread->Dispatch(ev, aHandle->mPriority
+                                            ? CacheIOThread::WRITE_PRIORITY
+                                            : CacheIOThread::WRITE);
+}
 
-  return NS_OK;
+// static
+nsresult CacheFileIOManager::WriteWithoutCallback(CacheFileHandle* aHandle,
+                                                  int64_t aOffset, char* aBuf,
+                                                  int32_t aCount,
+                                                  bool aValidate,
+                                                  bool aTruncate) {
+  LOG(("CacheFileIOManager::WriteWithoutCallback() [handle=%p, offset=%" PRId64
+       ", count=%d, "
+       "validate=%d, truncate=%d]",
+       aHandle, aOffset, aCount, aValidate, aTruncate));
+
+  RefPtr<CacheFileIOManager> ioMan = gInstance;
+
+  if (aHandle->IsClosed() || !ioMan) {
+    // When no callback is provided, CacheFileIOManager is responsible for
+    // releasing the buffer. We must release it even in case of failure.
+    free(aBuf);
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  RefPtr<WriteEvent> ev = new WriteEvent(aHandle, aOffset, aBuf, aCount,
+                                         aValidate, aTruncate, nullptr);
+  return ioMan->mIOThread->Dispatch(ev, aHandle->mPriority
+                                            ? CacheIOThread::WRITE_PRIORITY
+                                            : CacheIOThread::WRITE);
 }
 
 static nsresult TruncFile(PRFileDesc* aFD, int64_t aEOF) {
@@ -3294,7 +3314,7 @@ nsresult CacheFileIOManager::EvictByContextInternal(
       }
 
       // Filter by LoadContextInfo.
-      if (aLoadContextInfo && !info->Equals(aLoadContextInfo)) {
+      if (aLoadContextInfo && !info->EqualsIgnoringFPD(aLoadContextInfo)) {
         return false;
       }
 
@@ -3313,7 +3333,6 @@ nsresult CacheFileIOManager::EvictByContextInternal(
           return false;
         }
       }
-
       return true;
     }();
 
@@ -4391,13 +4410,15 @@ class SizeOfHandlesRunnable : public Runnable {
  public:
   SizeOfHandlesRunnable(mozilla::MallocSizeOf mallocSizeOf,
                         CacheFileHandles const& handles,
-                        nsTArray<CacheFileHandle*> const& specialHandles)
+                        nsTArray<CacheFileHandle*> const& specialHandles,
+                        nsCOMPtr<nsITimer> const& metadataWritesTimer)
       : Runnable("net::SizeOfHandlesRunnable"),
         mMonitor("SizeOfHandlesRunnable.mMonitor"),
         mMonitorNotified(false),
         mMallocSizeOf(mallocSizeOf),
         mHandles(handles),
         mSpecialHandles(specialHandles),
+        mMetadataWritesTimer(metadataWritesTimer),
         mSize(0) {}
 
   size_t Get(CacheIOThread* thread) {
@@ -4429,6 +4450,10 @@ class SizeOfHandlesRunnable : public Runnable {
     for (uint32_t i = 0; i < mSpecialHandles.Length(); ++i) {
       mSize += mSpecialHandles[i]->SizeOfIncludingThis(mMallocSizeOf);
     }
+    nsCOMPtr<nsISizeOf> sizeOf = do_QueryInterface(mMetadataWritesTimer);
+    if (sizeOf) {
+      mSize += sizeOf->SizeOfIncludingThis(mMallocSizeOf);
+    }
 
     mMonitorNotified = true;
     mon.Notify();
@@ -4436,11 +4461,12 @@ class SizeOfHandlesRunnable : public Runnable {
   }
 
  private:
-  mozilla::Monitor mMonitor MOZ_UNANNOTATED;
+  mozilla::Monitor mMonitor;
   bool mMonitorNotified;
   mozilla::MallocSizeOf mMallocSizeOf;
   CacheFileHandles const& mHandles;
   nsTArray<CacheFileHandle*> const& mSpecialHandles;
+  nsCOMPtr<nsITimer> const& mMetadataWritesTimer;
   size_t mSize;
 };
 
@@ -4454,19 +4480,17 @@ size_t CacheFileIOManager::SizeOfExcludingThisInternal(
   if (mIOThread) {
     n += mIOThread->SizeOfIncludingThis(mallocSizeOf);
 
-    // mHandles and mSpecialHandles must be accessed only on the I/O thread,
-    // must sync dispatch.
+    // mHandles, mSpecialHandles and mMetadataWritesTimer must be accessed
+    // only on the I/O thread, must sync dispatch.
     RefPtr<SizeOfHandlesRunnable> sizeOfHandlesRunnable =
-        new SizeOfHandlesRunnable(mallocSizeOf, mHandles, mSpecialHandles);
+        new SizeOfHandlesRunnable(mallocSizeOf, mHandles, mSpecialHandles,
+                                  mMetadataWritesTimer);
     n += sizeOfHandlesRunnable->Get(mIOThread);
   }
 
   // mHandlesByLastUsed just refers handles reported by mHandles.
 
   sizeOf = do_QueryInterface(mCacheDirectory);
-  if (sizeOf) n += sizeOf->SizeOfIncludingThis(mallocSizeOf);
-
-  sizeOf = do_QueryInterface(mMetadataWritesTimer);
   if (sizeOf) n += sizeOf->SizeOfIncludingThis(mallocSizeOf);
 
   sizeOf = do_QueryInterface(mTrashTimer);

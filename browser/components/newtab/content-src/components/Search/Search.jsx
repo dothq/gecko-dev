@@ -4,12 +4,10 @@
 
 /* globals ContentSearchUIController, ContentSearchHandoffUIController */
 
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import { connect } from "react-redux";
 import { IS_NEWTAB } from "content-src/lib/constants";
+import { Logo } from "content-src/components/Logo/Logo";
 import React from "react";
 
 export class _Search extends React.PureComponent {
@@ -134,12 +132,7 @@ export class _Search extends React.PureComponent {
 
     return (
       <div className={wrapperClassName}>
-        {this.props.showLogo && (
-          <div className="logo-and-wordmark">
-            <div className="logo" />
-            <div className="wordmark" />
-          </div>
-        )}
+        {this.props.showLogo && <Logo />}
         {!this.props.handoffEnabled && (
           <div className="search-inner-wrapper">
             <input

@@ -10,6 +10,7 @@
 #include <IOSurface/IOSurfaceRef.h>
 #include <limits>
 
+#include "AOMDecoder.h"
 #include "AppleDecoderModule.h"
 #include "AppleUtils.h"
 #include "CallbackThreadRegistry.h"
@@ -55,6 +56,7 @@ AppleVTDecoder::AppleVTDecoder(const VideoInfo& aConfig,
       mColorDepth(aConfig.mColorDepth),
       mStreamType(MP4Decoder::IsH264(aConfig.mMimeType)  ? StreamType::H264
                   : VPXDecoder::IsVP9(aConfig.mMimeType) ? StreamType::VP9
+                  : AOMDecoder::IsAV1(aConfig.mMimeType) ? StreamType::AV1
                                                          : StreamType::Unknown),
       mTaskQueue(TaskQueue::Create(
           GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
@@ -89,7 +91,7 @@ AppleVTDecoder::AppleVTDecoder(const VideoInfo& aConfig,
   MOZ_ASSERT(mStreamType != StreamType::Unknown);
   // TODO: Verify aConfig.mime_type.
   LOG("Creating AppleVTDecoder for %dx%d %s video", mDisplayWidth,
-      mDisplayHeight, mStreamType == StreamType::H264 ? "H.264" : "VP9");
+      mDisplayHeight, EnumValueToString(mStreamType));
 }
 
 AppleVTDecoder::~AppleVTDecoder() { MOZ_COUNT_DTOR(AppleVTDecoder); }
@@ -176,6 +178,9 @@ void AppleVTDecoder::ProcessDecode(MediaRawData* aSample) {
         break;
       case StreamType::VP9:
         flag |= MediaInfoFlag::VIDEO_VP9;
+        break;
+      case StreamType::AV1:
+        flag |= MediaInfoFlag::VIDEO_AV1;
         break;
       default:
         break;
@@ -372,14 +377,7 @@ void AppleVTDecoder::MaybeRegisterCallbackThread() {
 }
 
 nsCString AppleVTDecoder::GetCodecName() const {
-  switch (mStreamType) {
-    case StreamType::H264:
-      return "h264"_ns;
-    case StreamType::VP9:
-      return "vp9"_ns;
-    default:
-      return "unknown"_ns;
-  }
+  return nsCString(EnumValueToString(mStreamType));
 }
 
 // Copy and return a decoded frame.
@@ -565,6 +563,8 @@ void AppleVTDecoder::OutputFrame(CVPixelBufferRef aImage,
         aStage.SetColorDepth(mColorDepth);
         aStage.SetYUVColorSpace(mColorSpace);
         aStage.SetColorRange(mColorRange);
+        aStage.SetStartTimeAndEndTime(data->mTime.ToMicroseconds(),
+                                      data->GetEndTime().ToMicroseconds());
       });
 
   // Frames come out in DTS order but we need to output them
@@ -598,13 +598,17 @@ MediaResult AppleVTDecoder::InitializeSession() {
   OSStatus rv;
 
   AutoCFRelease<CFDictionaryRef> extensions = CreateDecoderExtensions();
+  CMVideoCodecType streamType;
+  if (mStreamType == StreamType::H264) {
+    streamType = kCMVideoCodecType_H264;
+  } else if (mStreamType == StreamType::VP9) {
+    streamType = CMVideoCodecType(AppleDecoderModule::kCMVideoCodecType_VP9);
+  } else {
+    streamType = kCMVideoCodecType_AV1;
+  }
 
   rv = CMVideoFormatDescriptionCreate(
-      kCFAllocatorDefault,
-      mStreamType == StreamType::H264
-          ? kCMVideoCodecType_H264
-          : CMVideoCodecType(AppleDecoderModule::kCMVideoCodecType_VP9),
-      AssertedCast<int32_t>(mPictureWidth),
+      kCFAllocatorDefault, streamType, AssertedCast<int32_t>(mPictureWidth),
       AssertedCast<int32_t>(mPictureHeight), extensions, &mFormat);
   if (rv != noErr) {
     return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
@@ -626,6 +630,7 @@ MediaResult AppleVTDecoder::InitializeSession() {
                                    &cb, &mSession);
 
   if (rv != noErr) {
+    LOG("AppleVTDecoder: VTDecompressionSessionCreate failed: %d", rv);
     return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
                        RESULT_DETAIL("Couldn't create decompression session!"));
   }
@@ -656,13 +661,16 @@ CFDictionaryRef AppleVTDecoder::CreateDecoderExtensions() {
                    AssertedCast<CFIndex>(mExtraData->Length()));
 
   const void* atomsKey[1];
-  atomsKey[0] = mStreamType == StreamType::H264 ? CFSTR("avcC") : CFSTR("vpcC");
+  atomsKey[0] = mStreamType == StreamType::H264  ? CFSTR("avcC")
+                : mStreamType == StreamType::VP9 ? CFSTR("vpcC")
+                                                 : CFSTR("av1C");
+  ;
   const void* atomsValue[] = {data};
-  static_assert(ArrayLength(atomsKey) == ArrayLength(atomsValue),
+  static_assert(std::size(atomsKey) == std::size(atomsValue),
                 "Non matching keys/values array size");
 
   AutoCFRelease<CFDictionaryRef> atoms = CFDictionaryCreate(
-      kCFAllocatorDefault, atomsKey, atomsValue, ArrayLength(atomsKey),
+      kCFAllocatorDefault, atomsKey, atomsValue, std::size(atomsKey),
       &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
   const void* extensionKeys[] = {
@@ -672,11 +680,11 @@ CFDictionaryRef AppleVTDecoder::CreateDecoderExtensions() {
 
   const void* extensionValues[] = {kCVImageBufferChromaLocation_Left,
                                    kCVImageBufferChromaLocation_Left, atoms};
-  static_assert(ArrayLength(extensionKeys) == ArrayLength(extensionValues),
+  static_assert(std::size(extensionKeys) == std::size(extensionValues),
                 "Non matching keys/values array size");
 
   return CFDictionaryCreate(kCFAllocatorDefault, extensionKeys, extensionValues,
-                            ArrayLength(extensionKeys),
+                            std::size(extensionKeys),
                             &kCFTypeDictionaryKeyCallBacks,
                             &kCFTypeDictionaryValueCallBacks);
 }
@@ -691,12 +699,12 @@ CFDictionaryRef AppleVTDecoder::CreateDecoderSpecification() {
     // This GPU is blacklisted for hardware decoding.
     specValues[0] = kCFBooleanFalse;
   }
-  static_assert(ArrayLength(specKeys) == ArrayLength(specValues),
+  static_assert(std::size(specKeys) == std::size(specValues),
                 "Non matching keys/values array size");
 
-  return CFDictionaryCreate(
-      kCFAllocatorDefault, specKeys, specValues, ArrayLength(specKeys),
-      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  return CFDictionaryCreate(kCFAllocatorDefault, specKeys, specValues,
+                            std::size(specKeys), &kCFTypeDictionaryKeyCallBacks,
+                            &kCFTypeDictionaryValueCallBacks);
 }
 
 CFDictionaryRef AppleVTDecoder::CreateOutputConfiguration() {
@@ -707,11 +715,11 @@ CFDictionaryRef AppleVTDecoder::CreateOutputConfiguration() {
         kCFAllocatorDefault, kCFNumberSInt32Type, &PixelFormatTypeValue);
     const void* outputKeys[] = {kCVPixelBufferPixelFormatTypeKey};
     const void* outputValues[] = {PixelFormatTypeNumber};
-    static_assert(ArrayLength(outputKeys) == ArrayLength(outputValues),
+    static_assert(std::size(outputKeys) == std::size(outputValues),
                   "Non matching keys/values array size");
 
     return CFDictionaryCreate(
-        kCFAllocatorDefault, outputKeys, outputValues, ArrayLength(outputKeys),
+        kCFAllocatorDefault, outputKeys, outputValues, std::size(outputKeys),
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
   }
 
@@ -729,13 +737,13 @@ CFDictionaryRef AppleVTDecoder::CreateOutputConfiguration() {
   // Construct IOSurface Properties
   const void* IOSurfaceKeys[] = {kIOSurfaceIsGlobal};
   const void* IOSurfaceValues[] = {kCFBooleanTrue};
-  static_assert(ArrayLength(IOSurfaceKeys) == ArrayLength(IOSurfaceValues),
+  static_assert(std::size(IOSurfaceKeys) == std::size(IOSurfaceValues),
                 "Non matching keys/values array size");
 
   // Contruct output configuration.
   AutoCFRelease<CFDictionaryRef> IOSurfaceProperties = CFDictionaryCreate(
       kCFAllocatorDefault, IOSurfaceKeys, IOSurfaceValues,
-      ArrayLength(IOSurfaceKeys), &kCFTypeDictionaryKeyCallBacks,
+      std::size(IOSurfaceKeys), &kCFTypeDictionaryKeyCallBacks,
       &kCFTypeDictionaryValueCallBacks);
 
   const void* outputKeys[] = {kCVPixelBufferIOSurfacePropertiesKey,
@@ -743,11 +751,11 @@ CFDictionaryRef AppleVTDecoder::CreateOutputConfiguration() {
                               kCVPixelBufferOpenGLCompatibilityKey};
   const void* outputValues[] = {IOSurfaceProperties, PixelFormatTypeNumber,
                                 kCFBooleanTrue};
-  static_assert(ArrayLength(outputKeys) == ArrayLength(outputValues),
+  static_assert(std::size(outputKeys) == std::size(outputValues),
                 "Non matching keys/values array size");
 
   return CFDictionaryCreate(
-      kCFAllocatorDefault, outputKeys, outputValues, ArrayLength(outputKeys),
+      kCFAllocatorDefault, outputKeys, outputValues, std::size(outputKeys),
       &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 }
 

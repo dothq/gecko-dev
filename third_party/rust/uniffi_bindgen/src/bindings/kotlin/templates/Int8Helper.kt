@@ -1,3 +1,6 @@
+/**
+ * @suppress
+ */
 public object FfiConverterByte: FfiConverter<Byte, Byte> {
     override fun lift(value: Byte): Byte {
         return value
@@ -11,7 +14,7 @@ public object FfiConverterByte: FfiConverter<Byte, Byte> {
         return value
     }
 
-    override fun allocationSize(value: Byte) = 1
+    override fun allocationSize(value: Byte) = 1UL
 
     override fun write(value: Byte, buf: ByteBuffer) {
         buf.put(value)

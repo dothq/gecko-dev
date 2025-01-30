@@ -24,6 +24,14 @@
 #  include "mozilla/gfx/DeviceManagerDx.h"
 #endif
 
+#if MOZ_WIDGET_GTK
+#  include "mozilla/webgpu/ExternalTextureDMABuf.h"
+#endif
+
+#if defined(XP_MACOSX)
+#  include "mozilla/webgpu/ExternalTextureMacIOSurface.h"
+#endif
+
 namespace mozilla::webgpu {
 
 const uint64_t POLL_TIME_MS = 100;
@@ -37,6 +45,13 @@ extern bool wgpu_server_use_external_texture_for_swap_chain(
   auto* parent = static_cast<WebGPUParent*>(aParam);
 
   return parent->UseExternalTextureForSwapChain(aSwapChainId);
+}
+
+extern void wgpu_server_disable_external_texture_for_swap_chain(
+    void* aParam, WGPUSwapChainId aSwapChainId) {
+  auto* parent = static_cast<WebGPUParent*>(aParam);
+
+  parent->DisableExternalTextureForSwapChain(aSwapChainId);
 }
 
 extern bool wgpu_server_ensure_external_texture_for_swap_chain(
@@ -71,6 +86,76 @@ extern void* wgpu_server_get_external_texture_handle(void* aParam,
   MOZ_ASSERT_UNREACHABLE("unexpected to be called");
 #endif
   return sharedHandle;
+}
+
+extern int32_t wgpu_server_get_dma_buf_fd(void* aParam, WGPUTextureId aId) {
+  auto* parent = static_cast<WebGPUParent*>(aParam);
+
+  auto texture = parent->GetExternalTexture(aId);
+  if (!texture) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return -1;
+  }
+
+#ifdef MOZ_WIDGET_GTK
+  auto* textureDMABuf = texture->AsExternalTextureDMABuf();
+  if (!textureDMABuf) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return -1;
+  }
+  auto fd = textureDMABuf->CloneDmaBufFd();
+  // fd should be closed by the caller.
+  return fd.release();
+#else
+  MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+  return -1;
+#endif
+}
+
+#if !defined(XP_MACOSX)
+extern WGPUVkImageHandle* wgpu_server_get_vk_image_handle(void* aParam,
+                                                          WGPUTextureId aId) {
+  auto* parent = static_cast<WebGPUParent*>(aParam);
+
+  auto texture = parent->GetExternalTexture(aId);
+  if (!texture) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return nullptr;
+  }
+
+#  if defined(MOZ_WIDGET_GTK)
+  auto* textureDMABuf = texture->AsExternalTextureDMABuf();
+  if (!textureDMABuf) {
+    return nullptr;
+  }
+  return textureDMABuf->GetHandle();
+#  else
+  return nullptr;
+#  endif
+}
+#endif
+
+extern uint32_t wgpu_server_get_external_io_surface_id(void* aParam,
+                                                       WGPUTextureId aId) {
+  auto* parent = static_cast<WebGPUParent*>(aParam);
+
+  auto texture = parent->GetExternalTexture(aId);
+  if (!texture) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return 0;
+  }
+
+#if defined(XP_MACOSX)
+  auto* textureIOSurface = texture->AsExternalTextureMacIOSurface();
+  if (!textureIOSurface) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return 0;
+  }
+  return textureIOSurface->GetIOSurfaceId();
+#else
+  MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+  return 0;
+#endif
 }
 
 }  // namespace ffi
@@ -172,7 +257,7 @@ class PresentationData {
 
  public:
   WeakPtr<WebGPUParent> mParent;
-  const bool mUseExternalTextureInSwapChain;
+  bool mUseExternalTextureInSwapChain;
   const RawId mDeviceId;
   const RawId mQueueId;
   const layers::RGBDescriptor mDesc;
@@ -211,16 +296,21 @@ class PresentationData {
   ~PresentationData() { MOZ_COUNT_DTOR(PresentationData); }
 };
 
-WebGPUParent::WebGPUParent() : mContext(ffi::wgpu_server_new(this)) {
+#ifdef MOZ_DXCOMPILER
+#  define MOZ_USE_DXC true
+#else
+#  define MOZ_USE_DXC false
+#endif
+
+WebGPUParent::WebGPUParent()
+    : mContext(ffi::wgpu_server_new(this, MOZ_USE_DXC)) {
   mTimer.Start(base::TimeDelta::FromMilliseconds(POLL_TIME_MS), this,
                &WebGPUParent::MaintainDevices);
 }
 
-WebGPUParent::~WebGPUParent() {
-  // All devices should have been dropped, but maybe they weren't. To
-  // ensure we don't leak memory, clear the mDeviceLostRequests.
-  mDeviceLostRequests.clear();
-}
+#undef MOZ_USE_DXC
+
+WebGPUParent::~WebGPUParent() {}
 
 void WebGPUParent::MaintainDevices() {
   ffi::wgpu_server_poll_all_devices(mContext.get(), false);
@@ -235,11 +325,13 @@ void WebGPUParent::LoseDevice(const RawId aDeviceId, Maybe<uint8_t> aReason,
 
   // If the connection has been dropped, there is nobody to receive
   // the DeviceLost message anyway.
-  if (CanSend()) {
-    if (!SendDeviceLost(aDeviceId, aReason, aMessage)) {
-      NS_ERROR("SendDeviceLost failed");
-      return;
-    }
+  if (!CanSend()) {
+    return;
+  }
+
+  if (!SendDeviceLost(aDeviceId, aReason, aMessage)) {
+    NS_ERROR("SendDeviceLost failed");
+    return;
   }
 
   mLostDeviceIds.Insert(aDeviceId);
@@ -293,8 +385,7 @@ void WebGPUParent::ReportError(const Maybe<RawId> aDeviceId,
 }
 
 ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
-    const dom::GPURequestAdapterOptions& aOptions,
-    const nsTArray<RawId>& aTargetIds,
+    const dom::GPURequestAdapterOptions& aOptions, RawId aAdapterId,
     InstanceRequestAdapterResolver&& resolver) {
   ffi::WGPURequestAdapterOptions options = {};
   if (aOptions.mPowerPreference.WasPassed()) {
@@ -308,15 +399,14 @@ ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
   auto luid = GetCompositorDeviceLuid();
 
   ErrorBuffer error;
-  int8_t index = ffi::wgpu_server_instance_request_adapter(
-      mContext.get(), &options, aTargetIds.Elements(), aTargetIds.Length(),
-      luid.ptrOr(nullptr), error.ToFFI());
+  bool success = ffi::wgpu_server_instance_request_adapter(
+      mContext.get(), &options, aAdapterId, luid.ptrOr(nullptr), error.ToFFI());
 
   ByteBuf infoByteBuf;
   // Rust side expects an `Option`, so 0 maps to `None`.
   uint64_t adapterId = 0;
-  if (index >= 0) {
-    adapterId = aTargetIds[index];
+  if (success) {
+    adapterId = aAdapterId;
   }
   ffi::wgpu_server_adapter_pack_info(mContext.get(), adapterId,
                                      ToFFI(&infoByteBuf));
@@ -325,10 +415,8 @@ ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
 
   // free the unused IDs
   ipc::ByteBuf dropByteBuf;
-  for (size_t i = 0; i < aTargetIds.Length(); ++i) {
-    if (static_cast<int8_t>(i) != index) {
-      wgpu_server_adapter_free(aTargetIds[i], ToFFI(&dropByteBuf));
-    }
+  if (!success) {
+    wgpu_server_adapter_free(aAdapterId, ToFFI(&dropByteBuf));
   }
   if (dropByteBuf.mData && !SendDropAction(std::move(dropByteBuf))) {
     NS_ERROR("Unable to free free unused adapter IDs");
@@ -336,10 +424,21 @@ ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
   return IPC_OK();
 }
 
+struct OnDeviceLostRequest {
+  WeakPtr<WebGPUParent> mParent;
+  RawId mDeviceId;
+};
+
+static void DeviceLostCleanupCallback(uint8_t* aUserData) {
+  auto req = std::unique_ptr<OnDeviceLostRequest>(
+      reinterpret_cast<OnDeviceLostRequest*>(aUserData));
+}
+
 /* static */ void WebGPUParent::DeviceLostCallback(uint8_t* aUserData,
                                                    uint8_t aReason,
                                                    const char* aMessage) {
-  DeviceLostRequest* req = reinterpret_cast<DeviceLostRequest*>(aUserData);
+  auto req = std::unique_ptr<OnDeviceLostRequest>(
+      reinterpret_cast<OnDeviceLostRequest*>(aUserData));
   if (!req->mParent) {
     // Parent is dead, never mind.
     return;
@@ -347,13 +446,11 @@ ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
 
   RawId deviceId = req->mDeviceId;
 
-  // If aReason is 0, that corresponds to the "unknown" reason, which
-  // we treat as a Nothing() value. Any other value (which is positive)
-  // is mapped to the GPUDeviceLostReason values by subtracting 1.
-  Maybe<uint8_t> reason;
-  if (aReason > 0) {
-    uint8_t mappedReasonValue = (aReason - 1u);
-    reason = Some(mappedReasonValue);
+  // If aReason is 0, that corresponds to the unknown reason, which we
+  // treat as a Nothing() value. aReason of 1 corresponds to destroyed.
+  Maybe<uint8_t> reason;  // default to GPUDeviceLostReason::unknown
+  if (aReason == 1) {
+    reason = Some(uint8_t(0));  // this is GPUDeviceLostReason::destroyed
   }
   nsAutoCString message(aMessage);
   req->mParent->LoseDevice(deviceId, reason, message);
@@ -362,18 +459,15 @@ ipc::IPCResult WebGPUParent::RecvInstanceRequestAdapter(
   if (it != req->mParent->mDeviceFenceHandles.end()) {
     req->mParent->mDeviceFenceHandles.erase(it);
   }
-
-  // We're no longer tracking the memory for this callback, so erase
-  // it to ensure we don't leak memory.
-  req->mParent->mDeviceLostRequests.erase(deviceId);
 }
 
 ipc::IPCResult WebGPUParent::RecvAdapterRequestDevice(
     RawId aAdapterId, const ipc::ByteBuf& aByteBuf, RawId aDeviceId,
-    AdapterRequestDeviceResolver&& resolver) {
+    RawId aQueueId, AdapterRequestDeviceResolver&& resolver) {
   ErrorBuffer error;
-  ffi::wgpu_server_adapter_request_device(
-      mContext.get(), aAdapterId, ToFFI(&aByteBuf), aDeviceId, error.ToFFI());
+  ffi::wgpu_server_adapter_request_device(mContext.get(), aAdapterId,
+                                          ToFFI(&aByteBuf), aDeviceId, aQueueId,
+                                          error.ToFFI());
   if (ForwardError(0, error)) {
     uint8_t reasonDestroyed = 0;  // GPUDeviceLostReason::Destroyed
     auto maybeError = error.GetError();
@@ -385,17 +479,12 @@ ipc::IPCResult WebGPUParent::RecvAdapterRequestDevice(
 
   mErrorScopeStackByDevice.insert({aDeviceId, {}});
 
-  // Setup the device lost callback.
-  std::unique_ptr<DeviceLostRequest> req(
-      new DeviceLostRequest{this, aDeviceId});
-  auto iter = mDeviceLostRequests.insert({aDeviceId, std::move(req)});
-  MOZ_ASSERT(iter.second, "Should be able to insert DeviceLostRequest.");
-  auto record = iter.first;
-  DeviceLostRequest* req_shadow = (record->second).get();
-  ffi::WGPUDeviceLostClosureC callback = {
-      &DeviceLostCallback, reinterpret_cast<uint8_t*>(req_shadow)};
-  ffi::wgpu_server_set_device_lost_callback(mContext.get(), aDeviceId,
-                                            callback);
+  std::unique_ptr<OnDeviceLostRequest> request(
+      new OnDeviceLostRequest{this, aDeviceId});
+  ffi::WGPUDeviceLostClosure closure = {
+      &DeviceLostCallback, &DeviceLostCleanupCallback,
+      reinterpret_cast<uint8_t*>(request.release())};
+  ffi::wgpu_server_set_device_lost_callback(mContext.get(), aDeviceId, closure);
 
   resolver(true);
 
@@ -424,8 +513,6 @@ ipc::IPCResult WebGPUParent::RecvDeviceDestroy(RawId aDeviceId) {
 
 ipc::IPCResult WebGPUParent::RecvDeviceDrop(RawId aDeviceId) {
   ffi::wgpu_server_device_drop(mContext.get(), aDeviceId);
-  MOZ_ASSERT(mDeviceLostRequests.find(aDeviceId) == mDeviceLostRequests.end(),
-             "DeviceLostRequest should have been invoked, then erased.");
 
   mErrorScopeStackByDevice.erase(aDeviceId);
   mLostDeviceIds.Remove(aDeviceId);
@@ -499,8 +586,6 @@ static const char* MapStatusString(ffi::WGPUBufferMapAsyncStatus status) {
       return "Already mapped";
     case ffi::WGPUBufferMapAsyncStatus_MapAlreadyPending:
       return "Map is already pending";
-    case ffi::WGPUBufferMapAsyncStatus_Aborted:
-      return "Map aborted";
     case ffi::WGPUBufferMapAsyncStatus_ContextLost:
       return "Context lost";
     case ffi::WGPUBufferMapAsyncStatus_Invalid:
@@ -520,12 +605,12 @@ static const char* MapStatusString(ffi::WGPUBufferMapAsyncStatus status) {
   MOZ_CRASH("Bad ffi::WGPUBufferMapAsyncStatus");
 }
 
-void WebGPUParent::MapCallback(ffi::WGPUBufferMapAsyncStatus aStatus,
-                               uint8_t* aUserData) {
-  auto* req = reinterpret_cast<MapRequest*>(aUserData);
+void WebGPUParent::MapCallback(uint8_t* aUserData,
+                               ffi::WGPUBufferMapAsyncStatus aStatus) {
+  auto req =
+      std::unique_ptr<MapRequest>(reinterpret_cast<MapRequest*>(aUserData));
 
   if (!req->mParent->CanSend()) {
-    delete req;
     return;
   }
 
@@ -572,8 +657,7 @@ void WebGPUParent::MapCallback(ffi::WGPUBufferMapAsyncStatus aStatus,
     mapData->mMappedSize = size;
   }
 
-  req->mResolver(std::move(result));
-  delete req;
+  req->mResolver(result);
 }
 
 ipc::IPCResult WebGPUParent::RecvBufferMap(RawId aDeviceId, RawId aBufferId,
@@ -609,15 +693,15 @@ ipc::IPCResult WebGPUParent::RecvBufferMap(RawId aDeviceId, RawId aBufferId,
     return IPC_OK();
   }
 
-  auto* request =
-      new MapRequest{this,    mContext.get(), aBufferId,           mode,
-                     aOffset, aSize,          std::move(aResolver)};
+  std::unique_ptr<MapRequest> request(
+      new MapRequest{this, mContext.get(), aBufferId, mode, aOffset, aSize,
+                     std::move(aResolver)});
 
-  ffi::WGPUBufferMapCallbackC callback = {&MapCallback,
-                                          reinterpret_cast<uint8_t*>(request)};
+  ffi::WGPUBufferMapClosure closure = {
+      &MapCallback, reinterpret_cast<uint8_t*>(request.release())};
   ErrorBuffer mapError;
   ffi::wgpu_server_buffer_map(mContext.get(), aBufferId, aOffset, aSize, mode,
-                              callback, mapError.ToFFI());
+                              closure, mapError.ToFFI());
   ForwardError(aDeviceId, mapError);
 
   return IPC_OK();
@@ -721,6 +805,11 @@ ipc::IPCResult WebGPUParent::RecvSamplerDrop(RawId aSamplerId) {
   return IPC_OK();
 }
 
+ipc::IPCResult WebGPUParent::RecvQuerySetDrop(RawId aQuerySetId) {
+  ffi::wgpu_server_query_set_drop(mContext.get(), aQuerySetId);
+  return IPC_OK();
+}
+
 ipc::IPCResult WebGPUParent::RecvCommandEncoderFinish(
     RawId aEncoderId, RawId aDeviceId,
     const dom::GPUCommandBufferDescriptor& aDesc) {
@@ -788,10 +877,10 @@ ipc::IPCResult WebGPUParent::RecvQueueOnSubmittedWorkDone(
   std::unique_ptr<OnSubmittedWorkDoneRequest> request(
       new OnSubmittedWorkDoneRequest{this, std::move(aResolver)});
 
-  ffi::WGPUSubmittedWorkDoneClosureC callback = {
+  ffi::WGPUSubmittedWorkDoneClosure closure = {
       &OnSubmittedWorkDoneCallback,
       reinterpret_cast<uint8_t*>(request.release())};
-  ffi::wgpu_server_on_submitted_work_done(mContext.get(), aQueueId, callback);
+  ffi::wgpu_server_on_submitted_work_done(mContext.get(), aQueueId, closure);
   return IPC_OK();
 }
 
@@ -809,13 +898,13 @@ ipc::IPCResult WebGPUParent::RecvQueueWriteAction(
   return IPC_OK();
 }
 
-ipc::IPCResult WebGPUParent::RecvBindGroupLayoutDrop(RawId aBindGroupId) {
-  ffi::wgpu_server_bind_group_layout_drop(mContext.get(), aBindGroupId);
+ipc::IPCResult WebGPUParent::RecvBindGroupLayoutDrop(RawId aBindGroupLayoutId) {
+  ffi::wgpu_server_bind_group_layout_drop(mContext.get(), aBindGroupLayoutId);
   return IPC_OK();
 }
 
-ipc::IPCResult WebGPUParent::RecvPipelineLayoutDrop(RawId aLayoutId) {
-  ffi::wgpu_server_pipeline_layout_drop(mContext.get(), aLayoutId);
+ipc::IPCResult WebGPUParent::RecvPipelineLayoutDrop(RawId aPipelineLayoutId) {
+  ffi::wgpu_server_pipeline_layout_drop(mContext.get(), aPipelineLayoutId);
   return IPC_OK();
 }
 
@@ -954,8 +1043,8 @@ struct ReadbackPresentRequest {
   const layers::RemoteTextureOwnerId mOwnerId;
 };
 
-static void ReadbackPresentCallback(ffi::WGPUBufferMapAsyncStatus status,
-                                    uint8_t* userdata) {
+static void ReadbackPresentCallback(uint8_t* userdata,
+                                    ffi::WGPUBufferMapAsyncStatus status) {
   UniquePtr<ReadbackPresentRequest> req(
       reinterpret_cast<ReadbackPresentRequest*>(userdata));
 
@@ -1070,6 +1159,10 @@ ipc::IPCResult WebGPUParent::GetFrontBufferSnapshot(
   Shmem shmem;
   if (!AllocShmem(len, &shmem)) {
     return IPC_OK();
+  }
+
+  if (!data->mUseExternalTextureInSwapChain) {
+    ffi::wgpu_server_device_poll(mContext.get(), data->mDeviceId, true);
   }
 
   mRemoteTextureOwner->GetLatestBufferSnapshot(aOwnerId, shmem, aSize);
@@ -1197,10 +1290,10 @@ ipc::IPCResult WebGPUParent::RecvSwapChainPresent(
     }
   }
 
-  const ffi::WGPUImageCopyTexture texView = {
+  const ffi::WGPUTexelCopyTextureInfo texView = {
       aTextureId,
   };
-  const ffi::WGPUImageDataLayout bufLayout = {
+  const ffi::WGPUTexelCopyBufferLayout bufLayout = {
       0,
       &data->mSourcePitch,
       nullptr,
@@ -1254,13 +1347,13 @@ ipc::IPCResult WebGPUParent::RecvSwapChainPresent(
   auto presentRequest = MakeUnique<ReadbackPresentRequest>(
       mContext.get(), data, mRemoteTextureOwner, aRemoteTextureId, aOwnerId);
 
-  ffi::WGPUBufferMapCallbackC callback = {
+  ffi::WGPUBufferMapClosure closure = {
       &ReadbackPresentCallback,
       reinterpret_cast<uint8_t*>(presentRequest.release())};
 
   ErrorBuffer error;
   ffi::wgpu_server_buffer_map(mContext.get(), bufferId, 0, bufferSize,
-                              ffi::WGPUHostMap_Read, callback, error.ToFFI());
+                              ffi::WGPUHostMap_Read, closure, error.ToFFI());
   if (ForwardError(data->mDeviceId, error)) {
     return IPC_OK();
   }
@@ -1475,12 +1568,31 @@ bool WebGPUParent::UseExternalTextureForSwapChain(
   const auto& lookup = mPresentationDataMap.find(ownerId);
   if (lookup == mPresentationDataMap.end()) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    return IPC_OK();
+    return false;
   }
 
   RefPtr<PresentationData> data = lookup->second.get();
 
   return data->mUseExternalTextureInSwapChain;
+}
+
+void WebGPUParent::DisableExternalTextureForSwapChain(
+    ffi::WGPUSwapChainId aSwapChainId) {
+  auto ownerId = layers::RemoteTextureOwnerId{aSwapChainId._0};
+  const auto& lookup = mPresentationDataMap.find(ownerId);
+  if (lookup == mPresentationDataMap.end()) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return;
+  }
+
+  RefPtr<PresentationData> data = lookup->second.get();
+
+  if (data->mUseExternalTextureInSwapChain) {
+    gfxCriticalNote << "Disable ExternalTexture for SwapChain:  "
+                    << aSwapChainId._0;
+  }
+
+  data->mUseExternalTextureInSwapChain = false;
 }
 
 bool WebGPUParent::EnsureExternalTextureForSwapChain(
@@ -1516,10 +1628,7 @@ bool WebGPUParent::EnsureExternalTextureForSwapChain(
 
   auto externalTexture = CreateExternalTexture(aDeviceId, aTextureId, aWidth,
                                                aHeight, aFormat, aUsage);
-  if (!externalTexture) {
-    return false;
-  }
-  return true;
+  return static_cast<bool>(externalTexture);
 }
 
 std::shared_ptr<ExternalTexture> WebGPUParent::CreateExternalTexture(
@@ -1529,10 +1638,9 @@ std::shared_ptr<ExternalTexture> WebGPUParent::CreateExternalTexture(
   MOZ_RELEASE_ASSERT(mExternalTextures.find(aTextureId) ==
                      mExternalTextures.end());
 
-  UniquePtr<ExternalTexture> texture =
-      ExternalTexture::Create(aWidth, aHeight, aFormat, aUsage);
+  UniquePtr<ExternalTexture> texture = ExternalTexture::Create(
+      this, aDeviceId, aWidth, aHeight, aFormat, aUsage);
   if (!texture) {
-    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     return nullptr;
   }
 

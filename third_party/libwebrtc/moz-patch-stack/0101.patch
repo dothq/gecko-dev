@@ -1,36 +1,52 @@
-From: Michael Froman <mfroman@mozilla.com>
-Date: Mon, 4 Dec 2023 12:57:00 -0600
-Subject: Bug 1867099 - (fix-66b7275561) disable wgc capture yellow-line
- removal. r?ng!
+From: Nico Grunbaum <na-g@nostrum.com>
+Date: Thu, 2 May 2024 00:47:00 -0700
+Subject: Bug 1892299 - fix-afaae4e38a - fix adapted_track_source build
+ exclusion;r?mjf
 
-This code won't build until we support building with
-Win 10 SDK v10.0.20348.0 or newer.
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/0aac94794aad2ddb637f5076bc08706a11866737
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/60304c5d8a86fdecfe7527e75629dbc65fc9cbc1
 ---
- modules/desktop_capture/win/wgc_capture_session.cc | 6 ++++++
- 1 file changed, 6 insertions(+)
+ media/BUILD.gn | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
 
-diff --git a/modules/desktop_capture/win/wgc_capture_session.cc b/modules/desktop_capture/win/wgc_capture_session.cc
-index 8c74c2bf24..86afc52411 100644
---- a/modules/desktop_capture/win/wgc_capture_session.cc
-+++ b/modules/desktop_capture/win/wgc_capture_session.cc
-@@ -188,6 +188,11 @@ HRESULT WgcCaptureSession::StartCapture(const DesktopCaptureOptions& options) {
-     }
-   }
+diff --git a/media/BUILD.gn b/media/BUILD.gn
+index 371e78d09c..9b2a439eac 100644
+--- a/media/BUILD.gn
++++ b/media/BUILD.gn
+@@ -55,6 +55,11 @@ rtc_library("rtc_media_base") {
+     "base/video_broadcaster.h",  # Used downstream
+     "base/video_common.h",  # Used downstream
+   ]
++  if (build_with_mozilla) {
++    sources -= [
++      "base/adapted_video_track_source.h",
++    ]
++  }
+   deps = [
+     ":adapted_video_track_source",
+     ":codec",
+@@ -127,12 +132,6 @@ rtc_library("rtc_media_base") {
+     "../rtc_base/third_party/sigslot",
+     "../video/config:encoder_config",
+   ]
+-    if (build_with_mozilla) {
+-    sources -= [
+-      "base/adapted_video_track_source.cc",
+-      "base/adapted_video_track_source.h",
+-    ]
+-  }
+ }
  
-+// Until Mozilla builds with Win 10 SDK v10.0.20348.0 or newer, this
-+// code will not build.  Once we support the newer SDK, Bug 1868198
-+// exists to decide if we ever want to use this code since it is
-+// removing an indicator that capture is happening.
-+#if !defined(WEBRTC_MOZILLA_BUILD)
-   // By default, the WGC capture API adds a yellow border around the captured
-   // window or display to indicate that a capture is in progress. The section
-   // below is an attempt to remove this yellow border to make the capture
-@@ -199,6 +204,7 @@ HRESULT WgcCaptureSession::StartCapture(const DesktopCaptureOptions& options) {
-           &session3))) {
-     session3->put_IsBorderRequired(false);
-   }
-+#endif
- 
-   allow_zero_hertz_ = options.allow_wgc_zero_hertz();
- 
+ rtc_library("adapted_video_track_source") {
+@@ -140,6 +139,12 @@ rtc_library("adapted_video_track_source") {
+     "base/adapted_video_track_source.cc",
+     "base/adapted_video_track_source.h",
+   ]
++  if (build_with_mozilla) {
++    sources -= [
++      "base/adapted_video_track_source.cc",
++      "base/adapted_video_track_source.h",
++    ]
++  }
+   deps = [
+     ":video_adapter",
+     ":video_broadcaster",

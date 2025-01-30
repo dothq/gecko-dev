@@ -15,9 +15,13 @@ import {
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  ActionsProviderContextualSearch:
+    "resource:///modules/ActionsProviderContextualSearch.sys.mjs",
   UrlbarView: "resource:///modules/UrlbarView.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarProviderAutofill: "resource:///modules/UrlbarProviderAutofill.sys.mjs",
+  UrlbarProviderGlobalActions:
+    "resource:///modules/UrlbarProviderGlobalActions.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.sys.mjs",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
@@ -99,10 +103,6 @@ function initializeDynamicResult() {
 class ProviderTabToSearch extends UrlbarProvider {
   constructor() {
     super();
-    this.enginesShown = {
-      onboarding: new Set(),
-      regular: new Set(),
-    };
   }
 
   /**
@@ -136,7 +136,11 @@ class ProviderTabToSearch extends UrlbarProvider {
       queryContext.searchString &&
       queryContext.tokens.length == 1 &&
       !queryContext.searchMode &&
-      lazy.UrlbarPrefs.get("suggest.engines")
+      lazy.UrlbarPrefs.get("suggest.engines") &&
+      !(
+        lazy.UrlbarProviderGlobalActions.isActive(queryContext) &&
+        lazy.ActionsProviderContextualSearch.isActive(queryContext)
+      )
     );
   }
 
@@ -226,12 +230,9 @@ class ProviderTabToSearch extends UrlbarProvider {
     }
   }
 
-  onEngagement(state, queryContext, details) {
+  onEngagement(queryContext, controller, details) {
     let { result, element } = details;
-    if (
-      result?.providerName == this.name &&
-      result.type == UrlbarUtils.RESULT_TYPE.DYNAMIC
-    ) {
+    if (result.type == UrlbarUtils.RESULT_TYPE.DYNAMIC) {
       // Confirm search mode, but only for the onboarding (dynamic) result. The
       // input will handle confirming search mode for the non-onboarding
       // `RESULT_TYPE.SEARCH` result since it sets `providesSearchMode`.
@@ -240,46 +241,29 @@ class ProviderTabToSearch extends UrlbarProvider {
         checkValue: false,
       });
     }
+  }
 
-    if (!this.enginesShown.regular.size && !this.enginesShown.onboarding.size) {
-      return;
-    }
-
+  onImpression(state, queryContext, controller, providerVisibleResults) {
     try {
-      // urlbar.tabtosearch.* is prerelease-only/opt-in for now. See bug 1686330.
-      for (let engine of this.enginesShown.regular) {
-        let scalarKey = lazy.UrlbarSearchUtils.getSearchModeScalarKey({
-          engineName: engine,
-        });
-        Services.telemetry.keyedScalarAdd(
-          "urlbar.tabtosearch.impressions",
-          scalarKey,
-          1
-        );
-      }
-      for (let engine of this.enginesShown.onboarding) {
-        let scalarKey = lazy.UrlbarSearchUtils.getSearchModeScalarKey({
-          engineName: engine,
-        });
-        Services.telemetry.keyedScalarAdd(
-          "urlbar.tabtosearch.impressions_onboarding",
-          scalarKey,
-          1
-        );
-      }
-
-      // We also record in urlbar.tips because only it has been approved for use
-      // in release channels.
-      Services.telemetry.keyedScalarAdd(
-        "urlbar.tips",
-        "tabtosearch-shown",
-        this.enginesShown.regular.size
-      );
-      Services.telemetry.keyedScalarAdd(
-        "urlbar.tips",
-        "tabtosearch_onboard-shown",
-        this.enginesShown.onboarding.size
-      );
+      let regularResultCount = 0;
+      let onboardingResultCount = 0;
+      providerVisibleResults.forEach(({ result }) => {
+        if (result.type === UrlbarUtils.RESULT_TYPE.DYNAMIC) {
+          let scalarKey = lazy.UrlbarSearchUtils.getSearchModeScalarKey({
+            engineName: result?.payload.engine,
+          });
+          Glean.urlbarTabtosearch.impressionsOnboarding[scalarKey].add(1);
+          onboardingResultCount += 1;
+        } else if (result.type === UrlbarUtils.RESULT_TYPE.SEARCH) {
+          let scalarKey = lazy.UrlbarSearchUtils.getSearchModeScalarKey({
+            engineName: result?.payload.engine,
+          });
+          Glean.urlbarTabtosearch.impressions[scalarKey].add(1);
+          regularResultCount += 1;
+        }
+      });
+      Glean.urlbar.tips["tabtosearch-shown"].add(regularResultCount);
+      Glean.urlbar.tips["tabtosearch_onboard-shown"].add(onboardingResultCount);
     } catch (ex) {
       // If your test throws this error or causes another test to throw it, it
       // is likely because your test showed a tab-to-search result but did not
@@ -288,13 +272,6 @@ class ProviderTabToSearch extends UrlbarProvider {
       this.logger.error(
         `Exception while recording TabToSearch telemetry: ${ex})`
       );
-    } finally {
-      // Even if there's an exception, we want to clear these Sets. Otherwise,
-      // we might get into a state where we repeatedly run the same engines
-      // through the code above and never record telemetry, because there's an
-      // error every time.
-      this.enginesShown.regular.clear();
-      this.enginesShown.onboarding.clear();
     }
   }
 
@@ -390,17 +367,15 @@ class ProviderTabToSearch extends UrlbarProvider {
         partialMatchEnginesByHost.set(engine.searchUrlDomain, engine);
         // Don't continue here, we are looking for more partial matches.
       }
-      // We also try to match the searchForm domain, because otherwise for an
-      // engine like ebay, we'd check rover.ebay.com, when the user is likely
-      // to visit ebay.LANG. The searchForm URL often points to the main host.
-      let searchFormHost;
-      try {
-        searchFormHost = new URL(engine.searchForm).host;
-      } catch (ex) {
-        // Invalid url or no searchForm.
-      }
-      if (searchFormHost?.includes("." + searchStr)) {
-        partialMatchEnginesByHost.set(searchFormHost, engine);
+      // We also try to match the base domain of the searchUrlDomain,
+      // because otherwise for an engine like rakuten, we'd check pt.afl.rakuten.co.jp
+      // which redirects and is thus not saved in the history resulting in a low score.
+
+      let baseDomain = Services.eTLD.getBaseDomainFromHost(
+        engine.searchUrlDomain
+      );
+      if (baseDomain.startsWith(searchStr)) {
+        partialMatchEnginesByHost.set(baseDomain, engine);
       }
     }
     if (partialMatchEnginesByHost.size) {
@@ -421,16 +396,12 @@ class ProviderTabToSearch extends UrlbarProvider {
 }
 
 function makeOnboardingResult(engine, satisfiesAutofillThreshold = false) {
-  let [url] = UrlbarUtils.stripPrefixAndTrim(engine.searchUrlDomain, {
-    stripWww: true,
-  });
-  url = url.substr(0, url.length - engine.searchUrlPublicSuffix.length);
   let result = new lazy.UrlbarResult(
     UrlbarUtils.RESULT_TYPE.DYNAMIC,
     UrlbarUtils.RESULT_SOURCE.SEARCH,
     {
       engine: engine.name,
-      url,
+      searchUrlDomainWithoutSuffix: searchUrlDomainWithoutSuffix(engine),
       providesSearchMode: true,
       icon: UrlbarUtils.ICON.SEARCH_GLASS,
       dynamicType: DYNAMIC_RESULT_TYPE,
@@ -443,17 +414,13 @@ function makeOnboardingResult(engine, satisfiesAutofillThreshold = false) {
 }
 
 function makeResult(context, engine, satisfiesAutofillThreshold = false) {
-  let [url] = UrlbarUtils.stripPrefixAndTrim(engine.searchUrlDomain, {
-    stripWww: true,
-  });
-  url = url.substr(0, url.length - engine.searchUrlPublicSuffix.length);
   let result = new lazy.UrlbarResult(
     UrlbarUtils.RESULT_TYPE.SEARCH,
     UrlbarUtils.RESULT_SOURCE.SEARCH,
     ...lazy.UrlbarResult.payloadAndSimpleHighlights(context.tokens, {
       engine: engine.name,
       isGeneralPurposeEngine: engine.isGeneralPurposeEngine,
-      url,
+      searchUrlDomainWithoutSuffix: searchUrlDomainWithoutSuffix(engine),
       providesSearchMode: true,
       icon: UrlbarUtils.ICON.SEARCH_GLASS,
       query: "",
@@ -462,6 +429,13 @@ function makeResult(context, engine, satisfiesAutofillThreshold = false) {
   );
   result.suggestedIndex = 1;
   return result;
+}
+
+function searchUrlDomainWithoutSuffix(engine) {
+  let [value] = UrlbarUtils.stripPrefixAndTrim(engine.searchUrlDomain, {
+    stripWww: true,
+  });
+  return value.substr(0, value.length - engine.searchUrlPublicSuffix.length);
 }
 
 export var UrlbarProviderTabToSearch = new ProviderTabToSearch();

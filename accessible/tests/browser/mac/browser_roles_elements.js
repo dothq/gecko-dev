@@ -73,8 +73,8 @@ addAccessibleTask(
   <div id="switch" role="switch"></div>
   <div id="timer" role="timer"></div>
   <div id="tooltip" role="tooltip"></div>
-  <input type="radio" role="menuitemradio" id="menuitemradio">
-  <input type="checkbox" role="menuitemcheckbox" id="menuitemcheckbox">
+  <div role="menu"><input type="radio" role="menuitemradio" id="menuitemradio"></div>
+  <div role="menu"><input type="checkbox" role="menuitemcheckbox" id="menuitemcheckbox"></div>
   <input type="datetime-local" id="datetime">
 
   <!-- text entries -->
@@ -216,9 +216,9 @@ addAccessibleTask(
 
     // Other elements
     testRoleAndSubRole(accDoc, "deletion", "AXGroup", "AXDeleteStyleGroup");
-    testRoleAndSubRole(accDoc, "dl", "AXList", "AXDescriptionList");
+    testRoleAndSubRole(accDoc, "dl", "AXList", "AXDefinitionList");
     testRoleAndSubRole(accDoc, "dt", "AXGroup", "AXTerm");
-    testRoleAndSubRole(accDoc, "dd", "AXGroup", "AXDescription");
+    testRoleAndSubRole(accDoc, "dd", "AXGroup", "AXDefinition");
     testRoleAndSubRole(accDoc, "hr", "AXSplitter", "AXContentSeparator");
     testRoleAndSubRole(accDoc, "insertion", "AXGroup", "AXInsertStyleGroup");
     testRoleAndSubRole(

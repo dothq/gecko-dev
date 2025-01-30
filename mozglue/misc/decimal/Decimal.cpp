@@ -239,11 +239,6 @@ Decimal::Decimal(int32_t i32)
 Decimal::Decimal(Sign sign, int exponent, uint64_t coefficient)
     : m_data(sign, coefficient ? exponent : 0, coefficient) {}
 
-Decimal::Decimal(const EncodedData& data)
-    : m_data(data)
-{
-}
-
 Decimal::Decimal(const Decimal& other)
     : m_data(other.m_data)
 {
@@ -853,11 +848,6 @@ Decimal Decimal::infinity(const Sign sign)
     return Decimal(EncodedData(sign, EncodedData::ClassInfinity));
 }
 
-Decimal Decimal::nan()
-{
-    return Decimal(EncodedData(Positive, EncodedData::ClassNaN));
-}
-
 Decimal Decimal::remainder(const Decimal& rhs) const
 {
     const Decimal quotient = *this / rhs;
@@ -982,19 +972,6 @@ String Decimal::toString() const
         }
     }
     return builder.toString();
-}
-
-bool Decimal::toString(char* strBuf, size_t bufLength) const
-{
-  ASSERT(bufLength > 0);
-  String str = toString();
-  size_t length = str.copy(strBuf, bufLength);
-  if (length < bufLength) {
-    strBuf[length] = '\0';
-    return true;
-  }
-  strBuf[bufLength - 1] = '\0';
-  return false;
 }
 
 Decimal Decimal::zero(Sign sign)

@@ -19,7 +19,6 @@
 
   <linkset>
     <html:link rel="stylesheet" href="chrome://global/skin/global.css" />
-    <html:link rel="stylesheet" href="chrome://browser/skin/" />
     <html:link
       rel="stylesheet"
       href="chrome://browser/content/usercontext/usercontext.css"
@@ -28,7 +27,7 @@
     <html:link rel="localization" href="toolkit/branding/brandings.ftl"/>
     <html:link rel="localization" href="toolkit/global/textActions.ftl"/>
     <html:link rel="localization" href="browser/browserContext.ftl"/>
-    <html:link rel="localization" href="preview/select-translations.ftl"/>
+    <html:link rel="localization" href="browser/translations.ftl"/>
   </linkset>
 
   <commandset id="mainCommandset">
@@ -54,14 +53,8 @@
            norolluponanchor="true" />
 
     <menupopup id="contentAreaContextMenu"
-               onpopupshowing="if (event.target != this)
-                                 return true;
-                               gContextMenu = new nsContextMenu(this, event.shiftKey);
-                               return gContextMenu.shouldDisplay;"
-               onpopuphiding="if (event.target != this)
-                                return;
-                              gContextMenu.hiding(this);
-                              gContextMenu = null;">
+# read by macOS cocoa code to enable the "services" menu here:
+             showservicesmenu="true">
 #include browser-context.inc
     </menupopup>
   </popupset>

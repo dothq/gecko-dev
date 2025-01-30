@@ -9,6 +9,7 @@
 #include "mozilla/AppUnits.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_print.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/intl/Segmenter.h"
 #include "gfxContext.h"
@@ -124,9 +125,8 @@ nsReflowStatus nsPageFrame::ReflowPageContent(
   // the document is intended to fit the paper size exactly, and the client is
   // taking full responsibility for what happens around the edges.
   if (mPD->mPrintSettings->GetHonorPageRuleMargins()) {
-    const auto& margin = kidReflowInput.mStyleMargin->mMargin;
     for (const auto side : mozilla::AllPhysicalSides()) {
-      if (!margin.Get(side).IsAuto()) {
+      if (!kidReflowInput.mStyleMargin->GetMargin(side).IsAuto()) {
         // Computed margins are already in the coordinate space of the content,
         // do not scale.
         const nscoord computed =
@@ -213,7 +213,6 @@ void nsPageFrame::Reflow(nsPresContext* aPresContext,
                          nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsPageFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aReflowOutput, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   MOZ_ASSERT(mPD, "Need a pointer to nsSharedPageData before reflow starts");
 
@@ -336,11 +335,19 @@ void nsPageFrame::DrawHeaderFooter(
     const nsString& aStrCenter, const nsString& aStrRight, const nsRect& aRect,
     nscoord aAscent, nscoord aHeight) {
   int32_t numStrs = 0;
-  if (!aStrLeft.IsEmpty()) numStrs++;
-  if (!aStrCenter.IsEmpty()) numStrs++;
-  if (!aStrRight.IsEmpty()) numStrs++;
+  if (!aStrLeft.IsEmpty()) {
+    numStrs++;
+  }
+  if (!aStrCenter.IsEmpty()) {
+    numStrs++;
+  }
+  if (!aStrRight.IsEmpty()) {
+    numStrs++;
+  }
 
-  if (numStrs == 0) return;
+  if (numStrs == 0) {
+    return;
+  }
   const nscoord contentWidth =
       aRect.width - (mPD->mEdgePaperMargin.left + mPD->mEdgePaperMargin.right);
   const nscoord strSpace = contentWidth / numStrs;
@@ -463,7 +470,8 @@ class nsDisplayHeaderFooter final : public nsPaintedDisplayItem {
       : nsPaintedDisplayItem(aBuilder, aFrame) {
     MOZ_COUNT_CTOR(nsDisplayHeaderFooter);
   }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayHeaderFooter)
+
+  MOZ_COUNTED_DTOR_FINAL(nsDisplayHeaderFooter)
 
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override {
@@ -499,7 +507,7 @@ static void PaintMarginGuides(nsIFrame* aFrame, DrawTarget* aDrawTarget,
                        JoinStyle::MITER_OR_BEVEL, CapStyle::BUTT,
                        /* mitre limit (default, not used) */ 10.0f,
                        /* set dash pattern of 2px stroke, 2px gap */
-                       ArrayLength(dashes), dashes,
+                       std::size(dashes), dashes,
                        /* dash offset */ 0.0f);
   DrawOptions options;
 
@@ -540,6 +548,69 @@ static std::tuple<uint32_t, uint32_t> GetRowAndColFromIdx(uint32_t aIdxOnSheet,
   return {aIdxOnSheet / aNumCols, aIdxOnSheet % aNumCols};
 }
 
+// The minimum ratio for which we will center the page on the sheet when using
+// auto-detect logic.
+// Note that this ratio is of the content's size to the sheet size scaled to be
+// in content space, and so the actual ratio will always be from 0.0 to 1.0,
+// with this marking the smallest ratio we consider a near-miss.
+// The ratio of A4 on Letter is 0.915034. A threshold of 0.9 will ensure that
+// A4 on Letter works, as well as other near-misses.
+//
+// The ratio is computed as so:
+// scale = min(1, sheetHeight / pageHeight, sheetWidth / pageWidth)
+//
+// Where pageSize is pageWidth or pageHeight, and sheetSize is sheetWidth or
+// sheetHeight, respectively:
+// scaledPageSize = pageSize * scale
+// ratio = scaledPageSize / sheetSize
+//
+// A4 (210mm x 297mm) on US Letter (215.9mm x 279.4mm) is derived as so:
+// scale = min(1, 215.9 / 210, 279.4 / 297) = 0.9407407407..
+//
+// Using the widths:
+// scaledPageSize = (210 * 0.940741) = 197.556
+// ratio = 197.556 / 215.9 = 0.915034
+//
+// See nsPageFrame::ComputeSinglePPSPageSizeScale for scale calculation, and
+// OffsetToCenterPage for ratio calculation.
+constexpr float kCenterPageRatioThreshold = 0.9f;
+
+// Numeric values for the pref "print.center_page_on_sheet"
+enum {
+  kPrintCenterPageOnSheetNever = 0,
+  kPrintCenterPageOnSheetAlways = 1,
+  kPrintCenterPageOnSheetAuto = 2
+};
+
+// Returns an offset to center the page on the sheet, with a given scale.
+// When no centering can/should happen, this will avoid extra calculations and
+// return 0.0f.
+// This takes into account the value of the pref "print.center_page_on_sheet".
+static float OffsetToCenterPage(nscoord aContentSize, nscoord aSheetSize,
+                                float aScale, float aAppUnitsPerPixel) {
+  MOZ_ASSERT(aScale <= 1.0f && aScale > 0.0f,
+             "Scale must be in the range (0,1]");
+  const unsigned centerPagePref = StaticPrefs::print_center_page_on_sheet();
+  if (centerPagePref == kPrintCenterPageOnSheetNever) {
+    return 0.0f;
+  }
+
+  // Determine the ratio of scaled page to the sheet size.
+  const float sheetSize =
+      NSAppUnitsToFloatPixels(aSheetSize, aAppUnitsPerPixel);
+  const float scaledContentSize =
+      NSAppUnitsToFloatPixels(aContentSize, aAppUnitsPerPixel) * aScale;
+  const float ratio = scaledContentSize / sheetSize;
+
+  // If the ratio is within the threshold, or the pref indicates we should
+  // always center the page, return half the difference to form the offset.
+  if (centerPagePref == kPrintCenterPageOnSheetAlways ||
+      ratio >= kCenterPageRatioThreshold) {
+    return (sheetSize - scaledContentSize) * 0.5f;
+  }
+  return 0.0f;
+}
+
 // Helper for BuildDisplayList:
 static gfx::Matrix4x4 ComputePagesPerSheetAndPageSizeTransform(
     const nsIFrame* aFrame, float aAppUnitsPerPixel) {
@@ -561,8 +632,8 @@ static gfx::Matrix4x4 ComputePagesPerSheetAndPageSizeTransform(
   gfx::Matrix4x4 transform;
 
   if (ppsInfo->mNumPages == 1) {
+    const nsSize sheetSize = sheetFrame->GetSizeForChildren();
     if (rotation != 0.0) {
-      const nsSize sheetSize = sheetFrame->GetSizeForChildren();
       const bool sheetIsPortrait = sheetSize.width < sheetSize.height;
       const bool rotatingClockwise = rotation > 0.0;
 
@@ -584,7 +655,21 @@ static gfx::Matrix4x4 ComputePagesPerSheetAndPageSizeTransform(
                              NSAppUnitsToFloatPixels(-y, aAppUnitsPerPixel), 0);
     }
 
-    float scale = pageFrame->ComputeSinglePPSPageSizeScale(contentPageSize);
+    // If the difference in horizontal size, after scaling, is relatively small
+    // then center the page on the sheet.
+    const float scale =
+        pageFrame->ComputeSinglePPSPageSizeScale(contentPageSize);
+    const float centeringOffset = OffsetToCenterPage(
+        contentPageSize.width, sheetSize.width, scale, aAppUnitsPerPixel);
+
+    // Only bother with the translation if it is at least one pixel.
+    // It's possible for a mismatch in the paper size reported by the print
+    // server and the paper size from Gecko to lead to small offsets, or
+    // even (in combination with floating point error) a very small negative
+    // offset. Do not apply an offset in those cases.
+    if (centeringOffset >= 1.0f) {
+      transform.PreTranslate(centeringOffset, 0, 0);
+    }
     transform.PreScale(scale, scale, 1);
     return transform;
   }
@@ -926,18 +1011,18 @@ nsPageBreakFrame::nsPageBreakFrame(ComputedStyle* aStyle,
 
 nsPageBreakFrame::~nsPageBreakFrame() = default;
 
-nscoord nsPageBreakFrame::GetIntrinsicISize() {
-  return nsPresContext::CSSPixelsToAppUnits(1);
+IntrinsicSize nsPageBreakFrame::GetIntrinsicSize() {
+  IntrinsicSize intrinsicSize;
+  intrinsicSize.ISize(GetWritingMode())
+      .emplace(nsPresContext::CSSPixelsToAppUnits(1));
+  return intrinsicSize;
 }
-
-nscoord nsPageBreakFrame::GetIntrinsicBSize() { return 0; }
 
 void nsPageBreakFrame::Reflow(nsPresContext* aPresContext,
                               ReflowOutput& aReflowOutput,
                               const ReflowInput& aReflowInput,
                               nsReflowStatus& aStatus) {
   DO_GLOBAL_REFLOW_COUNT("nsPageBreakFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aReflowOutput, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Override reflow, since we don't want to deal with what our
@@ -965,7 +1050,7 @@ void nsPageBreakFrame::Reflow(nsPresContext* aPresContext,
       }
     }
   }
-  LogicalSize finalSize(wm, GetIntrinsicISize(), bSize);
+  LogicalSize finalSize(wm, *GetIntrinsicSize().ISize(wm), bSize);
   // round the height down to the nearest pixel
   // XXX(mats) why???
   finalSize.BSize(wm) -=

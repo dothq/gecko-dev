@@ -8,6 +8,7 @@
 
 #include "CompositorThread.h"
 #include "MainThreadUtils.h"
+#include "ipc/RemoteContentController.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZCTreeManagerParent.h"  // for APZCTreeManagerParent
@@ -62,7 +63,7 @@ void RemoteContentController::RequestContentRepaint(
   }
 }
 
-void RemoteContentController::HandleTapOnMainThread(
+void RemoteContentController::HandleTapOnParentProcessMainThread(
     TapType aTapType, LayoutDevicePoint aPoint, Modifiers aModifiers,
     ScrollableLayerGuid aGuid, uint64_t aInputBlockId,
     const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
@@ -78,20 +79,19 @@ void RemoteContentController::HandleTapOnMainThread(
   }
 }
 
-void RemoteContentController::HandleTapOnCompositorThread(
+void RemoteContentController::HandleTapOnGPUProcessMainThread(
     TapType aTapType, LayoutDevicePoint aPoint, Modifiers aModifiers,
     ScrollableLayerGuid aGuid, uint64_t aInputBlockId,
     const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
   MOZ_ASSERT(XRE_IsGPUProcess());
-  MOZ_ASSERT(mCompositorThread->IsOnCurrentThread());
+  MOZ_ASSERT(NS_IsMainThread());
 
-  // The raw pointer to APZCTreeManagerParent is ok here because we are on
-  // the compositor thread.
-  APZCTreeManagerParent* apzctmp =
-      CompositorBridgeParent::GetApzcTreeManagerParentForRoot(aGuid.mLayersId);
-  if (apzctmp) {
-    Unused << apzctmp->SendHandleTap(aTapType, aPoint, aModifiers, aGuid,
-                                     aInputBlockId, aDoubleTapToZoomMetrics);
+  // Send a message to the controller thread to handle the single-tap gesture.
+  APZInputBridgeParent* apzib =
+      CompositorBridgeParent::GetApzInputBridgeParentForRoot(aGuid.mLayersId);
+  if (apzib) {
+    Unused << apzib->SendHandleTap(aTapType, aPoint, aModifiers, aGuid,
+                                   aInputBlockId, aDoubleTapToZoomMetrics);
   }
 }
 
@@ -103,19 +103,18 @@ void RemoteContentController::HandleTap(
   APZThreadUtils::AssertOnControllerThread();
 
   if (XRE_GetProcessType() == GeckoProcessType_GPU) {
-    if (mCompositorThread->IsOnCurrentThread()) {
-      HandleTapOnCompositorThread(aTapType, aPoint, aModifiers, aGuid,
-                                  aInputBlockId, aDoubleTapToZoomMetrics);
+    if (NS_IsMainThread()) {
+      HandleTapOnGPUProcessMainThread(aTapType, aPoint, aModifiers, aGuid,
+                                      aInputBlockId, aDoubleTapToZoomMetrics);
     } else {
-      // We have to send messages from the compositor thread
-      mCompositorThread->Dispatch(
-          NewRunnableMethod<TapType, LayoutDevicePoint, Modifiers,
-                            ScrollableLayerGuid, uint64_t,
-                            Maybe<DoubleTapToZoomMetrics>>(
-              "layers::RemoteContentController::HandleTapOnCompositorThread",
-              this, &RemoteContentController::HandleTapOnCompositorThread,
-              aTapType, aPoint, aModifiers, aGuid, aInputBlockId,
-              aDoubleTapToZoomMetrics));
+      NS_DispatchToMainThread(NewRunnableMethod<TapType, LayoutDevicePoint,
+                                                Modifiers, ScrollableLayerGuid,
+                                                uint64_t,
+                                                Maybe<DoubleTapToZoomMetrics>>(
+          "layers::RemoteContentController::HandleTapOnGPUProcessMainThread",
+          this, &RemoteContentController::HandleTapOnGPUProcessMainThread,
+          aTapType, aPoint, aModifiers, aGuid, aInputBlockId,
+          aDoubleTapToZoomMetrics));
     }
     return;
   }
@@ -123,8 +122,8 @@ void RemoteContentController::HandleTap(
   MOZ_ASSERT(XRE_IsParentProcess());
 
   if (NS_IsMainThread()) {
-    HandleTapOnMainThread(aTapType, aPoint, aModifiers, aGuid, aInputBlockId,
-                          aDoubleTapToZoomMetrics);
+    HandleTapOnParentProcessMainThread(aTapType, aPoint, aModifiers, aGuid,
+                                       aInputBlockId, aDoubleTapToZoomMetrics);
   } else {
     // We must be on Android, running on the Java UI thread
 #ifndef MOZ_WIDGET_ANDROID
@@ -138,13 +137,15 @@ void RemoteContentController::HandleTap(
     // using NS_DispatchToMainThread would post to a different message loop,
     // and introduces the possibility of this tap event getting processed
     // out of order with respect to the touch events that synthesized it.
-    mozilla::jni::DispatchToGeckoPriorityQueue(
-        NewRunnableMethod<TapType, LayoutDevicePoint, Modifiers,
-                          ScrollableLayerGuid, uint64_t,
-                          Maybe<DoubleTapToZoomMetrics>>(
-            "layers::RemoteContentController::HandleTapOnMainThread", this,
-            &RemoteContentController::HandleTapOnMainThread, aTapType, aPoint,
-            aModifiers, aGuid, aInputBlockId, aDoubleTapToZoomMetrics));
+    mozilla::jni::DispatchToGeckoPriorityQueue(NewRunnableMethod<
+                                               TapType, LayoutDevicePoint,
+                                               Modifiers, ScrollableLayerGuid,
+                                               uint64_t,
+                                               Maybe<DoubleTapToZoomMetrics>>(
+        "layers::RemoteContentController::HandleTapOnParentProcessMainThread",
+        this, &RemoteContentController::HandleTapOnParentProcessMainThread,
+        aTapType, aPoint, aModifiers, aGuid, aInputBlockId,
+        aDoubleTapToZoomMetrics));
 #endif
   }
 }
@@ -322,6 +323,47 @@ void RemoteContentController::UpdateOverscrollOffset(
       MOZ_RELEASE_ASSERT(rootController->IsRemote());
       Unused << static_cast<RemoteContentController*>(rootController)
                     ->SendUpdateOverscrollOffset(aGuid, aX, aY, aIsRootContent);
+    }
+  }
+}
+
+void RemoteContentController::HideDynamicToolbar(
+    const ScrollableLayerGuid& aGuid) {
+  // We always want these to go to the parent process
+  if (XRE_IsParentProcess()) {
+#ifdef MOZ_WIDGET_ANDROID
+    if (!NS_IsMainThread()) {
+      mozilla::jni::DispatchToGeckoPriorityQueue(
+          NewRunnableMethod<ScrollableLayerGuid>(
+              "layers::RemoteContentController::HideDynamicToolbar", this,
+              &RemoteContentController::HideDynamicToolbar, aGuid));
+      return;
+    }
+#endif
+
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
+    RefPtr<GeckoContentController> rootController =
+        CompositorBridgeParent::GetGeckoContentControllerForRoot(
+            aGuid.mLayersId);
+    if (rootController) {
+      rootController->HideDynamicToolbar(aGuid);
+    }
+  } else if (XRE_IsGPUProcess()) {
+    if (!mCompositorThread->IsOnCurrentThread()) {
+      mCompositorThread->Dispatch(NewRunnableMethod<ScrollableLayerGuid>(
+          "layers::RemoteContentController::HideDynamicToolbar", this,
+          &RemoteContentController::HideDynamicToolbar, aGuid));
+      return;
+    }
+
+    MOZ_RELEASE_ASSERT(mCompositorThread->IsOnCurrentThread());
+    GeckoContentController* rootController =
+        CompositorBridgeParent::GetGeckoContentControllerForRoot(
+            aGuid.mLayersId);
+    if (rootController) {
+      MOZ_RELEASE_ASSERT(rootController->IsRemote());
+      Unused << static_cast<RemoteContentController*>(rootController)
+                    ->SendHideDynamicToolbar();
     }
   }
 }

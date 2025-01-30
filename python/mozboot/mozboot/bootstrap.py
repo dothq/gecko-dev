@@ -162,6 +162,25 @@ We recommend upgrading to at least version "{minimum_recommended_version}" to im
 performance.
 """.strip()
 
+# Dev Drives were added in 22621.2338 and should be available in all subsequent versions
+DEV_DRIVE_MINIMUM_VERSION = Version("10.0.22621.2338")
+DEV_DRIVE_SUGGESTION = """
+Mach has detected that the Firefox source repository ({}) is located on an {} drive.
+Your current version of Windows ({}) supports ReFS drives (Dev Drive).
+
+It has been shown that Firefox builds are 5-10% faster on
+ReFS, it is recommended that you create an ReFS drive and move the Firefox
+source repository to it before proceeding.
+
+The instructions for how to do that can be found here: https://learn.microsoft.com/en-us/windows/dev-drive/
+
+If you wish disregard this recommendation, you can hide this message by setting
+'MACH_HIDE_DEV_DRIVE_SUGGESTION=1' in your environment variables (and restarting your shell)."""
+DEV_DRIVE_DETECTION_ERROR = """
+Error encountered while checking for Dev Drive.
+ Reason: {} (skipping)
+"""
+
 
 def check_for_hgrc_state_dir_mismatch(state_dir):
     ignore_hgrc_state_dir_mismatch = os.environ.get(
@@ -419,6 +438,9 @@ class Bootstrapper(object):
         self.instance.validate_environment()
         self._validate_python_environment(checkout_root)
 
+        if sys.platform.startswith("win"):
+            self._check_for_dev_drive(checkout_root)
+
         if self.instance.no_system_changes:
             self.maybe_install_private_packages_or_exit(application, checkout_type)
             self._output_mozconfig(application, mozconfig_builder)
@@ -483,6 +505,71 @@ class Bootstrapper(object):
                 "To build %s, please restart the shell (Start a new terminal window)"
                 % name
             )
+
+    def _check_for_dev_drive(self, topsrcdir):
+        def extract_windows_version_number(raw_ver_output):
+            pattern = re.compile(r"\bVersion (\d+(\.\d+)*)\b")
+            match = pattern.search(raw_ver_output)
+
+            if match:
+                windows_version_number = match.group(1)
+                return Version(windows_version_number)
+
+            return Version("0")
+
+        if os.environ.get("MACH_HIDE_DEV_DRIVE_SUGGESTION"):
+            return
+
+        print("Checking for Dev Drive...")
+
+        if not shutil.which("powershell"):
+            print(
+                "PowerShell is not available on the system path. Unable to check for Dev Drive."
+            )
+            return
+
+        try:
+            ver_output = subprocess.check_output(["cmd.exe", "/c", "ver"], text=True)
+            current_windows_version = extract_windows_version_number(ver_output)
+
+            if current_windows_version < DEV_DRIVE_MINIMUM_VERSION:
+                return
+
+            file_system_info = subprocess.check_output(
+                [
+                    "powershell",
+                    "Get-Item",
+                    "-Path",
+                    topsrcdir,
+                    "|",
+                    "Get-Volume",
+                    "|",
+                    "Select-Object",
+                    "FileSystem",
+                ],
+                text=True,
+            )
+
+            file_system_type = file_system_info.strip().split("\n")[2]
+
+            if file_system_type == "ReFS":
+                print(" The Firefox source repository is on a Dev Drive.")
+            else:
+                print(
+                    DEV_DRIVE_SUGGESTION.format(
+                        topsrcdir, file_system_type, current_windows_version
+                    )
+                )
+                if self.instance.no_interactive:
+                    pass
+                else:
+                    input("\nPress enter to continue.")
+
+        except subprocess.CalledProcessError as error:
+            print(
+                DEV_DRIVE_DETECTION_ERROR.format(f"CalledProcessError: {error.stderr}")
+            )
+            pass
 
     def _default_mozconfig_path(self):
         return Path(self.mach_context.topdir) / "mozconfig"
@@ -599,7 +686,9 @@ def update_vct(hg: Path, root_state_dir: Path):
     return vct_dir
 
 
-def configure_mercurial(hg: Optional[Path], root_state_dir: Path):
+def configure_mercurial(
+    hg: Optional[Path], root_state_dir: Path, update_only: bool = False
+):
     """Run the Mercurial configuration wizard."""
     vct_dir = update_vct(hg, root_state_dir)
 
@@ -612,6 +701,8 @@ def configure_mercurial(hg: Optional[Path], root_state_dir: Path):
         f"extensions.configwizard={vct_dir}/hgext/configwizard",
         "configwizard",
     ]
+    if update_only:
+        args += ["--config", "configwizard.steps="]
     subprocess.call(args)
 
 
@@ -633,7 +724,12 @@ def update_mercurial_repo(hg: Path, url, dest: Path, revision):
     print(f"Ensuring {url} is up to date at {dest}")
 
     env = os.environ.copy()
-    env.update({"HGPLAIN": "1"})
+    env.update(
+        {
+            "HGPLAIN": "1",
+            "HGRCPATH": "!",
+        }
+    )
 
     try:
         subprocess.check_call(pull_args, cwd=str(cwd), env=env)
@@ -728,7 +824,7 @@ def update_git_tools(git: Optional[Path], root_state_dir: Path):
                 os.chmod(path, stat.S_IRWXU)
                 func(path)
             else:
-                raise
+                raise exc
 
         shutil.rmtree(str(cinnabar_dir), onerror=onerror)
 
@@ -743,6 +839,7 @@ def update_git_tools(git: Optional[Path], root_state_dir: Path):
     # git-cinnabar 0.6.0rc1 self-update had a bug that could leave an empty
     # file. If that happens, install from scratch.
     if not exists or cinnabar_exe.stat().st_size == 0:
+        import ssl
         from urllib.request import urlopen
 
         import certifi
@@ -753,10 +850,9 @@ def update_git_tools(git: Optional[Path], root_state_dir: Path):
         cinnabar_url = "https://github.com/glandium/git-cinnabar/"
         download_py = cinnabar_dir / "download.py"
         with open(download_py, "wb") as fh:
+            context = ssl.create_default_context(cafile=certifi.where())
             shutil.copyfileobj(
-                urlopen(
-                    f"{cinnabar_url}/raw/master/download.py", cafile=certifi.where()
-                ),
+                urlopen(f"{cinnabar_url}/raw/master/download.py", context=context),
                 fh,
             )
 

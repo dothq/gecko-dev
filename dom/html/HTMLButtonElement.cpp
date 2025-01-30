@@ -12,13 +12,12 @@
 #include "nsAttrValueInlines.h"
 #include "nsIContentInlines.h"
 #include "nsGkAtoms.h"
-#include "nsStyleConsts.h"
 #include "nsPresContext.h"
 #include "nsIFormControl.h"
 #include "nsIFrame.h"
-#include "nsIFormControlFrame.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/ContentEvents.h"
+#include "mozilla/FocusModel.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/MouseEvents.h"
@@ -113,15 +112,14 @@ void HTMLButtonElement::GetType(nsAString& aType) {
 
 int32_t HTMLButtonElement::TabIndexDefault() { return 0; }
 
-bool HTMLButtonElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
+bool HTMLButtonElement::IsHTMLFocusable(IsFocusableFlags aFlags,
+                                        bool* aIsFocusable,
                                         int32_t* aTabIndex) {
   if (nsGenericHTMLFormControlElementWithState::IsHTMLFocusable(
-          aWithMouse, aIsFocusable, aTabIndex)) {
+          aFlags, aIsFocusable, aTabIndex)) {
     return true;
   }
-
-  *aIsFocusable = IsFormControlDefaultFocusable(aWithMouse) && !IsDisabled();
-
+  *aIsFocusable = IsFormControlDefaultFocusable(aFlags) && !IsDisabled();
   return false;
 }
 
@@ -148,9 +146,7 @@ bool HTMLButtonElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
 }
 
 bool HTMLButtonElement::IsDisabledForEvents(WidgetEvent* aEvent) {
-  nsIFormControlFrame* formControlFrame = GetFormControlFrame(false);
-  nsIFrame* formFrame = do_QueryFrame(formControlFrame);
-  return IsElementDisabledForEvents(aEvent, formFrame);
+  return IsElementDisabledForEvents(aEvent, GetPrimaryFrame());
 }
 
 void HTMLButtonElement::GetEventTargetParent(EventChainPreVisitor& aVisitor) {

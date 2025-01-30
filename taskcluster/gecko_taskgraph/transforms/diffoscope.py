@@ -27,18 +27,18 @@ diff_description_schema = Schema(
         # Treeherder symbol.
         Required("symbol"): str,
         # relative path (from config.path) to the file the task was defined in.
-        Optional("job-from"): str,
+        Optional("task-from"): str,
         # Original and new builds to compare.
         Required("original"): index_or_string,
         Required("new"): index_or_string,
-        # Arguments to pass to diffoscope, used for job-defaults in
-        # taskcluster/ci/diffoscope/kind.yml
+        # Arguments to pass to diffoscope, used for task-defaults in
+        # taskcluster/kinds/diffoscope/kind.yml
         Optional("args"): str,
         # Extra arguments to pass to diffoscope, that can be set per job.
         Optional("extra-args"): str,
         # Fail the task when differences are detected.
         Optional("fail-on-diff"): bool,
-        # What artifact to check the differences of. Defaults to target.tar.bz2
+        # What artifact to check the differences of. Defaults to target.tar.xz
         # for Linux, target.dmg for Mac, target.zip for Windows, target.apk for
         # Android.
         Optional("artifact"): str,
@@ -96,7 +96,7 @@ def fill_template(config, tasks):
             if artifact:
                 pass
             elif "linux" in os_hint:
-                artifact = "target.tar.bz2"
+                artifact = "target.tar.xz"
             elif "macosx" in os_hint:
                 artifact = "target.dmg"
             elif "android" in os_hint:

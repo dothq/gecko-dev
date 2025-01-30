@@ -1,9 +1,7 @@
 #!/usr/bin/env python
-# ***** BEGIN LICENSE BLOCK *****
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-# ***** END LICENSE BLOCK *****
 """Generic VCS support.
 """
 
@@ -83,9 +81,7 @@ class VCSMixin(object):
             args=(vcs_obj, kwargs["dest"]),
         )
 
-    def vcs_checkout_repos(
-        self, repo_list, parent_dir=None, tag_override=None, **kwargs
-    ):
+    def vcs_checkout_repos(self, repo_list, parent_dir=None, **kwargs):
         """Check out a list of repos."""
         orig_dir = os.getcwd()
         c = self.config
@@ -98,8 +94,6 @@ class VCSMixin(object):
         for repo_dict in repo_list:
             kwargs = deepcopy(kwargs_orig)
             kwargs.update(repo_dict)
-            if tag_override:
-                kwargs["branch"] = tag_override
             dest = self.query_dest(kwargs)
             revision_dict[dest] = {"repo": kwargs["repo"]}
             revision_dict[dest]["revision"] = self.vcs_checkout(**kwargs)

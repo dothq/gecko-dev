@@ -799,6 +799,13 @@ class MOZ_RAII CacheIRCompiler {
                                        FloatRegisterSet::Volatile());
   }
 
+  // Returns the set of volatile registers that are live. These registers need
+  // to be saved when making non-GC calls with callWithABI.
+  LiveRegisterSet liveVolatileRegs() const {
+    // All volatile GPR registers are treated as live.
+    return {GeneralRegisterSet::Volatile(), liveVolatileFloatRegs()};
+  }
+
   bool objectGuardNeedsSpectreMitigations(ObjOperandId objId) const {
     // Instructions like GuardShape need Spectre mitigations if
     // (1) mitigations are enabled and (2) the object is used by other
@@ -1420,6 +1427,9 @@ class CacheIRStubInfo {
 
   void replaceStubRawWord(uint8_t* stubData, uint32_t offset, uintptr_t oldWord,
                           uintptr_t newWord) const;
+
+  void replaceStubRawValueBits(uint8_t* stubData, uint32_t offset,
+                               uint64_t oldBits, uint64_t newBits) const;
 };
 
 template <typename T>

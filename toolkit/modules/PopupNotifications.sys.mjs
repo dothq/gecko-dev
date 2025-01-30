@@ -93,7 +93,7 @@ function Notification(
   this.isPrivate = PrivateBrowsingUtils.isWindowPrivate(
     this.browser.ownerGlobal
   );
-  this.timeCreated = this.owner.window.performance.now();
+  this.timeCreated = Cu.now();
 }
 
 Notification.prototype = {
@@ -689,7 +689,7 @@ PopupNotifications.prototype = {
    */
   suppressWhileOpen(panel) {
     this._hidePanel().catch(console.error);
-    panel.addEventListener("popuphidden", aEvent => {
+    panel.addEventListener("popuphidden", () => {
       this._update();
     });
   },
@@ -823,8 +823,9 @@ PopupNotifications.prototype = {
       case "popuppositioned":
         if (this.isPanelOpen) {
           for (let elt of this.panel.children) {
+            let now = Cu.now();
             elt.notification.timeShown = Math.max(
-              this.window.performance.now(),
+              now,
               elt.notification.timeShown ?? 0
             );
           }
@@ -1046,13 +1047,9 @@ PopupNotifications.prototype = {
 
       popupnotification.setAttribute("id", popupnotificationID);
       popupnotification.setAttribute("popupid", n.id);
-      popupnotification.setAttribute(
-        "oncommand",
-        "PopupNotifications._onCommand(event);"
-      );
-      popupnotification.setAttribute(
-        "closebuttoncommand",
-        `PopupNotifications._dismiss(event, true);`
+
+      popupnotification.addEventListener("command", event =>
+        this._onCommand(event)
       );
 
       popupnotification.toggleAttribute(
@@ -1066,34 +1063,11 @@ PopupNotifications.prototype = {
           "buttonaccesskey",
           n.mainAction.accessKey
         );
-        popupnotification.setAttribute(
-          "buttoncommand",
-          "PopupNotifications._onButtonEvent(event, 'buttoncommand');"
-        );
-        popupnotification.setAttribute(
-          "dropmarkerpopupshown",
-          "PopupNotifications._onButtonEvent(event, 'dropmarkerpopupshown');"
-        );
-        popupnotification.setAttribute(
-          "learnmoreclick",
-          "PopupNotifications._onButtonEvent(event, 'learnmoreclick');"
-        );
-        popupnotification.setAttribute(
-          "menucommand",
-          "PopupNotifications._onMenuCommand(event);"
-        );
       } else {
         // Enable the default button to let the user close the popup if the close button is hidden
-        popupnotification.setAttribute(
-          "buttoncommand",
-          "PopupNotifications._onButtonEvent(event, 'buttoncommand');"
-        );
         popupnotification.toggleAttribute("buttonhighlight", true);
         popupnotification.removeAttribute("buttonlabel");
         popupnotification.removeAttribute("buttonaccesskey");
-        popupnotification.removeAttribute("dropmarkerpopupshown");
-        popupnotification.removeAttribute("learnmoreclick");
-        popupnotification.removeAttribute("menucommand");
       }
 
       let classes = "popup-notification-icon";
@@ -1153,10 +1127,6 @@ PopupNotifications.prototype = {
         popupnotification.setAttribute(
           "secondarybuttonaccesskey",
           secondaryAction.accessKey
-        );
-        popupnotification.setAttribute(
-          "secondarybuttoncommand",
-          "PopupNotifications._onButtonEvent(event, 'secondarybuttoncommand');"
         );
 
         for (let i = 1; i < n.secondaryActions.length; i++) {
@@ -1242,7 +1212,7 @@ PopupNotifications.prototype = {
   },
 
   _extendSecurityDelay(notifications) {
-    let now = this.window.performance.now();
+    let now = Cu.now();
     notifications.forEach(n => {
       n.timeShown = now + FULLSCREEN_TRANSITION_TIME_SHOWN_OFFSET_MS;
     });
@@ -1292,17 +1262,11 @@ PopupNotifications.prototype = {
       }
     }
 
-    // Remember the time the notification was shown for the security delay.
-    notificationsToShow.forEach(
-      n =>
-        (n.timeShown = Math.max(
-          this.window.performance.now(),
-          n.timeShown ?? 0
-        ))
-    );
-
     if (this.isPanelOpen && this._currentAnchorElement == anchorElement) {
       notificationsToShow.forEach(function (n) {
+        // If the panel is already open remember the time the notification was
+        // shown for the security delay.
+        n.timeShown = Math.max(Cu.now(), n.timeShown ?? 0);
         this._fireCallback(n, NOTIFICATION_EVENT_SHOWN);
       }, this);
 
@@ -1369,7 +1333,7 @@ PopupNotifications.prototype = {
           true
         );
       }
-      this._popupshownListener = function (e) {
+      this._popupshownListener = function () {
         target.removeEventListener(
           "popupshown",
           this._popupshownListener,
@@ -1378,6 +1342,9 @@ PopupNotifications.prototype = {
         this._popupshownListener = null;
 
         notificationsToShow.forEach(function (n) {
+          // The panel has been opened, remember the time the notification was
+          // shown for the security delay.
+          n.timeShown = Math.max(Cu.now(), n.timeShown ?? 0);
           this._fireCallback(n, NOTIFICATION_EVENT_SHOWN);
         }, this);
         // These notifications are used by tests to know when all the processing
@@ -1812,8 +1779,7 @@ PopupNotifications.prototype = {
 
       // Record the time of the first notification dismissal if the main action
       // was not triggered in the meantime.
-      let timeSinceShown =
-        this.window.performance.now() - notificationObj.timeShown;
+      let timeSinceShown = Cu.now() - notificationObj.timeShown;
       if (
         !notificationObj.wasDismissed &&
         !notificationObj.recordedTelemetryMainAction
@@ -1911,7 +1877,7 @@ PopupNotifications.prototype = {
         "_onButtonEvent: notification.timeShown is unset. Setting to now.",
         notification
       );
-      notification.timeShown = this.window.performance.now();
+      notification.timeShown = Cu.now();
     }
 
     if (type == "dropmarkerpopupshown") {
@@ -1927,8 +1893,7 @@ PopupNotifications.prototype = {
     if (type == "buttoncommand") {
       // Record the total timing of the main action since the notification was
       // created, even if the notification was dismissed in the meantime.
-      let timeSinceCreated =
-        this.window.performance.now() - notification.timeCreated;
+      let timeSinceCreated = Cu.now() - notification.timeCreated;
       if (!notification.recordedTelemetryMainAction) {
         notification.recordedTelemetryMainAction = true;
         notification._recordTelemetry(
@@ -1939,16 +1904,20 @@ PopupNotifications.prototype = {
     }
 
     if (type == "buttoncommand" || type == "secondarybuttoncommand") {
-      if (Services.focus.activeWindow != this.window) {
+      // TODO: Bug 1892756.
+      if (
+        Services.focus.activeWindow != this.window ||
+        notificationEl.matches(":-moz-window-inactive")
+      ) {
         Services.console.logStringMessage(
           "PopupNotifications._onButtonEvent: " +
-            "Button click happened before the window was focused"
+            "Button click happened before the window was focused / active"
         );
         this.window.focus();
         return;
       }
 
-      let now = this.window.performance.now();
+      let now = Cu.now();
       let timeSinceShown = now - notification.timeShown;
       if (timeSinceShown < lazy.buttonDelay) {
         Services.console.logStringMessage(

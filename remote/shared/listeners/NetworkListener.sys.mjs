@@ -42,13 +42,23 @@ ChromeUtils.defineESModuleGetters(lazy, {
  *      - {number} timestamp - Timestamp when the event was generated.
  */
 export class NetworkListener {
+  #decodedBodySizeMap;
   #devtoolsNetworkObserver;
   #listening;
+  #navigationManager;
+  #networkEventsMap;
 
-  constructor() {
+  constructor(navigationManager, decodedBodySizeMap) {
     lazy.EventEmitter.decorate(this);
 
     this.#listening = false;
+    this.#decodedBodySizeMap = decodedBodySizeMap;
+    this.#navigationManager = navigationManager;
+
+    // This map is going to be used in NetworkEventRecord,
+    // but because we need to have one instance of the map per session,
+    // we have to create and store it here (since each session has a dedicated NetworkListener).
+    this.#networkEventsMap = new Map();
   }
 
   destroy() {
@@ -104,6 +114,13 @@ export class NetworkListener {
   };
 
   #onNetworkEvent = (networkEvent, channel) => {
-    return new lazy.NetworkEventRecord(networkEvent, channel, this);
+    return new lazy.NetworkEventRecord(
+      networkEvent,
+      channel,
+      this,
+      this.#decodedBodySizeMap,
+      this.#navigationManager,
+      this.#networkEventsMap
+    );
   };
 }

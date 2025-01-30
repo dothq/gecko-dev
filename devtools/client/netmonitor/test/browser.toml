@@ -1,4 +1,5 @@
 [DEFAULT]
+https_first_disabled = true
 tags = "devtools"
 subsuite = "devtools"
 skip-if = [
@@ -12,6 +13,7 @@ support-files = [
   "html_cause-test-page.html",
   "html_content-type-without-cache-test-page.html",
   "html_brotli-test-page.html",
+  "html_zstd-test-page.html",
   "html_image-tooltip-test-page.html",
   "html_cache-test-page.html",
   "html_cors-test-page.html",
@@ -23,6 +25,7 @@ support-files = [
   "html_fonts-test-page.html",
   "html_frame-test-page.html",
   "html_frame-subdocument.html",
+  "html_file_channel.html",
   "html_filter-test-page.html",
   "html_infinite-get-page.html",
   "html_internal-stylesheet.html",
@@ -49,6 +52,7 @@ support-files = [
   "html_single-get-page.html",
   "html_slow-requests-test-page.html",
   "html_send-beacon.html",
+  "html_send-beacon-late-iframe-request.html",
   "html_sorting-test-page.html",
   "html_statistics-edge-case-page.html",
   "html_statistics-test-page.html",
@@ -65,11 +69,14 @@ support-files = [
   "html_sse-test-page.html",
   "html_ws-sse-test-page.html",
   "html_image-cache.html",
+  "html_script-cache.html",
+  "html_stylesheet-cache.html",
   "js_worker-test.js",
   "js_worker-test2.js",
   "js_websocket-worker-test.js",
   "sjs_content-type-test-server.sjs",
   "sjs_cors-test-server.sjs",
+  "sjs_early-hint-test-server.sjs",
   "sjs_https-redirect-test-server.sjs",
   "sjs_hsts-test-server.sjs",
   "sjs_json-test-server.sjs",
@@ -84,9 +91,11 @@ support-files = [
   "sjs_sorting-test-server.sjs",
   "sjs_sse-test-server.sjs",
   "sjs_status-codes-test-server.sjs",
+  "sjs_test-script.sjs",
   "sjs_timings-test-server.sjs",
   "sjs_truncate-test-server.sjs",
   "test-image.png",
+  "test-stylesheet.css",
   "ostrich-regular.ttf",
   "ostrich-black.ttf",
   "service-workers/status-codes.html",
@@ -113,6 +122,8 @@ support-files = [
 
 ["browser_net_basic-search.js"]
 
+["browser_net_block-before-network.js"]
+
 ["browser_net_block-context.js"]
 
 ["browser_net_block-csp.js"]
@@ -124,11 +135,10 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 
 ["browser_net_block-pattern.js"]
 skip-if = [
-  "os == 'linux' && os_version == '18.04'",
+  "os == 'linux' && os_version == '18.04' && processor == 'x86_64'",
   "win11_2009 && debug", # Bug 1603355
   "win10_2009 && debug", # Bug 1603355
-  "apple_catalina && debug", # Bug 1603355
-  "apple_silicon && debug", # Bug 1603355
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && debug", # Bug 1603355
 ]
 
 ["browser_net_block-serviceworker.js"]
@@ -174,12 +184,17 @@ skip-if = [
 ["browser_net_columns_last_column.js"]
 
 ["browser_net_columns_pref.js"]
+skip-if = [
+  # Frequent intermittents on win + beta after enabling throttling. See Bug 1902326
+  "release_or_beta && os == 'win'",
+]
 
 ["browser_net_columns_reset.js"]
 
 ["browser_net_columns_showhide.js"]
 
 ["browser_net_columns_time.js"]
+https_first_disabled = true # Bug 1898241
 skip-if = [
   "win11_2009", # Bug 1797751
 ]
@@ -191,8 +206,7 @@ skip-if = [
 
 ["browser_net_content-type.js"]
 skip-if = [
-  "apple_catalina && !debug",
-  "apple_silicon && !debug",
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && opt",
 ]
 
 ["browser_net_cookies_sorted.js"]
@@ -211,8 +225,7 @@ skip-if = ["win11_2009 && debug && verify"]
 ["browser_net_copy_params.js"]
 skip-if = [
   "win11_2009", # Bug 1797751
-  "apple_catalina && !debug && verify", # bug 1328915
-  "apple_silicon && !debug && verify", # bug 1328915
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && opt && verify", # bug 1328915
 ]
 
 ["browser_net_copy_response.js"]
@@ -229,6 +242,8 @@ skip-if = [
 
 ["browser_net_cyrillic-02.js"]
 
+["browser_net_data_uri.js"]
+
 ["browser_net_decode-params.js"]
 
 ["browser_net_decode-url.js"]
@@ -237,6 +252,8 @@ skip-if = [
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_domain-not-found.js"]
+
+["browser_net_earlyhints.js"]
 
 ["browser_net_edit_resend_cancel.js"]
 
@@ -247,6 +264,8 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 ["browser_net_edit_resend_xhr.js"]
 
 ["browser_net_error-boundary-01.js"]
+
+["browser_net_file_uri.js"]
 
 ["browser_net_filter-01.js"]
 
@@ -276,7 +295,6 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 skip-if = ["true"] # Bug 1479782
 
 ["browser_net_header-docs.js"]
-fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_header-ref-policy.js"]
 
@@ -291,6 +309,10 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_headers-resize.js"]
+skip-if = [
+  # Frequent intermittents on win + beta after enabling throttling. See Bug 1902326
+  "release_or_beta && os == 'win'",
+]
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_headers_filter.js"]
@@ -329,6 +351,8 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 ["browser_net_jsonp.js"]
 
 ["browser_net_large-response.js"]
+
+["browser_net_layout_after_toggle.js"]
 
 ["browser_net_leak_on_tab_close.js"]
 
@@ -406,15 +430,17 @@ skip-if = [
 ["browser_net_resend_xhr.js"]
 
 ["browser_net_response_CORS_blocked.js"]
-skip-if = ["os == 'linux' && os_version == '18.04' && !debug && a11y_checks"] # bug 1732635
+skip-if = ["os == 'linux' && os_version == '18.04' && processor == 'x86_64' && opt && a11y_checks"] # bug 1732635
 
 ["browser_net_response_node-expanded.js"]
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_save_response_as.js"]
 
+["browser_net_script_cache.js"]
+
 ["browser_net_search-results.js"]
-skip-if = ["os == 'linux' && os_version == '18.04' && a11y_checks"]  # Bug 1721160
+skip-if = ["os == 'linux' && os_version == '18.04' && processor == 'x86_64' && a11y_checks"]  # Bug 1721160
 
 ["browser_net_security-details.js"]
 
@@ -441,7 +467,7 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_net_service-worker-status.js"]
-skip-if = ["os == 'linux' && os_version == '18.04' && !debug && verify"]
+skip-if = ["os == 'linux' && os_version == '18.04' && processor == 'x86_64' && opt && verify"]
 
 ["browser_net_service-worker-timings.js"]
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
@@ -480,6 +506,8 @@ skip-if = ["true"] # Bug 1373558
 
 ["browser_net_streaming-response.js"]
 
+["browser_net_stylesheet_cache.js"]
+
 ["browser_net_tabbar_focus.js"]
 fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
@@ -497,16 +525,23 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 
 ["browser_net_throttle.js"]
 
+["browser_net_throttling_cached.js"]
+
 ["browser_net_throttling_profiles.js"]
 
 ["browser_net_timeline_ticks.js"]
 skip-if = ["true"] # TODO: fix the test
 
 ["browser_net_timing-division.js"]
+skip-if = [
+  # Frequent intermittents on win + beta after enabling throttling. See Bug 1902326
+  "release_or_beta && os == 'win'",
+]
 
 ["browser_net_tracking-resources.js"]
 
 ["browser_net_truncate-post-data.js"]
+https_first_disabled = true # Intermittent crashes on macos when using HTTPS, Bug 1732865
 skip-if = ["socketprocess_networking"] # Bug 1772211
 
 ["browser_net_truncate.js"]
@@ -557,3 +592,5 @@ fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and
 ["browser_net_ws-sse-persist-columns.js"]
 
 ["browser_net_ws-stomp-payload.js"]
+
+["browser_net_zstd.js"]

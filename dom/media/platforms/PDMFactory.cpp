@@ -19,7 +19,6 @@
 #include "MP4Decoder.h"
 #include "MediaChangeMonitor.h"
 #include "MediaInfo.h"
-#include "TheoraDecoder.h"
 #include "VPXDecoder.h"
 #include "VideoUtils.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -27,6 +26,7 @@
 #include "mozilla/RemoteDecoderManagerChild.h"
 #include "mozilla/RemoteDecoderModule.h"
 #include "mozilla/SharedThreadPool.h"
+#include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/TaskQueue.h"
@@ -87,6 +87,9 @@ class PDMInitializer final {
   static void InitGpuPDMs() {
 #ifdef XP_WIN
     WMFDecoderModule::Init();
+    if (StaticPrefs::media_ffvpx_hw_enabled()) {
+      FFVPXRuntimeLinker::Init();
+    }
 #endif
   }
 
@@ -191,8 +194,9 @@ StaticMutex PDMInitializer::sMonitor;
 /* static */
 void PDMInitializer::InitPDMs() {
   StaticMutexAutoLock mon(sMonitor);
-  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!sHasInitializedPDMs);
+  if (sHasInitializedPDMs) {
+    return;
+  }
   if (XRE_IsGPUProcess()) {
     PDM_INIT_LOG("Init PDMs in GPU process");
     InitGpuPDMs();
@@ -254,11 +258,11 @@ class SupportChecker {
       RefPtr<MediaByteBuffer> extraData =
           aTrackConfig.GetAsVideoInfo()->mExtraData;
       AddToCheckList([mimeType, extraData]() {
+#if defined(XP_WIN) || defined(XP_DARWIN)
         if (MP4Decoder::IsH264(mimeType)) {
           SPSData spsdata;
           // WMF H.264 Video Decoder and Apple ATDecoder
           // do not support YUV444 format.
-          // For consistency, all decoders should be checked.
           if (H264::DecodeSPSFromExtraData(extraData, spsdata) &&
               (spsdata.profile_idc == 244 /* Hi444PP */ ||
                spsdata.chroma_format_idc == PDMFactory::kYUV444)) {
@@ -271,6 +275,7 @@ class SupportChecker {
                                   "with YUV444 chroma subsampling.")));
           }
         }
+#endif
         return CheckResult(SupportChecker::Reason::kSupported);
       });
     }
@@ -305,26 +310,26 @@ void PDMFactory::EnsureInit() {
   if (PDMInitializer::HasInitializedPDMs()) {
     return;
   }
-  auto initalization = []() {
+  auto initalizationGfxVarsAndPreferences = []() {
     MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
-    if (!PDMInitializer::HasInitializedPDMs()) {
-      // Ensure that all system variables are initialized.
-      gfx::gfxVars::Initialize();
-      // Prime the preferences system from the main thread.
-      Unused << BrowserTabsRemoteAutostart();
-      PDMInitializer::InitPDMs();
-    }
+    // Ensure that all system variables are initialized.
+    gfx::gfxVars::Initialize();
+    // Prime the preferences system from the main thread.
+    Unused << BrowserTabsRemoteAutostart();
   };
-  // If on the main thread, then initialize PDMs. Otherwise, do a sync-dispatch
-  // to main thread.
-  if (NS_IsMainThread()) {
-    initalization();
-    return;
+  // There are some initialization needed to be done on the main thread.
+  if (!gfx::gfxVars::IsInitialized()) {
+    if (NS_IsMainThread()) {
+      initalizationGfxVarsAndPreferences();
+    } else {
+      nsCOMPtr<nsIEventTarget> mainTarget = GetMainThreadSerialEventTarget();
+      nsCOMPtr<nsIRunnable> runnable =
+          NS_NewRunnableFunction("PDMFactory::EnsureInit",
+                                 std::move(initalizationGfxVarsAndPreferences));
+      SyncRunnable::DispatchToThread(mainTarget, runnable);
+    }
   }
-  nsCOMPtr<nsIEventTarget> mainTarget = GetMainThreadSerialEventTarget();
-  nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction(
-      "PDMFactory::EnsureInit", std::move(initalization));
-  SyncRunnable::DispatchToThread(mainTarget, runnable);
+  PDMInitializer::InitPDMs();
 }
 
 RefPtr<PlatformDecoderModule::CreateDecoderPromise> PDMFactory::CreateDecoder(
@@ -333,7 +338,10 @@ RefPtr<PlatformDecoderModule::CreateDecoderPromise> PDMFactory::CreateDecoder(
     MOZ_ASSERT(mNullPDM);
     return CreateDecoderWithPDM(mNullPDM, aParams);
   }
-  bool isEncrypted = mEMEPDM && aParams.mConfig.mCrypto.IsEncrypted();
+  bool isEncrypted =
+      mEMEPDM && (aParams.mConfig.mCrypto.IsEncrypted() ||
+                  aParams.mEncryptedCustomIdent ==
+                      CreateDecoderParams::EncryptedCustomIdent::True);
 
   if (isEncrypted) {
     return CreateDecoderWithPDM(mEMEPDM, aParams);
@@ -404,15 +412,19 @@ PDMFactory::CreateDecoderWithPDM(PlatformDecoderModule* aPDM,
   }
 
   if (config.IsAudio()) {
+    if (MP4Decoder::IsAAC(config.mMimeType) && !aParams.mUseNullDecoder.mUse &&
+        aParams.mWrappers.contains(media::Wrapper::MediaChangeMonitor)) {
+      // If AudioTrimmer is needed, MediaChangeMonitor will request it.
+      return MediaChangeMonitor::Create(this, aParams);
+    }
     RefPtr<PlatformDecoderModule::CreateDecoderPromise> p;
     p = aPDM->AsyncCreateDecoder(aParams)->Then(
         GetCurrentSerialEventTarget(), __func__,
         [params = CreateDecoderParamsForAsync(aParams)](
             RefPtr<MediaDataDecoder>&& aDecoder) {
           RefPtr<MediaDataDecoder> decoder = std::move(aDecoder);
-          if (!params.mNoWrapper.mDontUseWrapper) {
-            decoder =
-                new AudioTrimmer(decoder.forget(), CreateDecoderParams(params));
+          if (params.mWrappers.contains(media::Wrapper::AudioTrimmer)) {
+            decoder = new AudioTrimmer(decoder.forget());
           }
           return PlatformDecoderModule::CreateDecoderPromise::CreateAndResolve(
               decoder, __func__);
@@ -439,7 +451,8 @@ PDMFactory::CreateDecoderWithPDM(PlatformDecoderModule* aPDM,
 #endif
        VPXDecoder::IsVPX(config.mMimeType) ||
        MP4Decoder::IsHEVC(config.mMimeType)) &&
-      !aParams.mUseNullDecoder.mUse && !aParams.mNoWrapper.mDontUseWrapper) {
+      !aParams.mUseNullDecoder.mUse &&
+      aParams.mWrappers.contains(media::Wrapper::MediaChangeMonitor)) {
     return MediaChangeMonitor::Create(this, aParams);
   }
   return aPDM->AsyncCreateDecoder(aParams);
@@ -474,7 +487,7 @@ DecodeSupportSet PDMFactory::Supports(
 
 void PDMFactory::CreatePDMs() {
   if (StaticPrefs::media_use_blank_decoder()) {
-    CreateAndStartupPDM<BlankDecoderModule>();
+    StartupPDM(BlankDecoderModule::Create());
     // The Blank PDM SupportsMimeType reports true for all codecs; the creation
     // of its decoder is infallible. As such it will be used for all media, we
     // can stop creating more PDM from this point.
@@ -499,8 +512,11 @@ void PDMFactory::CreatePDMs() {
 
 void PDMFactory::CreateGpuPDMs() {
 #ifdef XP_WIN
+  if (StaticPrefs::media_ffvpx_hw_enabled()) {
+    StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
+  }
   if (StaticPrefs::media_wmf_enabled()) {
-    CreateAndStartupPDM<WMFDecoderModule>();
+    StartupPDM(WMFDecoderModule::Create());
   }
 #endif
 }
@@ -529,12 +545,12 @@ void PDMFactory::CreateRddPDMs() {
 #ifdef XP_WIN
   if (StaticPrefs::media_wmf_enabled() &&
       StaticPrefs::media_rdd_wmf_enabled()) {
-    CreateAndStartupPDM<WMFDecoderModule>();
+    StartupPDM(WMFDecoderModule::Create());
   }
 #endif
 #ifdef MOZ_APPLEMEDIA
   if (StaticPrefs::media_rdd_applemedia_enabled()) {
-    CreateAndStartupPDM<AppleDecoderModule>();
+    StartupPDM(AppleDecoderModule::Create());
   }
 #endif
   StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
@@ -546,7 +562,8 @@ void PDMFactory::CreateRddPDMs() {
         FFmpegRuntimeLinker::LinkStatusCode());
   }
 #endif
-  CreateAndStartupPDM<AgnosticDecoderModule>();
+  StartupPDM(AgnosticDecoderModule::Create(),
+             StaticPrefs::media_prefer_non_ffvpx());
 }
 
 void PDMFactory::CreateUtilityPDMs() {
@@ -555,13 +572,13 @@ void PDMFactory::CreateUtilityPDMs() {
   if (StaticPrefs::media_wmf_enabled() &&
       StaticPrefs::media_utility_wmf_enabled() &&
       aKind == ipc::SandboxingKind::UTILITY_AUDIO_DECODING_WMF) {
-    CreateAndStartupPDM<WMFDecoderModule>();
+    StartupPDM(WMFDecoderModule::Create());
   }
 #endif
 #ifdef MOZ_APPLEMEDIA
   if (StaticPrefs::media_utility_applemedia_enabled() &&
       aKind == ipc::SandboxingKind::UTILITY_AUDIO_DECODING_APPLE_MEDIA) {
-    CreateAndStartupPDM<AppleDecoderModule>();
+    StartupPDM(AppleDecoderModule::Create());
   }
 #endif
   if (aKind == ipc::SandboxingKind::GENERIC_UTILITY) {
@@ -582,12 +599,13 @@ void PDMFactory::CreateUtilityPDMs() {
                  StaticPrefs::media_android_media_codec_preferred());
     }
 #endif
-    CreateAndStartupPDM<AgnosticDecoderModule>();
+    StartupPDM(AgnosticDecoderModule::Create(),
+               StaticPrefs::media_prefer_non_ffvpx());
   }
 #ifdef MOZ_WMF_MEDIA_ENGINE
   if (aKind == ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM) {
     if (StaticPrefs::media_wmf_media_engine_enabled()) {
-      CreateAndStartupPDM<MFMediaEngineDecoderModule>();
+      StartupPDM(MFMediaEngineDecoderModule::Create());
     }
   }
 #endif
@@ -595,31 +613,30 @@ void PDMFactory::CreateUtilityPDMs() {
 
 void PDMFactory::CreateContentPDMs() {
   if (StaticPrefs::media_gpu_process_decoder()) {
-    CreateAndStartupPDM<RemoteDecoderModule>(RemoteDecodeIn::GpuProcess);
+    StartupPDM(RemoteDecoderModule::Create(RemoteDecodeIn::GpuProcess));
   }
 
   if (StaticPrefs::media_rdd_process_enabled()) {
-    CreateAndStartupPDM<RemoteDecoderModule>(RemoteDecodeIn::RddProcess);
+    StartupPDM(RemoteDecoderModule::Create(RemoteDecodeIn::RddProcess));
   }
 
   if (StaticPrefs::media_utility_process_enabled()) {
 #ifdef MOZ_APPLEMEDIA
-    CreateAndStartupPDM<RemoteDecoderModule>(
-        RemoteDecodeIn::UtilityProcess_AppleMedia);
+    StartupPDM(
+        RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_AppleMedia));
 #endif
 #ifdef XP_WIN
-    CreateAndStartupPDM<RemoteDecoderModule>(
-        RemoteDecodeIn::UtilityProcess_WMF);
+    StartupPDM(RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_WMF));
 #endif
     // WMF and AppleMedia should be created before Generic because the order
     // affects what decoder module would be chose first.
-    CreateAndStartupPDM<RemoteDecoderModule>(
-        RemoteDecodeIn::UtilityProcess_Generic);
+    StartupPDM(
+        RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_Generic));
   }
 #ifdef MOZ_WMF_MEDIA_ENGINE
   if (StaticPrefs::media_wmf_media_engine_enabled()) {
-    CreateAndStartupPDM<RemoteDecoderModule>(
-        RemoteDecodeIn::UtilityProcess_MFMediaEngineCDM);
+    StartupPDM(RemoteDecoderModule::Create(
+        RemoteDecodeIn::UtilityProcess_MFMediaEngineCDM));
   }
 #endif
 
@@ -631,7 +648,7 @@ void PDMFactory::CreateContentPDMs() {
 #  ifdef MOZ_WMF
       if (!StaticPrefs::media_rdd_process_enabled() ||
           !StaticPrefs::media_rdd_wmf_enabled()) {
-        if (!CreateAndStartupPDM<WMFDecoderModule>()) {
+        if (!StartupPDM(WMFDecoderModule::Create())) {
           mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
         }
       }
@@ -642,11 +659,11 @@ void PDMFactory::CreateContentPDMs() {
 #endif
 
 #ifdef MOZ_APPLEMEDIA
-    CreateAndStartupPDM<AppleDecoderModule>();
+    StartupPDM(AppleDecoderModule::Create());
 #endif
 #ifdef MOZ_OMX
     if (StaticPrefs::media_omx_enabled()) {
-      CreateAndStartupPDM<OmxDecoderModule>();
+      StartupPDM(OmxDecoderModule::Create());
     }
 #endif
     StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
@@ -658,7 +675,8 @@ void PDMFactory::CreateContentPDMs() {
     }
 #endif
 
-    CreateAndStartupPDM<AgnosticDecoderModule>();
+    StartupPDM(AgnosticDecoderModule::Create(),
+               StaticPrefs::media_prefer_non_ffvpx());
 #if !defined(MOZ_WIDGET_ANDROID)  // Still required for video?
   }
 #endif  // !defined(MOZ_WIDGET_ANDROID)
@@ -681,7 +699,7 @@ void PDMFactory::CreateContentPDMs() {
 void PDMFactory::CreateDefaultPDMs() {
 #ifdef XP_WIN
   if (StaticPrefs::media_wmf_enabled()) {
-    if (!CreateAndStartupPDM<WMFDecoderModule>()) {
+    if (!StartupPDM(WMFDecoderModule::Create())) {
       mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
     }
   } else if (StaticPrefs::media_decoder_doctor_wmf_disabled_is_failure()) {
@@ -690,11 +708,11 @@ void PDMFactory::CreateDefaultPDMs() {
 #endif
 
 #ifdef MOZ_APPLEMEDIA
-  CreateAndStartupPDM<AppleDecoderModule>();
+  StartupPDM(AppleDecoderModule::Create());
 #endif
 #ifdef MOZ_OMX
   if (StaticPrefs::media_omx_enabled()) {
-    CreateAndStartupPDM<OmxDecoderModule>();
+    StartupPDM(OmxDecoderModule::Create());
   }
 #endif
   StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
@@ -712,7 +730,8 @@ void PDMFactory::CreateDefaultPDMs() {
   }
 #endif
 
-  CreateAndStartupPDM<AgnosticDecoderModule>();
+  StartupPDM(AgnosticDecoderModule::Create(),
+             StaticPrefs::media_prefer_non_ffvpx());
 
   if (StaticPrefs::media_gmp_decoder_enabled() &&
       !StartupPDM(GMPDecoderModule::Create(),
@@ -783,9 +802,11 @@ void PDMFactory::SetCDMProxy(CDMProxy* aProxy) {
   mEMEPDM = MakeRefPtr<EMEDecoderModule>(aProxy, m);
 }
 
+StaticMutex sSupportedMutex;
+
 /* static */
 media::MediaCodecsSupported PDMFactory::Supported(bool aForceRefresh) {
-  MOZ_ASSERT(NS_IsMainThread());
+  StaticMutexAutoLock lock(sSupportedMutex);
 
   static auto calculate = []() {
     auto pdm = MakeRefPtr<PDMFactory>();
@@ -838,9 +859,6 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
       return MCSInfo::GetDecodeSupportSet(MediaCodec::AV1, aSupported);
     }
 #endif
-    if (TheoraDecoder::IsTheora(aMimeType)) {
-      return MCSInfo::GetDecodeSupportSet(MediaCodec::Theora, aSupported);
-    }
     if (MP4Decoder::IsHEVC(aMimeType)) {
       return MCSInfo::GetDecodeSupportSet(MediaCodec::HEVC, aSupported);
     }
@@ -873,7 +891,6 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
 bool PDMFactory::AllDecodersAreRemote() {
   return StaticPrefs::media_rdd_process_enabled() &&
          StaticPrefs::media_rdd_opus_enabled() &&
-         StaticPrefs::media_rdd_theora_enabled() &&
          StaticPrefs::media_rdd_vorbis_enabled() &&
          StaticPrefs::media_rdd_vpx_enabled() &&
 #if defined(MOZ_WMF)

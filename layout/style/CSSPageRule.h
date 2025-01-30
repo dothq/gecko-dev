@@ -7,11 +7,14 @@
 #ifndef mozilla_dom_CSSPageRule_h
 #define mozilla_dom_CSSPageRule_h
 
-#include "mozilla/css/Rule.h"
+#include "mozilla/css/GroupRule.h"
 #include "mozilla/ServoBindingTypes.h"
 
 #include "nsDOMCSSDeclaration.h"
 #include "nsICSSDeclaration.h"
+// TODO alaskanemily: This is only needed by the generated bindings.
+// Ideally it would only be included from there.
+#include "nsCSSProps.h"
 
 namespace mozilla {
 class DeclarationBlock;
@@ -28,12 +31,13 @@ class CSSPageRuleDeclaration final : public nsDOMCSSDeclaration {
   nsINode* GetAssociatedNode() const final;
   nsISupports* GetParentObject() const final;
 
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) final;
+
  protected:
   DeclarationBlock* GetOrCreateCSSDeclaration(
       Operation aOperation, DeclarationBlock** aCreated) final;
   nsresult SetCSSDeclaration(DeclarationBlock* aDecl,
                              MutationClosureData* aClosureData) final;
-  Document* DocToUpdate() final { return nullptr; }
   nsDOMCSSDeclaration::ParsingEnvironment GetParsingEnvironment(
       nsIPrincipal* aSubjectPrincipal) const final;
 
@@ -53,13 +57,14 @@ class CSSPageRuleDeclaration final : public nsDOMCSSDeclaration {
   RefPtr<DeclarationBlock> mDecls;
 };
 
-class CSSPageRule final : public css::Rule {
+class CSSPageRule final : public css::GroupRule {
  public:
   CSSPageRule(RefPtr<StyleLockedPageRule> aRawRule, StyleSheet* aSheet,
               css::Rule* aParentRule, uint32_t aLine, uint32_t aColumn);
 
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(CSSPageRule, css::Rule)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(CSSPageRule,
+                                                         css::GroupRule)
 
   bool IsCCLeaf() const final;
 
@@ -69,12 +74,14 @@ class CSSPageRule final : public css::Rule {
   // WebIDL interfaces
   StyleCssRuleType Type() const final;
   void GetCssText(nsACString& aCssText) const final;
-  nsICSSDeclaration* Style();
+  CSSPageRuleDeclaration* Style() { return &mDecls; }
 
   void GetSelectorText(nsACString& aSelectorText) const;
   void SetSelectorText(const nsACString& aSelectorText);
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const final;
+
+  already_AddRefed<StyleLockedCssRules> GetOrCreateRawRules() final;
 
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const final;

@@ -3,7 +3,7 @@
 /* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 /**
- * Testing search suggestions from SearchSuggestionController.jsm.
+ * Testing search suggestions from SearchSuggestionController.sys.mjs.
  */
 
 "use strict";
@@ -23,7 +23,7 @@ const SEARCH_TELEMETRY_LATENCY = "SEARCH_SUGGESTIONS_LATENCY_MS";
 
 // We must make sure the FormHistoryStartup component is
 // initialized in order for it to respond to FormHistory
-// requests from nsFormAutoComplete.js.
+// requests from FormHistoryAutoComplete.sys.mjs.
 var formHistoryStartup = Cc[
   "@mozilla.org/satchel/form-history-startup;1"
 ].getService(Ci.nsIObserver);
@@ -45,16 +45,14 @@ add_setup(async function () {
   let server = useHttpServer();
   server.registerContentType("sjs", "sjs");
 
-  await AddonTestUtils.promiseStartupManager();
-
   let getEngineData = {
-    baseURL: gDataUrl,
+    baseURL: `${gHttpURL}/sjs/`,
     name: "GET suggestion engine",
     method: "GET",
   };
 
   let postEngineData = {
-    baseURL: gDataUrl,
+    baseURL: `${gHttpURL}/sjs/`,
     name: "POST suggestion engine",
     method: "POST",
   };
@@ -66,23 +64,25 @@ add_setup(async function () {
   };
 
   let alternateJSONSuggestEngineData = {
-    baseURL: gDataUrl,
+    baseURL: `${gHttpURL}/sjs/`,
     name: "Alternative JSON suggestion type",
     method: "GET",
     alternativeJSONType: true,
   };
 
-  getEngine = await SearchTestUtils.promiseNewSearchEngine({
-    url: `${gDataUrl}engineMaker.sjs?${JSON.stringify(getEngineData)}`,
+  getEngine = await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify(getEngineData)}`,
   });
-  postEngine = await SearchTestUtils.promiseNewSearchEngine({
-    url: `${gDataUrl}engineMaker.sjs?${JSON.stringify(postEngineData)}`,
+  postEngine = await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify(postEngineData)}`,
   });
-  unresolvableEngine = await SearchTestUtils.promiseNewSearchEngine({
-    url: `${gDataUrl}engineMaker.sjs?${JSON.stringify(unresolvableEngineData)}`,
+  unresolvableEngine = await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify(
+      unresolvableEngineData
+    )}`,
   });
-  alternateJSONEngine = await SearchTestUtils.promiseNewSearchEngine({
-    url: `${gDataUrl}engineMaker.sjs?${JSON.stringify(
+  alternateJSONEngine = await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/sjs/engineMaker.sjs?${JSON.stringify(
       alternateJSONSuggestEngineData
     )}`,
   });
@@ -123,32 +123,6 @@ add_task(async function simple_remote_no_local_result() {
   Assert.equal(result.remote[0].value, "Mozilla");
   Assert.equal(result.remote[1].value, "modern");
   Assert.equal(result.remote[2].value, "mom");
-
-  assertLatencyHistogram(histogram, true);
-});
-
-add_task(async function simple_remote_no_local_result_telemetry() {
-  Services.telemetry.clearScalars();
-
-  let histogram = TelemetryTestUtils.getAndClearKeyedHistogram(
-    SEARCH_TELEMETRY_LATENCY
-  );
-
-  let controller = new SearchSuggestionController();
-  await controller.fetch("mo", false, getEngine);
-
-  let scalars = {};
-  const key = "browser.search.data_transferred";
-
-  await TestUtils.waitForCondition(() => {
-    scalars =
-      Services.telemetry.getSnapshotForKeyedScalars("main", false).parent || {};
-    return key in scalars;
-  }, "should have the expected keyed scalars");
-
-  const scalar = scalars[key];
-  Assert.ok(`sggt-${ENGINE_NAME}` in scalar, "correct telemetry category");
-  Assert.notEqual(scalar[`sggt-${ENGINE_NAME}`], 0, "bandwidth logged");
 
   assertLatencyHistogram(histogram, true);
 });
@@ -581,9 +555,7 @@ add_task(async function stop_search() {
   let histogram = TelemetryTestUtils.getAndClearKeyedHistogram(
     SEARCH_TELEMETRY_LATENCY
   );
-  let controller = new SearchSuggestionController(() => {
-    do_throw("The callback shouldn't be called after stop()");
-  });
+  let controller = new SearchSuggestionController();
   let resultPromise = controller.fetch("mo", false, getEngine);
   controller.stop();
   await resultPromise.then(result => {

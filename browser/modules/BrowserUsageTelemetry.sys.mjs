@@ -30,6 +30,27 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "gRecentVisitedOriginsExpiry",
   "browser.engagement.recent_visited_origins.expiry"
 );
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "sidebarVerticalTabs",
+  "sidebar.verticalTabs",
+  false,
+  (_aPreference, _previousValue, isVertical) => {
+    let tabCount = getOpenTabsAndWinsCounts().tabCount;
+    BrowserUsageTelemetry.maxTabCount = tabCount;
+    let pinnedTabCount = getPinnedTabsCount();
+    BrowserUsageTelemetry.maxTabPinnedCount = pinnedTabCount;
+    if (isVertical) {
+      Glean.browserEngagement.maxConcurrentVerticalTabCount.set(tabCount);
+      Glean.browserEngagement.maxConcurrentVerticalTabPinnedCount.set(
+        pinnedTabCount
+      );
+    } else {
+      Glean.browserEngagement.maxConcurrentTabCount.set(tabCount);
+      Glean.browserEngagement.maxConcurrentTabPinnedCount.set(pinnedTabCount);
+    }
+  }
+);
 
 // The upper bound for the count of the visited unique domain names.
 const MAX_UNIQUE_VISITED_DOMAINS = 100;
@@ -39,26 +60,6 @@ const TAB_RESTORING_TOPIC = "SSTabRestoring";
 const TELEMETRY_SUBSESSIONSPLIT_TOPIC =
   "internal-telemetry-after-subsession-split";
 const DOMWINDOW_OPENED_TOPIC = "domwindowopened";
-
-// Probe names.
-const MAX_TAB_COUNT_SCALAR_NAME = "browser.engagement.max_concurrent_tab_count";
-const MAX_WINDOW_COUNT_SCALAR_NAME =
-  "browser.engagement.max_concurrent_window_count";
-const TAB_OPEN_EVENT_COUNT_SCALAR_NAME =
-  "browser.engagement.tab_open_event_count";
-const MAX_TAB_PINNED_COUNT_SCALAR_NAME =
-  "browser.engagement.max_concurrent_tab_pinned_count";
-const TAB_PINNED_EVENT_COUNT_SCALAR_NAME =
-  "browser.engagement.tab_pinned_event_count";
-const WINDOW_OPEN_EVENT_COUNT_SCALAR_NAME =
-  "browser.engagement.window_open_event_count";
-const UNIQUE_DOMAINS_COUNT_SCALAR_NAME =
-  "browser.engagement.unique_domains_count";
-const TOTAL_URI_COUNT_SCALAR_NAME = "browser.engagement.total_uri_count";
-const UNFILTERED_URI_COUNT_SCALAR_NAME =
-  "browser.engagement.unfiltered_uri_count";
-const TOTAL_URI_COUNT_NORMAL_AND_PRIVATE_MODE_SCALAR_NAME =
-  "browser.engagement.total_uri_count_normal_and_private_mode";
 
 export const MINIMUM_TAB_COUNT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes, in ms
 
@@ -74,7 +75,9 @@ const UI_TARGET_ELEMENTS = [
   "image",
   "radio",
   "richlistitem",
+  "moz-checkbox",
 ];
+const UI_TARGET_COMPOSED_ELEMENTS_MAP = new Map([["moz-checkbox", "input"]]);
 
 // The containers of interactive elements that we care about and their pretty
 // names. These should be listed in order of most-specific to least-specific,
@@ -83,6 +86,7 @@ const UI_TARGET_ELEMENTS = [
 const BROWSER_UI_CONTAINER_IDS = {
   "toolbar-menubar": "menu-bar",
   TabsToolbar: "tabs-bar",
+  "vertical-tabs": "vertical-tabs-container",
   PersonalToolbar: "bookmarks-bar",
   "appMenu-popup": "app-menu",
   tabContextMenu: "tabs-context",
@@ -159,6 +163,11 @@ const PLACES_OPEN_COMMANDS = [
   "placesCmd_open:privatewindow",
   "placesCmd_open:tab",
 ];
+
+// How long of a delay between events means the start of a new flow?
+// Used by Browser UI Interaction event instrumentation.
+// Default: 5min.
+const FLOW_IDLE_TIME = 5 * 60 * 1000;
 
 function telemetryId(widgetId, obscureAddons = true) {
   // Add-on IDs need to be obscured.
@@ -311,7 +320,7 @@ export let URICountListener = {
       // If we have troubles parsing the spec, still count this as
       // an unfiltered URI.
       if (shouldCountURI) {
-        Services.telemetry.scalarAdd(UNFILTERED_URI_COUNT_SCALAR_NAME, 1);
+        Glean.browserEngagement.unfilteredUriCount.add(1);
       }
       return;
     }
@@ -334,7 +343,7 @@ export let URICountListener = {
     // If this is an http(s) URI, this also gets counted by the "total_uri_count"
     // probe.
     if (shouldCountURI) {
-      Services.telemetry.scalarAdd(UNFILTERED_URI_COUNT_SCALAR_NAME, 1);
+      Glean.browserEngagement.unfilteredUriCount.add(1);
     }
 
     if (!this.isHttpURI(uri)) {
@@ -357,10 +366,6 @@ export let URICountListener = {
     }
 
     // Update total URI count, including when in private mode.
-    Services.telemetry.scalarAdd(
-      TOTAL_URI_COUNT_NORMAL_AND_PRIVATE_MODE_SCALAR_NAME,
-      1
-    );
     Glean.browserEngagement.uriCount.add(1);
 
     if (!shouldCountURI) {
@@ -368,7 +373,7 @@ export let URICountListener = {
     }
 
     // Update the URI counts.
-    Services.telemetry.scalarAdd(TOTAL_URI_COUNT_SCALAR_NAME, 1);
+    Glean.browserEngagement.uriCountNormalMode.add(1);
 
     // Update tab count
     BrowserUsageTelemetry._recordTabCounts(getOpenTabsAndWinsCounts());
@@ -388,10 +393,7 @@ export let URICountListener = {
     // We only want to count the unique domains up to MAX_UNIQUE_VISITED_DOMAINS.
     if (this._domainSet.size < MAX_UNIQUE_VISITED_DOMAINS) {
       this._domainSet.add(baseDomain);
-      Services.telemetry.scalarSet(
-        UNIQUE_DOMAINS_COUNT_SCALAR_NAME,
-        this._domainSet.size
-      );
+      Glean.browserEngagement.uniqueDomainsCount.set(this._domainSet.size);
     }
 
     this._domain24hrSet.add(baseDomain);
@@ -434,6 +436,8 @@ export let URICountListener = {
   ]),
 };
 
+let gInstallationTelemetryPromise = null;
+
 export let BrowserUsageTelemetry = {
   /**
    * This is a policy object used to override behavior for testing.
@@ -454,6 +458,10 @@ export let BrowserUsageTelemetry = {
     this._inited = true;
 
     Services.prefs.addObserver("browser.tabs.inTitlebar", this);
+    Services.prefs.addObserver(
+      "media.videocontrols.picture-in-picture.enable-when-switching-tabs.enabled",
+      this
+    );
 
     this._recordUITelemetry();
 
@@ -461,6 +469,28 @@ export let BrowserUsageTelemetry = {
       () => this._onTabsOpened(),
       0
     );
+  },
+
+  maxWindowCount: 0,
+  maxTabCount: 0,
+  get maxTabCountGleanQuantity() {
+    return lazy.sidebarVerticalTabs
+      ? Glean.browserEngagement.maxConcurrentVerticalTabCount
+      : Glean.browserEngagement.maxConcurrentTabCount;
+  },
+
+  maxTabPinnedCount: 0,
+  updateMaxTabPinnedCount(pinnedTabs) {
+    if (pinnedTabs > this.maxTabPinnedCount) {
+      this.maxTabPinnedCount = pinnedTabs;
+      if (lazy.sidebarVerticalTabs) {
+        Glean.browserEngagement.maxConcurrentVerticalTabPinnedCount.set(
+          pinnedTabs
+        );
+      } else {
+        Glean.browserEngagement.maxConcurrentTabPinnedCount.set(pinnedTabs);
+      }
+    }
   },
 
   /**
@@ -477,15 +507,7 @@ export let BrowserUsageTelemetry = {
     // Scalars just got cleared due to a subsession split. We need to set the maximum
     // concurrent tab and window counts so that they reflect the correct value for the
     // new subsession.
-    const counts = getOpenTabsAndWinsCounts();
-    Services.telemetry.scalarSetMaximum(
-      MAX_TAB_COUNT_SCALAR_NAME,
-      counts.tabCount
-    );
-    Services.telemetry.scalarSetMaximum(
-      MAX_WINDOW_COUNT_SCALAR_NAME,
-      counts.winCount
-    );
+    this._initMaxTabAndWindowCounts();
 
     // Reset the URI counter.
     URICountListener.reset();
@@ -521,6 +543,11 @@ export let BrowserUsageTelemetry = {
               "pref"
             );
             break;
+          case "media.videocontrols.picture-in-picture.enable-when-switching-tabs.enabled":
+            if (Services.prefs.getBoolPref(data)) {
+              Glean.pictureinpictureSettings.enableAutotriggerSettings.record();
+            }
+            break;
         }
         break;
     }
@@ -550,6 +577,14 @@ export let BrowserUsageTelemetry = {
     }
   },
 
+  _initMaxTabAndWindowCounts() {
+    const counts = getOpenTabsAndWinsCounts();
+    this.maxTabCount = counts.tabCount;
+    this.maxTabCountGleanQuantity.set(counts.tabCount);
+    this.maxWindowCount = counts.winCount;
+    Glean.browserEngagement.maxConcurrentWindowCount.set(counts.winCount);
+  },
+
   /**
    * This gets called shortly after the SessionStore has finished restoring
    * windows and tabs. It counts the open tabs and adds listeners to all the
@@ -566,15 +601,7 @@ export let BrowserUsageTelemetry = {
     }
 
     // Get the initial tab and windows max counts.
-    const counts = getOpenTabsAndWinsCounts();
-    Services.telemetry.scalarSetMaximum(
-      MAX_TAB_COUNT_SCALAR_NAME,
-      counts.tabCount
-    );
-    Services.telemetry.scalarSetMaximum(
-      MAX_WINDOW_COUNT_SCALAR_NAME,
-      counts.winCount
-    );
+    this._initMaxTabAndWindowCounts();
   },
 
   _buildWidgetPositions() {
@@ -755,13 +782,13 @@ export let BrowserUsageTelemetry = {
       return "keyboard";
     }
 
-    const { URL } = node.ownerDocument;
-    if (URL == AppConstants.BROWSER_CHROME_URL) {
+    const { URL: url } = node.ownerDocument;
+    if (url == AppConstants.BROWSER_CHROME_URL) {
       return this._getBrowserWidgetContainer(node);
     }
     if (
-      URL.startsWith("about:preferences") ||
-      URL.startsWith("about:settings")
+      url.startsWith("about:preferences") ||
+      url.startsWith("about:settings")
     ) {
       // Find the element's category.
       let container = node.closest("[data-category]");
@@ -855,6 +882,20 @@ export let BrowserUsageTelemetry = {
       }
     }
 
+    // When the expected target is a Custom Element with a Shadow Root, there
+    // may be a specific part of the component that click events correspond to
+    // changes. Ignore any other events if requested.
+    let expectedEventTarget = UI_TARGET_COMPOSED_ELEMENTS_MAP.get(
+      node.localName
+    );
+    if (
+      event.type == "click" &&
+      expectedEventTarget &&
+      expectedEventTarget != event.composedTarget?.localName
+    ) {
+      return;
+    }
+
     if (sourceEvent.type === "command") {
       const { command, ownerDocument, parentNode } = node;
       // Check if this command is for a history or bookmark link being opened
@@ -872,8 +913,11 @@ export let BrowserUsageTelemetry = {
     let source = this._getWidgetContainer(node);
 
     if (item && source) {
-      let scalar = `browser.ui.interaction.${source.replace(/-/g, "_")}`;
-      Services.telemetry.keyedScalarAdd(scalar, telemetryId(item), 1);
+      this.recordInteractionEvent(item, source);
+      let name = source
+        .replace(/-/g, "_")
+        .replace(/_([a-z])/g, (m, p) => p.toUpperCase());
+      Glean.browserUiInteraction[name]?.[telemetryId(item)].add(1);
       if (SET_USAGECOUNT_PREF_BUTTONS.includes(item)) {
         let pref = `browser.engagement.${item}.used-count`;
         Services.prefs.setIntPref(pref, Services.prefs.getIntPref(pref, 0) + 1);
@@ -889,14 +933,43 @@ export let BrowserUsageTelemetry = {
         node.closest("menupopup")?.triggerNode
       );
       if (triggerContainer) {
-        let scalar = `browser.ui.interaction.${contextMenu.replace(/-/g, "_")}`;
-        Services.telemetry.keyedScalarAdd(
-          scalar,
-          telemetryId(triggerContainer),
+        this.recordInteractionEvent(item, contextMenu);
+        let name = contextMenu
+          .replace(/-/g, "_")
+          .replace(/_([a-z])/g, (m, p) => p.toUpperCase());
+        Glean.browserUiInteraction[name]?.[telemetryId(triggerContainer)].add(
           1
         );
       }
     }
+  },
+
+  _flowId: null,
+  _flowIdTS: 0,
+
+  recordInteractionEvent(widgetId, source) {
+    // A note on clocks. Cu.now() is monotonic, but its behaviour across
+    // computer sleeps is different per platform.
+    // We're okay with this for flows because we're looking at idle times
+    // on the order of minutes and within the same machine, so the weirdest
+    // thing we may expect is a flow that accidentally continues across a
+    // sleep. Until we have evidence that this is common, we're in the clear.
+    if (!this._flowId || this._flowIdTS + FLOW_IDLE_TIME < Cu.now()) {
+      // We submit the ping full o' events on every new flow,
+      // including at startup.
+      GleanPings.prototypeNoCodeEvents.submit();
+      // We use a GUID here because we need to identify events in a flow
+      // out of all events from all flows across all clients.
+      this._flowId = Services.uuid.generateUUID();
+    }
+    this._flowIdTS = Cu.now();
+
+    const extra = {
+      source,
+      widget_id: telemetryId(widgetId),
+      flow_id: this._flowId,
+    };
+    Glean.browserUsage.interaction.record(extra);
   },
 
   /**
@@ -995,7 +1068,7 @@ export let BrowserUsageTelemetry = {
     let key = `${telemetryId(widgetId, false)}_${action}_${oldPos ?? "na"}_${
       newPos ?? "na"
     }_${reason}`;
-    Services.telemetry.keyedScalarAdd("browser.ui.customized_widgets", key, 1);
+    Glean.browserUi.customizedWidgets[key].add(1);
 
     if (newPos) {
       this.widgetMap.set(widgetId, newPos);
@@ -1007,13 +1080,21 @@ export let BrowserUsageTelemetry = {
   _recordUITelemetry() {
     this.widgetMap = this._buildWidgetPositions();
 
+    // FIXME(bug 1883857): object metric type not available in artefact builds.
+    if ("toolbarWidgets" in Glean.browserUi) {
+      Glean.browserUi.toolbarWidgets.set(
+        this.widgetMap
+          .entries()
+          .map(([widgetId, position]) => {
+            return { widgetId: telemetryId(widgetId, false), position };
+          })
+          .toArray()
+      );
+    }
+
     for (let [widgetId, position] of this.widgetMap.entries()) {
       let key = `${telemetryId(widgetId, false)}_pinned_${position}`;
-      Services.telemetry.keyedScalarSet(
-        "browser.ui.toolbar_widgets",
-        key,
-        true
-      );
+      Glean.browserUi.mirrorForToolbarWidgets[key].set(true);
     }
   },
 
@@ -1051,7 +1132,11 @@ export let BrowserUsageTelemetry = {
    */
   _onTabOpen() {
     // Update the "tab opened" count and its maximum.
-    Services.telemetry.scalarAdd(TAB_OPEN_EVENT_COUNT_SCALAR_NAME, 1);
+    if (lazy.sidebarVerticalTabs) {
+      Glean.browserEngagement.verticalTabOpenEventCount.add(1);
+    } else {
+      Glean.browserEngagement.tabOpenEventCount.add(1);
+    }
 
     // In the case of opening multiple tabs at once, avoid enumerating all open
     // tabs and windows each time a tab opens.
@@ -1064,20 +1149,24 @@ export let BrowserUsageTelemetry = {
    */
   _onTabsOpened() {
     const { tabCount, loadedTabCount } = getOpenTabsAndWinsCounts();
-    Services.telemetry.scalarSetMaximum(MAX_TAB_COUNT_SCALAR_NAME, tabCount);
+    if (tabCount > this.maxTabCount) {
+      this.maxTabCount = tabCount;
+      this.maxTabCountGleanQuantity.set(tabCount);
+    }
 
     this._recordTabCounts({ tabCount, loadedTabCount });
   },
 
-  _onTabPinned(target) {
+  _onTabPinned() {
     const pinnedTabs = getPinnedTabsCount();
 
     // Update the "tab pinned" count and its maximum.
-    Services.telemetry.scalarAdd(TAB_PINNED_EVENT_COUNT_SCALAR_NAME, 1);
-    Services.telemetry.scalarSetMaximum(
-      MAX_TAB_PINNED_COUNT_SCALAR_NAME,
-      pinnedTabs
-    );
+    if (lazy.sidebarVerticalTabs) {
+      Glean.browserEngagement.verticalTabPinnedEventCount.add(1);
+    } else {
+      Glean.browserEngagement.tabPinnedEventCount.add(1);
+    }
+    this.updateMaxTabPinnedCount(pinnedTabs);
   },
 
   /**
@@ -1104,11 +1193,12 @@ export let BrowserUsageTelemetry = {
       this._registerWindow(win);
       // Track the window open event and check the maximum.
       const counts = getOpenTabsAndWinsCounts();
-      Services.telemetry.scalarAdd(WINDOW_OPEN_EVENT_COUNT_SCALAR_NAME, 1);
-      Services.telemetry.scalarSetMaximum(
-        MAX_WINDOW_COUNT_SCALAR_NAME,
-        counts.winCount
-      );
+      Glean.browserEngagement.windowOpenEventCount.add(1);
+
+      if (counts.winCount > this.maxWindowCount) {
+        this.maxWindowCount = counts.winCount;
+        Glean.browserEngagement.maxConcurrentWindowCount.set(counts.winCount);
+      }
 
       // We won't receive the "TabOpen" event for the first tab within a new window.
       // Account for that.
@@ -1264,33 +1354,28 @@ export let BrowserUsageTelemetry = {
       valueToReport = 0;
     }
 
-    Services.telemetry.scalarSet(
-      "browser.engagement.profile_count",
-      valueToReport
-    );
-    // Manually mirror to Glean
     Glean.browserEngagement.profileCount.set(valueToReport);
   },
 
   /**
    * Check if this is the first run of this profile since installation,
-   * if so then send installation telemetry.
+   * if so then collect installation telemetry.
    *
    * @param {nsIFile} [dataPathOverride] Optional, full data file path, for tests.
    * @param {Array<string>} [msixPackagePrefixes] Optional, list of prefixes to
             consider "existing" installs when looking at installed MSIX packages.
             Defaults to prefixes for builds produced in Firefox automation.
-   * @return {Promise}
+   * @return {Promise<Object>} A JSON object containing install telemetry.
    * @resolves When the event has been recorded, or if the data file was not found.
    * @rejects JavaScript exception on any failure.
    */
-  async reportInstallationTelemetry(
+  async collectInstallationTelemetry(
     dataPathOverride,
     msixPackagePrefixes = ["Mozilla.Firefox", "Mozilla.MozillaFirefox"]
   ) {
     if (AppConstants.platform != "win") {
       // This is a windows-only feature.
-      return;
+      return {};
     }
 
     const TIMESTAMP_PREF = "app.installation.timestamp";
@@ -1333,7 +1418,7 @@ export let BrowserUsageTelemetry = {
     if (pfn) {
       if (lastInstallTime != null) {
         // We've already seen this install
-        return;
+        return {};
       }
 
       // First time seeing this install, record the timestamp.
@@ -1376,7 +1461,7 @@ export let BrowserUsageTelemetry = {
         if (ex.name == "NotFoundError") {
           // Many systems will not have the data file, return silently if not found as
           // there is nothing to record.
-          return;
+          return {};
         }
         throw ex;
       }
@@ -1385,7 +1470,7 @@ export let BrowserUsageTelemetry = {
 
       if (lastInstallTime && data.install_timestamp == lastInstallTime) {
         // We've already seen this install
-        return;
+        return {};
       }
 
       // First time seeing this install, record the timestamp.
@@ -1413,15 +1498,68 @@ export let BrowserUsageTelemetry = {
         extra.default_path = data.default_path.toString();
       }
     }
-    // Record the event
-    Services.telemetry.setEventRecordingEnabled("installation", true);
-    Services.telemetry.recordEvent(
-      "installation",
-      "first_seen",
-      installer_type,
-      null,
-      extra
-    );
+    return { installer_type, extra };
+  },
+
+  async reportInstallationTelemetry(
+    dataPathOverride,
+    msixPackagePrefixes = ["Mozilla.Firefox", "Mozilla.MozillaFirefox"]
+  ) {
+    // The optional dataPathOverride is only used for testing purposes.
+    // Use this as a proxy for whether we're in a testing environment.
+    // If we're in a testing environment we don't want to return the
+    // same data even if we call this function multiple times in the
+    // same instance.
+    if (gInstallationTelemetryPromise && !dataPathOverride) {
+      return gInstallationTelemetryPromise;
+    }
+
+    gInstallationTelemetryPromise = (async () => {
+      let data = await BrowserUsageTelemetry.collectInstallationTelemetry(
+        dataPathOverride,
+        msixPackagePrefixes
+      );
+
+      if (data?.installer_type) {
+        let { installer_type, extra } = data;
+
+        // Record the event (mirrored to legacy telemetry using GIFFT)
+        if (installer_type == "full") {
+          Glean.installation.firstSeenFull.record(extra);
+        } else if (installer_type == "stub") {
+          Glean.installation.firstSeenStub.record(extra);
+        } else if (installer_type == "msix") {
+          Glean.installation.firstSeenMsix.record(extra);
+        }
+
+        // Scalars for the new-profile ping. We don't need to collect the build version
+        // These are mirrored to legacy telemetry using GIFFT
+        Glean.installationFirstSeen.installerType.set(installer_type);
+        Glean.installationFirstSeen.version.set(extra.version);
+        // Convert "true" or "false" strings back into booleans
+        Glean.installationFirstSeen.adminUser.set(extra.admin_user === "true");
+        Glean.installationFirstSeen.installExisted.set(
+          extra.install_existed === "true"
+        );
+        Glean.installationFirstSeen.profdirExisted.set(
+          extra.profdir_existed === "true"
+        );
+        Glean.installationFirstSeen.otherInst.set(extra.other_inst === "true");
+        Glean.installationFirstSeen.otherMsixInst.set(
+          extra.other_msix_inst === "true"
+        );
+        if (installer_type == "full") {
+          Glean.installationFirstSeen.silent.set(extra.silent === "true");
+          Glean.installationFirstSeen.fromMsi.set(extra.from_msi === "true");
+          Glean.installationFirstSeen.defaultPath.set(
+            extra.default_path === "true"
+          );
+        }
+      }
+      return data;
+    })();
+
+    return gInstallationTelemetryPromise;
   },
 };
 

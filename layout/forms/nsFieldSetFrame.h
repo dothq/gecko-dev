@@ -10,7 +10,10 @@
 #include "mozilla/Attributes.h"
 #include "ImgDrawResult.h"
 #include "nsContainerFrame.h"
-#include "nsIScrollableFrame.h"
+
+namespace mozilla {
+class ScrollContainerFrame;
+}  // namespace mozilla
 
 class nsFieldSetFrame final : public nsContainerFrame {
   typedef mozilla::image::ImgDrawResult ImgDrawResult;
@@ -21,10 +24,8 @@ class nsFieldSetFrame final : public nsContainerFrame {
 
   explicit nsFieldSetFrame(ComputedStyle* aStyle, nsPresContext* aPresContext);
 
-  nscoord GetIntrinsicISize(gfxContext* aRenderingContext,
-                            mozilla::IntrinsicISizeType);
-  nscoord GetMinISize(gfxContext* aRenderingContext) override;
-  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
+  nscoord IntrinsicISize(const mozilla::IntrinsicSizeInput& aInput,
+                         mozilla::IntrinsicISizeType aType) override;
 
   /**
    * The area to paint box-shadows around.  It's the border rect except
@@ -62,7 +63,7 @@ class nsFieldSetFrame final : public nsContainerFrame {
                    nsIFrame* aOldFrame) override;
 #endif
 
-  nsIScrollableFrame* GetScrollTargetFrame() const override;
+  mozilla::ScrollContainerFrame* GetScrollTargetFrame() const override;
 
   // Return the block wrapper around our kids.
   void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;

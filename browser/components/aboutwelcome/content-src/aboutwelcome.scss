@@ -87,16 +87,18 @@ html {
   --mr-screen-heading-color: var(--in-content-text-color);
   --mr-welcome-background-gradient: linear-gradient(0deg, rgba(144, 89, 255, 20%) 0%, rgba(2, 144, 238, 20%) 100%);
   --mr-screen-background-color: #F8F6F4;
+  --single-select-border-color: #8F8F9D;
+  --single-select-hover-color: #DEDEDF;
 
   @media (prefers-color-scheme: dark) {
     --grey-subtitle-1: #FFF;
     --mr-welcome-background-color: #333336;
     --mr-welcome-background-gradient: linear-gradient(0deg, rgba(144, 89, 255, 30%) 0%, rgba(2, 144, 238, 30%) 100%);
     --mr-screen-background-color: #62697A;
+    --single-select-hover-color: #52525E;
   }
 
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ubuntu,
-    'Helvetica Neue', sans-serif;
+  font-family: system-ui;
   font-size: 16px;
   position: relative;
   text-align: center;
@@ -537,19 +539,23 @@ html {
     }
 
     &[pos='split'] {
-      margin: auto;
-      min-height: $split-screen-height;
 
-      &::before {
-        content: '';
-        position: absolute;
-        box-shadow: 0 2px 14px 0 rgba(0, 0, 0, 20%);
-        width: $split-section-width + $split-section-width;
-        height: $split-screen-height;
-        border-radius: 8px;
-        inset: 0;
+      // Prevent the drop shadow from appearing in fullscreen mode
+      &:where(:not([fullscreen])) {
         margin: auto;
-        pointer-events: none;
+        min-height: $split-screen-height;
+
+        &::before {
+          content: '';
+          position: absolute;
+          box-shadow: 0 2px 14px 0 rgba(0, 0, 0, 20%);
+          width: $split-section-width + $split-section-width;
+          height: $split-screen-height;
+          border-radius: 8px;
+          inset: 0;
+          margin: auto;
+          pointer-events: none;
+        }
       }
 
       .section-secondary,
@@ -605,8 +611,16 @@ html {
             line-height: 16.5px;
             color: #5B5B66;
 
-            @media only screen and (width <= 800px) {
+            @mixin narrow-legal-paragraph {
               padding-inline: 30px;
+            }
+
+            @media only screen and (width <= 800px) {
+              @include narrow-legal-paragraph;
+            }
+
+            [narrow] & {
+              @include narrow-legal-paragraph;
             }
 
             @media (prefers-color-scheme: dark) {
@@ -749,7 +763,6 @@ html {
             z-index: 1;
 
             &.progress-bar {
-              width: $split-section-width;
               margin-inline: -35px;
             }
           }
@@ -762,7 +775,7 @@ html {
               background-color: var(--in-content-page-background);
 
               .indicator {
-                background-color: var(--in-content-accent-color);
+                background-color: var(--color-accent-primary);
               }
             }
           }
@@ -778,6 +791,7 @@ html {
         align-items: center;
         -moz-context-properties: fill, stroke, fill-opacity, stroke-opacity;
         stroke: currentColor;
+        position: relative;
 
         &:dir(rtl) {
           border-radius: 0 8px 8px 0;
@@ -814,8 +828,16 @@ html {
             margin: 25px 0;
             padding-bottom: 30px;
 
-            @media only screen and (width <= 800px) {
+            @mixin narrow-hero-img {
               padding-bottom: unset;
+            }
+
+            @media only screen and (width <= 800px) {
+              @include narrow-hero-img;
+            }
+
+            [narrow] & {
+              @include narrow-hero-img;
             }
           }
         }
@@ -824,7 +846,17 @@ html {
       .multi-select-container {
         margin-inline: 0 10px;
 
-        @media only screen and (width <= 800px) {
+        .multi-select-item {
+          display: block;
+
+          p {
+            margin-block: 0.5em 0;
+            margin-inline-start: calc(16px + var(--checkbox-margin-inline)); // width of checkbox and its inline margin
+            font-size: 12px;
+          }
+        }
+
+        @mixin narrow-multi-select-container {
           flex-direction: column;
           align-self: center;
           align-items: start;
@@ -833,14 +865,26 @@ html {
           padding: 0 30px;
           margin-inline: 0;
           box-sizing: content-box;
+
+          .multi-select-item p {
+            margin-inline-start: 0;
+          }
+        }
+
+        @media only screen and (width <= 800px) {
+          @include narrow-multi-select-container;
+        }
+
+        [narrow] & {
+          @include narrow-multi-select-container;
         }
       }
 
-      .tiles-theme-container {
+      .tiles-single-select-container {
         margin-block: -20px auto;
         align-items: initial;
 
-        .theme {
+        .select-item {
           min-width: 38px;
         }
       }
@@ -858,7 +902,7 @@ html {
       }
 
       @media only screen and (width >= 800px) {
-        .tiles-theme-section {
+        .tiles-single-select-section {
           margin-inline-start: -10px;
         }
 
@@ -898,7 +942,7 @@ html {
       // duplicate the above styles for no-rdm. unfortunately SASS won't allow
       // us to combine these selectors.
       &:where([no-rdm='true']) {
-        .tiles-theme-section {
+        .tiles-single-select-section {
           margin-inline-start: -10px;
         }
 
@@ -935,7 +979,114 @@ html {
         }
       }
 
-      @media only screen and (width <= 800px) {
+      &[fullscreen] {
+        $split-section-width: 50%;
+        $split-screen-height: 100%;
+
+        .section-secondary,
+        .section-main {
+          width: $split-section-width;
+          height: $split-screen-height;
+        }
+
+        .section-main .main-content {
+          border-radius: 0;
+          padding: 0;
+
+          h1 {
+            width: auto;
+          }
+
+          .main-content-inner {
+            min-height: 0;
+            flex-grow: 0;
+            padding-inline: 110px;
+            margin-block: auto;
+            max-width: 400px;
+          }
+
+          .action-buttons {
+            position: static;
+            height: auto;
+
+            .secondary-cta {
+              inset-block-end: 26px;
+              inset-inline-end: 30px;
+            }
+          }
+        }
+
+        .section-secondary {
+          --mr-secondary-position: center center / 50%;
+
+          border-radius: 0;
+          margin: 0;
+
+          .hero-image {
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+
+            img {
+              width: 30%;
+            }
+          }
+        }
+
+        @mixin narrow-split-fullscreen {
+          .section-main,
+          .section-secondary {
+            width: 100%;
+          }
+
+          .section-main {
+            height: 75%;
+
+            &[hide-secondary-section='responsive'] {
+              height: 100%;
+
+              .main-content {
+                border-radius: 0;
+                padding: 0;
+              }
+            }
+          }
+
+          .section-main .main-content {
+            .action-buttons .secondary-cta {
+              inset-block-end: 0;
+              inset-inline-end: 0;
+            }
+
+            .main-content-inner {
+              padding-inline: 55px;
+              margin-inline: auto;
+            }
+          }
+
+          .section-secondary {
+            --mr-secondary-position: center var(--mr-secondary-background-position-y) / 50%;
+
+            .hero-image {
+              img {
+                width: 25%;
+                max-height: 75%;
+              }
+            }
+          }
+        }
+
+        @media only screen and (width <= 800px) {
+          @include narrow-split-fullscreen;
+        }
+
+        [narrow] & {
+          @include narrow-split-fullscreen;
+        }
+      }
+
+      @mixin narrow-split {
         &:where(:not([no-rdm])) {
           flex-direction: column;
           min-height: $small-main-section-height + $small-secondary-section-height;
@@ -1139,7 +1290,47 @@ html {
 
         &[no-rdm] {
           width: 800px;
+
+          &[reverse-split] {
+            flex-direction: row-reverse;
+
+            .section-main {
+              .main-content {
+                border-radius: inherit;
+              }
+
+              margin: auto;
+              margin-inline-end: 0;
+              border-radius: 8px 0 0 8px;
+
+              &:dir(rtl) {
+                border-radius: 0 8px 8px 0;
+                margin: auto;
+                margin-inline-end: 0;
+              }
+            }
+
+            .section-secondary {
+              margin: auto;
+              margin-inline-start: 0;
+              border-radius: 0 8px 8px 0;
+
+              &:dir(rtl) {
+                border-radius: 8px 0 0 8px;
+                margin: auto;
+                margin-inline-start: 0;
+              }
+            }
+          }
         }
+      }
+
+      @media only screen and (width <= 800px) {
+        @include narrow-split;
+      }
+
+      [narrow] & {
+        @include narrow-split;
       }
 
       @media only screen and (height <= 650px) {
@@ -1155,12 +1346,22 @@ html {
 
         // Reposition the "Sign in" button on the welcome screen to move inside
         // the screen when it would otherwise overlap the screen.
-        @media (width <= 620px) {
+        @mixin extra-narrow-secondary-cta {
           .section-main .secondary-cta.top {
             position: absolute;
             padding: 0;
             top: 0;
             inset-inline-end: 0;
+          }
+        }
+
+        @media (width <= 620px) {
+          @include extra-narrow-secondary-cta;
+        }
+
+        [narrow] & {
+          @media (width <= 620px) {
+            @include extra-narrow-secondary-cta;
           }
         }
       }
@@ -1198,8 +1399,16 @@ html {
   .rtamo-icon {
     text-align: start;
 
-    @media only screen and (width <= 800px) {
+    @mixin narrow-rtamo-icon {
       text-align: center;
+    }
+
+    @media only screen and (width <= 800px) {
+      @include narrow-rtamo-icon;
+    }
+
+    [narrow] & {
+      @include narrow-rtamo-icon;
     }
   }
 
@@ -1322,7 +1531,8 @@ html {
   }
 
   .language-loader {
-    filter: invert(1);
+    -moz-context-properties: fill;
+    fill: currentColor;
     margin-inline-end: 10px;
     position: relative;
     top: 3px;
@@ -1331,13 +1541,7 @@ html {
     margin-top: -6px;
   }
 
-  @media (prefers-color-scheme: dark) {
-    .language-loader {
-      filter: invert(0);
-    }
-  }
-
-  .tiles-theme-container {
+  .tiles-single-select-container {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1355,7 +1559,7 @@ html {
     }
   }
 
-  .tiles-theme-section {
+  .tiles-single-select-section {
     border: 0;
     display: flex;
     flex-wrap: wrap;
@@ -1372,14 +1576,191 @@ html {
       outline: 2px solid var(--in-content-primary-button-background);
     }
 
-    .theme {
+    // single select only specific styles
+    &.single-select:not(.wallpaper, .theme) {
+      flex-direction: row;
+      padding-top: 5px;
+      gap: 10px;
+      justify-content: center;
+
+      .select-item {
+        position: relative;
+        padding-top: 5px;
+        border: 2px solid var(--single-select-border-color);
+        border-radius: 12px;
+
+        &:has(.input:focus),
+        &:has(.selected) {
+          outline: none;
+        }
+
+        &:has(.input:focus) {
+          outline: 2px solid var(--in-content-primary-button-background);
+          outline-offset: 5px;
+        }
+
+        &:has(.selected) {
+          border: 3px solid var(--in-content-primary-button-background);
+          border-radius: 12px;
+        }
+
+        &:hover {
+          background-color: var(--single-select-hover-color);
+        }
+
+        &:focus-visible {
+          outline: none;
+          // Only highlight the image, not the frame around the image and the label
+          .icon {
+            outline: initial;
+          }
+        }
+
+        .flair {
+          height: 18px;
+          border-radius: 4px;
+          background-color: #9059FF;
+          color: #FFF;
+          padding: 2px 8px;
+          position: absolute;
+          right: 1px;
+          top: -10px;
+          line-height: 1;
+        }
+
+        .icon {
+          outline: none;
+        }
+
+        .text {
+          margin-block: 8px;
+        }
+      }
+
+    }
+    // theme and wallpaper specific styles
+    &.wallpaper,
+    &.theme {
+      .select-item {
+        width: 180px;
+      }
+    }
+
+    // single select and wallpaper specific styles
+    &.single-select,
+    &.wallpaper {
+      &:hover, &:focus-within {
+        outline: none;
+      }
+
+      .select-item {
+        transition: var(--transition);
+
+        &:has(.input:focus) {
+          outline: 2px solid var(--in-content-primary-button-background);
+          outline-offset: 2px;
+        }
+      }
+    }
+
+    // newtab wallpaper specific styles
+    &.wallpaper {
+      justify-content: center;
+      gap: 10px;
+
+      .select-item {
+        flex: unset;
+        width: unset;
+
+        .icon {
+          width: 116px;
+          height: 86px;
+          border-radius: 8px;
+          box-shadow: 0 1px 2px 0 #3A394433;
+
+          &:hover {
+            filter: brightness(45%);
+          }
+
+          // dark theme wallpapers
+          &.dark-landscape {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-landscape.avif');
+          }
+
+          &.dark-beach {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-beach.avif');
+          }
+
+          &.dark-color {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-color.avif');
+          }
+
+          &.dark-mountain {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-mountain.avif');
+          }
+
+          &.dark-panda {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-panda.avif');
+          }
+
+          &.dark-sky {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/dark-sky.avif');
+          }
+
+          // light theme wallpapers
+          &.light-beach {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-beach.avif');
+          }
+
+          &.light-color {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-color.avif');
+          }
+
+          &.light-landscape {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-landscape.avif');
+          }
+
+          &.light-mountain {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-mountain.avif');
+          }
+
+          &.light-panda {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-panda.avif');
+          }
+
+          &.light-sky {
+            background-image: url('chrome://activity-stream/content/data/content/assets/wallpapers/light-sky.avif');
+          }
+        }
+      }
+
+      .dark {
+        display: none;
+      }
+
+      .text {
+        display: none;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .light {
+          display: none;
+        }
+
+        .dark {
+          display: block;
+        }
+      }
+
+    }
+
+    .select-item {
       align-items: center;
       display: flex;
       flex-direction: column;
       flex: 1;
       padding: 0;
       min-width: 50px;
-      width: 180px;
       color: #000;
       box-shadow: none;
       border-radius: 4px;
@@ -1405,11 +1786,15 @@ html {
           transform: scaleX(-1);
         }
 
-        &:focus,
+        &:focus-visible,
         &:active,
         &.selected {
           outline: 2px solid var(--in-content-primary-button-background);
           outline-offset: 2px;
+        }
+
+        &.selected {
+          outline-color: var(--color-accent-primary-active);
         }
 
         &.light {
@@ -1512,10 +1897,19 @@ html {
 
     .checkbox-container {
       display: flex;
+
+      > input {
+        flex-grow: 0;
+        flex-shrink: 0;
+      }
     }
 
-    @media (prefers-contrast: no-preference) and (prefers-color-scheme: dark) {
+    @media (prefers-color-scheme: dark) {
       color: #CFCFD8;
+    }
+
+    @media (prefers-contrast) {
+      color: var(--in-content-page-color);
     }
   }
 
@@ -1849,6 +2243,10 @@ html {
       margin: auto;
     }
 
+    .section-main.system-prompt-spotlight {
+      margin-top: 100px;
+      margin-inline: auto;
+    }
     // Position of noodles on second screen
     .outline-L {
       width: 87px;
@@ -1892,7 +2290,9 @@ html {
       transition-delay: 0.8s;
     }
 
-    .tiles-theme-section,
+    .tiles-single-select-section,
+    .inline-image,
+    .link-paragraph,
     .multi-select-container,
     migration-wizard {
       transition-delay: 0.9s;
@@ -1903,14 +2303,17 @@ html {
     .secondary-cta,
     .steps,
     .cta-link,
-    .legal-paragraph {
+    .legal-paragraph,
+    .steps[above-button]:not(.progress-bar) {
       transition-delay: 1s;
     }
   }
 
   // Delays for transitioning-in of intermediate screens
   .screen:not(.dialog-initial) {
-    .tiles-theme-section,
+    .tiles-single-select-section,
+    .inline-image,
+    .link-paragraph,
     .multi-select-container
      {
       transition-delay: 0.2s;
@@ -1920,7 +2323,8 @@ html {
     .secondary,
     .secondary-cta,
     .cta-link,
-    .legal-paragraph {
+    .legal-paragraph,
+    .steps[above-button]:not(.progress-bar) {
       transition-delay: 0.4s;
     }
   }
@@ -1929,6 +2333,11 @@ html {
     .section-main {
       z-index: 1;
       margin: auto;
+    }
+
+    .section-main.system-prompt-spotlight {
+      margin-top: 100px;
+      margin-inline: auto;
     }
 
     // Position of noodles on third screen
@@ -1987,23 +2396,63 @@ html {
     .screen {
       .welcome-text,
       .multi-select-container,
-      .tiles-theme-section,
+      .tiles-single-select-section,
+      .link-paragraph,
+      .inline-image,
       .primary,
       .checkbox-container:not(.multi-select-item),
       .secondary,
       .secondary-cta:not(.top),
       .cta-link,
       .legal-paragraph,
-      migration-wizard {
+      migration-wizard,
+      .steps[above-button]:not(.progress-bar) {
         opacity: 0;
         translate: 0 calc(-1 * var(--translate));
       }
 
       &:not(.dialog-initial) {
-        .steps:not(.progress-bar) {
+        .steps:not(.progress-bar, [above-button]) {
           opacity: 0.2;
         }
       }
+    }
+  }
+
+  .system-prompt-spotlight {
+    .inline-icon-container {
+      display: flex;
+    }
+
+    .welcome-text {
+      align-items: flex-start;
+      padding: 5px;
+
+      h2 {
+        text-align: start;
+        margin: 0;
+        margin-block: 10px 15px;
+      }
+    }
+
+    .brand-logo {
+      margin-block: 2px;
+    }
+
+    .multi-select-container {
+      margin-inline-start: 23px;
+      margin-block-end: 17px;
+    }
+
+    .additional-cta-container {
+      display: flex;
+      flex-direction: row-reverse;
+      padding-inline-end: 15px;
+    }
+
+    .main-content.no-steps {
+      padding-bottom: 12px;
+      margin-inline: auto;
     }
   }
 
@@ -2029,7 +2478,9 @@ html {
 
       // content that is nested between inner main content and navigation CTAs
       // requires an additional 0.1s transition to avoid overlap
-      .tiles-theme-section,
+      .tiles-single-select-section,
+      .inline-image,
+      .link-paragraph,
       migration-wizard {
         opacity: 0;
         translate: 0 var(--translate);
@@ -2041,13 +2492,14 @@ html {
       .secondary,
       .secondary-cta:not(.top),
       .cta-link,
-      .legal-paragraph {
+      .legal-paragraph,
+      .steps[above-button]:not(.progress-bar) {
         opacity: 0;
         translate: 0 var(--translate);
         transition-delay: 0.3s;
       }
 
-      .steps:not(.progress-bar) {
+      .steps:not(.progress-bar, [above-button]) {
         opacity: 0.2;
         transition-delay: 0.5s;
       }
@@ -2065,6 +2517,11 @@ html {
         transition-delay: 0.4s;
       }
     }
+  }
+
+  .inline-image,
+  .link-paragraph {
+    transition: var(--transition);
   }
 
   migration-wizard {

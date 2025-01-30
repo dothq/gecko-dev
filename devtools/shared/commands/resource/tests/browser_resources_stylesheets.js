@@ -118,6 +118,8 @@ const ADDITIONAL_FROM_ACTOR_RESOURCE = {
 };
 
 add_task(async function () {
+  // Enable @property
+  await pushPref("layout.css.properties-and-values.enabled", true);
   await testResourceAvailableDestroyedFeature();
   await testResourceUpdateFeature();
   await testNestedResourceUpdateFeature();
@@ -146,9 +148,8 @@ async function testResourceAvailableDestroyedFeature() {
     "Should have two entires for resource timing"
   );
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info("Check whether ResourceCommand gets existing stylesheet");
   const availableResources = [];
@@ -220,9 +221,8 @@ async function testResourceAvailableDestroyedFeature() {
   info(
     "Check whether ResourceCommand gets additonal stylesheet which is added by DevTools"
   );
-  const styleSheetsFront = await targetCommand.targetFront.getFront(
-    "stylesheets"
-  );
+  const styleSheetsFront =
+    await targetCommand.targetFront.getFront("stylesheets");
   await styleSheetsFront.addStyleSheet(
     ADDITIONAL_FROM_ACTOR_RESOURCE.styleText
   );
@@ -309,9 +309,8 @@ async function testResourceUpdateFeature() {
 
   const tab = await addTab(STYLE_TEST_URL);
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info("Setup the watcher");
   const availableResources = [];
@@ -445,9 +444,8 @@ async function testNestedResourceUpdateFeature() {
     tab.ownerGlobal.resizeTo(originalWindowWidth, originalWindowHeight);
   });
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info("Setup the watcher");
   const availableResources = [];
@@ -496,13 +494,18 @@ async function testNestedResourceUpdateFeature() {
           }
         }
       }
+    }
+    @property --my-property {
+      syntax: "<color>";
+      inherits: true;
+      initial-value: #f06;
     }`,
     false
   );
   await waitUntil(() => updates.length === 3);
   is(
     updates.at(-1).resource.ruleCount,
-    7,
+    8,
     "Resource in update has expected ruleCount"
   );
 
@@ -554,6 +557,10 @@ async function testNestedResourceUpdateFeature() {
       type: "container",
       conditionText: "root (width > 10px)",
     },
+    {
+      type: "property",
+      propertyName: "--my-property",
+    },
   ];
 
   assertAtRules(targetUpdate.resource.atRules, expectedAtRules);
@@ -562,7 +569,7 @@ async function testNestedResourceUpdateFeature() {
   const styleSheetResult = await getStyleSheetResult(tab);
   is(
     styleSheetResult.ruleCount,
-    7,
+    8,
     "ruleCount of actual stylesheet is updated correctly"
   );
   assertAtRules(styleSheetResult.atRules, expectedAtRules);
@@ -620,6 +627,11 @@ async function getStyleSheetResult(tab) {
             type: "support",
             conditionText: rule.conditionText,
           });
+        } else if (rule instanceof content.CSSPropertyRule) {
+          atRules.push({
+            type: "property",
+            propertyName: rule.name,
+          });
         }
 
         if (rule.cssRules) {
@@ -655,6 +667,8 @@ function assertAtRules(atRules, expectedAtRules) {
       is(atRule.matches, expected.matches, "matches is correct");
     } else if (expected.type === "layer") {
       is(atRule.layerName, expected.layerName, "layerName is correct");
+    } else if (expected.type === "property") {
+      is(atRule.propertyName, expected.propertyName, "propertyName is correct");
     }
 
     if (expected.line !== undefined) {

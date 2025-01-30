@@ -116,8 +116,7 @@ class ProviderSearchSuggestions extends UrlbarProvider {
 
     let wantsLocalSuggestions =
       lazy.UrlbarPrefs.get("maxHistoricalSearchSuggestions") &&
-      (queryContext.trimmedSearchString ||
-        lazy.UrlbarPrefs.get("update2.emptySearchBehavior") != 0);
+      queryContext.trimmedSearchString;
 
     return wantsLocalSuggestions || this._allowRemoteSuggestions(queryContext);
   }
@@ -352,12 +351,8 @@ class ProviderSearchSuggestions extends UrlbarProvider {
     return undefined;
   }
 
-  onEngagement(state, queryContext, details, controller) {
+  onEngagement(queryContext, controller, details) {
     let { result } = details;
-    if (result?.providerName != this.name) {
-      return;
-    }
-
     if (details.selType == "dismiss" && queryContext.formHistoryName) {
       lazy.FormHistory.update({
         op: "remove",
@@ -580,9 +575,8 @@ class ProviderSearchSuggestions extends UrlbarProvider {
     }
 
     // Check if the user entered an engine alias directly.
-    let engineMatch = await lazy.UrlbarSearchUtils.engineForAlias(
-      possibleAlias
-    );
+    let engineMatch =
+      await lazy.UrlbarSearchUtils.engineForAlias(possibleAlias);
     if (engineMatch) {
       return {
         engine: engineMatch,
@@ -619,7 +613,7 @@ class ProviderSearchSuggestions extends UrlbarProvider {
    * Send telemetry to indicating trending results have been hidden.
    */
   #recordTrendingBlockedTelemetry() {
-    Services.telemetry.scalarAdd("urlbar.trending.block", 1);
+    Glean.urlbarTrending.block.add(1);
   }
 
   /*

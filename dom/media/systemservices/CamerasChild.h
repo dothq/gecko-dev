@@ -29,14 +29,14 @@ namespace camera {
 
 class FrameRelay {
  public:
+  virtual void OnCaptureEnded() = 0;
   virtual int DeliverFrame(
       uint8_t* buffer, const mozilla::camera::VideoFrameProperties& props) = 0;
 };
 
 struct CapturerElement {
-  CaptureEngine engine;
-  int id;
-  FrameRelay* callback;
+  int id{};
+  FrameRelay* callback{};
 };
 
 // Forward declaration so we can work with pointers to it.
@@ -146,8 +146,9 @@ class CamerasChild final : public PCamerasChild {
 
   // IPC messages recevied, received on the PBackground thread
   // these are the actual callbacks with data
+  mozilla::ipc::IPCResult RecvCaptureEnded(const int&) override;
   mozilla::ipc::IPCResult RecvDeliverFrame(
-      const CaptureEngine&, const int&, mozilla::ipc::Shmem&&,
+      const int&, mozilla::ipc::Shmem&&,
       const VideoFrameProperties& prop) override;
 
   mozilla::ipc::IPCResult RecvDeviceChange() override;
@@ -212,7 +213,7 @@ class CamerasChild final : public PCamerasChild {
     return IPC_OK();
   }
 
-  FrameRelay* Callback(CaptureEngine aCapEngine, int capture_id);
+  FrameRelay* Callback(int capture_id);
 
  private:
   CamerasChild();
@@ -220,9 +221,8 @@ class CamerasChild final : public PCamerasChild {
   // Dispatch a Runnable to the PCamerasParent, by executing it on the
   // decidecated Cameras IPC/PBackground thread.
   bool DispatchToParent(nsIRunnable* aRunnable, MonitorAutoLock& aMonitor);
-  void AddCallback(const CaptureEngine aCapEngine, const int capture_id,
-                   FrameRelay* render);
-  void RemoveCallback(const CaptureEngine aCapEngine, const int capture_id);
+  void AddCallback(int capture_id, FrameRelay* render);
+  void RemoveCallback(int capture_id);
 
   nsTArray<CapturerElement> mCallbacks;
   // Protects the callback arrays

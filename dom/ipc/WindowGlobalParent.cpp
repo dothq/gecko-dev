@@ -10,6 +10,8 @@
 
 #include "mozilla/AntiTrackingUtils.h"
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/BounceTrackingStorageObserver.h"
+#include "mozilla/BounceTrackingProtection.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/dom/InProcessParent.h"
@@ -31,6 +33,7 @@
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/Components.h"
+#include "mozilla/IdentityCredentialRequestManager.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/ServoCSSParser.h"
 #include "mozilla/ServoStyleSet.h"
@@ -39,6 +42,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/Variant.h"
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "MMPrinter.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
@@ -74,7 +78,7 @@
 #include "mozilla/net/PCookieServiceParent.h"
 #include "mozilla/net/CookieServiceParent.h"
 
-#include "SessionStoreFunctions.h"
+#include "nsISessionStoreFunctions.h"
 #include "nsIXPConnect.h"
 #include "nsImportModule.h"
 #include "nsIXULRuntime.h"
@@ -176,9 +180,6 @@ void WindowGlobalParent::Init() {
   if (!BrowsingContext()->IsDiscarded()) {
     MOZ_ALWAYS_SUCCEEDS(
         BrowsingContext()->SetCurrentInnerWindowId(InnerWindowId()));
-
-    Unused << SendSetContainerFeaturePolicy(
-        BrowsingContext()->GetContainerFeaturePolicy());
   }
 
   if (BrowsingContext()->IsTopContent()) {
@@ -230,8 +231,8 @@ void WindowGlobalParent::OriginCounter::UpdateSiteOriginsFrom(
 }
 
 void WindowGlobalParent::OriginCounter::Accumulate() {
-  mozilla::glean::geckoview::per_document_site_origins.AccumulateSamples(
-      {mMaxOrigins});
+  mozilla::glean::geckoview::per_document_site_origins.AccumulateSingleSample(
+      mMaxOrigins);
 
   mMaxOrigins = 0;
   mOriginMap.Clear();
@@ -398,26 +399,20 @@ IPCResult WindowGlobalParent::RecvUpdateDocumentURI(NotNull<nsIURI*> aURI) {
       return IPC_FAIL(this, "Setting DocumentURI with unknown protocol.");
     }
 
-    auto isLoadableViaInternet = [](nsIURI* uri) {
-      return (uri && (net::SchemeIsHTTP(uri) || net::SchemeIsHTTPS(uri)));
-    };
-
-    if (isLoadableViaInternet(aURI)) {
-      nsCOMPtr<nsIURI> principalURI = mDocumentPrincipal->GetURI();
-      if (mDocumentPrincipal->GetIsNullPrincipal()) {
-        nsCOMPtr<nsIPrincipal> precursor =
-            mDocumentPrincipal->GetPrecursorPrincipal();
-        if (precursor) {
-          principalURI = precursor->GetURI();
-        }
+    nsCOMPtr<nsIURI> principalURI = mDocumentPrincipal->GetURI();
+    if (mDocumentPrincipal->GetIsNullPrincipal()) {
+      nsCOMPtr<nsIPrincipal> precursor =
+          mDocumentPrincipal->GetPrecursorPrincipal();
+      if (precursor) {
+        principalURI = precursor->GetURI();
       }
+    }
 
-      if (isLoadableViaInternet(principalURI) &&
-          !nsScriptSecurityManager::SecurityCompareURIs(principalURI, aURI)) {
-        return IPC_FAIL(this,
-                        "Setting DocumentURI with a different Origin than "
-                        "principal URI");
-      }
+    if (nsScriptSecurityManager::IsHttpOrHttpsAndCrossOrigin(principalURI,
+                                                             aURI)) {
+      return IPC_FAIL(this,
+                      "Setting DocumentURI with a different Origin than "
+                      "principal URI");
     }
   }
 
@@ -570,6 +565,8 @@ IPCResult WindowGlobalParent::RecvRawMessage(
     stack.emplace();
     stack->BorrowFromClonedMessageData(*aStack);
   }
+  MMPrinter::Print("WindowGlobalParent::RecvRawMessage", aMeta.actorName(),
+                   aMeta.messageName(), aData);
   ReceiveRawMessage(aMeta, std::move(data), std::move(stack));
   return IPC_OK();
 }
@@ -880,7 +877,7 @@ class CheckPermitUnloadRequest final : public PromiseNativeHandler,
     }
 
     // Handle any failure in prompting by aborting the navigation. See comment
-    // in nsContentViewer::PermitUnload for reasoning.
+    // in nsDocumentViewer::PermitUnload for reasoning.
     auto cleanup = MakeScopeExit([&]() { SendReply(false); });
 
     if (nsCOMPtr<nsIPromptCollection> prompt =
@@ -1382,18 +1379,11 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvReloadWithHttpsOnlyException() {
     return IPC_FAIL(this, "HTTPS-only mode: Illegal state");
   }
 
-  // If the error page is within an iFrame, we create an exception for whatever
-  // scheme the top-level site is currently on, because the user wants to
-  // unbreak the iFrame and not the top-level page. When the error page shows up
-  // on a top-level request, then we replace the scheme with http, because the
-  // user wants to unbreak the whole page.
+  // We replace the scheme with http, because the user wants to unbreak the
+  // whole page.
   nsCOMPtr<nsIURI> newURI;
-  if (!BrowsingContext()->IsTop()) {
-    newURI = innerURI;
-  } else {
-    Unused << NS_MutateURI(innerURI).SetScheme("http"_ns).Finalize(
-        getter_AddRefs(newURI));
-  }
+  Unused << NS_MutateURI(innerURI).SetScheme("http"_ns).Finalize(
+      getter_AddRefs(newURI));
 
   OriginAttributes originAttributes =
       TopWindowContext()->DocumentPrincipal()->OriginAttributesRef();
@@ -1434,6 +1424,8 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvReloadWithHttpsOnlyException() {
   RefPtr<nsDocShellLoadState> loadState = new nsDocShellLoadState(insecureURI);
   loadState->SetTriggeringPrincipal(nsContentUtils::GetSystemPrincipal());
   loadState->SetLoadType(LOAD_NORMAL_REPLACE);
+  loadState->SetHttpsUpgradeTelemetry(
+      nsILoadInfo::HTTPS_ONLY_UPGRADE_DOWNGRADE);
 
   RefPtr<CanonicalBrowsingContext> topBC = BrowsingContext()->Top();
   topBC->LoadURI(loadState, /* setNavigating */ true);
@@ -1441,21 +1433,55 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvReloadWithHttpsOnlyException() {
   return IPC_OK();
 }
 
-IPCResult WindowGlobalParent::RecvDiscoverIdentityCredentialFromExternalSource(
+IPCResult WindowGlobalParent::RecvGetIdentityCredential(
     const IdentityCredentialRequestOptions& aOptions,
-    const DiscoverIdentityCredentialFromExternalSourceResolver& aResolver) {
-  IdentityCredential::DiscoverFromExternalSourceInMainProcess(
-      DocumentPrincipal(), this->BrowsingContext(), aOptions)
+    const CredentialMediationRequirement& aMediationRequirement,
+    const GetIdentityCredentialResolver& aResolver) {
+  IdentityCredential::GetCredentialInMainProcess(
+      DocumentPrincipal(), this->BrowsingContext(), aOptions,
+      aMediationRequirement)
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
           [aResolver](const IPCIdentityCredential& aResult) {
-            return aResolver(Some(aResult));
+            return aResolver({Some(aResult), NS_OK});
           },
-          [aResolver](nsresult aErr) { aResolver(Nothing()); });
+          [aResolver](nsresult aErr) {
+            aResolver({Maybe<IPCIdentityCredential>(Nothing()), aErr});
+          });
+  return IPC_OK();
+}
+
+IPCResult WindowGlobalParent::RecvStoreIdentityCredential(
+    const IPCIdentityCredential& aCredential,
+    const StoreIdentityCredentialResolver& aResolver) {
+  IdentityCredential::StoreInMainProcess(DocumentPrincipal(), aCredential)
+      ->Then(
+          GetCurrentSerialEventTarget(), __func__,
+          [aResolver](const bool& aResult) { aResolver(NS_OK); },
+          [aResolver](nsresult aErr) { aResolver(aErr); });
+  return IPC_OK();
+}
+
+IPCResult WindowGlobalParent::RecvPreventSilentAccess(
+    const PreventSilentAccessResolver& aResolver) {
+  nsIPrincipal* principal = DocumentPrincipal();
+  if (principal) {
+    nsCOMPtr<nsIPermissionManager> permissionManager =
+        components::PermissionManager::Service();
+    if (permissionManager) {
+      permissionManager->RemoveFromPrincipal(
+          principal, "credential-allow-silent-access"_ns);
+      aResolver(NS_OK);
+      return IPC_OK();
+    }
+  }
+
+  aResolver(NS_ERROR_NOT_AVAILABLE);
   return IPC_OK();
 }
 
 IPCResult WindowGlobalParent::RecvGetStorageAccessPermission(
+    bool aIncludeIdentityCredential,
     GetStorageAccessPermissionResolver&& aResolve) {
   WindowGlobalParent* top = TopWindowContext();
   if (!top) {
@@ -1469,6 +1495,24 @@ IPCResult WindowGlobalParent::RecvGetStorageAccessPermission(
   if (NS_WARN_IF(NS_FAILED(rv))) {
     aResolve(nsIPermissionManager::UNKNOWN_ACTION);
     return IPC_OK();
+  }
+  if (result == nsIPermissionManager::ALLOW_ACTION) {
+    aResolve(nsIPermissionManager::ALLOW_ACTION);
+    return IPC_OK();
+  }
+
+  if (aIncludeIdentityCredential) {
+    bool canCollect;
+    rv = IdentityCredential::CanSilentlyCollect(topPrincipal, principal,
+                                                &canCollect);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aResolve(nsIPermissionManager::UNKNOWN_ACTION);
+      return IPC_OK();
+    }
+    if (canCollect) {
+      aResolve(nsIPermissionManager::ALLOW_ACTION);
+      return IPC_OK();
+    }
   }
 
   aResolve(result);
@@ -1523,7 +1567,7 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
     Accumulate(Telemetry::MIXED_CONTENT_PAGE_LOAD, mixedContentLevel);
 
     if (GetDocTreeHadMedia()) {
-      ScalarAdd(Telemetry::ScalarID::MEDIA_ELEMENT_IN_PAGE_COUNT, 1);
+      glean::media::element_in_page_count.Add(1);
     }
   }
 
@@ -1556,7 +1600,7 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
       nsCOMPtr<nsILoadContext> loadContext = browserParent->GetLoadContext();
       if (loadContext && !loadContext->UsePrivateBrowsing() &&
           BrowsingContext()->IsTopContent()) {
-        GetContentBlockingLog()->ReportLog(DocumentPrincipal());
+        GetContentBlockingLog()->ReportLog();
 
         if (mDocumentURI && (net::SchemeIsHTTP(mDocumentURI) ||
                              net::SchemeIsHTTPS(mDocumentURI))) {
@@ -1690,7 +1734,8 @@ void WindowGlobalParent::SetShouldReportHasBlockedOpaqueResponse(
 
 IPCResult WindowGlobalParent::RecvSetCookies(
     const nsCString& aBaseDomain, const OriginAttributes& aOriginAttributes,
-    nsIURI* aHost, bool aFromHttp, const nsTArray<CookieStruct>& aCookies) {
+    nsIURI* aHost, bool aFromHttp, bool aIsThirdParty,
+    const nsTArray<CookieStruct>& aCookies) {
   // Get CookieServiceParent via
   // ContentParent->NeckoParent->CookieServiceParent.
   ContentParent* contentParent = GetContentParent();
@@ -1705,11 +1750,50 @@ IPCResult WindowGlobalParent::RecvSetCookies(
   auto* cs = static_cast<net::CookieServiceParent*>(csParent);
 
   return cs->SetCookies(aBaseDomain, aOriginAttributes, aHost, aFromHttp,
-                        aCookies, GetBrowsingContext());
+                        aIsThirdParty, aCookies, GetBrowsingContext());
 }
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(WindowGlobalParent, WindowContext,
-                                   mPageUseCountersWindow)
+IPCResult WindowGlobalParent::RecvOnInitialStorageAccess() {
+  DebugOnly<nsresult> rv =
+      BounceTrackingStorageObserver::OnInitialStorageAccess(this);
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Failed to notify storage access");
+  return IPC_OK();
+}
+
+IPCResult WindowGlobalParent::RecvRecordUserActivationForBTP() {
+  WindowGlobalParent* top = TopWindowContext();
+  if (!top) {
+    return IPC_OK();
+  }
+  nsIPrincipal* principal = top->DocumentPrincipal();
+  if (!principal) {
+    return IPC_OK();
+  }
+
+  DebugOnly<nsresult> rv =
+      BounceTrackingProtection::RecordUserActivation(principal, Some(PR_Now()));
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "Failed to record BTP user activation.");
+
+  return IPC_OK();
+}
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(WindowGlobalParent)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WindowGlobalParent,
+                                                WindowContext)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPageUseCountersWindow)
+  tmp->UnlinkManager();
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(WindowGlobalParent,
+                                                  WindowContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPageUseCountersWindow)
+  if (!tmp->IsInProcess()) {
+    CycleCollectionNoteChild(cb, static_cast<BrowserParent*>(tmp->Manager()),
+                             "Manager()");
+  }
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(WindowGlobalParent,
                                                WindowContext)

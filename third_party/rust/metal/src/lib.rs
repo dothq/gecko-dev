@@ -10,23 +10,13 @@
 #![allow(non_upper_case_globals)]
 
 #[macro_use]
-pub extern crate bitflags;
-#[macro_use]
-pub extern crate log;
-#[macro_use]
 pub extern crate objc;
 #[macro_use]
 pub extern crate foreign_types;
 #[macro_use]
 pub extern crate paste;
 
-use std::{
-    borrow::{Borrow, ToOwned},
-    marker::PhantomData,
-    mem,
-    ops::Deref,
-    os::raw::c_void,
-};
+use std::{borrow::Borrow, marker::PhantomData, mem, ops::Deref, os::raw::c_void};
 
 use core_graphics_types::{base::CGFloat, geometry::CGSize};
 use foreign_types::ForeignType;

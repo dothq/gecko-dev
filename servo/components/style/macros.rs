@@ -4,33 +4,6 @@
 
 //! Various macro helpers.
 
-macro_rules! exclusive_value {
-    (($value:ident, $set:expr) => $ident:path) => {
-        if $value.intersects($set) {
-            return Err(());
-        } else {
-            $ident
-        }
-    };
-}
-
-#[cfg(feature = "gecko")]
-macro_rules! impl_gecko_keyword_conversions {
-    ($name:ident, $utype:ty) => {
-        impl From<$utype> for $name {
-            fn from(bits: $utype) -> $name {
-                $name::from_gecko_keyword(bits)
-            }
-        }
-
-        impl From<$name> for $utype {
-            fn from(v: $name) -> $utype {
-                v.to_gecko_keyword()
-            }
-        }
-    };
-}
-
 macro_rules! trivial_to_computed_value {
     ($name:ty) => {
         impl $crate::values::computed::ToComputedValue for $name {
@@ -68,17 +41,17 @@ macro_rules! try_match_ident_ignore_ascii_case {
 #[cfg(feature = "servo")]
 macro_rules! local_name {
     ($s:tt) => {
-        $crate::values::GenericAtomIdent(html5ever::local_name!($s))
+        $crate::values::GenericAtomIdent(markup5ever::local_name!($s))
     };
 }
 
 #[cfg(feature = "servo")]
 macro_rules! ns {
     () => {
-        $crate::values::GenericAtomIdent(html5ever::ns!())
+        $crate::values::GenericAtomIdent(markup5ever::ns!())
     };
     ($s:tt) => {
-        $crate::values::GenericAtomIdent(html5ever::ns!($s))
+        $crate::values::GenericAtomIdent(markup5ever::ns!($s))
     };
 }
 

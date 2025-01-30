@@ -4,7 +4,6 @@ add_task(async function setup_pref() {
       // To avoid throttling requestAnimationFrame callbacks in invisible
       // iframes
       ["layout.throttled_frame_rate", 60],
-      ["dom.animations-api.timelines.enabled", true],
       // Next two prefs are needed for hit-testing to work
       ["test.events.async.enabled", true],
       ["apz.test.logging_enabled", true],
@@ -27,9 +26,6 @@ add_task(async function test_main() {
   // setup (optional): function that takes the top-level fission window and is
   //   run once after the subtest is loaded but before it is started.
   var subtests = [
-    { file: "helper_fission_basic.html" },
-    { file: "helper_fission_transforms.html" },
-    { file: "helper_fission_scroll_oopif.html" },
     {
       file: "helper_fission_event_region_override.html",
       setup(win) {
@@ -39,30 +35,7 @@ add_task(async function test_main() {
         });
       },
     },
-    { file: "helper_fission_animation_styling_in_oopif.html" },
-    { file: "helper_fission_force_empty_hit_region.html" },
-    { file: "helper_fission_touch.html" },
-    {
-      file: "helper_fission_tap.html",
-      prefs: [["apz.max_tap_time", 10000]],
-    },
-    { file: "helper_fission_inactivescroller_under_oopif.html" },
-    {
-      file: "helper_fission_tap_on_zoomed.html",
-      prefs: [["apz.max_tap_time", 10000]],
-    },
-    {
-      file: "helper_fission_tap_in_nested_iframe_on_zoomed.html",
-      prefs: [["apz.max_tap_time", 10000]],
-    },
-    { file: "helper_fission_scroll_handoff.html" },
-    { file: "helper_fission_large_subframe.html" },
     { file: "helper_fission_initial_displayport.html" },
-    { file: "helper_fission_checkerboard_severity.html" },
-    { file: "helper_fission_setResolution.html" },
-    { file: "helper_fission_inactivescroller_positionedcontent.html" },
-    { file: "helper_fission_irregular_areas.html" },
-    { file: "helper_fission_animation_styling_in_transformed_oopif.html" },
     // add additional tests here
   ];
 

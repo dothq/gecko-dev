@@ -7,7 +7,7 @@ let distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "empty"]);
 distroDir.create(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
 registerDirectory("XREAppFeat", distroDir);
 
-AddonTestUtils.usePrivilegedSignatures = id => "system";
+AddonTestUtils.usePrivilegedSignatures = () => "system";
 
 add_task(() => initSystemAddonDirs());
 
@@ -80,9 +80,8 @@ add_task(async function test_addon_update() {
     "Got the expected telemetry info on balrog system addon installed addon"
   );
 
-  const updatedSystemAddon = await AddonManager.getAddonByID(
-    updatedSystemAddonId
-  );
+  const updatedSystemAddon =
+    await AddonManager.getAddonByID(updatedSystemAddonId);
   Assert.deepEqual(
     updatedSystemAddon.installTelemetryInfo,
     // For addons that are distributed in Firefox, then updated through the product

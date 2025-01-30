@@ -20,8 +20,8 @@ struct GleanDistributionData;
 }  // namespace mozilla::dom
 
 namespace mozilla::glean {
-
-typedef uint64_t TimerId;
+// Forward declaration to make the friend class below work.
+class GleanTimingDistribution;
 
 namespace impl {
 class TimingDistributionMetric {
@@ -93,6 +93,8 @@ class TimingDistributionMetric {
 
  private:
   const uint32_t mId;
+
+  friend class mozilla::glean::GleanTimingDistribution;
 };
 }  // namespace impl
 
@@ -107,6 +109,8 @@ class GleanTimingDistribution final : public GleanMetric {
   uint64_t Start();
   void StopAndAccumulate(uint64_t aId);
   void Cancel(uint64_t aId);
+  void AccumulateSamples(const nsTArray<int64_t>& aSamples);
+  void AccumulateSingleSample(int64_t aSample);
 
   void TestGetValue(const nsACString& aPingName,
                     dom::Nullable<dom::GleanDistributionData>& aRetval,

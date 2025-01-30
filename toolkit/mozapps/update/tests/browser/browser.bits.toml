@@ -1,8 +1,5 @@
 [DEFAULT]
-run-if = ["os == 'win'"] # "BITS is only available on Windows."
-skip-if = [
-  "msix", # Updater is disabled in MSIX builds
-]
+run-if = ["os == 'win' && !msix"] # "BITS is only available on Windows."
 dupe-manifest = true
 tags = "appupdate bits"
 head = "head.js"
@@ -16,7 +13,8 @@ support-files = [
 
 prefs = [
   "app.update.BITS.enabled=true",
- "app.update.langpack.enabled=true",
+  "app.update.langpack.enabled=true",
+  "app.update.multiSessionInstallLockout.enabled=false",
 ]
 
 # BITS Download Tests
@@ -88,6 +86,8 @@ prefs = [
 
 ["browser_aboutPrefs_fc_patch_partialBadSize_completeBadSize.js"]
 
+["browser_discardUpdateNotif.js"]
+
 # Doorhanger Application Update Tests
 
 ["browser_doorhanger_bc_downloadAutoFailures.js"]
@@ -127,6 +127,8 @@ prefs = [
 ["browser_doorhanger_sp_patch_partialApplyFailure_completeBadSize.js"]
 
 ["browser_doorhanger_sp_patch_partialApplyFailure_complete_staging.js"]
+
+["browser_showWhatsNewPageTest.js"]
 
 # Telemetry Update Ping Tests
 

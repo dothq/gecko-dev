@@ -118,7 +118,7 @@
 #include "mozilla/css/ImageLoader.h"
 #include "gfxUserFontSet.h"
 #include "RestoreTabContentObserver.h"
-#include "mozilla/intl/nsComplexBreaker.h"
+#include "mozilla/intl/LineBreakCache.h"
 
 #include "nsRLBoxExpatDriver.h"
 #include "RLBoxWOFF2Types.h"
@@ -183,9 +183,6 @@ nsresult nsLayoutStatics::Initialize() {
 
   nsMathMLOperators::AddRefTable();
 
-#ifdef DEBUG
-  nsIFrame::DisplayReflowStartup();
-#endif
   Attr::Initialize();
 
   PopupBlocker::Initialize();
@@ -256,7 +253,7 @@ nsresult nsLayoutStatics::Initialize() {
   if (XRE_IsParentProcess()) {
     // On content process we initialize these components when PContentChild is
     // fully initialized.
-    mozilla::dom::RemoteWorkerService::Initialize();
+    mozilla::dom::RemoteWorkerService::InitializeParent();
   }
 
   ClearSiteData::Initialize();
@@ -277,7 +274,7 @@ nsresult nsLayoutStatics::Initialize() {
 
   RestoreTabContentObserver::Initialize();
 
-  ComplexBreaker::Initialize();
+  mozilla::intl::LineBreakCache::Initialize();
 
   RLBoxExpatSandboxPool::Initialize();
 
@@ -320,9 +317,6 @@ void nsLayoutStatics::Shutdown() {
   HTMLDNSPrefetch::Shutdown();
   nsCSSRendering::Shutdown();
   StaticPresData::Shutdown();
-#ifdef DEBUG
-  nsIFrame::DisplayReflowShutdown();
-#endif
   nsCellMap::Shutdown();
   ActiveLayerTracker::Shutdown();
 
@@ -392,5 +386,5 @@ void nsLayoutStatics::Shutdown() {
 
   RestoreTabContentObserver::Shutdown();
 
-  ComplexBreaker::Shutdown();
+  mozilla::intl::LineBreakCache::Shutdown();
 }

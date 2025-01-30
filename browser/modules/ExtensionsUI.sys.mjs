@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { EventEmitter } from "resource://gre/modules/EventEmitter.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = {};
 
@@ -25,10 +26,29 @@ ChromeUtils.defineLazyGetter(
     new Localization(["browser/extensionsUI.ftl", "branding/brand.ftl"], true)
 );
 
+ChromeUtils.defineLazyGetter(lazy, "logConsole", () =>
+  console.createInstance({
+    prefix: "ExtensionsUI",
+    maxLogLevelPref: "extensions.webextensions.log.level",
+  })
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "POSTINSTALL_PRIVATEBROWSING_CHECKBOX",
+  "extensions.ui.postInstallPrivateBrowsingCheckbox",
+  false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "SHOW_FULL_DOMAINS_LIST",
+  "extensions.ui.installDialogFullDomains",
+  true
+);
+
 const DEFAULT_EXTENSION_ICON =
   "chrome://mozapps/skin/extensions/extensionGeneric.svg";
-
-const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 function getTabBrowser(browser) {
   while (browser.ownerGlobal.docShell.itemType !== Ci.nsIDocShell.typeChrome) {
@@ -51,6 +71,14 @@ export var ExtensionsUI = {
   sideloadListener: null,
 
   pendingNotifications: new WeakMap(),
+
+  get SHOW_FULL_DOMAINS_LIST() {
+    return lazy.SHOW_FULL_DOMAINS_LIST;
+  },
+
+  get POSTINSTALL_PRIVATEBROWSING_CHECKBOX() {
+    return lazy.POSTINSTALL_PRIVATEBROWSING_CHECKBOX;
+  },
 
   async init() {
     Services.obs.addObserver(this, "webextension-permission-prompt");
@@ -117,14 +145,26 @@ export var ExtensionsUI = {
     this.emit("change");
   },
 
-  showAddonsManager(tabbrowser, strings, icon) {
+  showAddonsManager(
+    tabbrowser,
+    strings,
+    icon,
+    addon = undefined,
+    shouldShowIncognitoCheckbox = false
+  ) {
     let global = tabbrowser.selectedBrowser.ownerGlobal;
-    return global
-      .BrowserOpenAddonsMgr("addons://list/extension")
-      .then(aomWin => {
+    return global.BrowserAddonUI.openAddonsMgr("addons://list/extension").then(
+      aomWin => {
         let aomBrowser = aomWin.docShell.chromeEventHandler;
-        return this.showPermissionsPrompt(aomBrowser, strings, icon);
-      });
+        return this.showPermissionsPrompt(
+          aomBrowser,
+          strings,
+          icon,
+          addon,
+          shouldShowIncognitoCheckbox
+        );
+      }
+    );
   },
 
   showSideloaded(tabbrowser, addon) {
@@ -134,7 +174,7 @@ export var ExtensionsUI = {
 
     let strings = this._buildStrings({
       addon,
-      permissions: addon.userPermissions,
+      permissions: addon.installPermissions,
       type: "sideload",
     });
 
@@ -142,26 +182,31 @@ export var ExtensionsUI = {
       num_strings: strings.msgs.length,
     });
 
-    this.showAddonsManager(tabbrowser, strings, addon.iconURL).then(
-      async answer => {
-        if (answer) {
-          await addon.enable();
+    this.showAddonsManager(
+      tabbrowser,
+      strings,
+      addon.iconURL,
+      addon,
+      true /* shouldShowIncognitoCheckbox */
+    ).then(async answer => {
+      if (answer) {
+        await addon.enable();
 
-          this._updateNotifications();
+        this._updateNotifications();
 
-          // The user has just enabled a sideloaded extension, if the permission
-          // can be changed for the extension, show the post-install panel to
-          // give the user that opportunity.
-          if (
-            addon.permissions &
+        // The user has just enabled a sideloaded extension, if the permission
+        // can be changed for the extension, show the post-install panel to
+        // give the user that opportunity.
+        if (
+          ExtensionsUI.POSTINSTALL_PRIVATEBROWSING_CHECKBOX &&
+          addon.permissions &
             lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
-          ) {
-            this.showInstallNotification(tabbrowser.selectedBrowser, addon);
-          }
+        ) {
+          this.showInstallNotification(tabbrowser.selectedBrowser, addon);
         }
-        this.emit("sideload-response");
       }
-    );
+      this.emit("sideload-response");
+    });
   },
 
   showUpdate(browser, info) {
@@ -185,7 +230,7 @@ export var ExtensionsUI = {
     );
   },
 
-  observe(subject, topic, data) {
+  observe(subject, topic) {
     if (topic == "webextension-permission-prompt") {
       let { target, info } = subject.wrappedJSObject;
 
@@ -207,7 +252,10 @@ export var ExtensionsUI = {
       if (
         info.unsigned &&
         Cu.isInAutomation &&
-        Services.prefs.getBoolPref("extensions.ui.ignoreUnsigned", false)
+        Services.prefs.getBoolPref(
+          "extensions.ui.showAddonIconForUnsigned",
+          false
+        )
       ) {
         info.unsigned = false;
       }
@@ -235,7 +283,13 @@ export var ExtensionsUI = {
         });
       }
 
-      this.showPermissionsPrompt(browser, strings, icon).then(answer => {
+      this.showPermissionsPrompt(
+        browser,
+        strings,
+        icon,
+        info.addon,
+        true /* shouldShowIncognitoCheckbox */
+      ).then(answer => {
         if (answer) {
           info.resolve();
         } else {
@@ -285,7 +339,22 @@ export var ExtensionsUI = {
         resolve(true);
         return;
       }
-      resolve(this.showPermissionsPrompt(browser, strings, icon));
+      // "userScripts" is an OptionalOnlyPermission, which means that it can
+      // only be requested through the permissions.request() API, without other
+      // permissions in the same request.
+      let isUserScriptsRequest =
+        permissions.permissions.length === 1 &&
+        permissions.permissions[0] === "userScripts";
+      resolve(
+        this.showPermissionsPrompt(
+          browser,
+          strings,
+          icon,
+          /* addon */ undefined,
+          /* shouldShowIncognitoCheckbox */ false,
+          isUserScriptsRequest
+        )
+      );
     } else if (topic == "webextension-defaultsearch-prompt") {
       let { browser, name, icon, respond, currentEngine, newEngine } =
         subject.wrappedJSObject;
@@ -329,17 +398,44 @@ export var ExtensionsUI = {
 
   // Create a set of formatted strings for a permission prompt
   _buildStrings(info) {
-    const strings = lazy.ExtensionData.formatPermissionStrings(info, {
-      collapseOrigins: true,
-    });
+    const strings = lazy.ExtensionData.formatPermissionStrings(
+      info,
+      this.SHOW_FULL_DOMAINS_LIST
+        ? { fullDomainsList: true }
+        : { collapseOrigins: true }
+    );
     strings.addonName = info.addon.name;
     return strings;
   },
 
-  async showPermissionsPrompt(target, strings, icon) {
+  async showPermissionsPrompt(
+    target,
+    strings,
+    icon,
+    addon = undefined,
+    shouldShowIncognitoCheckbox = false,
+    isUserScriptsRequest = false
+  ) {
     let { browser, window } = getTabBrowser(target);
 
-    await window.ensureCustomElements("moz-support-link");
+    let showIncognitoCheckbox =
+      shouldShowIncognitoCheckbox && !lazy.POSTINSTALL_PRIVATEBROWSING_CHECKBOX;
+
+    if (showIncognitoCheckbox) {
+      showIncognitoCheckbox = !!(
+        addon.permissions &
+        lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
+      );
+    }
+
+    const incognitoPermissionName = "internal:privateBrowsingAllowed";
+    let grantPrivateBrowsingAllowed = false;
+    if (showIncognitoCheckbox) {
+      const { permissions } = await lazy.ExtensionPermissions.get(addon.id);
+      grantPrivateBrowsingAllowed = permissions.includes(
+        incognitoPermissionName
+      );
+    }
 
     // Wait for any pending prompts to complete before showing the next one.
     let pending;
@@ -349,51 +445,7 @@ export var ExtensionsUI = {
 
     let promise = new Promise(resolve => {
       function eventCallback(topic) {
-        let doc = this.browser.ownerDocument;
-        if (topic == "showing") {
-          let textEl = doc.getElementById("addon-webext-perm-text");
-          textEl.textContent = strings.text;
-          textEl.hidden = !strings.text;
-
-          // By default, multiline strings don't get formatted properly. These
-          // are presently only used in site permission add-ons, so we treat it
-          // as a special case to avoid unintended effects on other things.
-          let isMultiline = strings.text.includes("\n\n");
-          textEl.classList.toggle(
-            "addon-webext-perm-text-multiline",
-            isMultiline
-          );
-
-          let listIntroEl = doc.getElementById("addon-webext-perm-intro");
-          listIntroEl.textContent = strings.listIntro;
-          listIntroEl.hidden = !strings.msgs.length || !strings.listIntro;
-
-          let listInfoEl = doc.getElementById("addon-webext-perm-info");
-          listInfoEl.hidden = !strings.msgs.length;
-
-          let list = doc.getElementById("addon-webext-perm-list");
-          while (list.firstChild) {
-            list.firstChild.remove();
-          }
-          let singleEntryEl = doc.getElementById(
-            "addon-webext-perm-single-entry"
-          );
-          singleEntryEl.textContent = "";
-          singleEntryEl.hidden = true;
-          list.hidden = true;
-
-          if (strings.msgs.length === 1) {
-            singleEntryEl.textContent = strings.msgs[0];
-            singleEntryEl.hidden = false;
-          } else if (strings.msgs.length) {
-            for (let msg of strings.msgs) {
-              let item = doc.createElementNS(HTML_NS, "li");
-              item.textContent = msg;
-              list.appendChild(item);
-            }
-            list.hidden = false;
-          }
-        } else if (topic == "swapping") {
+        if (topic == "swapping") {
           return true;
         }
         if (topic == "removed") {
@@ -404,15 +456,38 @@ export var ExtensionsUI = {
         return false;
       }
 
+      // Show the SUMO link already part of the popupnotification by
+      // setting learnMoreURL option if there are permissions to be
+      // granted to the addon being installed (or if the private
+      // browsing checkbox is shown).
+      const learnMoreURL =
+        strings.msgs.length || showIncognitoCheckbox
+          ? Services.urlFormatter.formatURLPref("app.support.baseURL") +
+            "extension-permissions"
+          : undefined;
+
       let options = {
         hideClose: true,
         popupIconURL: icon || DEFAULT_EXTENSION_ICON,
         popupIconClass: icon ? "" : "addon-warning-icon",
+        learnMoreURL,
         persistent: true,
         eventCallback,
         removeOnDismissal: true,
         popupOptions: {
           position: "bottomright topright",
+        },
+        // Pass additional options used internally by the
+        // addon-webext-permissions-notification custom element
+        // (defined and registered by browser-addons.js).
+        customElementOptions: {
+          strings,
+          showIncognitoCheckbox,
+          grantPrivateBrowsingAllowed,
+          onPrivateBrowsingAllowedChanged(value) {
+            grantPrivateBrowsingAllowed = value;
+          },
+          isUserScriptsRequest,
         },
       };
       // The prompt/notification machinery has a special affordance wherein
@@ -463,7 +538,45 @@ export var ExtensionsUI = {
 
     this.pendingNotifications.set(browser, promise);
     promise.finally(() => this.pendingNotifications.delete(browser));
-    return promise;
+    // NOTE: this method is also called from showQuarantineConfirmation and some of its
+    // related test cases (from browser_ext_originControls.js) seem to be hitting a race
+    // if the promise returned requires an additional tick to be resolved.
+    // Look more into the failure and determine a better option to avoid those failures.
+    if (!showIncognitoCheckbox) {
+      return promise;
+    }
+    return promise.then(continueInstall => {
+      if (!continueInstall) {
+        return continueInstall;
+      }
+      const incognitoPermission = {
+        permissions: [incognitoPermissionName],
+        origins: [],
+      };
+      let permUpdatePromise;
+      if (grantPrivateBrowsingAllowed) {
+        permUpdatePromise = lazy.ExtensionPermissions.add(
+          addon.id,
+          incognitoPermission
+        ).catch(err =>
+          lazy.logConsole.warn(
+            `Error on adding "${incognitoPermissionName}" permission to addon id "${addon.id}`,
+            err
+          )
+        );
+      } else {
+        permUpdatePromise = lazy.ExtensionPermissions.remove(
+          addon.id,
+          incognitoPermission
+        ).catch(err =>
+          lazy.logConsole.warn(
+            `Error on removing "${incognitoPermissionName}" permission to addon id "${addon.id}`,
+            err
+          )
+        );
+      }
+      return permUpdatePromise.then(() => continueInstall);
+    });
   },
 
   showDefaultSearchPrompt(target, strings, icon) {
@@ -518,6 +631,8 @@ export var ExtensionsUI = {
     const message = await lazy.l10n.formatValue("addon-post-install-message", {
       addonName: "<>",
     });
+
+    const hideIncognitoCheckbox = !lazy.POSTINSTALL_PRIVATEBROWSING_CHECKBOX;
     const permissionName = "internal:privateBrowsingAllowed";
     const { permissions } = await lazy.ExtensionPermissions.get(addon.id);
     const hasIncognito = permissions.includes(permissionName);
@@ -527,16 +642,18 @@ export var ExtensionsUI = {
       function setCheckbox(win) {
         let checkbox = win.document.getElementById("addon-incognito-checkbox");
         checkbox.checked = hasIncognito;
-        checkbox.hidden = !(
-          addon.permissions &
-          lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
-        );
+        checkbox.hidden =
+          hideIncognitoCheckbox ||
+          !(
+            addon.permissions &
+            lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
+          );
       }
 
       async function actionResolve(win) {
         let checkbox = win.document.getElementById("addon-incognito-checkbox");
 
-        if (checkbox.checked == hasIncognito) {
+        if (hideIncognitoCheckbox || checkbox.checked == hasIncognito) {
           resolve();
           return;
         }

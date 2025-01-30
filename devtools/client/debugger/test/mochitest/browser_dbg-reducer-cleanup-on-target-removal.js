@@ -46,7 +46,7 @@ add_task(async function () {
   });
 
   await waitForPaused(dbg, "original.js");
-  assertPausedAtSourceAndLine(dbg, findSource(dbg, "original.js").id, 8);
+  await assertPausedAtSourceAndLine(dbg, findSource(dbg, "original.js").id, 8);
   // Also open the genertated source to populate the reducer for original and generated sources
   await dbg.actions.jumpToMappedSelectedLocation();
   await waitForSelectedSource(dbg, "bundle.js");
@@ -116,6 +116,9 @@ add_task(async function () {
 
   info("Wait for all sources to be removed");
   await waitFor(() => dbg.selectors.getSourceCount() == 0);
+  info("Wait for target to be removed");
+  await waitFor(() => dbg.selectors.getAllThreads().length == 1);
+
   // The pause thread being removed, we are no longer paused.
   assertNotPaused(dbg);
 

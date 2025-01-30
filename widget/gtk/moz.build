@@ -55,6 +55,7 @@ EXPORTS.mozilla.widget += [
     "GtkCompositorWidget.h",
     "InProcessGtkCompositorWidget.h",
     "va_drmcommon.h",
+    "WaylandSurfaceLock.h",
     "WindowSurface.h",
     "WindowSurfaceProvider.h",
 ]
@@ -92,8 +93,8 @@ UNIFIED_SOURCES += [
     "ScreenHelperGTK.cpp",
     "TaskbarProgress.cpp",
     "WakeLockListener.cpp",
+    "WaylandSurfaceLock.cpp",
     "WidgetStyleCache.cpp",
-    "WidgetTraceEvent.cpp",
     "WidgetUtilsGtk.cpp",
     "WindowSurfaceProvider.cpp",
 ]
@@ -111,12 +112,14 @@ if CONFIG["MOZ_WAYLAND"]:
         "nsClipboardWayland.cpp",
         "nsWaylandDisplay.cpp",
         "WaylandBuffer.cpp",
+        "WaylandSurface.cpp",
         "WindowSurfaceWaylandMultiBuffer.cpp",
     ]
     EXPORTS.mozilla.widget += [
         "MozContainerWayland.h",
         "nsWaylandDisplay.h",
         "WaylandBuffer.h",
+        "WaylandSurface.h",
     ]
 
 if CONFIG["MOZ_X11"]:
@@ -174,6 +177,7 @@ if CONFIG["MOZ_ENABLE_DBUS"]:
     UNIFIED_SOURCES += [
         "AsyncDBus.cpp",
         "DBusMenu.cpp",
+        "DBusService.cpp",
     ]
     CXXFLAGS += CONFIG["MOZ_DBUS_CFLAGS"]
 

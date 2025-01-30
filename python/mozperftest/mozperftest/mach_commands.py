@@ -102,11 +102,12 @@ def run_perftest(command_context, **kwargs):
     else:
         if script_info.script_type == ScriptType.xpcshell:
             kwargs["flavor"] = script_info.script_type.name
-        else:
+        elif script_info.script_type == ScriptType.alert:
+            kwargs["flavor"] = script_info.script_type.name
+        elif "flavor" not in kwargs:
             # we set the value only if not provided (so "mobile-browser"
             # can be picked)
-            if "flavor" not in kwargs:
-                kwargs["flavor"] = "desktop-browser"
+            kwargs["flavor"] = "desktop-browser"
 
     push_to_try = kwargs.pop("push_to_try", False)
     if push_to_try:
@@ -125,7 +126,7 @@ def run_perftest(command_context, **kwargs):
         for plat in platform:
             if plat not in _TRY_PLATFORMS:
                 # we can extend platform support here: linux, win, macOs
-                # by adding more jobs in taskcluster/ci/perftest/kind.yml
+                # by adding more jobs in taskcluster/kinds/perftest/kind.yml
                 # then picking up the right one here
                 raise NotImplementedError(
                     "%r doesn't exist or is not yet supported" % plat
@@ -138,11 +139,12 @@ def run_perftest(command_context, **kwargs):
 
         for name, value in args.items():
             # ignore values that are set to default
+            new_val = value
             if original_parser.get_default(name) == value:
                 continue
             if name == "tests":
-                value = [relative(path) for path in value]
-            perftest_parameters[name] = value
+                new_val = [relative(path) for path in value]
+            perftest_parameters[name] = new_val
 
         parameters = {
             "try_task_config": {
@@ -186,14 +188,24 @@ def run_perftest(command_context, **kwargs):
 @CommandArgument(
     "-v", "--verbose", action="store_true", default=False, help="Verbose mode"
 )
+@CommandArgument(
+    "-r",
+    "--raptor",
+    action="store_true",
+    default=False,
+    help="Run raptor tests",
+)
 def run_tests(command_context, **kwargs):
     from pathlib import Path
 
     from mozperftest.utils import temporary_env
 
-    with temporary_env(
-        COVERAGE_RCFILE=str(Path(HERE, ".coveragerc")), RUNNING_TESTS="YES"
-    ):
+    COVERAGE_RCFILE = str(Path(HERE, ".mpt-coveragerc"))
+    if kwargs.get("raptor", False):
+        print("Running raptor unit tests through mozperftest")
+        COVERAGE_RCFILE = str(Path(HERE, ".raptor-coveragerc"))
+
+    with temporary_env(COVERAGE_RCFILE=COVERAGE_RCFILE, RUNNING_TESTS="YES"):
         _run_tests(command_context, **kwargs)
 
 
@@ -206,7 +218,7 @@ def _run_tests(command_context, **kwargs):
     skip_linters = kwargs.get("skip_linters", False)
     verbose = kwargs.get("verbose", False)
 
-    if not ON_TRY and not skip_linters:
+    if not ON_TRY and not skip_linters and not kwargs.get("raptor"):
         cmd = "./mach lint "
         if verbose:
             cmd += " -v"
@@ -220,6 +232,7 @@ def _run_tests(command_context, **kwargs):
     # 2/ coverage run pytest ... => run the tests and collect info
     # 3/ coverage report => generate the report
     tests_dir = Path(HERE, "tests").resolve()
+
     tests = kwargs.get("tests", [])
     if tests == []:
         tests = str(tests_dir)
@@ -244,11 +257,19 @@ def _run_tests(command_context, **kwargs):
     if kwargs.get("verbose"):
         options += "v"
 
+    # If we run mozperftest with the --raptor argument,
+    # then only run the raptor unit tests
+    if kwargs.get("raptor"):
+        run_coverage_check = True
+        tests = str(Path(command_context.topsrcdir, "testing", "raptor", "test"))
+
     if run_coverage_check:
         assert checkout_python_script(
             venv, "coverage", ["erase"], label="remove old coverage data"
         )
+
     args = ["run", "-m", "pytest", options, "--durations", "10", tests]
+
     assert checkout_python_script(
         venv, "coverage", args, label="running tests", verbose=verbose
     )

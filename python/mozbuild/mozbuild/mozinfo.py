@@ -100,6 +100,11 @@ def build_dict(config, env=os.environ):
     d["isolated_process"] = (
         substs.get("MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS") == "1"
     )
+    d["automation"] = substs.get("MOZ_AUTOMATION") == "1"
+    d["gecko_profiler"] = bool(substs.get("MOZ_GECKO_PROFILER"))
+    d["dbus_enabled"] = bool(substs.get("MOZ_ENABLE_DBUS"))
+
+    d["opt"] = not d["debug"] and not d["asan"] and not d["tsan"] and not d["ccov"]
 
     def guess_platform():
         if d["buildapp"] == "browser":

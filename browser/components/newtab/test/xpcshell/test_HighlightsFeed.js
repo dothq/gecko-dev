@@ -4,7 +4,7 @@
 "use strict";
 
 const { actionTypes: at } = ChromeUtils.importESModule(
-  "resource://activity-stream/common/Actions.sys.mjs"
+  "resource://activity-stream/common/Actions.mjs"
 );
 
 ChromeUtils.defineESModuleGetters(this, {
@@ -931,9 +931,8 @@ add_task(
     );
     let sandbox = sinon.createSandbox();
     let feed = getHighlightsFeedForTest(sandbox);
-    feed.store.state.Prefs.values[
-      "section.highlights.includeBookmarks"
-    ] = false;
+    feed.store.state.Prefs.values["section.highlights.includeBookmarks"] =
+      false;
 
     let links = [
       {

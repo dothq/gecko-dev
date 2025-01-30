@@ -4,11 +4,12 @@ from voluptuous import ALLOW_EXTRA, Any, Optional, Required
 
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.schema import Schema
-from taskgraph.util.templates import deep_get, substitute
+from taskgraph.util.templates import deep_get, substitute_task_fields
 from taskgraph.util.yaml import load_yaml
 
 SCHEMA = Schema(
     {
+        Optional("name"): str,
         Required(
             "task-context",
             description=dedent(
@@ -81,9 +82,9 @@ transforms.add_validate(SCHEMA)
 
 
 @transforms.add
-def render_task(config, jobs):
-    for job in jobs:
-        sub_config = job.pop("task-context")
+def render_task(config, tasks):
+    for task in tasks:
+        sub_config = task.pop("task-context")
         params_context = {}
         for var, path in sub_config.pop("from-parameters", {}).items():
             if isinstance(path, str):
@@ -108,14 +109,9 @@ def render_task(config, jobs):
         # substitution key/value pairs.
         subs.update(sub_config.pop("from-object", {}))
         subs.update(params_context)
+        if "name" in task:
+            subs.setdefault("name", task["name"])
 
         # Now that we have our combined context, we can substitute.
-        for field in fields:
-            container, subfield = job, field
-            while "." in subfield:
-                f, subfield = subfield.split(".", 1)
-                container = container[f]
-
-            container[subfield] = substitute(container[subfield], **subs)
-
-        yield job
+        substitute_task_fields(task, fields, **subs)
+        yield task

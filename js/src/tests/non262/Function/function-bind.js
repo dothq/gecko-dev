@@ -41,16 +41,7 @@ assertEq(strictReturnThis.bind("foopy")(), "foopy");
 
 function expectThrowTypeError(fun)
 {
-  try
-  {
-    var r = fun();
-    throw new Error("didn't throw TypeError, returned " + r);
-  }
-  catch (e)
-  {
-    assertEq(e instanceof TypeError, true,
-             "didn't throw TypeError, got: " + e);
-  }
+  assertThrowsInstanceOf(fun, TypeError);
 }
 
 /*
@@ -262,9 +253,8 @@ function testBound(fun)
 testBound(strict);
 testBound(nonstrict);
 
-assertEq((function unbound(){"body"}).bind().toString(), `function() {
-    [native code]
-}`);
+var nativeFunctionRegex = /^function\s*\(\)\s*{\s*\[native code\]\s*}$/
+assertEq(nativeFunctionRegex.test((function unbound(){"body"}).bind().toString()), true);
 
 
 /* 22. Return F. */

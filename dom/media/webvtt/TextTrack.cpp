@@ -4,15 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/dom/TextTrack.h"
-#include "mozilla/dom/TextTrackBinding.h"
-#include "mozilla/dom/TextTrackList.h"
-#include "mozilla/dom/TextTrackCue.h"
-#include "mozilla/dom/TextTrackCueList.h"
-#include "mozilla/dom/TextTrackRegion.h"
+
+#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/HTMLTrackElement.h"
+#include "mozilla/dom/TextTrackBinding.h"
+#include "mozilla/dom/TextTrackCue.h"
+#include "mozilla/dom/TextTrackCueList.h"
+#include "mozilla/dom/TextTrackList.h"
+#include "mozilla/dom/TextTrackRegion.h"
 #include "nsGlobalWindowInner.h"
 
 extern mozilla::LazyLogModule gTextTrackLog;
@@ -22,54 +23,6 @@ extern mozilla::LazyLogModule gTextTrackLog;
           ("TextTrack=%p, " msg, this, ##__VA_ARGS__))
 
 namespace mozilla::dom {
-
-static const char* ToStateStr(const TextTrackMode aMode) {
-  switch (aMode) {
-    case TextTrackMode::Disabled:
-      return "DISABLED";
-    case TextTrackMode::Hidden:
-      return "HIDDEN";
-    case TextTrackMode::Showing:
-      return "SHOWING";
-    default:
-      MOZ_ASSERT_UNREACHABLE("Invalid state.");
-  }
-  return "Unknown";
-}
-
-static const char* ToReadyStateStr(const TextTrackReadyState aState) {
-  switch (aState) {
-    case TextTrackReadyState::NotLoaded:
-      return "NotLoaded";
-    case TextTrackReadyState::Loading:
-      return "Loading";
-    case TextTrackReadyState::Loaded:
-      return "Loaded";
-    case TextTrackReadyState::FailedToLoad:
-      return "FailedToLoad";
-    default:
-      MOZ_ASSERT_UNREACHABLE("Invalid state.");
-  }
-  return "Unknown";
-}
-
-static const char* ToTextTrackKindStr(const TextTrackKind aKind) {
-  switch (aKind) {
-    case TextTrackKind::Subtitles:
-      return "Subtitles";
-    case TextTrackKind::Captions:
-      return "Captions";
-    case TextTrackKind::Descriptions:
-      return "Descriptions";
-    case TextTrackKind::Chapters:
-      return "Chapters";
-    case TextTrackKind::Metadata:
-      return "Metadata";
-    default:
-      MOZ_ASSERT_UNREACHABLE("Invalid kind.");
-  }
-  return "Unknown";
-}
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(TextTrack, DOMEventTargetHelper, mCueList,
                                    mActiveCueList, mTextTrackList,
@@ -113,7 +66,7 @@ TextTrack::TextTrack(nsPIDOMWindowInner* aOwnerWindow,
 TextTrack::~TextTrack() = default;
 
 void TextTrack::SetDefaultSettings() {
-  nsPIDOMWindowInner* ownerWindow = GetOwner();
+  nsPIDOMWindowInner* ownerWindow = GetOwnerWindow();
   mCueList = new TextTrackCueList(ownerWindow);
   mActiveCueList = new TextTrackCueList(ownerWindow);
   mCuePos = 0;
@@ -129,8 +82,8 @@ void TextTrack::SetMode(TextTrackMode aValue) {
   if (mMode == aValue) {
     return;
   }
-  WEBVTT_LOG("Set mode=%s for track kind %s", ToStateStr(aValue),
-             ToTextTrackKindStr(mKind));
+  WEBVTT_LOG("Set mode=%s for track kind %s", GetEnumString(aValue).get(),
+             GetEnumString(mKind).get());
   mMode = aValue;
 
   HTMLMediaElement* mediaElement = GetMediaElement();
@@ -226,7 +179,7 @@ void TextTrack::GetActiveCueArray(nsTArray<RefPtr<TextTrackCue> >& aCues) {
 TextTrackReadyState TextTrack::ReadyState() const { return mReadyState; }
 
 void TextTrack::SetReadyState(TextTrackReadyState aState) {
-  WEBVTT_LOG("SetReadyState=%s", ToReadyStateStr(aState));
+  WEBVTT_LOG("SetReadyState=%s", EnumValueToString(aState));
   mReadyState = aState;
   HTMLMediaElement* mediaElement = GetMediaElement();
   if (mediaElement && (mReadyState == TextTrackReadyState::Loaded ||
@@ -278,14 +231,15 @@ void TextTrack::GetLanguage(nsAString& aLanguage) const {
 }
 
 void TextTrack::DispatchAsyncTrustedEvent(const nsString& aEventName) {
-  nsPIDOMWindowInner* win = GetOwner();
+  nsGlobalWindowInner* win = GetOwnerWindow();
   if (!win) {
     return;
   }
-  RefPtr<TextTrack> self = this;
-  nsGlobalWindowInner::Cast(win)->Dispatch(NS_NewRunnableFunction(
-      "dom::TextTrack::DispatchAsyncTrustedEvent",
-      [self, aEventName]() { self->DispatchTrustedEvent(aEventName); }));
+  win->Dispatch(
+      NS_NewRunnableFunction("dom::TextTrack::DispatchAsyncTrustedEvent",
+                             [self = RefPtr{this}, aEventName]() {
+                               self->DispatchTrustedEvent(aEventName);
+                             }));
 }
 
 bool TextTrack::IsLoaded() {
@@ -348,7 +302,7 @@ void TextTrack::GetCurrentCuesAndOtherCues(
       aCurrentCues->AddCue(*cue);
     } else {
       // As the spec didn't have a restriction for the negative duration, it
-      // does happen sometime if user sets it explictly. It would be treated as
+      // does happen sometime if user sets it explicitly. It would be treated as
       // a `missing cue` later in the `TimeMarchesOn` but it won't be displayed.
       if (cue->EndTime() < cue->StartTime()) {
         // Add cue into `otherCue` only when its start time is contained by the

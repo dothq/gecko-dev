@@ -113,18 +113,11 @@ export class ContextMenuChild extends JSWindowActorChild {
                 }
                 break;
               case "pictureinpicture":
-                if (!media.isCloningElementVisually) {
-                  Services.telemetry.keyedScalarAdd(
-                    "pictureinpicture.opened_method",
-                    "contextmenu",
-                    1
-                  );
-                }
                 let event = new this.contentWindow.CustomEvent(
                   "MozTogglePictureInPicture",
                   {
                     bubbles: true,
-                    detail: { reason: "contextMenu" },
+                    detail: { reason: "ContextMenu" },
                   },
                   this.contentWindow
                 );
@@ -371,7 +364,7 @@ export class ContextMenuChild extends JSWindowActorChild {
   }
 
   // Returns true if clicked-on link targets a resource that can be saved.
-  _isLinkSaveable(aLink) {
+  _isLinkSaveable() {
     // We don't do the Right Thing for news/snews yet, so turn them off
     // until we do.
     return (
@@ -535,6 +528,23 @@ export class ContextMenuChild extends JSWindowActorChild {
     }
 
     let doc = aEvent.composedTarget.ownerDocument;
+    if (!doc && Cu.isInAutomation) {
+      // doc has been observed to be null for many years, causing intermittent
+      // test failures all over the place (bug 1478596). The rate of failures
+      // is too low to debug locally, but frequent enough to be a nuisance.
+      // TODO bug 1478596: use these diagnostic logs to resolve the bug.
+      dump(
+        `doc is unexpectedly null (bug 1478596), composedTarget=${aEvent.composedTarget}\n`
+      );
+      // A potential fix is to fall back to aEvent.target.ownerDocument, per
+      // https://bugzilla.mozilla.org/show_bug.cgi?id=1478596#c1
+      // Let's print potentially viable alternatives to see what we should use.
+      for (let k of ["target", "originalTarget", "explicitOriginalTarget"]) {
+        dump(
+          ` Alternative: ${k}=${aEvent[k]} and its doc=${aEvent[k]?.ownerDocument}\n`
+        );
+      }
+    }
     let {
       mozDocumentURIIfNotForErrorPages: docLocation,
       characterSet: charSet,
@@ -696,7 +706,7 @@ export class ContextMenuChild extends JSWindowActorChild {
    * - link
    * - linkURI
    */
-  _cleanContext(aEvent) {
+  _cleanContext() {
     const context = this.context;
     const cleanTarget = Object.create(null);
 
@@ -933,7 +943,6 @@ export class ContextMenuChild extends JSWindowActorChild {
           ? undefined
           : context.target.title || context.target.alt,
       };
-      const { SVGAnimatedLength } = context.target.ownerGlobal;
       if (SVGAnimatedLength.isInstance(context.imageInfo.height)) {
         context.imageInfo.height = context.imageInfo.height.animVal.value;
       }

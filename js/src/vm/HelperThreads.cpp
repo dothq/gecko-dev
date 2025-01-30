@@ -9,12 +9,12 @@
 #include "mozilla/ReverseIterator.h"  // mozilla::Reversed(...)
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Span.h"  // mozilla::Span<TaggedScriptThingIndex>
-#include "mozilla/Utf8.h"  // mozilla::Utf8Unit
 
 #include <algorithm>
 
 #include "frontend/CompilationStencil.h"  // frontend::CompilationStencil
 #include "gc/GC.h"
+#include "gc/Zone.h"
 #include "jit/Ion.h"
 #include "jit/IonCompileTask.h"
 #include "jit/JitRuntime.h"
@@ -36,14 +36,27 @@
 using namespace js;
 
 using mozilla::TimeDuration;
-using mozilla::TimeStamp;
-using mozilla::Utf8Unit;
 
-using JS::DispatchReason;
+static void CancelOffThreadWasmCompleteTier2GeneratorLocked(
+    AutoLockHelperThreadState& lock);
+static void CancelOffThreadWasmPartialTier2CompileLocked(
+    AutoLockHelperThreadState& lock);
+
+// This file is structured as follows:
+//
+// (1) Methods for GlobalHelperThreadState, and top level scheduling logic
+// (2) Specifics for JS task classes
+// (3) Specifics for wasm task classes
+
+///////////////////////////////////////////////////////////////////////////
+//                                                                       //
+// GlobalHelperThreadState methods and top-level scheduling logic        //
+//                                                                       //
+///////////////////////////////////////////////////////////////////////////
 
 namespace js {
 
-Mutex gHelperThreadLock(mutexid::GlobalHelperThreadState);
+MOZ_RUNINIT Mutex gHelperThreadLock(mutexid::GlobalHelperThreadState);
 GlobalHelperThreadState* gHelperThreadState = nullptr;
 
 }  // namespace js
@@ -108,10 +121,6 @@ size_t js::GetHelperThreadCount() { return HelperThreadState().threadCount; }
 
 size_t js::GetHelperThreadCPUCount() { return HelperThreadState().cpuCount; }
 
-size_t js::GetMaxWasmCompilationThreads() {
-  return HelperThreadState().maxWasmCompilationThreads();
-}
-
 void JS::SetProfilingThreadCallbacks(
     JS::RegisterThreadCallback registerThread,
     JS::UnregisterThreadCallback unregisterThread) {
@@ -128,6 +137,11 @@ JS_PUBLIC_API MOZ_NEVER_INLINE void JS::SetHelperThreadTaskCallback(
                                               lock);
 }
 
+JS_PUBLIC_API MOZ_NEVER_INLINE const char* JS::GetHelperThreadTaskName(
+    HelperThreadTask* task) {
+  return task->getName();
+}
+
 void GlobalHelperThreadState::setDispatchTaskCallback(
     JS::HelperThreadTaskCallback callback, size_t threadCount, size_t stackSize,
     const AutoLockHelperThreadState& lock) {
@@ -139,651 +153,6 @@ void GlobalHelperThreadState::setDispatchTaskCallback(
   dispatchTaskCallback = callback;
   this->threadCount = threadCount;
   this->stackQuota = JS::ThreadStackQuotaForSize(stackSize);
-}
-
-bool js::StartOffThreadWasmCompile(wasm::CompileTask* task,
-                                   wasm::CompileMode mode) {
-  return HelperThreadState().submitTask(task, mode);
-}
-
-bool GlobalHelperThreadState::submitTask(wasm::CompileTask* task,
-                                         wasm::CompileMode mode) {
-  AutoLockHelperThreadState lock;
-  if (!wasmWorklist(lock, mode).pushBack(task)) {
-    return false;
-  }
-
-  dispatch(DispatchReason::NewTask, lock);
-  return true;
-}
-
-size_t js::RemovePendingWasmCompileTasks(
-    const wasm::CompileTaskState& taskState, wasm::CompileMode mode,
-    const AutoLockHelperThreadState& lock) {
-  wasm::CompileTaskPtrFifo& worklist =
-      HelperThreadState().wasmWorklist(lock, mode);
-  return worklist.eraseIf([&taskState](wasm::CompileTask* task) {
-    return &task->state == &taskState;
-  });
-}
-
-void js::StartOffThreadWasmTier2Generator(wasm::UniqueTier2GeneratorTask task) {
-  (void)HelperThreadState().submitTask(std::move(task));
-}
-
-bool GlobalHelperThreadState::submitTask(wasm::UniqueTier2GeneratorTask task) {
-  AutoLockHelperThreadState lock;
-
-  MOZ_ASSERT(isInitialized(lock));
-
-  if (!wasmTier2GeneratorWorklist(lock).append(task.get())) {
-    return false;
-  }
-  (void)task.release();
-
-  dispatch(DispatchReason::NewTask, lock);
-  return true;
-}
-
-static void CancelOffThreadWasmTier2GeneratorLocked(
-    AutoLockHelperThreadState& lock) {
-  if (!HelperThreadState().isInitialized(lock)) {
-    return;
-  }
-
-  // Remove pending tasks from the tier2 generator worklist and cancel and
-  // delete them.
-  {
-    wasm::Tier2GeneratorTaskPtrVector& worklist =
-        HelperThreadState().wasmTier2GeneratorWorklist(lock);
-    for (size_t i = 0; i < worklist.length(); i++) {
-      wasm::Tier2GeneratorTask* task = worklist[i];
-      HelperThreadState().remove(worklist, &i);
-      js_delete(task);
-    }
-  }
-
-  // There is at most one running Tier2Generator task and we assume that
-  // below.
-  static_assert(GlobalHelperThreadState::MaxTier2GeneratorTasks == 1,
-                "code must be generalized");
-
-  // If there is a running Tier2 generator task, shut it down in a predictable
-  // way.  The task will be deleted by the normal deletion logic.
-  for (auto* helper : HelperThreadState().helperTasks(lock)) {
-    if (helper->is<wasm::Tier2GeneratorTask>()) {
-      // Set a flag that causes compilation to shortcut itself.
-      helper->as<wasm::Tier2GeneratorTask>()->cancel();
-
-      // Wait for the generator task to finish.  This avoids a shutdown race
-      // where the shutdown code is trying to shut down helper threads and the
-      // ongoing tier2 compilation is trying to finish, which requires it to
-      // have access to helper threads.
-      uint32_t oldFinishedCount =
-          HelperThreadState().wasmTier2GeneratorsFinished(lock);
-      while (HelperThreadState().wasmTier2GeneratorsFinished(lock) ==
-             oldFinishedCount) {
-        HelperThreadState().wait(lock);
-      }
-
-      // At most one of these tasks.
-      break;
-    }
-  }
-}
-
-void js::CancelOffThreadWasmTier2Generator() {
-  AutoLockHelperThreadState lock;
-  CancelOffThreadWasmTier2GeneratorLocked(lock);
-}
-
-bool js::StartOffThreadIonCompile(jit::IonCompileTask* task,
-                                  const AutoLockHelperThreadState& lock) {
-  return HelperThreadState().submitTask(task, lock);
-}
-
-bool GlobalHelperThreadState::submitTask(
-    jit::IonCompileTask* task, const AutoLockHelperThreadState& locked) {
-  MOZ_ASSERT(isInitialized(locked));
-
-  if (!ionWorklist(locked).append(task)) {
-    return false;
-  }
-
-  // The build is moving off-thread. Freeze the LifoAlloc to prevent any
-  // unwanted mutations.
-  task->alloc().lifoAlloc()->setReadOnly();
-
-  dispatch(DispatchReason::NewTask, locked);
-  return true;
-}
-
-bool js::AutoStartIonFreeTask::addIonCompileToFreeTaskBatch(
-    jit::IonCompileTask* task) {
-  return jitRuntime_->addIonCompileToFreeTaskBatch(task);
-}
-
-js::AutoStartIonFreeTask::~AutoStartIonFreeTask() {
-  jitRuntime_->maybeStartIonFreeTask(force_);
-}
-
-void jit::JitRuntime::maybeStartIonFreeTask(bool force) {
-  IonFreeCompileTasks& tasks = ionFreeTaskBatch_.ref();
-  if (tasks.empty()) {
-    return;
-  }
-
-  // Start an IonFreeTask if we have at least eight tasks. If |force| is true we
-  // always start an IonFreeTask.
-  if (!force) {
-    constexpr size_t MinBatchSize = 8;
-    static_assert(IonFreeCompileTasks::InlineLength >= MinBatchSize,
-                  "Minimum batch size shouldn't require malloc");
-    if (tasks.length() < MinBatchSize) {
-      return;
-    }
-  }
-
-  auto freeTask = js::MakeUnique<jit::IonFreeTask>(std::move(tasks));
-  if (!freeTask) {
-    // Free compilation data on the main thread instead.
-    MOZ_ASSERT(!tasks.empty(), "shouldn't have moved tasks on OOM");
-    jit::FreeIonCompileTasks(tasks);
-    tasks.clearAndFree();
-    return;
-  }
-
-  AutoLockHelperThreadState lock;
-  if (!HelperThreadState().submitTask(std::move(freeTask), lock)) {
-    // If submitTask OOMs, then freeTask hasn't been moved so we can still use
-    // its task list.
-    jit::FreeIonCompileTasks(freeTask->compileTasks());
-  }
-
-  tasks.clearAndFree();
-}
-
-bool GlobalHelperThreadState::submitTask(
-    UniquePtr<jit::IonFreeTask>&& task,
-    const AutoLockHelperThreadState& locked) {
-  MOZ_ASSERT(isInitialized(locked));
-
-  if (!ionFreeList(locked).append(std::move(task))) {
-    return false;
-  }
-
-  dispatch(DispatchReason::NewTask, locked);
-  return true;
-}
-
-/*
- * Move an IonCompilationTask for which compilation has either finished, failed,
- * or been cancelled into the global finished compilation list. All off thread
- * compilations which are started must eventually be finished.
- */
-void js::FinishOffThreadIonCompile(jit::IonCompileTask* task,
-                                   const AutoLockHelperThreadState& lock) {
-  AutoEnterOOMUnsafeRegion oomUnsafe;
-  if (!HelperThreadState().ionFinishedList(lock).append(task)) {
-    oomUnsafe.crash("FinishOffThreadIonCompile");
-  }
-  task->script()
-      ->runtimeFromAnyThread()
-      ->jitRuntime()
-      ->numFinishedOffThreadTasksRef(lock)++;
-}
-
-static JSRuntime* GetSelectorRuntime(const CompilationSelector& selector) {
-  struct Matcher {
-    JSRuntime* operator()(JSScript* script) {
-      return script->runtimeFromMainThread();
-    }
-    JSRuntime* operator()(Zone* zone) { return zone->runtimeFromMainThread(); }
-    JSRuntime* operator()(ZonesInState zbs) { return zbs.runtime; }
-    JSRuntime* operator()(JSRuntime* runtime) { return runtime; }
-  };
-
-  return selector.match(Matcher());
-}
-
-static bool JitDataStructuresExist(const CompilationSelector& selector) {
-  struct Matcher {
-    bool operator()(JSScript* script) { return !!script->zone()->jitZone(); }
-    bool operator()(Zone* zone) { return !!zone->jitZone(); }
-    bool operator()(ZonesInState zbs) { return zbs.runtime->hasJitRuntime(); }
-    bool operator()(JSRuntime* runtime) { return runtime->hasJitRuntime(); }
-  };
-
-  return selector.match(Matcher());
-}
-
-static bool IonCompileTaskMatches(const CompilationSelector& selector,
-                                  jit::IonCompileTask* task) {
-  struct TaskMatches {
-    jit::IonCompileTask* task_;
-
-    bool operator()(JSScript* script) { return script == task_->script(); }
-    bool operator()(Zone* zone) {
-      return zone == task_->script()->zoneFromAnyThread();
-    }
-    bool operator()(JSRuntime* runtime) {
-      return runtime == task_->script()->runtimeFromAnyThread();
-    }
-    bool operator()(ZonesInState zbs) {
-      return zbs.runtime == task_->script()->runtimeFromAnyThread() &&
-             zbs.state == task_->script()->zoneFromAnyThread()->gcState();
-    }
-  };
-
-  return selector.match(TaskMatches{task});
-}
-
-// If we're canceling Ion compilations for a zone/runtime, force a new
-// IonFreeTask even if there are just a few tasks. This lets us free as much
-// memory as possible.
-static bool ShouldForceIonFreeTask(const CompilationSelector& selector) {
-  struct Matcher {
-    bool operator()(JSScript* script) { return false; }
-    bool operator()(Zone* zone) { return true; }
-    bool operator()(ZonesInState zbs) { return true; }
-    bool operator()(JSRuntime* runtime) { return true; }
-  };
-
-  return selector.match(Matcher());
-}
-
-void js::CancelOffThreadIonCompile(const CompilationSelector& selector) {
-  if (!JitDataStructuresExist(selector)) {
-    return;
-  }
-
-  if (jit::IsPortableBaselineInterpreterEnabled()) {
-    return;
-  }
-
-  jit::JitRuntime* jitRuntime = GetSelectorRuntime(selector)->jitRuntime();
-  MOZ_ASSERT(jitRuntime);
-
-  AutoStartIonFreeTask freeTask(jitRuntime, ShouldForceIonFreeTask(selector));
-
-  {
-    AutoLockHelperThreadState lock;
-    if (!HelperThreadState().isInitialized(lock)) {
-      return;
-    }
-
-    /* Cancel any pending entries for which processing hasn't started. */
-    GlobalHelperThreadState::IonCompileTaskVector& worklist =
-        HelperThreadState().ionWorklist(lock);
-    for (size_t i = 0; i < worklist.length(); i++) {
-      jit::IonCompileTask* task = worklist[i];
-      if (IonCompileTaskMatches(selector, task)) {
-        // Once finished, tasks are added to a Linked list which is
-        // allocated with the IonCompileTask class. The IonCompileTask is
-        // allocated in the LifoAlloc so we need the LifoAlloc to be mutable.
-        worklist[i]->alloc().lifoAlloc()->setReadWrite();
-
-        FinishOffThreadIonCompile(task, lock);
-        HelperThreadState().remove(worklist, &i);
-      }
-    }
-
-    /* Wait for in progress entries to finish up. */
-    bool cancelled;
-    do {
-      cancelled = false;
-      for (auto* helper : HelperThreadState().helperTasks(lock)) {
-        if (!helper->is<jit::IonCompileTask>()) {
-          continue;
-        }
-
-        jit::IonCompileTask* ionCompileTask = helper->as<jit::IonCompileTask>();
-        if (IonCompileTaskMatches(selector, ionCompileTask)) {
-          ionCompileTask->mirGen().cancel();
-          cancelled = true;
-        }
-      }
-      if (cancelled) {
-        HelperThreadState().wait(lock);
-      }
-    } while (cancelled);
-
-    /* Cancel code generation for any completed entries. */
-    GlobalHelperThreadState::IonCompileTaskVector& finished =
-        HelperThreadState().ionFinishedList(lock);
-    for (size_t i = 0; i < finished.length(); i++) {
-      jit::IonCompileTask* task = finished[i];
-      if (IonCompileTaskMatches(selector, task)) {
-        JSRuntime* rt = task->script()->runtimeFromAnyThread();
-        rt->jitRuntime()->numFinishedOffThreadTasksRef(lock)--;
-        jit::FinishOffThreadTask(rt, freeTask, task);
-        HelperThreadState().remove(finished, &i);
-      }
-    }
-  }
-
-  /* Cancel lazy linking for pending tasks (attached to the ionScript). */
-  JSRuntime* runtime = GetSelectorRuntime(selector);
-  jit::IonCompileTask* task =
-      runtime->jitRuntime()->ionLazyLinkList(runtime).getFirst();
-  while (task) {
-    jit::IonCompileTask* next = task->getNext();
-    if (IonCompileTaskMatches(selector, task)) {
-      jit::FinishOffThreadTask(runtime, freeTask, task);
-    }
-    task = next;
-  }
-}
-
-#ifdef DEBUG
-bool js::HasOffThreadIonCompile(Zone* zone) {
-  if (jit::IsPortableBaselineInterpreterEnabled()) {
-    return false;
-  }
-
-  AutoLockHelperThreadState lock;
-
-  if (!HelperThreadState().isInitialized(lock)) {
-    return false;
-  }
-
-  GlobalHelperThreadState::IonCompileTaskVector& worklist =
-      HelperThreadState().ionWorklist(lock);
-  for (size_t i = 0; i < worklist.length(); i++) {
-    jit::IonCompileTask* task = worklist[i];
-    if (task->script()->zoneFromAnyThread() == zone) {
-      return true;
-    }
-  }
-
-  for (auto* helper : HelperThreadState().helperTasks(lock)) {
-    if (!helper->is<jit::IonCompileTask>()) {
-      continue;
-    }
-    JSScript* script = helper->as<jit::IonCompileTask>()->script();
-    if (script->zoneFromAnyThread() == zone) {
-      return true;
-    }
-  }
-
-  GlobalHelperThreadState::IonCompileTaskVector& finished =
-      HelperThreadState().ionFinishedList(lock);
-  for (size_t i = 0; i < finished.length(); i++) {
-    jit::IonCompileTask* task = finished[i];
-    if (task->script()->zoneFromAnyThread() == zone) {
-      return true;
-    }
-  }
-
-  JSRuntime* rt = zone->runtimeFromMainThread();
-  if (rt->hasJitRuntime()) {
-    jit::IonCompileTask* task =
-        rt->jitRuntime()->ionLazyLinkList(rt).getFirst();
-    while (task) {
-      if (task->script()->zone() == zone) {
-        return true;
-      }
-      task = task->getNext();
-    }
-  }
-
-  return false;
-}
-#endif
-
-void js::StartOffThreadDelazification(
-    JSContext* maybeCx, const JS::ReadOnlyCompileOptions& options,
-    const frontend::CompilationStencil& stencil) {
-  // Skip delazify tasks if we parse everything on-demand or ahead.
-  auto strategy = options.eagerDelazificationStrategy();
-  if (strategy == JS::DelazificationOption::OnDemandOnly ||
-      strategy == JS::DelazificationOption::ParseEverythingEagerly) {
-    return;
-  }
-
-  // Skip delazify task if code coverage is enabled.
-  if (maybeCx && maybeCx->realm()->collectCoverageForDebug()) {
-    return;
-  }
-
-  if (!CanUseExtraThreads()) {
-    return;
-  }
-
-  JSRuntime* maybeRuntime = maybeCx ? maybeCx->runtime() : nullptr;
-  UniquePtr<DelazifyTask> task;
-  task = DelazifyTask::Create(maybeRuntime, options, stencil);
-  if (!task) {
-    return;
-  }
-
-  // Schedule delazification task if there is any function to delazify.
-  if (!task->done()) {
-    AutoLockHelperThreadState lock;
-    HelperThreadState().submitTask(task.release(), lock);
-  }
-}
-
-UniquePtr<DelazifyTask> DelazifyTask::Create(
-    JSRuntime* maybeRuntime, const JS::ReadOnlyCompileOptions& options,
-    const frontend::CompilationStencil& stencil) {
-  UniquePtr<DelazifyTask> task;
-  task.reset(js_new<DelazifyTask>(maybeRuntime, options.prefableOptions()));
-  if (!task) {
-    return nullptr;
-  }
-
-  if (!task->init(options, stencil)) {
-    // In case of errors, skip this and delazify on-demand.
-    return nullptr;
-  }
-
-  return task;
-}
-
-DelazifyTask::DelazifyTask(
-    JSRuntime* maybeRuntime,
-    const JS::PrefableCompileOptions& initialPrefableOptions)
-    : maybeRuntime(maybeRuntime),
-      delazificationCx(initialPrefableOptions, HelperThreadState().stackQuota) {
-}
-
-DelazifyTask::~DelazifyTask() {
-  // The LinkedListElement destructor will remove us from any list we are part
-  // of without synchronization, so ensure that doesn't happen.
-  MOZ_DIAGNOSTIC_ASSERT(!isInList());
-}
-
-bool DelazifyTask::init(const JS::ReadOnlyCompileOptions& options,
-                        const frontend::CompilationStencil& stencil) {
-  return delazificationCx.init(options, stencil);
-}
-
-size_t DelazifyTask::sizeOfExcludingThis(
-    mozilla::MallocSizeOf mallocSizeOf) const {
-  return delazificationCx.sizeOfExcludingThis(mallocSizeOf);
-}
-
-void DelazifyTask::runHelperThreadTask(AutoLockHelperThreadState& lock) {
-  {
-    AutoUnlockHelperThreadState unlock(lock);
-    // NOTE: We do not report errors beyond this scope, as there is no where
-    // to report these errors to. In the mean time, prevent the eager
-    // delazification from running after any kind of errors.
-    (void)runTask();
-  }
-
-  // If we should continue to delazify even more functions, then re-add this
-  // task to the vector of delazification tasks. This might happen when the
-  // DelazifyTask is interrupted by a higher priority task. (see
-  // mozilla::TaskController & mozilla::Task)
-  if (!delazificationCx.done()) {
-    HelperThreadState().submitTask(this, lock);
-  } else {
-    UniquePtr<FreeDelazifyTask> freeTask(js_new<FreeDelazifyTask>(this));
-    if (freeTask) {
-      HelperThreadState().submitTask(std::move(freeTask), lock);
-    }
-  }
-}
-
-bool DelazifyTask::runTask() { return delazificationCx.delazify(); }
-
-bool DelazifyTask::done() const { return delazificationCx.done(); }
-
-void FreeDelazifyTask::runHelperThreadTask(AutoLockHelperThreadState& locked) {
-  {
-    AutoUnlockHelperThreadState unlock(locked);
-    js_delete(task);
-    task = nullptr;
-  }
-
-  js_delete(this);
-}
-
-static void CancelPendingDelazifyTask(JSRuntime* rt,
-                                      AutoLockHelperThreadState& lock) {
-  auto& delazifyList = HelperThreadState().delazifyWorklist(lock);
-
-  auto end = delazifyList.end();
-  for (auto iter = delazifyList.begin(); iter != end;) {
-    DelazifyTask* task = *iter;
-    ++iter;
-    if (task->runtimeMatchesOrNoRuntime(rt)) {
-      task->removeFrom(delazifyList);
-      js_delete(task);
-    }
-  }
-}
-
-static void WaitUntilCancelledDelazifyTasks(JSRuntime* rt,
-                                            AutoLockHelperThreadState& lock) {
-  if (!HelperThreadState().isInitialized(lock)) {
-    return;
-  }
-
-  while (true) {
-    CancelPendingDelazifyTask(rt, lock);
-
-    // If running tasks are delazifying any functions, then we have to wait
-    // until they complete to remove them from the pending list. DelazifyTask
-    // are inserting themself back to be processed once more after delazifying a
-    // function.
-    bool inProgress = false;
-    for (auto* helper : HelperThreadState().helperTasks(lock)) {
-      if (helper->is<DelazifyTask>() &&
-          helper->as<DelazifyTask>()->runtimeMatchesOrNoRuntime(rt)) {
-        inProgress = true;
-        break;
-      }
-    }
-    if (!inProgress) {
-      break;
-    }
-
-    HelperThreadState().wait(lock);
-  }
-
-#ifdef DEBUG
-  for (DelazifyTask* task : HelperThreadState().delazifyWorklist(lock)) {
-    MOZ_ASSERT(!task->runtimeMatchesOrNoRuntime(rt));
-  }
-  for (auto* helper : HelperThreadState().helperTasks(lock)) {
-    MOZ_ASSERT_IF(helper->is<DelazifyTask>(),
-                  !helper->as<DelazifyTask>()->runtimeMatchesOrNoRuntime(rt));
-  }
-#endif
-}
-
-static void WaitUntilEmptyFreeDelazifyTaskVector(
-    AutoLockHelperThreadState& lock) {
-  if (!HelperThreadState().isInitialized(lock)) {
-    return;
-  }
-
-  while (true) {
-    bool inProgress = false;
-    auto& freeList = HelperThreadState().freeDelazifyTaskVector(lock);
-    if (!freeList.empty()) {
-      inProgress = true;
-    }
-
-    // If running tasks are delazifying any functions, then we have to wait
-    // until they complete to remove them from the pending list. DelazifyTask
-    // are inserting themself back to be processed once more after delazifying a
-    // function.
-    for (auto* helper : HelperThreadState().helperTasks(lock)) {
-      if (helper->is<FreeDelazifyTask>()) {
-        inProgress = true;
-        break;
-      }
-    }
-    if (!inProgress) {
-      break;
-    }
-
-    HelperThreadState().wait(lock);
-  }
-}
-
-void js::CancelOffThreadDelazify(JSRuntime* runtime) {
-  AutoLockHelperThreadState lock;
-
-  // Cancel all Delazify tasks from the given runtime, and wait if tasks are
-  // from the given runtime are being executed.
-  WaitUntilCancelledDelazifyTasks(runtime, lock);
-
-  // Empty the free list of delazify task, in case one of the delazify task
-  // ended and therefore did not returned to the pending list of delazify tasks.
-  WaitUntilEmptyFreeDelazifyTaskVector(lock);
-}
-
-static bool HasAnyDelazifyTask(JSRuntime* rt, AutoLockHelperThreadState& lock) {
-  auto& delazifyList = HelperThreadState().delazifyWorklist(lock);
-  for (auto task : delazifyList) {
-    if (task->runtimeMatchesOrNoRuntime(rt)) {
-      return true;
-    }
-  }
-
-  for (auto* helper : HelperThreadState().helperTasks(lock)) {
-    if (helper->is<DelazifyTask>() &&
-        helper->as<DelazifyTask>()->runtimeMatchesOrNoRuntime(rt)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-void js::WaitForAllDelazifyTasks(JSRuntime* rt) {
-  AutoLockHelperThreadState lock;
-  if (!HelperThreadState().isInitialized(lock)) {
-    return;
-  }
-
-  while (true) {
-    if (!HasAnyDelazifyTask(rt, lock)) {
-      break;
-    }
-
-    HelperThreadState().wait(lock);
-  }
-}
-
-void GlobalHelperThreadState::submitTask(
-    DelazifyTask* task, const AutoLockHelperThreadState& locked) {
-  delazifyWorklist(locked).insertBack(task);
-  dispatch(DispatchReason::NewTask, locked);
-}
-
-bool GlobalHelperThreadState::submitTask(
-    UniquePtr<FreeDelazifyTask> task, const AutoLockHelperThreadState& locked) {
-  if (!freeDelazifyTaskVector(locked).append(std::move(task))) {
-    return false;
-  }
-  dispatch(DispatchReason::NewTask, locked);
-  return true;
 }
 
 bool GlobalHelperThreadState::ensureInitialized() {
@@ -845,7 +214,7 @@ GlobalHelperThreadState::GlobalHelperThreadState()
       totalCountRunningTasks(0),
       registerThread(nullptr),
       unregisterThread(nullptr),
-      wasmTier2GeneratorsFinished_(0) {
+      wasmCompleteTier2GeneratorsFinished_(0) {
   MOZ_ASSERT(!gHelperThreadState);
 
   cpuCount = ClampDefaultCPUCount(GetCPUCount());
@@ -889,25 +258,34 @@ void GlobalHelperThreadState::assertIsLockedByCurrentThread() const {
 }
 #endif  // DEBUG
 
-void GlobalHelperThreadState::dispatch(
-    DispatchReason reason, const AutoLockHelperThreadState& locked) {
-  if (canStartTasks(locked) && tasksPending_ < threadCount) {
-    // This doesn't guarantee that we don't dispatch more tasks to the external
-    // pool than necessary if tasks are taking a long time to start, but it does
-    // limit the number.
-    tasksPending_++;
-
-    // The hazard analysis can't tell that the callback doesn't GC.
-    JS::AutoSuppressGCAnalysis nogc;
-
-    dispatchTaskCallback(reason);
+void GlobalHelperThreadState::dispatch(const AutoLockHelperThreadState& lock) {
+  if (helperTasks_.length() >= threadCount) {
+    return;
   }
+
+  HelperThreadTask* task = findHighestPriorityTask(lock);
+  if (!task) {
+    return;
+  }
+
+#ifdef DEBUG
+  MOZ_ASSERT(tasksPending_ < threadCount);
+  tasksPending_++;
+#endif
+
+  // Add task to list of running tasks immediately.
+  helperTasks(lock).infallibleEmplaceBack(task);
+  runningTaskCount[task->threadType()]++;
+  totalCountRunningTasks++;
+
+  lock.queueTaskToDispatch(task);
 }
 
 void GlobalHelperThreadState::wait(
-    AutoLockHelperThreadState& locked,
+    AutoLockHelperThreadState& lock,
     TimeDuration timeout /* = TimeDuration::Forever() */) {
-  consumerWakeup.wait_for(locked, timeout);
+  MOZ_ASSERT(!lock.hasQueuedTasks());
+  consumerWakeup.wait_for(lock, timeout);
 }
 
 void GlobalHelperThreadState::notifyAll(const AutoLockHelperThreadState&) {
@@ -936,20 +314,23 @@ void GlobalHelperThreadState::waitForAllTasks() {
 
 void GlobalHelperThreadState::waitForAllTasksLocked(
     AutoLockHelperThreadState& lock) {
-  CancelOffThreadWasmTier2GeneratorLocked(lock);
+  CancelOffThreadWasmCompleteTier2GeneratorLocked(lock);
+  CancelOffThreadWasmPartialTier2CompileLocked(lock);
 
-  while (canStartTasks(lock) || tasksPending_ || hasActiveThreads(lock)) {
+  while (canStartTasks(lock) || hasActiveThreads(lock)) {
     wait(lock);
   }
 
+  MOZ_ASSERT(tasksPending_ == 0);
   MOZ_ASSERT(gcParallelWorklist().isEmpty(lock));
   MOZ_ASSERT(ionWorklist(lock).empty());
-  MOZ_ASSERT(wasmWorklist(lock, wasm::CompileMode::Tier1).empty());
+  MOZ_ASSERT(wasmWorklist(lock, wasm::CompileState::EagerTier1).empty());
   MOZ_ASSERT(promiseHelperTasks(lock).empty());
   MOZ_ASSERT(compressionWorklist(lock).empty());
   MOZ_ASSERT(ionFreeList(lock).empty());
-  MOZ_ASSERT(wasmWorklist(lock, wasm::CompileMode::Tier2).empty());
-  MOZ_ASSERT(wasmTier2GeneratorWorklist(lock).empty());
+  MOZ_ASSERT(wasmWorklist(lock, wasm::CompileState::EagerTier2).empty());
+  MOZ_ASSERT(wasmCompleteTier2GeneratorWorklist(lock).empty());
+  MOZ_ASSERT(wasmPartialTier2CompileWorklist(lock).empty());
   MOZ_ASSERT(!tasksPending_);
   MOZ_ASSERT(!hasActiveThreads(lock));
 }
@@ -974,34 +355,21 @@ void GlobalHelperThreadState::waitForAllTasksLocked(
 bool GlobalHelperThreadState::checkTaskThreadLimit(
     ThreadType threadType, size_t maxThreads, bool isMaster,
     const AutoLockHelperThreadState& lock) const {
-  MOZ_ASSERT(maxThreads > 0);
+  MOZ_ASSERT(maxThreads >= 1);
+  MOZ_ASSERT(maxThreads <= threadCount);
 
-  if (!isMaster && maxThreads >= threadCount) {
-    return true;
-  }
-
+  // Check thread limit for this task kind.
   size_t count = runningTaskCount[threadType];
   if (count >= maxThreads) {
     return false;
   }
 
+  // Check overall idle thread count taking into account master threads. A
+  // master thread must not use the last idle thread or it will deadlock itself.
   MOZ_ASSERT(threadCount >= totalCountRunningTasks);
-  size_t idle = threadCount - totalCountRunningTasks;
-
-  // It is possible for the number of idle threads to be zero here, because
-  // checkTaskThreadLimit() can be called from non-helper threads.  Notably,
-  // the compression task scheduler invokes it, and runs off a helper thread.
-  if (idle == 0) {
-    return false;
-  }
-
-  // A master thread that's the last available thread must not be allowed to
-  // run.
-  if (isMaster && idle == 1) {
-    return false;
-  }
-
-  return true;
+  size_t idleCount = threadCount - totalCountRunningTasks;
+  size_t idleRequired = isMaster ? 2 : 1;
+  return idleCount >= idleRequired;
 }
 
 static inline bool IsHelperThreadSimulatingOOM(js::ThreadType threadType) {
@@ -1035,7 +403,8 @@ void GlobalHelperThreadState::addSizeOfIncludingThis(
       ionFreeList_.sizeOfExcludingThis(mallocSizeOf) +
       wasmWorklist_tier1_.sizeOfExcludingThis(mallocSizeOf) +
       wasmWorklist_tier2_.sizeOfExcludingThis(mallocSizeOf) +
-      wasmTier2GeneratorWorklist_.sizeOfExcludingThis(mallocSizeOf) +
+      wasmCompleteTier2GeneratorWorklist_.sizeOfExcludingThis(mallocSizeOf) +
+      wasmPartialTier2CompileWorklist_.sizeOfExcludingThis(mallocSizeOf) +
       promiseHelperTasks_.sizeOfExcludingThis(mallocSizeOf) +
       compressionPendingList_.sizeOfExcludingThis(mallocSizeOf) +
       compressionWorklist_.sizeOfExcludingThis(mallocSizeOf) +
@@ -1084,18 +453,6 @@ size_t GlobalHelperThreadState::maxIonFreeThreads() const {
   return 1;
 }
 
-size_t GlobalHelperThreadState::maxWasmCompilationThreads() const {
-  if (IsHelperThreadSimulatingOOM(js::THREAD_TYPE_WASM_COMPILE_TIER1) ||
-      IsHelperThreadSimulatingOOM(js::THREAD_TYPE_WASM_COMPILE_TIER2)) {
-    return 1;
-  }
-  return std::min(cpuCount, threadCount);
-}
-
-size_t GlobalHelperThreadState::maxWasmTier2GeneratorThreads() const {
-  return MaxTier2GeneratorTasks;
-}
-
 size_t GlobalHelperThreadState::maxPromiseHelperThreads() const {
   if (IsHelperThreadSimulatingOOM(js::THREAD_TYPE_PROMISE_TASK)) {
     return 1;
@@ -1127,119 +484,214 @@ size_t GlobalHelperThreadState::maxGCParallelThreads() const {
   return threadCount;
 }
 
-HelperThreadTask* GlobalHelperThreadState::maybeGetWasmTier1CompileTask(
-    const AutoLockHelperThreadState& lock) {
-  return maybeGetWasmCompile(lock, wasm::CompileMode::Tier1);
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetWasmTier2CompileTask(
-    const AutoLockHelperThreadState& lock) {
-  return maybeGetWasmCompile(lock, wasm::CompileMode::Tier2);
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetWasmCompile(
-    const AutoLockHelperThreadState& lock, wasm::CompileMode mode) {
-  if (!canStartWasmCompile(lock, mode)) {
-    return nullptr;
+size_t GlobalHelperThreadState::maxWasmCompilationThreads() const {
+  if (IsHelperThreadSimulatingOOM(js::THREAD_TYPE_WASM_COMPILE_TIER1) ||
+      IsHelperThreadSimulatingOOM(js::THREAD_TYPE_WASM_COMPILE_TIER2)) {
+    return 1;
   }
-
-  return wasmWorklist(lock, mode).popCopyFront();
+  return std::min(cpuCount, threadCount);
 }
 
-bool GlobalHelperThreadState::canStartWasmTier1CompileTask(
-    const AutoLockHelperThreadState& lock) {
-  return canStartWasmCompile(lock, wasm::CompileMode::Tier1);
+size_t js::GetMaxWasmCompilationThreads() {
+  return HelperThreadState().maxWasmCompilationThreads();
 }
 
-bool GlobalHelperThreadState::canStartWasmTier2CompileTask(
-    const AutoLockHelperThreadState& lock) {
-  return canStartWasmCompile(lock, wasm::CompileMode::Tier2);
+size_t GlobalHelperThreadState::maxWasmCompleteTier2GeneratorThreads() const {
+  return MaxCompleteTier2GeneratorTasks;
 }
 
-bool GlobalHelperThreadState::canStartWasmCompile(
-    const AutoLockHelperThreadState& lock, wasm::CompileMode mode) {
-  if (wasmWorklist(lock, mode).empty()) {
-    return false;
-  }
+size_t GlobalHelperThreadState::maxWasmPartialTier2CompileThreads() const {
+  return MaxPartialTier2CompileTasks;
+}
 
-  // Parallel compilation and background compilation should be disabled on
-  // unicore systems.
+void GlobalHelperThreadState::trace(JSTracer* trc) {
+  {
+    AutoLockHelperThreadState lock;
 
-  MOZ_RELEASE_ASSERT(cpuCount > 1);
-
-  // If Tier2 is very backlogged we must give priority to it, since the Tier2
-  // queue holds onto Tier1 tasks.  Indeed if Tier2 is backlogged we will
-  // devote more resources to Tier2 and not start any Tier1 work at all.
-
-  bool tier2oversubscribed = wasmTier2GeneratorWorklist(lock).length() > 20;
-
-  // For Tier1 and Once compilation, honor the maximum allowed threads to
-  // compile wasm jobs at once, to avoid oversaturating the machine.
-  //
-  // For Tier2 compilation we need to allow other things to happen too, so we
-  // do not allow all logical cores to be used for background work; instead we
-  // wish to use a fraction of the physical cores.  We can't directly compute
-  // the physical cores from the logical cores, but 1/3 of the logical cores
-  // is a safe estimate for the number of physical cores available for
-  // background work.
-
-  size_t physCoresAvailable = size_t(ceil(cpuCount / 3.0));
-
-  size_t threads;
-  ThreadType threadType;
-  if (mode == wasm::CompileMode::Tier2) {
-    if (tier2oversubscribed) {
-      threads = maxWasmCompilationThreads();
-    } else {
-      threads = physCoresAvailable;
+#ifdef DEBUG
+    // Since we hold the helper thread lock here we must disable GCMarker's
+    // checking of the atom marking bitmap since that also relies on taking the
+    // lock.
+    GCMarker* marker = nullptr;
+    if (trc->isMarkingTracer()) {
+      marker = GCMarker::fromTracer(trc);
+      marker->setCheckAtomMarking(false);
     }
-    threadType = THREAD_TYPE_WASM_COMPILE_TIER2;
-  } else {
-    if (tier2oversubscribed) {
-      threads = 0;
-    } else {
-      threads = maxWasmCompilationThreads();
+    auto reenableAtomMarkingCheck = mozilla::MakeScopeExit([marker] {
+      if (marker) {
+        marker->setCheckAtomMarking(true);
+      }
+    });
+#endif
+
+    for (auto task : ionWorklist(lock)) {
+      task->alloc().lifoAlloc()->setReadWrite();
+      task->trace(trc);
+      task->alloc().lifoAlloc()->setReadOnly();
     }
-    threadType = THREAD_TYPE_WASM_COMPILE_TIER1;
+    for (auto task : ionFinishedList(lock)) {
+      task->trace(trc);
+    }
+
+    for (auto* helper : helperTasks(lock)) {
+      if (helper->is<jit::IonCompileTask>()) {
+        jit::IonCompileTask* ionCompileTask = helper->as<jit::IonCompileTask>();
+        ionCompileTask->alloc().lifoAlloc()->setReadWrite();
+        ionCompileTask->trace(trc);
+      }
+    }
   }
 
-  return threads != 0 && checkTaskThreadLimit(threadType, threads, lock);
+  // The lazy link list is only accessed on the main thread, so trace it after
+  // releasing the lock.
+  JSRuntime* rt = trc->runtime();
+  if (auto* jitRuntime = rt->jitRuntime()) {
+    jit::IonCompileTask* task = jitRuntime->ionLazyLinkList(rt).getFirst();
+    while (task) {
+      task->trace(trc);
+      task = task->getNext();
+    }
+  }
 }
 
-HelperThreadTask* GlobalHelperThreadState::maybeGetWasmTier2GeneratorTask(
+// Definition of helper thread tasks.
+//
+// Priority is determined by the order they're listed here.
+const GlobalHelperThreadState::Selector GlobalHelperThreadState::selectors[] = {
+    &GlobalHelperThreadState::maybeGetGCParallelTask,
+    &GlobalHelperThreadState::maybeGetIonCompileTask,
+    &GlobalHelperThreadState::maybeGetWasmTier1CompileTask,
+    &GlobalHelperThreadState::maybeGetPromiseHelperTask,
+    &GlobalHelperThreadState::maybeGetFreeDelazifyTask,
+    &GlobalHelperThreadState::maybeGetDelazifyTask,
+    &GlobalHelperThreadState::maybeGetCompressionTask,
+    &GlobalHelperThreadState::maybeGetLowPrioIonCompileTask,
+    &GlobalHelperThreadState::maybeGetIonFreeTask,
+    &GlobalHelperThreadState::maybeGetWasmPartialTier2CompileTask,
+    &GlobalHelperThreadState::maybeGetWasmTier2CompileTask,
+    &GlobalHelperThreadState::maybeGetWasmCompleteTier2GeneratorTask};
+
+bool GlobalHelperThreadState::canStartTasks(
     const AutoLockHelperThreadState& lock) {
-  if (!canStartWasmTier2GeneratorTask(lock)) {
-    return nullptr;
+  return canStartGCParallelTask(lock) || canStartIonCompileTask(lock) ||
+         canStartWasmTier1CompileTask(lock) ||
+         canStartPromiseHelperTask(lock) || canStartFreeDelazifyTask(lock) ||
+         canStartDelazifyTask(lock) || canStartCompressionTask(lock) ||
+         canStartIonFreeTask(lock) || canStartWasmTier2CompileTask(lock) ||
+         canStartWasmCompleteTier2GeneratorTask(lock) ||
+         canStartWasmPartialTier2CompileTask(lock);
+}
+
+void JS::RunHelperThreadTask(HelperThreadTask* task) {
+  MOZ_ASSERT(task);
+  MOZ_ASSERT(CanUseExtraThreads());
+
+  AutoLockHelperThreadState lock;
+
+  if (!gHelperThreadState || HelperThreadState().isTerminating(lock)) {
+    return;
   }
 
-  return wasmTier2GeneratorWorklist(lock).popCopy();
+  HelperThreadState().runOneTask(task, lock);
+  HelperThreadState().dispatch(lock);
 }
 
-bool GlobalHelperThreadState::canStartWasmTier2GeneratorTask(
-    const AutoLockHelperThreadState& lock) {
-  return !wasmTier2GeneratorWorklist(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_WASM_GENERATOR_TIER2,
-                              maxWasmTier2GeneratorThreads(),
-                              /*isMaster=*/true, lock);
+void GlobalHelperThreadState::runOneTask(HelperThreadTask* task,
+                                         AutoLockHelperThreadState& lock) {
+#ifdef DEBUG
+  MOZ_ASSERT(tasksPending_ > 0);
+  tasksPending_--;
+#endif
+
+  runTaskLocked(task, lock);
+
+  notifyAll(lock);
 }
 
-HelperThreadTask* GlobalHelperThreadState::maybeGetPromiseHelperTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartPromiseHelperTask(lock)) {
-    return nullptr;
+HelperThreadTask* GlobalHelperThreadState::findHighestPriorityTask(
+    const AutoLockHelperThreadState& locked) {
+  // Return the highest priority task that is ready to start, or nullptr.
+
+  for (const auto& selector : selectors) {
+    if (auto* task = (this->*(selector))(locked)) {
+      return task;
+    }
   }
 
-  return promiseHelperTasks(lock).popCopy();
+  return nullptr;
 }
 
-bool GlobalHelperThreadState::canStartPromiseHelperTask(
+#ifdef DEBUG
+static bool VectorHasTask(
+    const Vector<HelperThreadTask*, 0, SystemAllocPolicy>& tasks,
+    HelperThreadTask* task) {
+  for (HelperThreadTask* t : tasks) {
+    if (t == task) {
+      return true;
+    }
+  }
+
+  return false;
+}
+#endif
+
+void GlobalHelperThreadState::runTaskLocked(HelperThreadTask* task,
+                                            AutoLockHelperThreadState& locked) {
+  ThreadType threadType = task->threadType();
+
+  MOZ_ASSERT(VectorHasTask(helperTasks(locked), task));
+  MOZ_ASSERT(totalCountRunningTasks != 0);
+  MOZ_ASSERT(runningTaskCount[threadType] != 0);
+
+  js::oom::SetThreadType(threadType);
+
+  {
+    JS::AutoSuppressGCAnalysis nogc;
+    task->runHelperThreadTask(locked);
+  }
+
+  js::oom::SetThreadType(js::THREAD_TYPE_NONE);
+
+  helperTasks(locked).eraseIfEqual(task);
+  totalCountRunningTasks--;
+  runningTaskCount[threadType]--;
+}
+
+void AutoHelperTaskQueue::queueTaskToDispatch(
+    JS::HelperThreadTask* task) const {
+  // This is marked const because it doesn't release the mutex.
+
+  task->onThreadPoolDispatch();
+
+  AutoEnterOOMUnsafeRegion oomUnsafe;
+  if (!tasksToDispatch.append(task)) {
+    oomUnsafe.crash("AutoLockHelperThreadState::queueTaskToDispatch");
+  }
+}
+
+void AutoHelperTaskQueue::dispatchQueuedTasks() {
+  // The hazard analysis can't tell that the callback doesn't GC.
+  JS::AutoSuppressGCAnalysis nogc;
+
+  for (size_t i = 0; i < tasksToDispatch.length(); i++) {
+    HelperThreadState().dispatchTaskCallback(tasksToDispatch[i]);
+  }
+  tasksToDispatch.clear();
+}
+
+///////////////////////////////////////////////////////////////////////////
+//                                                                       //
+// JS task definitions                                                   //
+//                                                                       //
+///////////////////////////////////////////////////////////////////////////
+
+//== IonCompileTask and CompilationSelector ===============================
+
+bool GlobalHelperThreadState::canStartIonCompileTask(
     const AutoLockHelperThreadState& lock) {
-  // PromiseHelperTasks can be wasm compilation tasks that in turn block on
-  // wasm compilation so set isMaster = true.
-  return !promiseHelperTasks(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_PROMISE_TASK,
-                              maxPromiseHelperThreads(),
-                              /*isMaster=*/true, lock);
+  return !ionWorklist(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_ION, maxIonCompilationThreads(),
+                              lock);
 }
 
 static bool IonCompileTaskHasHigherPriority(jit::IonCompileTask* first,
@@ -1254,50 +706,6 @@ static bool IonCompileTaskHasHigherPriority(jit::IonCompileTask* first,
   jit::JitScript* secondJitScript = second->script()->jitScript();
   return firstJitScript->warmUpCount() / first->script()->length() >
          secondJitScript->warmUpCount() / second->script()->length();
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetIonCompileTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartIonCompileTask(lock)) {
-    return nullptr;
-  }
-
-  return highestPriorityPendingIonCompile(lock,
-                                          /* checkExecutionStatus */ true);
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetLowPrioIonCompileTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartIonCompileTask(lock)) {
-    return nullptr;
-  }
-
-  return highestPriorityPendingIonCompile(lock,
-                                          /* checkExecutionStatus */ false);
-}
-
-bool GlobalHelperThreadState::canStartIonCompileTask(
-    const AutoLockHelperThreadState& lock) {
-  return !ionWorklist(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_ION, maxIonCompilationThreads(),
-                              lock);
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetIonFreeTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartIonFreeTask(lock)) {
-    return nullptr;
-  }
-
-  UniquePtr<jit::IonFreeTask> task = std::move(ionFreeList(lock).back());
-  ionFreeList(lock).popBack();
-  return task.release();
-}
-
-bool GlobalHelperThreadState::canStartIonFreeTask(
-    const AutoLockHelperThreadState& lock) {
-  return !ionFreeList(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_ION_FREE, maxIonFreeThreads(), lock);
 }
 
 jit::IonCompileTask* GlobalHelperThreadState::highestPriorityPendingIonCompile(
@@ -1326,21 +734,344 @@ jit::IonCompileTask* GlobalHelperThreadState::highestPriorityPendingIonCompile(
   return task;
 }
 
-HelperThreadTask* GlobalHelperThreadState::maybeGetFreeDelazifyTask(
+HelperThreadTask* GlobalHelperThreadState::maybeGetIonCompileTask(
     const AutoLockHelperThreadState& lock) {
-  auto& freeList = freeDelazifyTaskVector(lock);
-  if (!freeList.empty()) {
-    UniquePtr<FreeDelazifyTask> task = std::move(freeList.back());
-    freeList.popBack();
-    return task.release();
+  if (!canStartIonCompileTask(lock)) {
+    return nullptr;
   }
-  return nullptr;
+
+  return highestPriorityPendingIonCompile(lock,
+                                          /* checkExecutionStatus */ true);
 }
 
-bool GlobalHelperThreadState::canStartFreeDelazifyTask(
+HelperThreadTask* GlobalHelperThreadState::maybeGetLowPrioIonCompileTask(
     const AutoLockHelperThreadState& lock) {
-  return !freeDelazifyTaskVector(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_DELAZIFY_FREE, maxDelazifyThreads(),
+  if (!canStartIonCompileTask(lock)) {
+    return nullptr;
+  }
+
+  return highestPriorityPendingIonCompile(lock,
+                                          /* checkExecutionStatus */ false);
+}
+
+bool GlobalHelperThreadState::submitTask(
+    jit::IonCompileTask* task, const AutoLockHelperThreadState& locked) {
+  MOZ_ASSERT(isInitialized(locked));
+
+  if (!ionWorklist(locked).append(task)) {
+    return false;
+  }
+
+  // The build is moving off-thread. Freeze the LifoAlloc to prevent any
+  // unwanted mutations.
+  task->alloc().lifoAlloc()->setReadOnly();
+
+  dispatch(locked);
+  return true;
+}
+
+bool js::StartOffThreadIonCompile(jit::IonCompileTask* task,
+                                  const AutoLockHelperThreadState& lock) {
+  return HelperThreadState().submitTask(task, lock);
+}
+
+/*
+ * Move an IonCompilationTask for which compilation has either finished, failed,
+ * or been cancelled into the global finished compilation list. All off thread
+ * compilations which are started must eventually be finished.
+ */
+void js::FinishOffThreadIonCompile(jit::IonCompileTask* task,
+                                   const AutoLockHelperThreadState& lock) {
+  AutoEnterOOMUnsafeRegion oomUnsafe;
+  if (!HelperThreadState().ionFinishedList(lock).append(task)) {
+    oomUnsafe.crash("FinishOffThreadIonCompile");
+  }
+  task->script()
+      ->runtimeFromAnyThread()
+      ->jitRuntime()
+      ->numFinishedOffThreadTasksRef(lock)++;
+}
+
+static JSRuntime* GetSelectorRuntime(const CompilationSelector& selector) {
+  struct Matcher {
+    JSRuntime* operator()(JSScript* script) {
+      return script->runtimeFromMainThread();
+    }
+    JSRuntime* operator()(Zone* zone) { return zone->runtimeFromMainThread(); }
+    JSRuntime* operator()(ZonesInState zbs) { return zbs.runtime; }
+    JSRuntime* operator()(JSRuntime* runtime) { return runtime; }
+  };
+
+  return selector.match(Matcher());
+}
+
+static bool IonCompileTaskMatches(const CompilationSelector& selector,
+                                  jit::IonCompileTask* task) {
+  struct TaskMatches {
+    jit::IonCompileTask* task_;
+
+    bool operator()(JSScript* script) { return script == task_->script(); }
+    bool operator()(Zone* zone) {
+      return zone == task_->script()->zoneFromAnyThread();
+    }
+    bool operator()(JSRuntime* runtime) {
+      return runtime == task_->script()->runtimeFromAnyThread();
+    }
+    bool operator()(ZonesInState zbs) {
+      return zbs.runtime == task_->script()->runtimeFromAnyThread() &&
+             zbs.state == task_->script()->zoneFromAnyThread()->gcState();
+    }
+  };
+
+  return selector.match(TaskMatches{task});
+}
+
+// If we're canceling Ion compilations for a zone/runtime, force a new
+// IonFreeTask even if there are just a few tasks. This lets us free as much
+// memory as possible.
+static bool ShouldForceIonFreeTask(const CompilationSelector& selector) {
+  struct Matcher {
+    bool operator()(JSScript* script) { return false; }
+    bool operator()(Zone* zone) { return true; }
+    bool operator()(ZonesInState zbs) { return true; }
+    bool operator()(JSRuntime* runtime) { return true; }
+  };
+
+  return selector.match(Matcher());
+}
+
+void GlobalHelperThreadState::cancelOffThreadIonCompile(
+    const CompilationSelector& selector) {
+  jit::JitRuntime* jitRuntime = GetSelectorRuntime(selector)->jitRuntime();
+  MOZ_ASSERT(jitRuntime);
+
+  AutoStartIonFreeTask freeTask(jitRuntime, ShouldForceIonFreeTask(selector));
+
+  {
+    AutoLockHelperThreadState lock;
+    if (!isInitialized(lock)) {
+      return;
+    }
+
+    /* Cancel any pending entries for which processing hasn't started. */
+    GlobalHelperThreadState::IonCompileTaskVector& worklist = ionWorklist(lock);
+    for (size_t i = 0; i < worklist.length(); i++) {
+      jit::IonCompileTask* task = worklist[i];
+      if (IonCompileTaskMatches(selector, task)) {
+        // Once finished, tasks are added to a Linked list which is
+        // allocated with the IonCompileTask class. The IonCompileTask is
+        // allocated in the LifoAlloc so we need the LifoAlloc to be mutable.
+        worklist[i]->alloc().lifoAlloc()->setReadWrite();
+
+        FinishOffThreadIonCompile(task, lock);
+        remove(worklist, &i);
+      }
+    }
+
+    /* Wait for in progress entries to finish up. */
+    bool cancelled;
+    do {
+      cancelled = false;
+      for (auto* helper : helperTasks(lock)) {
+        if (!helper->is<jit::IonCompileTask>()) {
+          continue;
+        }
+
+        jit::IonCompileTask* ionCompileTask = helper->as<jit::IonCompileTask>();
+        if (IonCompileTaskMatches(selector, ionCompileTask)) {
+          ionCompileTask->alloc().lifoAlloc()->setReadWrite();
+          ionCompileTask->mirGen().cancel();
+          cancelled = true;
+        }
+      }
+      if (cancelled) {
+        wait(lock);
+      }
+    } while (cancelled);
+
+    /* Cancel code generation for any completed entries. */
+    GlobalHelperThreadState::IonCompileTaskVector& finished =
+        ionFinishedList(lock);
+    for (size_t i = 0; i < finished.length(); i++) {
+      jit::IonCompileTask* task = finished[i];
+      if (IonCompileTaskMatches(selector, task)) {
+        JSRuntime* rt = task->script()->runtimeFromAnyThread();
+        jitRuntime->numFinishedOffThreadTasksRef(lock)--;
+        jit::FinishOffThreadTask(rt, freeTask, task);
+        remove(finished, &i);
+      }
+    }
+  }
+
+  /* Cancel lazy linking for pending tasks (attached to the ionScript). */
+  JSRuntime* runtime = GetSelectorRuntime(selector);
+  jit::IonCompileTask* task = jitRuntime->ionLazyLinkList(runtime).getFirst();
+  while (task) {
+    jit::IonCompileTask* next = task->getNext();
+    if (IonCompileTaskMatches(selector, task)) {
+      jit::FinishOffThreadTask(runtime, freeTask, task);
+    }
+    task = next;
+  }
+}
+
+static bool JitDataStructuresExist(const CompilationSelector& selector) {
+  struct Matcher {
+    bool operator()(JSScript* script) { return !!script->zone()->jitZone(); }
+    bool operator()(Zone* zone) { return !!zone->jitZone(); }
+    bool operator()(ZonesInState zbs) { return zbs.runtime->hasJitRuntime(); }
+    bool operator()(JSRuntime* runtime) { return runtime->hasJitRuntime(); }
+  };
+
+  return selector.match(Matcher());
+}
+
+void js::CancelOffThreadIonCompile(const CompilationSelector& selector) {
+  if (!JitDataStructuresExist(selector)) {
+    return;
+  }
+
+  if (jit::IsPortableBaselineInterpreterEnabled()) {
+    return;
+  }
+
+  HelperThreadState().cancelOffThreadIonCompile(selector);
+}
+
+#ifdef DEBUG
+bool GlobalHelperThreadState::hasOffThreadIonCompile(
+    Zone* zone, AutoLockHelperThreadState& lock) {
+  for (jit::IonCompileTask* task : ionWorklist(lock)) {
+    if (task->script()->zoneFromAnyThread() == zone) {
+      return true;
+    }
+  }
+
+  for (auto* helper : helperTasks(lock)) {
+    if (helper->is<jit::IonCompileTask>()) {
+      JSScript* script = helper->as<jit::IonCompileTask>()->script();
+      if (script->zoneFromAnyThread() == zone) {
+        return true;
+      }
+    }
+  }
+
+  for (jit::IonCompileTask* task : ionFinishedList(lock)) {
+    if (task->script()->zoneFromAnyThread() == zone) {
+      return true;
+    }
+  }
+
+  JSRuntime* rt = zone->runtimeFromMainThread();
+  if (rt->hasJitRuntime()) {
+    for (jit::IonCompileTask* task : rt->jitRuntime()->ionLazyLinkList(rt)) {
+      if (task->script()->zone() == zone) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool js::HasOffThreadIonCompile(Zone* zone) {
+  if (jit::IsPortableBaselineInterpreterEnabled()) {
+    return false;
+  }
+
+  AutoLockHelperThreadState lock;
+
+  if (!HelperThreadState().isInitialized(lock)) {
+    return false;
+  }
+
+  return HelperThreadState().hasOffThreadIonCompile(zone, lock);
+}
+#endif
+
+//== IonFreeTask ==========================================================
+
+bool GlobalHelperThreadState::canStartIonFreeTask(
+    const AutoLockHelperThreadState& lock) {
+  return !ionFreeList(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_ION_FREE, maxIonFreeThreads(), lock);
+}
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetIonFreeTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartIonFreeTask(lock)) {
+    return nullptr;
+  }
+
+  UniquePtr<jit::IonFreeTask> task = std::move(ionFreeList(lock).back());
+  ionFreeList(lock).popBack();
+  return task.release();
+}
+
+void jit::JitRuntime::maybeStartIonFreeTask(bool force) {
+  IonFreeCompileTasks& tasks = ionFreeTaskBatch_.ref();
+  if (tasks.empty()) {
+    return;
+  }
+
+  // Start an IonFreeTask if we have at least eight tasks. If |force| is true we
+  // always start an IonFreeTask.
+  if (!force) {
+    constexpr size_t MinBatchSize = 8;
+    static_assert(IonFreeCompileTasks::InlineLength >= MinBatchSize,
+                  "Minimum batch size shouldn't require malloc");
+    if (tasks.length() < MinBatchSize) {
+      return;
+    }
+  }
+
+  auto freeTask = js::MakeUnique<jit::IonFreeTask>(std::move(tasks));
+  if (!freeTask) {
+    // Free compilation data on the main thread instead.
+    MOZ_ASSERT(!tasks.empty(), "shouldn't have moved tasks on OOM");
+    jit::FreeIonCompileTasks(tasks);
+    tasks.clearAndFree();
+    return;
+  }
+
+  AutoLockHelperThreadState lock;
+  if (!HelperThreadState().submitTask(std::move(freeTask), lock)) {
+    // If submitTask OOMs, then freeTask hasn't been moved so we can still use
+    // its task list.
+    jit::FreeIonCompileTasks(freeTask->compileTasks());
+  }
+
+  tasks.clearAndFree();
+}
+
+bool GlobalHelperThreadState::submitTask(
+    UniquePtr<jit::IonFreeTask>&& task,
+    const AutoLockHelperThreadState& locked) {
+  MOZ_ASSERT(isInitialized(locked));
+
+  if (!ionFreeList(locked).append(std::move(task))) {
+    return false;
+  }
+
+  dispatch(locked);
+  return true;
+}
+
+bool js::AutoStartIonFreeTask::addIonCompileToFreeTaskBatch(
+    jit::IonCompileTask* task) {
+  return jitRuntime_->addIonCompileToFreeTaskBatch(task);
+}
+
+js::AutoStartIonFreeTask::~AutoStartIonFreeTask() {
+  jitRuntime_->maybeStartIonFreeTask(force_);
+}
+
+//== DelazifyTask =========================================================
+
+bool GlobalHelperThreadState::canStartDelazifyTask(
+    const AutoLockHelperThreadState& lock) {
+  return !delazifyWorklist(lock).isEmpty() &&
+         checkTaskThreadLimit(THREAD_TYPE_DELAZIFY, maxDelazifyThreads(),
                               /*isMaster=*/true, lock);
 }
 
@@ -1357,193 +1088,298 @@ HelperThreadTask* GlobalHelperThreadState::maybeGetDelazifyTask(
   return worklist.popFirst();
 }
 
-bool GlobalHelperThreadState::canStartDelazifyTask(
-    const AutoLockHelperThreadState& lock) {
-  return !delazifyWorklist(lock).isEmpty() &&
-         checkTaskThreadLimit(THREAD_TYPE_DELAZIFY, maxDelazifyThreads(),
-                              /*isMaster=*/true, lock);
+void GlobalHelperThreadState::submitTask(
+    DelazifyTask* task, const AutoLockHelperThreadState& locked) {
+  delazifyWorklist(locked).insertBack(task);
+  dispatch(locked);
 }
 
-HelperThreadTask* GlobalHelperThreadState::maybeGetCompressionTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartCompressionTask(lock)) {
-    return nullptr;
+void js::StartOffThreadDelazification(
+    JSContext* maybeCx, const JS::ReadOnlyCompileOptions& options,
+    frontend::InitialStencilAndDelazifications* stencils) {
+  // Skip delazify tasks if we parse everything on-demand or ahead.
+  auto strategy = options.eagerDelazificationStrategy();
+  if (strategy == JS::DelazificationOption::OnDemandOnly ||
+      strategy == JS::DelazificationOption::ParseEverythingEagerly) {
+    return;
   }
 
-  auto& worklist = compressionWorklist(lock);
-  UniquePtr<SourceCompressionTask> task = std::move(worklist.back());
-  worklist.popBack();
-  return task.release();
-}
-
-bool GlobalHelperThreadState::canStartCompressionTask(
-    const AutoLockHelperThreadState& lock) {
-  return !compressionWorklist(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_COMPRESS, maxCompressionThreads(),
-                              lock);
-}
-
-void GlobalHelperThreadState::startHandlingCompressionTasks(
-    ScheduleCompressionTask schedule, JSRuntime* maybeRuntime,
-    const AutoLockHelperThreadState& lock) {
-  MOZ_ASSERT((schedule == ScheduleCompressionTask::GC) ==
-             (maybeRuntime != nullptr));
-
-  auto& pending = compressionPendingList(lock);
-
-  for (size_t i = 0; i < pending.length(); i++) {
-    UniquePtr<SourceCompressionTask>& task = pending[i];
-    if (schedule == ScheduleCompressionTask::API ||
-        (task->runtimeMatches(maybeRuntime) && task->shouldStart())) {
-      // OOMing during appending results in the task not being scheduled
-      // and deleted.
-      (void)submitTask(std::move(task), lock);
-      remove(pending, &i);
-    }
-  }
-}
-
-bool GlobalHelperThreadState::submitTask(
-    UniquePtr<SourceCompressionTask> task,
-    const AutoLockHelperThreadState& locked) {
-  if (!compressionWorklist(locked).append(std::move(task))) {
-    return false;
+  // Skip delazify task if code coverage is enabled.
+  if (maybeCx && maybeCx->realm()->collectCoverageForDebug()) {
+    return;
   }
 
-  dispatch(DispatchReason::NewTask, locked);
-  return true;
-}
-
-bool GlobalHelperThreadState::submitTask(
-    GCParallelTask* task, const AutoLockHelperThreadState& locked) {
-  gcParallelWorklist().insertBack(task, locked);
-  dispatch(DispatchReason::NewTask, locked);
-  return true;
-}
-
-HelperThreadTask* GlobalHelperThreadState::maybeGetGCParallelTask(
-    const AutoLockHelperThreadState& lock) {
-  if (!canStartGCParallelTask(lock)) {
-    return nullptr;
-  }
-
-  return gcParallelWorklist().popFirst(lock);
-}
-
-bool GlobalHelperThreadState::canStartGCParallelTask(
-    const AutoLockHelperThreadState& lock) {
-  return !gcParallelWorklist().isEmpty(lock) &&
-         checkTaskThreadLimit(THREAD_TYPE_GCPARALLEL, maxGCParallelThreads(),
-                              lock);
-}
-
-bool js::EnqueueOffThreadCompression(JSContext* cx,
-                                     UniquePtr<SourceCompressionTask> task) {
-  AutoLockHelperThreadState lock;
-
-  auto& pending = HelperThreadState().compressionPendingList(lock);
-  if (!pending.append(std::move(task))) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
-
-  return true;
-}
-
-void js::StartHandlingCompressionsOnGC(JSRuntime* runtime) {
-  AutoLockHelperThreadState lock;
-  HelperThreadState().startHandlingCompressionTasks(
-      GlobalHelperThreadState::ScheduleCompressionTask::GC, runtime, lock);
-}
-
-template <typename T>
-static void ClearCompressionTaskList(T& list, JSRuntime* runtime) {
-  for (size_t i = 0; i < list.length(); i++) {
-    if (list[i]->runtimeMatches(runtime)) {
-      HelperThreadState().remove(list, &i);
-    }
-  }
-}
-
-void js::CancelOffThreadCompressions(JSRuntime* runtime) {
   if (!CanUseExtraThreads()) {
     return;
   }
 
-  AutoLockHelperThreadState lock;
+  JSRuntime* maybeRuntime = maybeCx ? maybeCx->runtime() : nullptr;
+  UniquePtr<DelazifyTask> task;
+  task = DelazifyTask::Create(maybeRuntime, options, stencils);
+  if (!task) {
+    return;
+  }
 
-  // Cancel all pending compression tasks.
-  ClearCompressionTaskList(HelperThreadState().compressionPendingList(lock),
-                           runtime);
-  ClearCompressionTaskList(HelperThreadState().compressionWorklist(lock),
-                           runtime);
+  // Schedule delazification task if there is any function to delazify.
+  if (!task->done()) {
+    AutoLockHelperThreadState lock;
+    HelperThreadState().submitTask(task.release(), lock);
+  }
+}
 
-  // Cancel all in-process compression tasks and wait for them to join so we
-  // clean up the finished tasks.
+UniquePtr<DelazifyTask> DelazifyTask::Create(
+    JSRuntime* maybeRuntime, const JS::ReadOnlyCompileOptions& options,
+    frontend::InitialStencilAndDelazifications* stencils) {
+  UniquePtr<DelazifyTask> task;
+  task.reset(js_new<DelazifyTask>(maybeRuntime, options.prefableOptions()));
+  if (!task) {
+    return nullptr;
+  }
+
+  if (!task->init(options, stencils)) {
+    // In case of errors, skip this and delazify on-demand.
+    return nullptr;
+  }
+
+  return task;
+}
+
+DelazifyTask::DelazifyTask(
+    JSRuntime* maybeRuntime,
+    const JS::PrefableCompileOptions& initialPrefableOptions)
+    : maybeRuntime(maybeRuntime),
+      delazificationCx(initialPrefableOptions, HelperThreadState().stackQuota) {
+}
+
+DelazifyTask::~DelazifyTask() {
+  // The LinkedListElement destructor will remove us from any list we are part
+  // of without synchronization, so ensure that doesn't happen.
+  MOZ_DIAGNOSTIC_ASSERT(!isInList());
+}
+
+bool DelazifyTask::init(const JS::ReadOnlyCompileOptions& options,
+                        frontend::InitialStencilAndDelazifications* stencils) {
+  return delazificationCx.init(options, stencils);
+}
+
+size_t DelazifyTask::sizeOfExcludingThis(
+    mozilla::MallocSizeOf mallocSizeOf) const {
+  return delazificationCx.sizeOfExcludingThis(mallocSizeOf);
+}
+
+void DelazifyTask::runHelperThreadTask(AutoLockHelperThreadState& lock) {
+  {
+    AutoUnlockHelperThreadState unlock(lock);
+    // NOTE: We do not report errors beyond this scope, as there is no where
+    // to report these errors to. In the mean time, prevent the eager
+    // delazification from running after any kind of errors.
+    (void)runTask();
+  }
+
+  // If we should continue to delazify even more functions, then re-add this
+  // task to the vector of delazification tasks. This might happen when the
+  // DelazifyTask is interrupted by a higher priority task. (see
+  // mozilla::TaskController & mozilla::Task)
+  if (!delazificationCx.done()) {
+    HelperThreadState().submitTask(this, lock);
+  } else {
+    UniquePtr<FreeDelazifyTask> freeTask(js_new<FreeDelazifyTask>(this));
+    if (freeTask) {
+      HelperThreadState().submitTask(std::move(freeTask), lock);
+    }
+  }
+}
+
+bool DelazifyTask::runTask() { return delazificationCx.delazify(); }
+
+bool DelazifyTask::done() const { return delazificationCx.done(); }
+
+void GlobalHelperThreadState::cancelPendingDelazifyTask(
+    JSRuntime* rt, AutoLockHelperThreadState& lock) {
+  auto& delazifyList = delazifyWorklist(lock);
+
+  auto end = delazifyList.end();
+  for (auto iter = delazifyList.begin(); iter != end;) {
+    DelazifyTask* task = *iter;
+    ++iter;
+    if (task->runtimeMatchesOrNoRuntime(rt)) {
+      task->removeFrom(delazifyList);
+      js_delete(task);
+    }
+  }
+}
+
+void GlobalHelperThreadState::waitUntilCancelledDelazifyTasks(
+    JSRuntime* rt, AutoLockHelperThreadState& lock) {
   while (true) {
-    bool inProgress = false;
-    for (auto* helper : HelperThreadState().helperTasks(lock)) {
-      if (!helper->is<SourceCompressionTask>()) {
-        continue;
-      }
+    cancelPendingDelazifyTask(rt, lock);
 
-      if (helper->as<SourceCompressionTask>()->runtimeMatches(runtime)) {
+    // If running tasks are delazifying any functions, then we have to wait
+    // until they complete to remove them from the pending list. DelazifyTask
+    // are inserting themself back to be processed once more after delazifying a
+    // function.
+    bool inProgress = false;
+    for (auto* helper : helperTasks(lock)) {
+      if (helper->is<DelazifyTask>() &&
+          helper->as<DelazifyTask>()->runtimeMatchesOrNoRuntime(rt)) {
         inProgress = true;
+        break;
       }
     }
-
     if (!inProgress) {
+      break;
+    }
+
+    wait(lock);
+  }
+
+  MOZ_ASSERT(!hasAnyDelazifyTask(rt, lock));
+}
+
+void GlobalHelperThreadState::waitUntilEmptyFreeDelazifyTaskVector(
+    AutoLockHelperThreadState& lock) {
+  while (true) {
+    bool inProgress = false;
+    if (!freeDelazifyTaskVector(lock).empty()) {
+      inProgress = true;
+    }
+
+    // If running tasks are delazifying any functions, then we have to wait
+    // until they complete to remove them from the pending list. DelazifyTask
+    // are inserting themself back to be processed once more after delazifying a
+    // function.
+    for (auto* helper : helperTasks(lock)) {
+      if (helper->is<FreeDelazifyTask>()) {
+        inProgress = true;
+        break;
+      }
+    }
+    if (!inProgress) {
+      break;
+    }
+
+    wait(lock);
+  }
+}
+
+void js::CancelOffThreadDelazify(JSRuntime* runtime) {
+  AutoLockHelperThreadState lock;
+
+  if (!HelperThreadState().isInitialized(lock)) {
+    return;
+  }
+
+  // Cancel all Delazify tasks from the given runtime, and wait if tasks are
+  // from the given runtime are being executed.
+  HelperThreadState().waitUntilCancelledDelazifyTasks(runtime, lock);
+
+  // Empty the free list of delazify task, in case one of the delazify task
+  // ended and therefore did not returned to the pending list of delazify tasks.
+  HelperThreadState().waitUntilEmptyFreeDelazifyTaskVector(lock);
+}
+
+bool GlobalHelperThreadState::hasAnyDelazifyTask(
+    JSRuntime* rt, AutoLockHelperThreadState& lock) {
+  for (auto task : delazifyWorklist(lock)) {
+    if (task->runtimeMatchesOrNoRuntime(rt)) {
+      return true;
+    }
+  }
+
+  for (auto* helper : helperTasks(lock)) {
+    if (helper->is<DelazifyTask>() &&
+        helper->as<DelazifyTask>()->runtimeMatchesOrNoRuntime(rt)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void js::WaitForAllDelazifyTasks(JSRuntime* rt) {
+  AutoLockHelperThreadState lock;
+  if (!HelperThreadState().isInitialized(lock)) {
+    return;
+  }
+
+  while (true) {
+    if (!HelperThreadState().hasAnyDelazifyTask(rt, lock)) {
       break;
     }
 
     HelperThreadState().wait(lock);
   }
-
-  // Clean up finished tasks.
-  ClearCompressionTaskList(HelperThreadState().compressionFinishedList(lock),
-                           runtime);
 }
 
-void js::AttachFinishedCompressions(JSRuntime* runtime,
-                                    AutoLockHelperThreadState& lock) {
-  auto& finished = HelperThreadState().compressionFinishedList(lock);
-  for (size_t i = 0; i < finished.length(); i++) {
-    if (finished[i]->runtimeMatches(runtime)) {
-      UniquePtr<SourceCompressionTask> compressionTask(std::move(finished[i]));
-      HelperThreadState().remove(finished, &i);
-      compressionTask->complete();
-    }
-  }
+//== FreeDelazifyTask =====================================================
+
+bool GlobalHelperThreadState::canStartFreeDelazifyTask(
+    const AutoLockHelperThreadState& lock) {
+  return !freeDelazifyTaskVector(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_DELAZIFY_FREE, maxDelazifyThreads(),
+                              /*isMaster=*/true, lock);
 }
 
-void js::SweepPendingCompressions(AutoLockHelperThreadState& lock) {
-  auto& pending = HelperThreadState().compressionPendingList(lock);
-  for (size_t i = 0; i < pending.length(); i++) {
-    if (pending[i]->shouldCancel()) {
-      HelperThreadState().remove(pending, &i);
-    }
+HelperThreadTask* GlobalHelperThreadState::maybeGetFreeDelazifyTask(
+    const AutoLockHelperThreadState& lock) {
+  auto& freeList = freeDelazifyTaskVector(lock);
+  if (!freeList.empty()) {
+    UniquePtr<FreeDelazifyTask> task = std::move(freeList.back());
+    freeList.popBack();
+    return task.release();
   }
+  return nullptr;
 }
 
-void js::RunPendingSourceCompressions(JSRuntime* runtime) {
-  if (!CanUseExtraThreads()) {
-    return;
+bool GlobalHelperThreadState::submitTask(
+    UniquePtr<FreeDelazifyTask> task, const AutoLockHelperThreadState& locked) {
+  if (!freeDelazifyTaskVector(locked).append(std::move(task))) {
+    return false;
+  }
+  dispatch(locked);
+  return true;
+}
+
+void FreeDelazifyTask::runHelperThreadTask(AutoLockHelperThreadState& locked) {
+  {
+    AutoUnlockHelperThreadState unlock(locked);
+    js_delete(task);
+    task = nullptr;
   }
 
+  js_delete(this);
+}
+
+//== PromiseHelperTask ====================================================
+
+bool GlobalHelperThreadState::canStartPromiseHelperTask(
+    const AutoLockHelperThreadState& lock) {
+  // PromiseHelperTasks can be wasm compilation tasks that in turn block on
+  // wasm compilation so set isMaster = true.
+  return !promiseHelperTasks(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_PROMISE_TASK,
+                              maxPromiseHelperThreads(),
+                              /*isMaster=*/true, lock);
+}
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetPromiseHelperTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartPromiseHelperTask(lock)) {
+    return nullptr;
+  }
+
+  return promiseHelperTasks(lock).popCopy();
+}
+
+bool GlobalHelperThreadState::submitTask(PromiseHelperTask* task) {
   AutoLockHelperThreadState lock;
 
-  HelperThreadState().startHandlingCompressionTasks(
-      GlobalHelperThreadState::ScheduleCompressionTask::API, nullptr, lock);
-
-  // Wait until all tasks have started compression.
-  while (!HelperThreadState().compressionWorklist(lock).empty()) {
-    HelperThreadState().wait(lock);
+  if (!promiseHelperTasks(lock).append(task)) {
+    return false;
   }
 
-  // Wait for all in-process compression tasks to complete.
-  HelperThreadState().waitForAllTasksLocked(lock);
-
-  AttachFinishedCompressions(runtime, lock);
+  dispatch(lock);
+  return true;
 }
 
 void PromiseHelperTask::executeAndResolveAndDestroy(JSContext* cx) {
@@ -1587,151 +1423,503 @@ bool js::StartOffThreadPromiseHelperTask(PromiseHelperTask* task) {
   return HelperThreadState().submitTask(task);
 }
 
-bool GlobalHelperThreadState::submitTask(PromiseHelperTask* task) {
-  AutoLockHelperThreadState lock;
+//== SourceCompressionTask ================================================
 
-  if (!promiseHelperTasks(lock).append(task)) {
+bool GlobalHelperThreadState::canStartCompressionTask(
+    const AutoLockHelperThreadState& lock) {
+  return !compressionWorklist(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_COMPRESS, maxCompressionThreads(),
+                              lock);
+}
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetCompressionTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartCompressionTask(lock)) {
+    return nullptr;
+  }
+
+  auto& worklist = compressionWorklist(lock);
+  UniquePtr<SourceCompressionTask> task = std::move(worklist.back());
+  worklist.popBack();
+  return task.release();
+}
+
+bool GlobalHelperThreadState::submitTask(
+    UniquePtr<SourceCompressionTask> task,
+    const AutoLockHelperThreadState& locked) {
+  if (!compressionWorklist(locked).append(std::move(task))) {
     return false;
   }
 
-  dispatch(DispatchReason::NewTask, lock);
+  dispatch(locked);
   return true;
 }
 
-void GlobalHelperThreadState::trace(JSTracer* trc) {
-  {
-    AutoLockHelperThreadState lock;
-
-#ifdef DEBUG
-    // Since we hold the helper thread lock here we must disable GCMarker's
-    // checking of the atom marking bitmap since that also relies on taking the
-    // lock.
-    GCMarker* marker = nullptr;
-    if (trc->isMarkingTracer()) {
-      marker = GCMarker::fromTracer(trc);
-      marker->setCheckAtomMarking(false);
-    }
-    auto reenableAtomMarkingCheck = mozilla::MakeScopeExit([marker] {
-      if (marker) {
-        marker->setCheckAtomMarking(true);
-      }
-    });
-#endif
-
-    for (auto task : ionWorklist(lock)) {
-      task->alloc().lifoAlloc()->setReadWrite();
-      task->trace(trc);
-      task->alloc().lifoAlloc()->setReadOnly();
-    }
-    for (auto task : ionFinishedList(lock)) {
-      task->trace(trc);
-    }
-
-    for (auto* helper : HelperThreadState().helperTasks(lock)) {
-      if (helper->is<jit::IonCompileTask>()) {
-        helper->as<jit::IonCompileTask>()->trace(trc);
-      }
-    }
-  }
-
-  // The lazy link list is only accessed on the main thread, so trace it after
-  // releasing the lock.
-  JSRuntime* rt = trc->runtime();
-  if (auto* jitRuntime = rt->jitRuntime()) {
-    jit::IonCompileTask* task = jitRuntime->ionLazyLinkList(rt).getFirst();
-    while (task) {
-      task->trace(trc);
-      task = task->getNext();
-    }
-  }
-}
-
-// Definition of helper thread tasks.
-//
-// Priority is determined by the order they're listed here.
-const GlobalHelperThreadState::Selector GlobalHelperThreadState::selectors[] = {
-    &GlobalHelperThreadState::maybeGetGCParallelTask,
-    &GlobalHelperThreadState::maybeGetIonCompileTask,
-    &GlobalHelperThreadState::maybeGetWasmTier1CompileTask,
-    &GlobalHelperThreadState::maybeGetPromiseHelperTask,
-    &GlobalHelperThreadState::maybeGetFreeDelazifyTask,
-    &GlobalHelperThreadState::maybeGetDelazifyTask,
-    &GlobalHelperThreadState::maybeGetCompressionTask,
-    &GlobalHelperThreadState::maybeGetLowPrioIonCompileTask,
-    &GlobalHelperThreadState::maybeGetIonFreeTask,
-    &GlobalHelperThreadState::maybeGetWasmTier2CompileTask,
-    &GlobalHelperThreadState::maybeGetWasmTier2GeneratorTask};
-
-bool GlobalHelperThreadState::canStartTasks(
+void GlobalHelperThreadState::startHandlingCompressionTasks(
+    ScheduleCompressionTask schedule, JSRuntime* maybeRuntime,
     const AutoLockHelperThreadState& lock) {
-  return canStartGCParallelTask(lock) || canStartIonCompileTask(lock) ||
-         canStartWasmTier1CompileTask(lock) ||
-         canStartPromiseHelperTask(lock) || canStartFreeDelazifyTask(lock) ||
-         canStartDelazifyTask(lock) || canStartCompressionTask(lock) ||
-         canStartIonFreeTask(lock) || canStartWasmTier2CompileTask(lock) ||
-         canStartWasmTier2GeneratorTask(lock);
+  MOZ_ASSERT((schedule == ScheduleCompressionTask::GC) ==
+             (maybeRuntime != nullptr));
+
+  auto& pending = compressionPendingList(lock);
+
+  for (size_t i = 0; i < pending.length(); i++) {
+    UniquePtr<SourceCompressionTask>& task = pending[i];
+    if (schedule == ScheduleCompressionTask::API ||
+        (task->runtimeMatches(maybeRuntime) && task->shouldStart())) {
+      // OOMing during appending results in the task not being scheduled
+      // and deleted.
+      (void)submitTask(std::move(task), lock);
+      remove(pending, &i);
+    }
+  }
 }
 
-void JS::RunHelperThreadTask() {
-  MOZ_ASSERT(CanUseExtraThreads());
+void js::AttachFinishedCompressions(JSRuntime* runtime,
+                                    AutoLockHelperThreadState& lock) {
+  auto& finished = HelperThreadState().compressionFinishedList(lock);
+  for (size_t i = 0; i < finished.length(); i++) {
+    if (finished[i]->runtimeMatches(runtime)) {
+      UniquePtr<SourceCompressionTask> compressionTask(std::move(finished[i]));
+      HelperThreadState().remove(finished, &i);
+      compressionTask->complete();
+    }
+  }
+}
 
-  AutoLockHelperThreadState lock;
+void js::SweepPendingCompressions(AutoLockHelperThreadState& lock) {
+  auto& pending = HelperThreadState().compressionPendingList(lock);
+  for (size_t i = 0; i < pending.length(); i++) {
+    if (pending[i]->shouldCancel()) {
+      HelperThreadState().remove(pending, &i);
+    }
+  }
+}
 
-  if (!gHelperThreadState || HelperThreadState().isTerminating(lock)) {
+void js::RunPendingSourceCompressions(JSRuntime* runtime) {
+  if (!CanUseExtraThreads()) {
     return;
   }
 
-  HelperThreadState().runOneTask(lock);
+  AutoLockHelperThreadState lock;
+  HelperThreadState().runPendingSourceCompressions(runtime, lock);
 }
 
-void GlobalHelperThreadState::runOneTask(AutoLockHelperThreadState& lock) {
-  MOZ_ASSERT(tasksPending_ > 0);
-  tasksPending_--;
-
-  // The selectors may depend on the HelperThreadState not changing between task
-  // selection and task execution, in particular, on new tasks not being added
-  // (because of the lifo structure of the work lists). Unlocking the
-  // HelperThreadState between task selection and execution is not well-defined.
-  HelperThreadTask* task = findHighestPriorityTask(lock);
-  if (task) {
-    runTaskLocked(task, lock);
-    dispatch(DispatchReason::FinishedTask, lock);
+void GlobalHelperThreadState::runPendingSourceCompressions(
+    JSRuntime* runtime, AutoLockHelperThreadState& lock) {
+  startHandlingCompressionTasks(
+      GlobalHelperThreadState::ScheduleCompressionTask::API, nullptr, lock);
+  {
+    // Dispatch tasks.
+    AutoUnlockHelperThreadState unlock(lock);
   }
 
-  notifyAll(lock);
+  // Wait until all tasks have started compression.
+  while (!compressionWorklist(lock).empty()) {
+    wait(lock);
+  }
+
+  // Wait for all in-process compression tasks to complete.
+  waitForAllTasksLocked(lock);
+
+  AttachFinishedCompressions(runtime, lock);
 }
 
-HelperThreadTask* GlobalHelperThreadState::findHighestPriorityTask(
-    const AutoLockHelperThreadState& locked) {
-  // Return the highest priority task that is ready to start, or nullptr.
+bool js::EnqueueOffThreadCompression(JSContext* cx,
+                                     UniquePtr<SourceCompressionTask> task) {
+  AutoLockHelperThreadState lock;
 
-  for (const auto& selector : selectors) {
-    if (auto* task = (this->*(selector))(locked)) {
-      return task;
+  auto& pending = HelperThreadState().compressionPendingList(lock);
+  if (!pending.append(std::move(task))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+
+  return true;
+}
+
+void js::StartHandlingCompressionsOnGC(JSRuntime* runtime) {
+  AutoLockHelperThreadState lock;
+  HelperThreadState().startHandlingCompressionTasks(
+      GlobalHelperThreadState::ScheduleCompressionTask::GC, runtime, lock);
+}
+
+template <typename T>
+static void ClearCompressionTaskList(T& list, JSRuntime* runtime) {
+  for (size_t i = 0; i < list.length(); i++) {
+    if (list[i]->runtimeMatches(runtime)) {
+      HelperThreadState().remove(list, &i);
+    }
+  }
+}
+
+void GlobalHelperThreadState::cancelOffThreadCompressions(
+    JSRuntime* runtime, AutoLockHelperThreadState& lock) {
+  // Cancel all pending compression tasks.
+  ClearCompressionTaskList(compressionPendingList(lock), runtime);
+  ClearCompressionTaskList(compressionWorklist(lock), runtime);
+
+  // Cancel all in-process compression tasks and wait for them to join so we
+  // clean up the finished tasks.
+  while (true) {
+    bool inProgress = false;
+    for (auto* helper : helperTasks(lock)) {
+      if (!helper->is<SourceCompressionTask>()) {
+        continue;
+      }
+
+      if (helper->as<SourceCompressionTask>()->runtimeMatches(runtime)) {
+        inProgress = true;
+      }
+    }
+
+    if (!inProgress) {
+      break;
+    }
+
+    wait(lock);
+  }
+
+  // Clean up finished tasks.
+  ClearCompressionTaskList(compressionFinishedList(lock), runtime);
+}
+
+void js::CancelOffThreadCompressions(JSRuntime* runtime) {
+  if (!CanUseExtraThreads()) {
+    return;
+  }
+
+  AutoLockHelperThreadState lock;
+  HelperThreadState().cancelOffThreadCompressions(runtime, lock);
+}
+
+//== GCParallelTask =======================================================
+
+bool GlobalHelperThreadState::canStartGCParallelTask(
+    const AutoLockHelperThreadState& lock) {
+  return !gcParallelWorklist().isEmpty(lock) &&
+         checkTaskThreadLimit(THREAD_TYPE_GCPARALLEL, maxGCParallelThreads(),
+                              lock);
+}
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetGCParallelTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartGCParallelTask(lock)) {
+    return nullptr;
+  }
+
+  return gcParallelWorklist().popFirst(lock);
+}
+
+bool GlobalHelperThreadState::submitTask(
+    GCParallelTask* task, const AutoLockHelperThreadState& locked) {
+  gcParallelWorklist().insertBack(task, locked);
+  dispatch(locked);
+  return true;
+}
+
+///////////////////////////////////////////////////////////////////////////
+//                                                                       //
+// Wasm task definitions                                                 //
+//                                                                       //
+///////////////////////////////////////////////////////////////////////////
+
+//== WasmTier1CompileTask =================================================
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetWasmTier1CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  return maybeGetWasmCompile(lock, wasm::CompileState::EagerTier1);
+}
+
+bool GlobalHelperThreadState::canStartWasmTier1CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  return canStartWasmCompile(lock, wasm::CompileState::EagerTier1);
+}
+
+//== WasmTier2CompileTask =================================================
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetWasmTier2CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  return maybeGetWasmCompile(lock, wasm::CompileState::EagerTier2);
+}
+
+bool GlobalHelperThreadState::canStartWasmTier2CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  return canStartWasmCompile(lock, wasm::CompileState::EagerTier2);
+}
+
+//== WasmCompleteTier2GeneratorTask =======================================
+
+bool GlobalHelperThreadState::canStartWasmCompleteTier2GeneratorTask(
+    const AutoLockHelperThreadState& lock) {
+  return !wasmCompleteTier2GeneratorWorklist(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_WASM_GENERATOR_COMPLETE_TIER2,
+                              maxWasmCompleteTier2GeneratorThreads(),
+                              /*isMaster=*/true, lock);
+}
+
+HelperThreadTask*
+GlobalHelperThreadState::maybeGetWasmCompleteTier2GeneratorTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartWasmCompleteTier2GeneratorTask(lock)) {
+    return nullptr;
+  }
+
+  return wasmCompleteTier2GeneratorWorklist(lock).popCopy();
+}
+
+bool GlobalHelperThreadState::submitTask(
+    wasm::UniqueCompleteTier2GeneratorTask task) {
+  AutoLockHelperThreadState lock;
+
+  MOZ_ASSERT(isInitialized(lock));
+
+  if (!wasmCompleteTier2GeneratorWorklist(lock).append(task.get())) {
+    return false;
+  }
+  (void)task.release();
+
+  dispatch(lock);
+  return true;
+}
+
+void js::StartOffThreadWasmCompleteTier2Generator(
+    wasm::UniqueCompleteTier2GeneratorTask task) {
+  (void)HelperThreadState().submitTask(std::move(task));
+}
+
+void GlobalHelperThreadState::cancelOffThreadWasmCompleteTier2Generator(
+    AutoLockHelperThreadState& lock) {
+  // Remove pending tasks from the tier2 generator worklist and cancel and
+  // delete them.
+  {
+    wasm::CompleteTier2GeneratorTaskPtrVector& worklist =
+        wasmCompleteTier2GeneratorWorklist(lock);
+    for (size_t i = 0; i < worklist.length(); i++) {
+      wasm::CompleteTier2GeneratorTask* task = worklist[i];
+      remove(worklist, &i);
+      js_delete(task);
     }
   }
 
-  return nullptr;
+  // There is at most one running CompleteTier2Generator task and we assume that
+  // below.
+  static_assert(GlobalHelperThreadState::MaxCompleteTier2GeneratorTasks == 1,
+                "code must be generalized");
+
+  // If there is a running Tier2 generator task, shut it down in a predictable
+  // way.  The task will be deleted by the normal deletion logic.
+  for (auto* helper : helperTasks(lock)) {
+    if (helper->is<wasm::CompleteTier2GeneratorTask>()) {
+      // Set a flag that causes compilation to shortcut itself.
+      helper->as<wasm::CompleteTier2GeneratorTask>()->cancel();
+
+      // Wait for the generator task to finish.  This avoids a shutdown race
+      // where the shutdown code is trying to shut down helper threads and the
+      // ongoing tier2 compilation is trying to finish, which requires it to
+      // have access to helper threads.
+      uint32_t oldFinishedCount = wasmCompleteTier2GeneratorsFinished(lock);
+      while (wasmCompleteTier2GeneratorsFinished(lock) == oldFinishedCount) {
+        wait(lock);
+      }
+
+      // At most one of these tasks.
+      break;
+    }
+  }
 }
 
-void GlobalHelperThreadState::runTaskLocked(HelperThreadTask* task,
-                                            AutoLockHelperThreadState& locked) {
-  JS::AutoSuppressGCAnalysis nogc;
+static void CancelOffThreadWasmCompleteTier2GeneratorLocked(
+    AutoLockHelperThreadState& lock) {
+  if (!HelperThreadState().isInitialized(lock)) {
+    return;
+  }
 
-  HelperThreadState().helperTasks(locked).infallibleEmplaceBack(task);
+  HelperThreadState().cancelOffThreadWasmCompleteTier2Generator(lock);
+}
 
-  ThreadType threadType = task->threadType();
-  js::oom::SetThreadType(threadType);
-  runningTaskCount[threadType]++;
-  totalCountRunningTasks++;
+void js::CancelOffThreadWasmCompleteTier2Generator() {
+  AutoLockHelperThreadState lock;
+  CancelOffThreadWasmCompleteTier2GeneratorLocked(lock);
+}
 
-  task->runHelperThreadTask(locked);
+//== WasmPartialTier2CompileTask ==========================================
 
-  // Delete task from helperTasks.
-  HelperThreadState().helperTasks(locked).eraseIfEqual(task);
+bool GlobalHelperThreadState::canStartWasmPartialTier2CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  size_t maxThreads = maxWasmPartialTier2CompileThreads();
+  // Avoid assertion failure in checkTaskThreadLimit().
+  if (maxThreads > threadCount) {
+    maxThreads = threadCount;
+  }
+  return !wasmPartialTier2CompileWorklist(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_WASM_COMPILE_PARTIAL_TIER2,
+                              maxThreads, /*isMaster=*/false, lock);
+}
 
-  totalCountRunningTasks--;
-  runningTaskCount[threadType]--;
+HelperThreadTask* GlobalHelperThreadState::maybeGetWasmPartialTier2CompileTask(
+    const AutoLockHelperThreadState& lock) {
+  if (!canStartWasmPartialTier2CompileTask(lock)) {
+    return nullptr;
+  }
 
-  js::oom::SetThreadType(js::THREAD_TYPE_NONE);
+  return wasmPartialTier2CompileWorklist(lock).popCopy();
+}
+
+bool GlobalHelperThreadState::submitTask(
+    wasm::UniquePartialTier2CompileTask task) {
+  AutoLockHelperThreadState lock;
+
+  MOZ_ASSERT(isInitialized(lock));
+
+  wasm::PartialTier2CompileTaskPtrVector& workList =
+      wasmPartialTier2CompileWorklist(lock);
+  if (!workList.append(task.get())) {
+    return false;
+  }
+  (void)task.release();
+
+  dispatch(lock);
+  return true;
+}
+
+void js::StartOffThreadWasmPartialTier2Compile(
+    wasm::UniquePartialTier2CompileTask task) {
+  (void)HelperThreadState().submitTask(std::move(task));
+}
+
+void GlobalHelperThreadState::cancelOffThreadWasmPartialTier2Compile(
+    AutoLockHelperThreadState& lock) {
+  // Remove pending tasks from the partial tier2 compilation worklist and
+  // cancel and delete them.
+  wasm::PartialTier2CompileTaskPtrVector& worklist =
+      wasmPartialTier2CompileWorklist(lock);
+  for (size_t i = 0; i < worklist.length(); i++) {
+    wasm::PartialTier2CompileTask* task = worklist[i];
+    remove(worklist, &i);
+    js_delete(task);
+  }
+
+  // And remove running partial tier2 compilation tasks.  They will be deleted
+  // by the normal deletion logic (in
+  // PartialTier2CompileTaskImpl::runHelperThreadTask).
+  bool anyCancelled;
+  do {
+    anyCancelled = false;
+    for (auto* helper : helperTasks(lock)) {
+      if (!helper->is<wasm::PartialTier2CompileTask>()) {
+        continue;
+      }
+      wasm::PartialTier2CompileTask* pt2CompileTask =
+          helper->as<wasm::PartialTier2CompileTask>();
+      pt2CompileTask->cancel();
+      anyCancelled = true;
+    }
+    if (anyCancelled) {
+      wait(lock);
+    }
+  } while (anyCancelled);
+}
+
+static void CancelOffThreadWasmPartialTier2CompileLocked(
+    AutoLockHelperThreadState& lock) {
+  if (!HelperThreadState().isInitialized(lock)) {
+    return;
+  }
+
+  HelperThreadState().cancelOffThreadWasmPartialTier2Compile(lock);
+}
+
+void js::CancelOffThreadWasmPartialTier2Compile() {
+  AutoLockHelperThreadState lock;
+  CancelOffThreadWasmPartialTier2CompileLocked(lock);
+}
+
+//== wasm task management =================================================
+
+bool GlobalHelperThreadState::canStartWasmCompile(
+    const AutoLockHelperThreadState& lock, wasm::CompileState state) {
+  if (wasmWorklist(lock, state).empty()) {
+    return false;
+  }
+
+  // Parallel compilation and background compilation should be disabled on
+  // unicore systems.
+
+  MOZ_RELEASE_ASSERT(cpuCount > 1);
+
+  // If CompleteTier2 is very backlogged we must give priority to it, since the
+  // CompleteTier2 queue holds onto Tier1 tasks.  Indeed if CompleteTier2 is
+  // backlogged we will devote more resources to CompleteTier2 and not start
+  // any Tier1 work at all.
+
+  bool completeTier2oversubscribed =
+      wasmCompleteTier2GeneratorWorklist(lock).length() > 20;
+
+  // For Tier1 and Once compilation, honor the maximum allowed threads to
+  // compile wasm jobs at once, to avoid oversaturating the machine.
+  //
+  // For CompleteTier2 compilation we need to allow other things to happen too,
+  // so we do not allow all logical cores to be used for background work;
+  // instead we wish to use a fraction of the physical cores.  We can't
+  // directly compute the physical cores from the logical cores, but 1/3 of the
+  // logical cores is a safe estimate for the number of physical cores
+  // available for background work.
+
+  size_t physCoresAvailable = size_t(ceil(cpuCount / 3.0));
+
+  size_t threads;
+  ThreadType threadType;
+  if (state == wasm::CompileState::EagerTier2) {
+    if (completeTier2oversubscribed) {
+      threads = maxWasmCompilationThreads();
+    } else {
+      threads = physCoresAvailable;
+    }
+    threadType = THREAD_TYPE_WASM_COMPILE_TIER2;
+  } else {
+    if (completeTier2oversubscribed) {
+      threads = 0;
+    } else {
+      threads = maxWasmCompilationThreads();
+    }
+    threadType = THREAD_TYPE_WASM_COMPILE_TIER1;
+  }
+
+  return threads != 0 && checkTaskThreadLimit(threadType, threads, lock);
+}
+
+HelperThreadTask* GlobalHelperThreadState::maybeGetWasmCompile(
+    const AutoLockHelperThreadState& lock, wasm::CompileState state) {
+  if (!canStartWasmCompile(lock, state)) {
+    return nullptr;
+  }
+
+  return wasmWorklist(lock, state).popCopyFront();
+}
+
+size_t js::RemovePendingWasmCompileTasks(
+    const wasm::CompileTaskState& taskState, wasm::CompileState state,
+    const AutoLockHelperThreadState& lock) {
+  wasm::CompileTaskPtrFifo& worklist =
+      HelperThreadState().wasmWorklist(lock, state);
+  return worklist.eraseIf([&taskState](wasm::CompileTask* task) {
+    return &task->state == &taskState;
+  });
+}
+
+bool GlobalHelperThreadState::submitTask(wasm::CompileTask* task,
+                                         wasm::CompileState state) {
+  AutoLockHelperThreadState lock;
+  if (!wasmWorklist(lock, state).pushBack(task)) {
+    return false;
+  }
+
+  dispatch(lock);
+  return true;
+}
+
+bool js::StartOffThreadWasmCompile(wasm::CompileTask* task,
+                                   wasm::CompileState state) {
+  return HelperThreadState().submitTask(task, state);
 }

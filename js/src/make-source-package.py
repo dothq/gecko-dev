@@ -122,8 +122,7 @@ rsync_filter_list = """
 + /moz.configure
 + /test.mozbuild
 + /.babel-eslint.rc.js
-+ /.eslintignore
-+ /.eslintrc.js
++ /.eslintrc*.js
 + /.flake8
 + /.gitignore
 + /.hgignore
@@ -179,8 +178,9 @@ rsync_filter_list = """
 + /config/**
 + /python/**
 
-+ /.cargo/config.in
++ /.cargo/config.toml.in
 
++ /third_party/fmt/**
 + /third_party/function2/**
 - /third_party/python/gyp
 + /third_party/python/**

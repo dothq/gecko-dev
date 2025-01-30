@@ -351,7 +351,7 @@ struct ParamTraits<nsID> {
     WriteParam(aWriter, aParam.m0);
     WriteParam(aWriter, aParam.m1);
     WriteParam(aWriter, aParam.m2);
-    for (unsigned int i = 0; i < mozilla::ArrayLength(aParam.m3); i++) {
+    for (unsigned int i = 0; i < std::size(aParam.m3); i++) {
       WriteParam(aWriter, aParam.m3[i]);
     }
   }
@@ -362,7 +362,7 @@ struct ParamTraits<nsID> {
         !ReadParam(aReader, &(aResult->m2)))
       return false;
 
-    for (unsigned int i = 0; i < mozilla::ArrayLength(aResult->m3); i++)
+    for (unsigned int i = 0; i < std::size(aResult->m3); i++)
       if (!ReadParam(aReader, &(aResult->m3[i]))) return false;
 
     return true;
@@ -775,6 +775,7 @@ struct ParamTraits<mozilla::net::LinkHeader> {
     WriteParam(aWriter, aParam.mSizes);
     WriteParam(aWriter, aParam.mType);
     WriteParam(aWriter, aParam.mMedia);
+    WriteParam(aWriter, aParam.mAnchor);
     WriteParam(aWriter, aParam.mCrossOrigin);
     WriteParam(aWriter, aParam.mReferrerPolicy);
     WriteParam(aWriter, aParam.mAs);
@@ -810,6 +811,9 @@ struct ParamTraits<mozilla::net::LinkHeader> {
       return false;
     }
     if (!ReadParam(aReader, &aResult->mMedia)) {
+      return false;
+    }
+    if (!ReadParam(aReader, &aResult->mAnchor)) {
       return false;
     }
     if (!ReadParam(aReader, &aResult->mCrossOrigin)) {

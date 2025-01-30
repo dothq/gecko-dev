@@ -10,20 +10,14 @@
 #include <cstdint>
 #include <iterator>
 #include <map>
-#include <unordered_map>
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 #include "ErrorList.h"
-#include "base/basictypes.h"
-#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/pickle.h"
-#include "base/string_util.h"
 #include "chrome/common/ipc_message.h"
 #include "mozilla/CheckedInt.h"
-#include "mozilla/IntegerRange.h"
 
 #if defined(XP_WIN)
 #  include <windows.h>
@@ -82,6 +76,11 @@ class MOZ_STACK_CLASS MessageWriter final {
 
 #undef FORWARD_WRITE
 
+  template <class T>
+  bool WriteScalar(const T& result) {
+    return message_.WriteScalar(result);
+  }
+
   bool WriteData(const char* data, uint32_t length) {
     return message_.WriteData(data, length);
   }
@@ -114,6 +113,10 @@ class MOZ_STACK_CLASS MessageWriter final {
 
   void FatalError(const char* aErrorMsg) const {
     mozilla::ipc::PickleFatalError(aErrorMsg, actor_);
+  }
+
+  void NoteLargeBufferShmemFailure(uint32_t aLargeBufferSize) {
+    message_.NoteLargeBufferShmemFailure(aLargeBufferSize);
   }
 
  private:
@@ -162,6 +165,11 @@ class MOZ_STACK_CLASS MessageReader final {
   FORWARD_READ(Length, int);
 
 #undef FORWARD_READ
+
+  template <class T>
+  [[nodiscard]] bool ReadScalar(T* const result) {
+    return message_.ReadScalar(&iter_, result);
+  }
 
   [[nodiscard]] bool ReadBytesInto(void* data, uint32_t length) {
     return message_.ReadBytesInto(&iter_, data, length);
@@ -459,7 +467,7 @@ inline constexpr auto ParamTraitsReadUsesOutParam()
 }  // namespace detail
 
 template <typename P>
-inline bool WARN_UNUSED_RESULT ReadParam(MessageReader* reader, P* p) {
+[[nodiscard]] inline bool ReadParam(MessageReader* reader, P* p) {
   if constexpr (!detail::ParamTraitsReadUsesOutParam<P>()) {
     auto maybe = ParamTraits<P>::Read(reader);
     if (maybe) {
@@ -473,7 +481,7 @@ inline bool WARN_UNUSED_RESULT ReadParam(MessageReader* reader, P* p) {
 }
 
 template <typename P>
-inline ReadResult<P> WARN_UNUSED_RESULT ReadParam(MessageReader* reader) {
+[[nodiscard]] inline ReadResult<P> ReadParam(MessageReader* reader) {
   if constexpr (!detail::ParamTraitsReadUsesOutParam<P>()) {
     return ParamTraits<P>::Read(reader);
   } else {
@@ -665,8 +673,7 @@ bool ReadSequenceParamImpl(MessageReader* reader, mozilla::Maybe<I>&& data,
  * If the type satisfies kUseWriteBytes, output iterators are not supported.
  */
 template <typename P, typename F>
-bool WARN_UNUSED_RESULT ReadSequenceParam(MessageReader* reader,
-                                          F&& allocator) {
+[[nodiscard]] bool ReadSequenceParam(MessageReader* reader, F&& allocator) {
   uint32_t length = 0;
   if (!reader->ReadUInt32(&length)) {
     reader->FatalError("failed to read byte length in ReadSequenceParam");
@@ -713,6 +720,17 @@ struct ParamTraitsFundamental<bool> {
   }
   static bool Read(MessageReader* reader, param_type* r) {
     return reader->ReadBool(r);
+  }
+};
+
+template <>
+struct ParamTraitsFundamental<char> {
+  typedef char param_type;
+  static void Write(MessageWriter* writer, const param_type& p) {
+    writer->WriteScalar(p);
+  }
+  static bool Read(MessageReader* reader, param_type* r) {
+    return reader->ReadScalar(r);
   }
 };
 
@@ -786,6 +804,28 @@ struct ParamTraitsFundamental<double> {
 
 template <class P>
 struct ParamTraitsFixed : ParamTraitsFundamental<P> {};
+
+template <>
+struct ParamTraitsFixed<int8_t> {
+  typedef int8_t param_type;
+  static void Write(MessageWriter* writer, const param_type& p) {
+    writer->WriteScalar(p);
+  }
+  static bool Read(MessageReader* reader, param_type* r) {
+    return reader->ReadScalar(r);
+  }
+};
+
+template <>
+struct ParamTraitsFixed<uint8_t> {
+  typedef uint8_t param_type;
+  static void Write(MessageWriter* writer, const param_type& p) {
+    writer->WriteScalar(p);
+  }
+  static bool Read(MessageReader* reader, param_type* r) {
+    return reader->ReadScalar(r);
+  }
+};
 
 template <>
 struct ParamTraitsFixed<int16_t> {

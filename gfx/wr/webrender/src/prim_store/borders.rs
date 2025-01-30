@@ -7,7 +7,7 @@ use api::units::*;
 use crate::border::create_border_segments;
 use crate::border::NormalBorderAu;
 use crate::scene_building::{CreateShadow, IsVisible};
-use crate::frame_builder::{FrameBuildingState};
+use crate::frame_builder::FrameBuildingState;
 use crate::gpu_cache::GpuDataRequest;
 use crate::intern;
 use crate::internal_types::{LayoutPrimitiveInfo, FrameId};
@@ -166,7 +166,6 @@ impl InternablePrimitive for NormalBorderPrim {
         _key: NormalBorderKey,
         data_handle: NormalBorderDataHandle,
         _: &mut PrimitiveStore,
-        _reference_frame_relative_offset: LayoutVector2D,
     ) -> PrimitiveInstanceKind {
         PrimitiveInstanceKind::NormalBorder {
             data_handle,
@@ -354,7 +353,6 @@ impl InternablePrimitive for ImageBorder {
         _key: ImageBorderKey,
         data_handle: ImageBorderDataHandle,
         _: &mut PrimitiveStore,
-        _reference_frame_relative_offset: LayoutVector2D,
     ) -> PrimitiveInstanceKind {
         PrimitiveInstanceKind::ImageBorder {
             data_handle

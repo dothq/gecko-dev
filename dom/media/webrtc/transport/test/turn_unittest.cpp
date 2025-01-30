@@ -66,7 +66,7 @@ extern "C" {
 
 using namespace mozilla;
 
-static std::string kDummyTurnServer("192.0.2.1");  // From RFC 5737
+MOZ_RUNINIT static std::string kDummyTurnServer("192.0.2.1");  // From RFC 5737
 
 class TurnClient : public MtransportTest {
  public:
@@ -135,6 +135,7 @@ class TurnClient : public MtransportTest {
 
   void TearDown() {
     test_utils_->SyncDispatchToSTS(WrapRunnable(this, &TurnClient::TearDown_s));
+    MtransportTest::TearDown();
   }
 
   void Allocate_s() {

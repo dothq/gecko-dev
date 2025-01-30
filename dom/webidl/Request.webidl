@@ -7,20 +7,28 @@
  * https://fetch.spec.whatwg.org/#request-class
  */
 
-typedef (Request or USVString) RequestInfo;
+
+interface Principal;
+
+typedef (Request or UTF8String) RequestInfo;
 typedef unsigned long nsContentPolicyType;
 
 [Exposed=(Window,Worker)]
 interface Request {
+  /**
+   * Note that Requests created from system principal (ie "privileged"/chrome)
+   * code will default to omitting credentials. You can override this behaviour
+   * using the ``credentials`` member on the ``init`` dictionary.
+   */
   [Throws]
   constructor(RequestInfo input, optional RequestInit init = {});
 
   readonly attribute ByteString method;
-  readonly attribute USVString url;
+  readonly attribute UTF8String url;
   [SameObject, BinaryName="headers_"] readonly attribute Headers headers;
 
   readonly attribute RequestDestination destination;
-  readonly attribute USVString referrer;
+  readonly attribute UTF8String referrer;
   [BinaryName="referrerPolicy_"]
   readonly attribute ReferrerPolicy referrerPolicy;
   readonly attribute RequestMode mode;
@@ -28,6 +36,9 @@ interface Request {
   readonly attribute RequestCache cache;
   readonly attribute RequestRedirect redirect;
   readonly attribute DOMString integrity;
+
+  [Pref="dom.fetchKeepalive.enabled"]
+  readonly attribute boolean keepalive;
 
   // If a main-thread fetch() promise rejects, the error passed will be a
   // nsresult code.
@@ -51,16 +62,26 @@ dictionary RequestInit {
   ByteString method;
   HeadersInit headers;
   BodyInit? body;
-  USVString referrer;
+  UTF8String referrer;
   ReferrerPolicy referrerPolicy;
   RequestMode mode;
+  /**
+   * If not set, defaults to "same-origin", except for system principal (chrome)
+   * requests where the default is "omit".
+   */
   RequestCredentials credentials;
   RequestCache cache;
   RequestRedirect redirect;
   DOMString integrity;
 
+  [Pref="dom.fetchKeepalive.enabled"]
+  boolean keepalive;
+
   [ChromeOnly]
   boolean mozErrors;
+
+  [ChromeOnly]
+  Principal triggeringPrincipal;
 
   AbortSignal? signal;
 
@@ -74,7 +95,7 @@ dictionary RequestInit {
 enum RequestDestination {
   "",
   "audio", "audioworklet", "document", "embed", "font", "frame", "iframe",
-  "image", "manifest", "object", "paintworklet", "report", "script",
+  "image", "json", "manifest", "object", "paintworklet", "report", "script",
   "sharedworker", "style",  "track", "video", "worker", "xslt"
 };
 

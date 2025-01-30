@@ -21,7 +21,7 @@
         </menulist>
       </hbox>
       <checkbox id="searchShowSearchTermCheckbox"
-                data-l10n-id="search-show-search-term-option"
+                data-l10n-id="search-show-search-term-option-2"
                 preference="browser.urlbar.showSearchTerms.enabled"
                 hidden="true" />
       <checkbox id="browserSeparateDefaultEngine"
@@ -53,7 +53,7 @@
         <checkbox id="showSearchSuggestionsPrivateWindows"
                   data-l10n-id="search-show-suggestions-private-windows"/>
         <hbox align="center" id="showTrendingSuggestionsBox">
-          <checkbox id="showTrendingSuggestions" data-l10n-id="search-show-trending-suggestions" preference="browser.urlbar.suggest.trending" class="tail-with-learn-more" />
+          <checkbox id="showTrendingSuggestions" data-l10n-id="addressbar-locbar-showtrendingsuggestions-option" preference="browser.urlbar.suggest.trending" class="tail-with-learn-more" />
           <html:a is="moz-support-link" support-page="google-trending-searches-on-awesomebar" />
         </hbox>
         <hbox id="urlBarSuggestionPermanentPBLabel"
@@ -128,14 +128,8 @@
             <html:moz-toggle id="firefoxSuggestDataCollectionSearchToggle"
                              preference="browser.urlbar.quicksuggest.dataCollection.enabled"
                              data-l10n-id="addressbar-firefox-suggest-data-collection"
-                             data-l10n-attrs="label, description">
-              <html:a slot="support-link"
-                      is="moz-support-link"
-                      id="firefoxSuggestDataCollectionLearnMoreSearch"
-                      class="learnMore firefoxSuggestLearnMore"
-                      data-l10n-id="addressbar-locbar-firefox-suggest-learn-more"
-                      support-page="firefox-suggest"
-              />
+                             data-l10n-attrs="label, description"
+                             support-page="firefox-suggest">
             </html:moz-toggle>
         </vbox>
         <hbox id="dismissedSuggestions" align="center">

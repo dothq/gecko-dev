@@ -12,7 +12,7 @@ Services.scriptloader.loadSubScript(
 
 ChromeUtils.defineESModuleGetters(this, {
   CONTEXTUAL_SERVICES_PING_TYPES:
-    "resource:///modules/PartnerLinkAttribution.jsm",
+    "resource:///modules/PartnerLinkAttribution.sys.mjs",
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
   TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
   UrlbarProviderQuickSuggest:
@@ -102,8 +102,6 @@ async function setUpTelemetryTest({
       // button and closes the new tab, which interferes with the expected
       // indexes of quick suggest results, so disable them.
       ["browser.urlbar.suggest.openpage", false],
-      // Disable the persisted-search-terms search tip because it can interfere.
-      ["browser.urlbar.tipShownCount.searchTip_persist", 999],
     ],
   });
 
@@ -136,10 +134,6 @@ async function setUpTelemetryTest({
  *   An object describing the expected impression-only telemetry, i.e.,
  *   telemetry recorded when an impression occurs but not a click. It must have
  *   the following properties:
- *     {object} scalars
- *       An object that maps expected scalar names to values.
- *     {object} event
- *       The expected recorded event.
  *     {object} ping
  *       The expected recorded custom telemetry ping. If no ping is expected,
  *       leave this undefined or pass null.
@@ -155,10 +149,6 @@ async function setUpTelemetryTest({
  *       A command name or array; this is passed directly to
  *       `UrlbarTestUtils.openResultMenuAndClickItem()` as the `commandOrArray`
  *       arg, so see its documentation for details.
- *     {object} scalars
- *       An object that maps expected scalar names to values.
- *     {object} event
- *       The expected recorded event.
  *     {Array} pings
  *       A list of expected recorded custom telemetry pings. If no pings are
  *       expected, pass an empty array.
@@ -191,9 +181,6 @@ async function doTelemetryTest({
       fireInputEvent: true,
     }),
 }) {
-  Services.telemetry.clearScalars();
-  Services.telemetry.clearEvents();
-
   await doImpressionOnlyTest({
     index,
     suggestion,
@@ -243,10 +230,6 @@ async function doTelemetryTest({
  * @param {object} options.expected
  *   An object describing the expected impression-only telemetry. It must have
  *   the following properties:
- *     {object} scalars
- *       An object that maps expected scalar names to values.
- *     {object} event
- *       The expected recorded event.
  *     {object} ping
  *       The expected recorded custom telemetry ping. If no ping is expected,
  *       leave this undefined or pass null.
@@ -261,8 +244,6 @@ async function doImpressionOnlyTest({
   showSuggestion,
 }) {
   info("Starting impression-only test");
-
-  Services.telemetry.clearEvents();
 
   let expectedPings = expected.ping ? [expected.ping] : [];
   let gleanPingCount = watchGleanPings(expectedPings);
@@ -325,13 +306,6 @@ async function doImpressionOnlyTest({
   info("Waiting for page to load after clicking different row");
   await loadPromise;
 
-  // Check telemetry.
-  info("Checking scalars. Expected: " + JSON.stringify(expected.scalars));
-  QuickSuggestTestUtils.assertScalars(expected.scalars);
-
-  info("Checking events. Expected: " + JSON.stringify([expected.event]));
-  QuickSuggestTestUtils.assertEvents([expected.event]);
-
   Assert.equal(
     expectedPings.length,
     gleanPingCount.value,
@@ -361,10 +335,6 @@ async function doImpressionOnlyTest({
  * @param {object} options.expected
  *   An object describing the telemetry that's expected to be recorded when the
  *   selectable element is picked. It must have the following properties:
- *     {object} scalars
- *       An object that maps expected scalar names to values.
- *     {object} event
- *       The expected recorded event.
  *     {Array} pings
  *       A list of expected recorded custom telemetry pings. If no pings are
  *       expected, leave this undefined or pass an empty array.
@@ -379,8 +349,6 @@ async function doClickTest({
   showSuggestion,
 }) {
   info("Starting click test");
-
-  Services.telemetry.clearEvents();
 
   let expectedPings = expected.pings ?? [];
   let gleanPingCount = watchGleanPings(expectedPings);
@@ -403,12 +371,6 @@ async function doClickTest({
   info("Waiting for load");
   await loadPromise;
   await TestUtils.waitForTick();
-
-  info("Checking scalars. Expected: " + JSON.stringify(expected.scalars));
-  QuickSuggestTestUtils.assertScalars(expected.scalars);
-
-  info("Checking events. Expected: " + JSON.stringify([expected.event]));
-  QuickSuggestTestUtils.assertEvents([expected.event]);
 
   Assert.equal(
     expectedPings.length,
@@ -441,10 +403,6 @@ async function doClickTest({
  * @param {object} options.expected
  *   An object describing the telemetry that's expected to be recorded when the
  *   selectable element is picked. It must have the following properties:
- *     {object} scalars
- *       An object that maps expected scalar names to values.
- *     {object} event
- *       The expected recorded event.
  *     {Array} pings
  *       A list of expected recorded custom telemetry pings. If no pings are
  *       expected, leave this undefined or pass an empty array.
@@ -460,8 +418,6 @@ async function doCommandTest({
   showSuggestion,
 }) {
   info("Starting command test: " + JSON.stringify({ commandOrArray }));
-
-  Services.telemetry.clearEvents();
 
   let expectedPings = expected.pings ?? [];
   let gleanPingCount = watchGleanPings(expectedPings);
@@ -481,8 +437,8 @@ async function doCommandTest({
       : commandOrArray[commandOrArray.length - 1];
 
   let loadPromise;
-  if (command == "help") {
-    // We assume clicking "help" will load a page in a new tab.
+  if (command == "help" || command == "manage") {
+    // We assume clicking this command will load a page in a new tab.
     loadPromise = BrowserTestUtils.waitForNewTab(gBrowser);
   }
 
@@ -496,17 +452,11 @@ async function doCommandTest({
     info("Waiting for load");
     await loadPromise;
     await TestUtils.waitForTick();
-    if (command == "help") {
-      info("Closing help tab");
+    if (command == "help" || command == "manage") {
+      info("Closing help or manage tab");
       BrowserTestUtils.removeTab(gBrowser.selectedTab);
     }
   }
-
-  info("Checking scalars. Expected: " + JSON.stringify(expected.scalars));
-  QuickSuggestTestUtils.assertScalars(expected.scalars);
-
-  info("Checking events. Expected: " + JSON.stringify([expected.event]));
-  QuickSuggestTestUtils.assertEvents([expected.event]);
 
   Assert.equal(
     expectedPings.length,
@@ -520,6 +470,45 @@ async function doCommandTest({
   await PlacesUtils.history.clear();
 
   info("Finished command test: " + JSON.stringify({ commandOrArray }));
+}
+
+/*
+ * Do test the "Manage" result menu item.
+ *
+ * @param {object} options
+ *   Options
+ * @param {number} options.index
+ *   The index of the suggestion that will be checked in the results list.
+ * @param {number} options.input
+ *   The input value on the urlbar.
+ */
+async function doManageTest({ index, input }) {
+  await BrowserTestUtils.withNewTab({ gBrowser }, async browser => {
+    await UrlbarTestUtils.promiseAutocompleteResultPopup({
+      window,
+      value: input,
+    });
+
+    const managePage = "about:preferences#search";
+    let onManagePageLoaded = BrowserTestUtils.browserLoaded(
+      browser,
+      false,
+      managePage
+    );
+    // Click the command.
+    await UrlbarTestUtils.openResultMenuAndClickItem(window, "manage", {
+      resultIndex: index,
+    });
+    await onManagePageLoaded;
+
+    Assert.equal(
+      browser.currentURI.spec,
+      managePage,
+      "The manage page is loaded"
+    );
+
+    await UrlbarTestUtils.promisePopupClose(window);
+  });
 }
 
 /**
@@ -634,128 +623,4 @@ function _assertGleanPing(ping) {
       `Glean metric field ${key} should be the expected value`
     );
   }
-}
-
-let gAddTasksWithRustSetup;
-
-/**
- * Adds two tasks: One with the Rust backend disabled and one with it enabled.
- * The names of the task functions will be the name of the passed-in task
- * function appended with "_rustDisabled" and "_rustEnabled". If the passed-in
- * task doesn't have a name, "anonymousTask" will be used.
- *
- * Call this with the usual `add_task()` arguments. Additionally, an object with
- * the following properties can be specified as any argument:
- *
- * {boolean} skip_if_rust_enabled
- *   If true, a "_rustEnabled" task won't be added. Useful when Rust is enabled
- *   by default but the task doesn't make sense with Rust and you still want to
- *   test some behavior when Rust is disabled.
- *
- * @param {...any} args
- *   The usual `add_task()` arguments.
- */
-function add_tasks_with_rust(...args) {
-  let skipIfRustEnabled = false;
-  let i = args.findIndex(a => a.skip_if_rust_enabled);
-  if (i >= 0) {
-    skipIfRustEnabled = true;
-    args.splice(i, 1);
-  }
-
-  let taskFnIndex = args.findIndex(a => typeof a == "function");
-  let taskFn = args[taskFnIndex];
-
-  for (let rustEnabled of [false, true]) {
-    let newTaskName =
-      (taskFn.name || "anonymousTask") +
-      (rustEnabled ? "_rustEnabled" : "_rustDisabled");
-
-    if (rustEnabled && skipIfRustEnabled) {
-      info(
-        "add_tasks_with_rust: Skipping due to skip_if_rust_enabled: " +
-          newTaskName
-      );
-      continue;
-    }
-
-    let newTaskFn = async (...taskFnArgs) => {
-      info("add_tasks_with_rust: Setting rustEnabled: " + rustEnabled);
-      UrlbarPrefs.set("quicksuggest.rustEnabled", rustEnabled);
-      info("add_tasks_with_rust: Done setting rustEnabled: " + rustEnabled);
-
-      // The current backend may now start syncing, so wait for it to finish.
-      info("add_tasks_with_rust: Forcing sync");
-      await QuickSuggestTestUtils.forceSync();
-      info("add_tasks_with_rust: Done forcing sync");
-
-      if (gAddTasksWithRustSetup) {
-        info("add_tasks_with_rust: Calling setup function");
-        await gAddTasksWithRustSetup();
-        info("add_tasks_with_rust: Done calling setup function");
-      }
-
-      let rv;
-      try {
-        info(
-          "add_tasks_with_rust: Calling original task function: " + taskFn.name
-        );
-        rv = await taskFn(...taskFnArgs);
-      } catch (e) {
-        // Clearly report any unusual errors to make them easier to spot and to
-        // make the flow of the test clearer. The harness throws NS_ERROR_ABORT
-        // when a normal assertion fails, so don't report that.
-        if (e.result != Cr.NS_ERROR_ABORT) {
-          Assert.ok(
-            false,
-            "add_tasks_with_rust: The original task function threw an error: " +
-              e
-          );
-        }
-        throw e;
-      } finally {
-        info(
-          "add_tasks_with_rust: Done calling original task function: " +
-            taskFn.name
-        );
-        info("add_tasks_with_rust: Clearing rustEnabled");
-        UrlbarPrefs.clear("quicksuggest.rustEnabled");
-        info("add_tasks_with_rust: Done clearing rustEnabled");
-
-        // The current backend may now start syncing, so wait for it to finish.
-        info("add_tasks_with_rust: Forcing sync");
-        await QuickSuggestTestUtils.forceSync();
-        info("add_tasks_with_rust: Done forcing sync");
-      }
-      return rv;
-    };
-
-    Object.defineProperty(newTaskFn, "name", { value: newTaskName });
-
-    let addTaskArgs = [];
-    for (let j = 0; j < args.length; j++) {
-      addTaskArgs[j] =
-        j == taskFnIndex
-          ? newTaskFn
-          : Cu.cloneInto(args[j], this, { cloneFunctions: true });
-    }
-    add_task(...addTaskArgs);
-  }
-}
-
-/**
- * Registers a setup function that `add_tasks_with_rust()` will await before
- * calling each of your original tasks. Call this at most once in your test file
- * (i.e., in `add_setup()`). This is useful when enabling/disabling Rust has
- * side effects related to your particular test that need to be handled or
- * awaited for each of your tasks. On the other hand, if only one or two of your
- * tasks need special setup, do it directly in those tasks instead of using
- * this. The passed-in `setupFn` is automatically unregistered on cleanup.
- *
- * @param {Function} setupFn
- *   A function that will be awaited before your original tasks are called.
- */
-function registerAddTasksWithRustSetup(setupFn) {
-  gAddTasksWithRustSetup = setupFn;
-  registerCleanupFunction(() => (gAddTasksWithRustSetup = null));
 }

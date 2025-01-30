@@ -9,6 +9,7 @@
 #include "mozilla/gfx/Point.h"
 #include "mozilla/layers/LayersSurfaces.h"
 #include "mozilla/webgpu/ffi/wgpu.h"
+#include "mozilla/webgpu/WebGPUTypes.h"
 
 namespace mozilla {
 
@@ -18,11 +19,16 @@ class Shmem;
 
 namespace webgpu {
 
+class ExternalTextureDMABuf;
+class ExternalTextureMacIOSurface;
+class WebGPUParent;
+
 // A texture that can be used by the WebGPU implementation but is created and
 // owned by Gecko
 class ExternalTexture {
  public:
   static UniquePtr<ExternalTexture> Create(
+      WebGPUParent* aParent, const ffi::WGPUDeviceId aDeviceId,
       const uint32_t aWidth, const uint32_t aHeight,
       const struct ffi::WGPUTextureFormat aFormat,
       const ffi::WGPUTextureUsages aUsage);
@@ -39,6 +45,12 @@ class ExternalTexture {
 
   virtual void GetSnapshot(const ipc::Shmem& aDestShmem,
                            const gfx::IntSize& aSize) {}
+
+  virtual ExternalTextureDMABuf* AsExternalTextureDMABuf() { return nullptr; }
+
+  virtual ExternalTextureMacIOSurface* AsExternalTextureMacIOSurface() {
+    return nullptr;
+  }
 
   gfx::IntSize GetSize() { return gfx::IntSize(mWidth, mHeight); }
 

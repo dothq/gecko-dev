@@ -43,13 +43,24 @@ interface MozDocumentMatcher {
   readonly attribute boolean checkPermissions;
 
   /**
-   * If true, this (misleadingly-named, but inherited from Chrome) attribute
-   * causes us to match frames with URLs which inherit a principal that
-   * matches one of the match patterns, such as about:blank or about:srcdoc.
+   * If true, this causes us to match about:blank and about:srcdoc documents by
+   * the URL of the inherit principal, usually the initial URL of the document
+   * that triggered the navigation.
    * If false, we only match frames with an explicit matching URL.
    */
   [Constant]
   readonly attribute boolean matchAboutBlank;
+
+  /**
+   * If true, this causes us to match documents with opaque URLs (such as
+   * about:blank, about:srcdoc, data:, blob:, and sandboxed versions thereof)
+   * by the document principal's origin URI. In case of null principals, their
+   * precursor is used for matching.
+   * When true, matchAboutBlank is implicitly true.
+   * If false, we only match frames with an explicit matching URL.
+   */
+  [Constant]
+  readonly attribute boolean matchOriginAsFallback;
 
   /**
    * The outer window ID of the frame in which to run the script, or 0 if it
@@ -75,6 +86,14 @@ interface MozDocumentMatcher {
   readonly attribute MatchPatternSet? excludeMatches;
 
   /**
+   * Whether the matcher is used by the MV3 userScripts API.
+   * If true, URLs are matched when they match "matches" OR "includeGlobs",
+   * instead of the usual AND.
+   */
+  [Constant]
+  readonly attribute boolean isUserScript;
+
+  /**
    * The originAttributesPattern for which this script should be enabled for.
    */
   [Constant, Throws]
@@ -96,6 +115,8 @@ dictionary MozDocumentMatcherInit {
 
   boolean matchAboutBlank = false;
 
+  boolean matchOriginAsFallback = false;
+
   unsigned long long? frameID = null;
 
   required MatchPatternSetOrStringSequence matches;
@@ -105,6 +126,8 @@ dictionary MozDocumentMatcherInit {
   sequence<MatchGlobOrString>? includeGlobs = null;
 
   sequence<MatchGlobOrString>? excludeGlobs = null;
+
+  boolean isUserScript = false;
 
   boolean hasActiveTabPermission = false;
 };
@@ -133,6 +156,32 @@ enum ContentScriptRunAt {
   "document_idle",
 };
 
+/**
+ * Describes the world where a script should run.
+ */
+enum ContentScriptExecutionWorld {
+  /**
+   * The default execution environment of content scripts.
+   * The name refers to "isolated world", which is a concept from Chromium and
+   * WebKit, used to enforce isolation of the JavaScript execution environments
+   * of content scripts and web pages.
+   *
+   * Not supported when isUserScript=true.
+   */
+  "ISOLATED",
+  /**
+   * The execution environment of the web page.
+   */
+  "MAIN",
+  /**
+   * The execution environment of a sandbox running scripts registered through
+   * the MV3 userScripts API.
+   *
+   * Only supported when isUserScript=true.
+   */
+  "USER_SCRIPT",
+};
+
 [ChromeOnly, Exposed=Window]
 interface WebExtensionContentScript : MozDocumentMatcher {
   [Throws]
@@ -151,6 +200,19 @@ interface WebExtensionContentScript : MozDocumentMatcher {
   readonly attribute ContentScriptRunAt runAt;
 
   /**
+   * The world where the script should run.
+   */
+  [Constant]
+  readonly attribute ContentScriptExecutionWorld world;
+
+  /**
+   * When world is "USER_SCRIPT", worldId can be used to specify a specific
+   * extension-specific sandbox to execute in, instead of the default one.
+   */
+  [Constant]
+  readonly attribute DOMString? worldId;
+
+  /**
    * A set of paths, relative to the extension root, of CSS sheets to inject
    * into matching pages.
    */
@@ -167,6 +229,10 @@ interface WebExtensionContentScript : MozDocumentMatcher {
 
 dictionary WebExtensionContentScriptInit : MozDocumentMatcherInit {
   ContentScriptRunAt runAt = "document_idle";
+
+  ContentScriptExecutionWorld world = "ISOLATED";
+
+  DOMString? worldId = null;
 
   sequence<DOMString> cssPaths = [];
 

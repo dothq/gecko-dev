@@ -13,8 +13,6 @@ use std::time::Instant;
 
 use crate::maybe_cached::MaybeCached;
 
-pub struct Conn(rusqlite::Connection);
-
 /// This trait exists so that we can use these helpers on `rusqlite::{Transaction, Connection}`.
 /// Note that you must import ConnExt in order to call these methods on anything.
 pub trait ConnExt {
@@ -201,7 +199,7 @@ pub trait ConnExt {
     }
 
     // This should probably have a longer name...
-    /// Like `query_row_and_then_cachable` but returns None instead of erroring
+    /// Like `query_row_and_then_cacheable` but returns None instead of erroring
     /// if no such row exists.
     fn try_query_row<T, E, P, F>(
         &self,
@@ -254,14 +252,14 @@ impl ConnExt for Connection {
     }
 }
 
-impl<'conn> ConnExt for Transaction<'conn> {
+impl ConnExt for Transaction<'_> {
     #[inline]
     fn conn(&self) -> &Connection {
         self
     }
 }
 
-impl<'conn> ConnExt for Savepoint<'conn> {
+impl ConnExt for Savepoint<'_> {
     #[inline]
     fn conn(&self) -> &Connection {
         self
@@ -294,7 +292,7 @@ impl<'conn> ConnExt for Savepoint<'conn> {
 /// crate. Aside from type's name and location (and the fact that `rusqlite`'s
 /// detects slightly more misuse at compile time, and has more features), the
 /// main difference is: `rusqlite`'s does not track when a transaction began,
-/// which unfortunatly seems to be used by the coop-transaction management in
+/// which unfortunately seems to be used by the coop-transaction management in
 /// places in some fashion.
 ///
 /// There are at least two options for how to fix this:
@@ -367,7 +365,7 @@ impl<'conn> UncheckedTransaction<'conn> {
     }
 }
 
-impl<'conn> Deref for UncheckedTransaction<'conn> {
+impl Deref for UncheckedTransaction<'_> {
     type Target = Connection;
 
     #[inline]
@@ -376,7 +374,7 @@ impl<'conn> Deref for UncheckedTransaction<'conn> {
     }
 }
 
-impl<'conn> Drop for UncheckedTransaction<'conn> {
+impl Drop for UncheckedTransaction<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.finish_() {
             log::warn!("Error dropping an unchecked transaction: {}", e);
@@ -384,7 +382,7 @@ impl<'conn> Drop for UncheckedTransaction<'conn> {
     }
 }
 
-impl<'conn> ConnExt for UncheckedTransaction<'conn> {
+impl ConnExt for UncheckedTransaction<'_> {
     #[inline]
     fn conn(&self) -> &Connection {
         self

@@ -9,11 +9,6 @@
 #endif
 
 #include "ecl-priv.h"
-#include "ecp.h"
-#include "mpi.h"
-#include "mplogic.h"
-#include "mpi-priv.h"
-#include "secmpi.h"
 #include "secitem.h"
 #include "secerr.h"
 #include "secport.h"
@@ -96,7 +91,7 @@ ec_Curve25519_pt_validate(const SECItem *px)
 }
 
 /*
- * scalar validation is not necessary. 
+ * scalar validation is not necessary.
  */
 SECStatus
 ec_Curve25519_scalar_validate(const SECItem *scalar)

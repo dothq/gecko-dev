@@ -21,7 +21,7 @@
     <hbox align="start">
       <image id="trackingProtectionShield"/>
       <description class="description-with-side-element" flex="1">
-        <html:span id="contentBlockingDescription" class="tail-with-learn-more" data-l10n-id="content-blocking-section-top-level-description"></html:span>
+        <html:span id="contentBlockingDescription" data-l10n-id="content-blocking-section-top-level-description"></html:span>
         <html:a is="moz-support-link"
                 id="contentBlockingLearnMore"
                 class="learnMore"
@@ -49,10 +49,10 @@
       </vbox>
       <vbox flex="1">
         <description>
-          <html:span class="tail-with-learn-more" data-l10n-id="content-blocking-rfp-incompatibility-warning"/>
+          <html:span data-l10n-id="content-blocking-rfp-incompatibility-warning"/>
           <html:a is="moz-support-link"
                   class="learnMore"
-                  support-page="firefox-protection-against-fingerprinting"
+                  support-page="resist-fingerprinting"
           />
         </description>
       </vbox>
@@ -128,7 +128,7 @@
               <vbox id="etpStandardTCPBox" class="content-blocking-warning info-box-container">
                 <label class="content-blocking-warning-title" data-l10n-id="content-blocking-etp-standard-tcp-title"/>
                 <description>
-                  <html:span class="tail-with-learn-more" data-l10n-id="content-blocking-etp-standard-tcp-rollout-description"></html:span>
+                  <html:span data-l10n-id="content-blocking-etp-standard-tcp-rollout-description"></html:span>
                   <html:a is="moz-support-link"
                           id="tcp-learn-more-link"
                           class="learnMore"
@@ -224,7 +224,7 @@
                   <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
                 </hbox>
                 <description class="indent">
-                  <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
+                  <html:span class="content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
                   <html:a is="moz-support-link"
                           class="learnMore"
                           data-l10n-id="content-blocking-warning-learn-how"
@@ -343,7 +343,7 @@
                   <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
                 </hbox>
                 <description class="indent">
-                  <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
+                  <html:span class="content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
                   <html:a is="moz-support-link"
                           class="learnMore"
                           data-l10n-id="content-blocking-warning-learn-how"
@@ -358,10 +358,10 @@
     </vbox>
   </vbox>
 </groupbox>
-<groupbox id="nonTechnicalPrivacyGroup" data-category="panePrivacy" data-subcategory="nontechnicalprivacy" hidden="true">
+<groupbox id="nonTechnicalPrivacyGroup" data-category="panePrivacy" hidden="true">
   <label id="nonTechnicalPrivacyHeader"><html:h2 data-l10n-id="non-technical-privacy-header"/></label>
   <vbox id="nonTechnicalPrivacyBox">
-    <hbox id="globalPrivacyControlBox" flex="1" align="center" hidden="true">
+    <hbox id="globalPrivacyControlBox" flex="1" align="center">
       <checkbox id="globalPrivacyControlCheckbox"
               class="tail-with-learn-more"
               preference="privacy.globalprivacycontrol.enabled"
@@ -371,27 +371,11 @@
           id="globalPrivacyControlLearnMoreLink"
           support-page="global-privacy-control" />
     </hbox>
-    <vbox id="legacyDoNotTrackBox">
-      <label>
-        <label class="tail-with-learn-more" data-l10n-id="do-not-track-description" id="doNotTrackDesc"></label>
+    <hbox id="doNotTrackBox" flex="1" align="center" hidden="true">
       <html:a is="moz-support-link"
-              class="learnMore"
-              support-page="how-do-i-turn-do-not-track-feature"
-      />
-      </label>
-      <radiogroup id="doNotTrackRadioGroup" aria-labelledby="doNotTrackDesc" preference="privacy.donottrackheader.enabled">
-        <radio value="true" data-l10n-id="do-not-track-option-always"/>
-        <radio value="false" data-l10n-id="do-not-track-option-default-content-blocking-known"/>
-      </radiogroup>
-    </vbox>
-    <hbox id="doNotTrackBox" flex="1" align="center">
-      <checkbox id="doNotTrackCheckbox"
-              class="tail-with-learn-more"
-              preference="privacy.donottrackheader.enabled"
-              data-l10n-id="do-not-track-description2" />
-      <html:a is="moz-support-link"
-          id="doNotTrackLearnMoreLink"
-          support-page="how-do-i-turn-do-not-track-feature" />
+          id="doNotTrackRemoval"
+          support-page="how-do-i-turn-do-not-track-feature"
+          data-l10n-id="do-not-track-removal" />
     </hbox>
   </vbox>
 </groupbox>
@@ -403,7 +387,7 @@
   <hbox data-subcategory="sitedata" align="baseline">
     <vbox flex="1">
       <description class="description-with-side-element description-deemphasized" flex="1">
-        <html:span id="totalSiteDataSize" class="tail-with-learn-more"></html:span>
+        <html:span id="totalSiteDataSize"></html:span>
         <html:a is="moz-support-link"
                 id="siteDataLearnMoreLink"
                 data-l10n-id="sitedata-learn-more"
@@ -464,7 +448,7 @@
   <vbox flex="1">
     <hbox>
       <description class="description-deemphasized">
-        <html:span id="cookieBannerReductionExplanation" class="tail-with-learn-more" data-l10n-id="cookie-banner-blocker-description" ></html:span>
+        <html:span id="cookieBannerReductionExplanation" data-l10n-id="cookie-banner-blocker-description" ></html:span>
         <html:a is="moz-support-link" id="cookieBannerHandlingLearnMore" class="learnMore"  data-l10n-id="cookie-banner-learn-more" support-page="cookie-banner-reduction"/>
       </description>
     </hbox>
@@ -536,8 +520,10 @@
       <checkbox id="relayIntegration"
                 class="tail-with-learn-more"
                 data-l10n-id="preferences-relay-integration-checkbox2"/>
-      <html:a id="relayIntegrationLearnMoreLink" class="learnMore"
-             data-l10n-id="relay-integration-learn-more-link"/>
+      <html:a is="moz-support-link"
+              id="relayIntegrationLearnMoreLink"
+              class="learnMore"
+              data-l10n-id="relay-integration-learn-more-link"/>
     </hbox>
     <hbox class="indent" id="breachAlertsBox" flex="1" align="center">
       <checkbox id="breachAlerts"
@@ -549,6 +535,12 @@
               data-l10n-id="forms-breach-alerts-learn-more-link"
               support-page="lockwise-alerts"
       />
+    </hbox>
+  </vbox>
+  <vbox>
+    <hbox id="osReauthRow" align="center">
+      <checkbox id="osReauthCheckbox"
+                data-l10n-id="forms-os-reauth"/>
     </hbox>
   </vbox>
   <vbox>
@@ -920,10 +912,11 @@
   <label class="search-header" hidden="true"><html:h2 data-l10n-id="collection-header2" data-l10n-attrs="searchkeywords"/></label>
 
   <description class="description-deemphasized">
-    <html:span class="tail-with-learn-more" data-l10n-id="collection-description"/>
+    <html:span data-l10n-id="collection-description"/>
     <html:a id="dataCollectionPrivacyNotice"
-           class="learnMore"
-           data-l10n-id="collection-privacy-notice"/>
+            class="learnMore"
+            target="_blank"
+            data-l10n-id="collection-privacy-notice"/>
   </description>
 #ifdef MOZ_DATA_REPORTING
   <hbox id="telemetry-container" class="info-box-container smaller-font-size" hidden="true">
@@ -931,36 +924,34 @@
       <html:img class="info-icon"></html:img>
     </hbox>
     <description>
-      <html:span id="telemetryDisabledDescription" class="tail-with-learn-more"
+      <html:span id="telemetryDisabledDescription"
                  data-l10n-id="collection-health-report-telemetry-disabled"/>
       <html:a is="moz-support-link"
-              id="telemetryDataDeletionLearnMore"
+              support-page="telemetry-clientid"
               class="learnMore"
               data-l10n-id="collection-health-report-telemetry-disabled-link"/>
     </description>
   </hbox>
   <vbox data-subcategory="reports">
-    <html:span flex="1">
+    <hbox>
       <checkbox id="submitHealthReportBox"
                 data-l10n-id="collection-health-report"
                 class="tail-with-learn-more"/>
       <html:a id="FHRLearnMore"
-             class="learnMore"
-             data-l10n-id="collection-health-report-link"/>
-      <vbox class="indent">
-        <hbox align="center">
-          <checkbox id="addonRecommendationEnabled"
-                    class="tail-with-learn-more"
-                    data-l10n-id="addon-recommendations"/>
-          <html:a is="moz-support-link"
-                  id="addonRecommendationLearnMore"
-                  class="learnMore"
-                  data-l10n-id="addon-recommendations-link"
-                  support-page="personalized-addons"
-          />
-        </hbox>
-      </vbox>
-    </html:span>
+              class="learnMore"
+              target="_blank"
+              data-l10n-id="collection-health-report-link"/>
+    </hbox>
+    <hbox class="indent">
+      <checkbox id="addonRecommendationEnabled"
+                class="tail-with-learn-more"
+                data-l10n-id="addon-recommendations"/>
+      <html:a is="moz-support-link"
+              id="addonRecommendationLearnMore"
+              class="learnMore"
+              data-l10n-id="addon-recommendations-link"
+              support-page="personalized-addons"/>
+    </hbox>
 #ifndef MOZ_TELEMETRY_REPORTING
   <description id="TelemetryDisabledDesc"
     class="indent tip-caption" control="telemetryGroup"
@@ -968,14 +959,14 @@
 #endif
 
 #ifdef MOZ_NORMANDY
-    <hbox align="center">
+    <hbox align="center" class="indent">
       <checkbox id="optOutStudiesEnabled"
                 class="tail-with-learn-more"
                 data-l10n-id="collection-studies"/>
       <html:a id="viewShieldStudies"
               href="about:studies"
-              useoriginprincipal="true"
               class="learnMore"
+              target="_blank"
               data-l10n-id="collection-studies-link"/>
     </hbox>
 #endif
@@ -999,14 +990,8 @@
     <html:moz-toggle id="firefoxSuggestDataCollectionPrivacyToggle"
                      preference="browser.urlbar.quicksuggest.dataCollection.enabled"
                      data-l10n-id="addressbar-firefox-suggest-data-collection"
-                     data-l10n-attrs="label, description">
-      <html:a slot="support-link"
-              is="moz-support-link"
-              id="firefoxSuggestDataCollectionLearnMorePrivacy"
-              class="learnMore firefoxSuggestLearnMore"
-              data-l10n-id="addressbar-locbar-firefox-suggest-learn-more"
-              support-page="firefox-suggest"
-      />
+                     data-l10n-attrs="label, description"
+                     support-page="firefox-suggest">
     </html:moz-toggle>
   </vbox>
   <vbox id="privacySegmentationSection" data-subcategory="privacy-segmentation" hidden="true">
@@ -1024,6 +1009,29 @@
     </radiogroup>
   </vbox>
 </groupbox>
+
+#ifdef MOZ_DATA_REPORTING
+<!-- Website Advertising Preferences -->
+<hbox id="websiteAdvertisingCategory"
+      class="subcategory"
+      hidden="true"
+      data-category="panePrivacy">
+  <html:h1 data-l10n-id="website-advertising-header"/>
+</hbox>
+
+<groupbox id="websiteAdvertisingGroup" data-category="panePrivacy" hidden="true">
+  <label class="search-header" searchkeywords="ppa" hidden="true"><html:h2 data-l10n-id="website-advertising-header"/></label>
+  <checkbox id="privateAttribution"
+            preference="dom.private-attribution.submission.enabled"
+            data-l10n-id="website-advertising-private-attribution"/>
+  <description class="indent tip-caption">
+    <html:span data-l10n-id="website-advertising-private-attribution-description"/>
+    <html:a is="moz-support-link"
+            class="learnMore"
+            support-page="privacy-preserving-attribution"/>
+  </description>
+</groupbox>
+#endif
 
 <hbox id="securityCategory"
       class="subcategory"
@@ -1119,7 +1127,7 @@
 <groupbox id="httpsOnlyBox" data-category="panePrivacy" hidden="true">
   <label><html:h2 data-l10n-id="httpsonly-header"/></label>
   <vbox data-subcategory="httpsonly" flex="1">
-    <description id="httpsOnlyDescription" class="description-deemphasized" data-l10n-id="httpsonly-description"/>
+    <description id="httpsOnlyDescription" class="description-deemphasized" data-l10n-id="httpsonly-description2"/>
     <html:a is="moz-support-link"
             id="httpsOnlyLearnMore"
             class="learnMore"
@@ -1130,13 +1138,13 @@
   <hbox>
     <radiogroup flex="1" id="httpsOnlyRadioGroup">
       <radio id="httpsOnlyRadioEnabled"
-              data-l10n-id="httpsonly-radio-enabled"
+              data-l10n-id="httpsonly-radio-enabled2"
               value="enabled"/>
       <radio id="httpsOnlyRadioEnabledPBM"
-              data-l10n-id="httpsonly-radio-enabled-pbm"
+              data-l10n-id="httpsonly-radio-enabled-pbm2"
               value="privateOnly"/>
       <radio id="httpsOnlyRadioDisabled"
-              data-l10n-id="httpsonly-radio-disabled"
+              data-l10n-id="httpsonly-radio-disabled2"
               value="disabled"/>
     </radiogroup>
     <vbox>
@@ -1182,21 +1190,18 @@
     <label class="doh-status-label" id="dohResolver"/>
     <label class="doh-status-label" id="dohSteeringStatus" data-l10n-id="preferences-doh-steering-status" hidden="true"/>
   </vbox>
-  <hbox id="dohExceptionBox">
-    <label flex="1" data-l10n-id="preferences-doh-exceptions-description"/>
-    <button id="dohExceptionsButton"
-            is="highlightable-button"
-            class="accessory-button"
-            data-l10n-id="preferences-doh-manage-exceptions"
-            search-l10n-ids="
-              permissions-doh-entry-field,
-              permissions-doh-add-exception.label,
-              permissions-doh-remove.label,
-              permissions-doh-remove-all.label,
-              permissions-exceptions-doh-window.title,
-              permissions-exceptions-manage-doh-desc,
-            "/>
-  </hbox>
+  <button id="dohExceptionsButton"
+          is="highlightable-button"
+          class="accessory-button"
+          data-l10n-id="preferences-doh-manage-exceptions"
+          search-l10n-ids="
+            permissions-doh-entry-field,
+            permissions-doh-add-exception.label,
+            permissions-doh-remove.label,
+            permissions-doh-remove-all.label,
+            permissions-exceptions-doh-window.title,
+            permissions-exceptions-manage-doh-desc,
+          "/>
   <vbox>
     <label><html:h2 id="dohGroupMessage" data-l10n-id="preferences-doh-group-message2"/></label>
     <vbox id="dohCategories">

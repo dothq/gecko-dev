@@ -16,9 +16,9 @@ use serde::{ser, Serialize, Serializer};
 
 // A test helper, used by the many test modules below.
 #[cfg(test)]
-fn assert_json<T: ?Sized>(v: &T, expected: serde_json::Value)
+fn assert_json<T>(v: &T, expected: serde_json::Value)
 where
-    T: serde::Serialize,
+    T: serde::Serialize + ?Sized,
 {
     assert_eq!(
         serde_json::to_value(v).expect("should get a value"),
@@ -36,6 +36,7 @@ struct WhenTook {
 
 /// What we track while recording 'when' and 'took. It serializes as a WhenTook,
 /// except when .finished() hasn't been called, in which case it panics.
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Stopwatch {
     Started(time::SystemTime, time::Instant),
@@ -781,8 +782,6 @@ impl SyncTelemetryPing {
     }
 }
 
-ffi_support::implement_into_ffi_by_json!(SyncTelemetryPing);
-
 #[cfg(test)]
 mod ping_tests {
     use super::*;
@@ -815,7 +814,7 @@ mod ping_tests {
     }
 }
 
-impl<'a> From<&'a Error> for SyncFailure {
+impl From<&Error> for SyncFailure {
     fn from(e: &Error) -> SyncFailure {
         match e {
             #[cfg(feature = "sync-client")]

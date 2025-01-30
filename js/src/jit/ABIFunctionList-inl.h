@@ -21,6 +21,7 @@
 #include "builtin/Object.h"            // js::ObjectClassToString
 #include "builtin/RegExp.h"            // js::RegExpPrototypeOptimizableRaw,
                                        // js::RegExpInstanceOptimizableRaw
+#include "builtin/Sorting.h"           // js::ArraySortData
 #include "builtin/TestingFunctions.h"  // js::FuzzilliHash*
 
 #include "irregexp/RegExpAPI.h"
@@ -41,15 +42,15 @@
 #include "js/Conversions.h"  // JS::ToInt32
 // JSJitGetterOp, JSJitSetterOp, JSJitMethodOp
 #include "js/experimental/JitInfo.h"
-#include "js/Utility.h"  // js_free
 
 #include "proxy/Proxy.h"  // js::ProxyGetProperty
 
-#include "vm/ArgumentsObject.h"  // js::ArgumentsObject::finishForIonPure
-#include "vm/Interpreter.h"      // js::TypeOfObject
-#include "vm/NativeObject.h"     // js::NativeObject
-#include "vm/RegExpShared.h"     // js::ExecuteRegExpAtomRaw
-#include "wasm/WasmBuiltins.h"   // js::wasm::*
+#include "vm/ArgumentsObject.h"   // js::ArgumentsObject::finishForIonPure
+#include "vm/Interpreter.h"       // js::TypeOfObject
+#include "vm/NativeObject.h"      // js::NativeObject
+#include "vm/RegExpShared.h"      // js::ExecuteRegExpAtomRaw
+#include "vm/TypedArrayObject.h"  // js::TypedArraySortFromJit
+#include "wasm/WasmBuiltins.h"    // js::wasm::*
 
 #include "builtin/Boolean-inl.h"  // js::EmulatesUndefined
 
@@ -103,13 +104,15 @@ namespace jit {
   _(js::ArgumentsObject::finishForIonPure)                            \
   _(js::ArgumentsObject::finishInlineForIonPure)                      \
   _(js::ArrayShiftMoveElements)                                       \
+  _(js::ArraySortData::sortArrayWithComparator)                       \
+  _(js::ArraySortData::sortTypedArrayWithComparator)                  \
+  _(js::ArraySortFromJit)                                             \
   _(js::ecmaAtan2)                                                    \
   _(js::ecmaHypot)                                                    \
   _(js::ecmaPow)                                                      \
   _(js::EmulatesUndefined)                                            \
   _(js::EmulatesUndefinedCheckFuse)                                   \
   _(js::ExecuteRegExpAtomRaw)                                         \
-  _(js_free)                                                          \
   _(js::hypot3)                                                       \
   _(js::hypot4)                                                       \
   _(js::Interpret)                                                    \
@@ -140,8 +143,11 @@ namespace jit {
   _(js::jit::NumberBigIntCompare<ComparisonKind::LessThan>)           \
   _(js::jit::NumberBigIntCompare<ComparisonKind::GreaterThanOrEqual>) \
   _(js::jit::BigIntNumberCompare<ComparisonKind::GreaterThanOrEqual>) \
+  _(js::jit::DateFillLocalTimeSlots)                                  \
   _(js::jit::EqualStringsHelperPure)                                  \
   _(js::jit::FinishBailoutToBaseline)                                 \
+  _(js::jit::Float16ToFloat32)                                        \
+  _(js::jit::Float32ToFloat16)                                        \
   _(js::jit::FrameIsDebuggeeCheck)                                    \
   _(js::jit::GetContextSensitiveInterpreterStub)                      \
   _(js::jit::GetIndexFromString)                                      \
@@ -173,6 +179,7 @@ namespace jit {
   _(js::jit::StringTrimEndIndex)                                      \
   _(js::jit::StringTrimStartIndex)                                    \
   _(js::jit::TypeOfNameObject)                                        \
+  _(js::jit::TypeOfEqObject)                                          \
   _(js::jit::WrapObjectPure)                                          \
   ABIFUNCTION_FUZZILLI_LIST(_)                                        \
   _(js::MapIteratorObject::next)                                      \
@@ -185,8 +192,10 @@ namespace jit {
   _(js::ProxyGetProperty)                                             \
   _(js::RegExpInstanceOptimizableRaw)                                 \
   _(js::RegExpPrototypeOptimizableRaw)                                \
+  _(js::RoundFloat16)                                                 \
   _(js::SetIteratorObject::next)                                      \
   _(js::StringToNumberPure)                                           \
+  _(js::TypedArraySortFromJit)                                        \
   _(js::TypeOfObject)                                                 \
   _(mozilla::SIMD::memchr16)                                          \
   _(mozilla::SIMD::memchr2x16)                                        \
@@ -199,7 +208,11 @@ namespace jit {
 // is not overloaded, you should prefer adding the function to
 // ABIFUNCTION_LIST instead. This list must be sorted with the name of the C++
 // function.
-#define ABIFUNCTION_AND_TYPE_LIST(_) _(JS::ToInt32, int32_t (*)(double))
+#define ABIFUNCTION_AND_TYPE_LIST(_)                    \
+  _(JS::ToInt32, int32_t (*)(double))                   \
+  _(js::jit::RoundFloat16ToFloat32, float (*)(int32_t)) \
+  _(js::jit::RoundFloat16ToFloat32, float (*)(float))   \
+  _(js::jit::RoundFloat16ToFloat32, float (*)(double))
 
 // List of all ABI function signature which are using a computed function
 // pointer instead of a statically known function pointer.

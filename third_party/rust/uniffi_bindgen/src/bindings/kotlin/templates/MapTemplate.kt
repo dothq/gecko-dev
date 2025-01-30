@@ -1,5 +1,9 @@
 {%- let key_type_name = key_type|type_name(ci) %}
 {%- let value_type_name = value_type|type_name(ci) %}
+
+/**
+ * @suppress
+ */
 public object {{ ffi_converter_name }}: FfiConverterRustBuffer<Map<{{ key_type_name }}, {{ value_type_name }}>> {
     override fun read(buf: ByteBuffer): Map<{{ key_type_name }}, {{ value_type_name }}> {
         val len = buf.getInt()
@@ -12,8 +16,8 @@ public object {{ ffi_converter_name }}: FfiConverterRustBuffer<Map<{{ key_type_n
         }
     }
 
-    override fun allocationSize(value: Map<{{ key_type_name }}, {{ value_type_name }}>): Int {
-        val spaceForMapSize = 4
+    override fun allocationSize(value: Map<{{ key_type_name }}, {{ value_type_name }}>): ULong {
+        val spaceForMapSize = 4UL
         val spaceForChildren = value.map { (k, v) ->
             {{ key_type|allocation_size_fn }}(k) +
             {{ value_type|allocation_size_fn }}(v)

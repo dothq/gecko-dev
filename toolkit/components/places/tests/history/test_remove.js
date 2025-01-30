@@ -1,7 +1,7 @@
 /* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
 
-// Tests for `History.remove`, as implemented in History.jsm
+// Tests for `History.remove`, as implemented in History.sys.mjs
 
 "use strict";
 
@@ -281,31 +281,15 @@ add_task(async function test_error_cases() {
 add_task(async function test_orphans() {
   let uri = NetUtil.newURI("http://moz.org/");
   await PlacesTestUtils.addVisits({ uri });
-
-  PlacesUtils.favicons.setAndFetchFaviconForPage(
+  await PlacesTestUtils.setFaviconForPage(
     uri,
     SMALLPNG_DATA_URI,
-    true,
-    PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-    null,
-    Services.scriptSecurityManager.getSystemPrincipal()
+    SMALLPNG_DATA_URI
   );
+
   // Also create a root icon.
   let faviconURI = Services.io.newURI(uri.spec + "favicon.ico");
-  PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-    faviconURI,
-    SMALLPNG_DATA_URI.spec,
-    0,
-    Services.scriptSecurityManager.getSystemPrincipal()
-  );
-  PlacesUtils.favicons.setAndFetchFaviconForPage(
-    uri,
-    faviconURI,
-    true,
-    PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-    null,
-    Services.scriptSecurityManager.getSystemPrincipal()
-  );
+  await PlacesTestUtils.setFaviconForPage(uri, faviconURI, SMALLPNG_DATA_URI);
 
   await PlacesUtils.history.update({
     url: uri,

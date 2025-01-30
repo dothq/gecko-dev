@@ -117,6 +117,8 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
 
   UnprotectedData<State> state_;
 
+  HelperThreadLockData<bool> dispatchedToThreadPool;
+
   // May be set to the time this task was queued to collect telemetry.
   mozilla::TimeStamp maybeQueueTime_;
 
@@ -125,7 +127,7 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
 
  protected:
   // A flag to signal a request for early completion of the off-thread task.
-  mozilla::Atomic<bool, mozilla::MemoryOrdering::ReleaseAcquire> cancel_;
+  mozilla::Atomic<bool, mozilla::Relaxed> cancel_;
 
  public:
   explicit GCParallelTask(gc::GCRuntime* gc, gcstats::PhaseKind phaseKind,
@@ -161,8 +163,6 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
   void joinWithLockHeld(
       AutoLockHelperThreadState& lock,
       mozilla::Maybe<mozilla::TimeStamp> deadline = mozilla::Nothing());
-  void joinNonIdleTask(mozilla::Maybe<mozilla::TimeStamp> deadline,
-                       AutoLockHelperThreadState& lock);
 
   // Instead of dispatching to a helper, run the task on the current thread.
   void runFromMainThread();
@@ -202,6 +202,8 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
     return state_ == State::Idle || state_ == State::Queued ||
            state_ == State::Dispatched;
   }
+
+  const char* getName() override { return "GCParallelTask"; }
 
  protected:
   // Override this method to provide the task's functionality.
@@ -247,6 +249,9 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
   }
   friend class gc::GCRuntime;
 
+  void joinNonIdleTask(mozilla::Maybe<mozilla::TimeStamp> deadline,
+                       AutoLockHelperThreadState& lock);
+
   void runTask(JS::GCContext* gcx, AutoLockHelperThreadState& lock);
 
   // Implement the HelperThreadTask interface.
@@ -254,6 +259,7 @@ class GCParallelTask : private mozilla::LinkedListElement<GCParallelTask>,
     return ThreadType::THREAD_TYPE_GCPARALLEL;
   }
   void runHelperThreadTask(AutoLockHelperThreadState& locked) override;
+  void onThreadPoolDispatch() override;
 };
 
 } /* namespace js */

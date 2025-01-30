@@ -21,6 +21,10 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
+const PERSONAL_TOOLBAR_VISIBILITY_PREF =
+  "browser.toolbars.bookmarks.visibility";
+const VERTICAL_TABS_PREF = "sidebar.verticalTabs";
+
 function parseColor(color, kind) {
   if (typeof color == "string") {
     let rgba = InspectorUtils.colorToRGBA(color);
@@ -55,13 +59,6 @@ class PanelActionBase {
       this.updateOnChange(tab);
     });
 
-    // eslint-disable-next-line mozilla/balanced-listeners
-    extension.on("add-permissions", () => this.updateOnChange());
-    // eslint-disable-next-line mozilla/balanced-listeners
-    extension.on("remove-permissions", () => this.updateOnChange());
-    // eslint-disable-next-line mozilla/balanced-listeners
-    extension.on("update-ignore-quarantine", () => this.updateOnChange());
-
     // When preloading a popup we temporarily grant active tab permissions to
     // the preloaded popup. If we don't end up opening we need to clear this
     // permission when clearing the popup.
@@ -79,8 +76,8 @@ class PanelActionBase {
   /**
    * Set a global, window specific or tab specific property.
    *
-   * @param {XULElement|ChromeWindow|null} target
-   *        A XULElement tab, a ChromeWindow, or null for the global data.
+   * @param {NativeTab|ChromeWindow|null} target
+   *        A NativeTab tab, a ChromeWindow, or null for the global data.
    * @param {string} prop
    *        String property to set. Should should be one of "icon", "title", "badgeText",
    *        "popup", "badgeBackgroundColor", "badgeTextColor" or "enabled".
@@ -104,8 +101,8 @@ class PanelActionBase {
   /**
    * Gets the data associated with a tab, window, or the global one.
    *
-   * @param {XULElement|ChromeWindow|null} target
-   *        A XULElement tab, a ChromeWindow, or null for the global data.
+   * @param {NativeTab|ChromeWindow|null} target
+   *        A NativeTab tab, a ChromeWindow, or null for the global data.
    * @returns {object}
    *        The icon, title, badge, etc. associated with the target.
    */
@@ -119,8 +116,8 @@ class PanelActionBase {
   /**
    * Retrieve the value of a global, window specific or tab specific property.
    *
-   * @param {XULElement|ChromeWindow|null} target
-   *        A XULElement tab, a ChromeWindow, or null for the global data.
+   * @param {NativeTab|ChromeWindow|null} target
+   *        A NativeTab tab, a ChromeWindow, or null for the global data.
    * @param {string} prop
    *        Name of property to retrieve. Should should be one of "icon",
    *        "title", "badgeText", "popup", "badgeBackgroundColor" or "enabled".
@@ -161,7 +158,7 @@ class PanelActionBase {
    *
    * @param {string} eventType
    *        The type of the event, should be "location-change".
-   * @param {XULElement} tab
+   * @param {NativeTab} tab
    *        The tab whose location changed, or which has become selected.
    * @param {boolean} [fromBrowse]
    *        - `true` if navigation occurred in `tab`.
@@ -178,7 +175,7 @@ class PanelActionBase {
   /**
    * Gets the popup url for a given tab.
    *
-   * @param {XULElement} tab
+   * @param {NativeTab} tab
    *        The tab the popup refers to.
    * @param {boolean} strict
    *        If errors should be thrown if a URL is not available.
@@ -208,7 +205,7 @@ class PanelActionBase {
    * Will clear any existing activeTab permissions previously granted for any
    * other tab.
    *
-   * @param {XULElement} tab
+   * @param {NativeTab} tab
    *        The tab that should be granted activeTab permission for. Set to
    *        null to clear previously granted activeTab permission.
    */
@@ -229,7 +226,7 @@ class PanelActionBase {
   /**
    * Triggers this action and sends the appropriate event if needed.
    *
-   * @param {XULElement} tab
+   * @param {NativeTab} tab
    *        The tab on which the action was fired.
    * @param {object} clickInfo
    *        Extra data passed to the second parameter to the action API's
@@ -322,7 +319,7 @@ class PanelActionBase {
    * If it only changes a parameter for a single window, `target` will be that window.
    * Otherwise `target` will be null.
    *
-   * @param {XULElement|ChromeWindow|null} _target
+   * @param {NativeTab|ChromeWindow} [_target]
    *        Browser tab or browser chrome window, may be null.
    */
   updateOnChange(_target) {}
@@ -332,16 +329,22 @@ class PanelActionBase {
    *
    * @param {string} _tabId
    *        Internal id of the tab to get.
+   * @returns {NativeTab}
    */
-  getTab(_tabId) {}
+  getTab(_tabId) {
+    throw new Error("Not implemented.");
+  }
 
   /**
    * Get window object from windowId
    *
    * @param {string} _windowId
    *        Internal id of the window to get.
+   * @returns {ChromeWindow}
    */
-  getWindow(_windowId) {}
+  getWindow(_windowId) {
+    throw new Error("Not implemented.");
+  }
 
   /**
    * Gets the target object corresponding to the `details` parameter of the various
@@ -352,19 +355,19 @@ class PanelActionBase {
    * @param {number} [_details.tabId]
    * @param {number} [_details.windowId]
    * @throws if both `tabId` and `windowId` are specified, or if they are invalid.
-   * @returns {XULElement|ChromeWindow|null}
-   *        If a `tabId` was specified, the corresponding XULElement tab.
+   * @returns {NativeTab|ChromeWindow|null}
+   *        If a `tabId` was specified, the corresponding NativeTab tab.
    *        If a `windowId` was specified, the corresponding ChromeWindow.
    *        Otherwise, `null`.
    */
   getTargetFromDetails(_details) {
-    return null;
+    throw new Error("Not Implemented");
   }
 
   /**
    * Triggers a click event.
    *
-   * @param {XULElement} _tab
+   * @param {NativeTab} _tab
    *        The tab where this event should be fired.
    * @param {object} _clickInfo
    *        Extra data passed to the second parameter to the action API's
@@ -375,7 +378,7 @@ class PanelActionBase {
   /**
    * Checks whether this action is shown.
    *
-   * @param {XULElement} _tab
+   * @param {NativeTab} _tab
    *        The tab to be checked
    * @returns {boolean}
    */
@@ -442,7 +445,7 @@ export class PageActionBase extends PanelActionBase {
 
   // Checks whether the tab action is shown when the specified tab becomes active.
   // Does pattern matching if necessary, and caches the result as a tab-specific value.
-  // @param {XULElement} tab
+  // @param {NativeTab} tab
   //        The tab to be checked
   // @return boolean
   isShownForTab(tab) {
@@ -513,6 +516,20 @@ export class BrowserActionBase extends PanelActionBase {
       options.default_area ||
       "menupanel";
 
+    // When the personal toolbar (bookmarks) is never visible OR vertical tabs
+    // are enabled, we want to place the extension action (widget) in the panel
+    // and not in one of these areas, otherwise it would be invisible to the
+    // user.
+    if (
+      (default_area === "tabstrip" &&
+        Services.prefs.getBoolPref(VERTICAL_TABS_PREF)) ||
+      (default_area === "personaltoolbar" &&
+        Services.prefs.getStringPref(PERSONAL_TOOLBAR_VISIBILITY_PREF) ===
+          "never")
+    ) {
+      default_area = "menupanel";
+    }
+
     this.defaults = {
       ...this.defaults,
       badgeText: "",
@@ -522,6 +539,15 @@ export class BrowserActionBase extends PanelActionBase {
       default_area,
     };
     this.globals = Object.create(this.defaults);
+
+    // eslint-disable-next-line mozilla/balanced-listeners
+    extension.on("add-permissions", () => this.updateOnChange());
+    // eslint-disable-next-line mozilla/balanced-listeners
+    extension.on("remove-permissions", () => this.updateOnChange());
+    // eslint-disable-next-line mozilla/balanced-listeners
+    extension.on("update-ignore-quarantine", () => this.updateOnChange());
+    // eslint-disable-next-line mozilla/balanced-listeners
+    extension.on("update-blocklist-state", () => this.updateOnChange());
   }
 
   async loadIconData() {
@@ -570,6 +596,8 @@ export class BrowserActionBase extends PanelActionBase {
 
   /**
    * Determines the text badge color to be used in a tab, window, or globally.
+   *
+   * @typedef {number[]} ColorArray from schemas/browser_action.json.
    *
    * @param {object} values
    *        The values associated with the tab or window, or global values.

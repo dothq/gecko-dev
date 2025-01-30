@@ -24,7 +24,7 @@
 
 #include <vector>
 
-#include "cairo-win32.h"
+#include "cairo-dwrite.h"
 
 #include "HelpersWinFonts.h"
 
@@ -326,29 +326,29 @@ static bool GetFontFileName(RefPtr<IDWriteFontFace> aFontFace,
     gfxDebug() << "Failed getting path for WR font";
     return false;
   }
-  DWORD attribs = GetFileAttributesW(aFileName.data());
-  if (attribs == INVALID_FILE_ATTRIBUTES) {
-    gfxDebug() << "Invalid file \"" << aFileName.data() << "\" for WR font";
-    return false;
-  }
+
   // We leave the null terminator at the end of the returned file name.
   return true;
 }
 
 bool UnscaledFontDWrite::GetFontDescriptor(FontDescriptorOutput aCb,
                                            void* aBaton) {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (!mFont) {
     return false;
   }
 
-  std::vector<WCHAR> fileName;
-  if (!GetFontFileName(mFontFace, fileName)) {
-    return false;
+  // We cache the font file name as it involves multiple DirectWrite calls.
+  if (mFontFileName.empty()) {
+    if (!GetFontFileName(mFontFace, mFontFileName)) {
+      return false;
+    }
   }
   uint32_t index = mFontFace->GetIndex();
 
-  aCb(reinterpret_cast<const uint8_t*>(fileName.data()),
-      fileName.size() * sizeof(WCHAR), index, aBaton);
+  aCb(reinterpret_cast<const uint8_t*>(mFontFileName.data()),
+      mFontFileName.size() * sizeof(WCHAR), index, aBaton);
   return true;
 }
 
@@ -468,7 +468,7 @@ bool ScaledFontDWrite::GetWRFontInstanceOptions(
     Maybe<wr::FontInstanceOptions>* aOutOptions,
     Maybe<wr::FontInstancePlatformOptions>* aOutPlatformOptions,
     std::vector<FontVariation>* aOutVariations) {
-  wr::FontInstanceOptions options;
+  wr::FontInstanceOptions options = {};
   options.render_mode = wr::ToFontRenderMode(GetDefaultAAMode());
   options.flags = wr::FontInstanceFlags{0};
   if (HasBoldSimulation()) {
@@ -696,13 +696,15 @@ cairo_font_face_t* ScaledFontDWrite::CreateCairoFontFace(
     return nullptr;
   }
 
-  return cairo_dwrite_font_face_create_for_dwrite_fontface(nullptr, mFontFace);
+  return cairo_dwrite_font_face_create_for_dwrite_fontface(mFontFace);
 }
 
 void ScaledFontDWrite::PrepareCairoScaledFont(cairo_scaled_font_t* aFont) {
+#if 0
   if (mGDIForced) {
     cairo_dwrite_scaled_font_set_force_GDI_classic(aFont, true);
   }
+#endif
 }
 
 already_AddRefed<UnscaledFont> UnscaledFontDWrite::CreateFromFontDescriptor(

@@ -6,10 +6,13 @@
 
 #include "nsColorPicker.h"
 
+#include <algorithm>
 #include <shlwapi.h>
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "nsIWidget.h"
 #include "nsString.h"
 #include "WidgetUtils.h"
@@ -86,6 +89,15 @@ AsyncColorChooser::Run() {
   MOZ_ASSERT(NS_IsMainThread(),
              "Color pickers can only be opened from main thread currently");
 
+  // Static to preserve the custom colors between different ChooseColor calls.
+  static COLORREF sCustomColors[16];
+  static bool sInitialized = false;
+  if (!sInitialized) {
+    // Initialize to white instead of black.
+    std::fill(std::begin(sCustomColors), std::end(sCustomColors), 0x00FFFFFF);
+    sInitialized = true;
+  }
+
   // Allow only one color picker to be opened at a time, to workaround bug
   // 944737
   if (!gColorChooser) {
@@ -94,13 +106,10 @@ AsyncColorChooser::Run() {
 
     ScopedRtlShimWindow shim(mParentWidget.get());
 
-    COLORREF customColors[16];
-    for (size_t i = 0; i < mozilla::ArrayLength(customColors); i++) {
-      if (i < mDefaultColors.Length()) {
-        customColors[i] = ColorStringToRGB(mDefaultColors[i]);
-      } else {
-        customColors[i] = 0x00FFFFFF;
-      }
+    // This will overwrite custom colors if default colors were defined.
+    for (size_t i = 0;
+         i < std::min(std::size(sCustomColors), mDefaultColors.Length()); i++) {
+      sCustomColors[i] = ColorStringToRGB(mDefaultColors[i]);
     }
 
     CHOOSECOLOR options;
@@ -108,7 +117,7 @@ AsyncColorChooser::Run() {
     options.hwndOwner = shim.get();
     options.Flags = CC_RGBINIT | CC_FULLOPEN | CC_ENABLEHOOK;
     options.rgbResult = mInitialColor;
-    options.lpCustColors = customColors;
+    options.lpCustColors = sCustomColors;
     options.lpfnHook = HookProc;
 
     mColor = ChooseColor(&options) ? options.rgbResult : mInitialColor;
@@ -181,13 +190,14 @@ nsColorPicker::~nsColorPicker() {}
 NS_IMPL_ISUPPORTS(nsColorPicker, nsIColorPicker)
 
 NS_IMETHODIMP
-nsColorPicker::Init(mozIDOMWindowProxy* parent, const nsAString& title,
-                    const nsAString& aInitialColor,
+nsColorPicker::Init(mozilla::dom::BrowsingContext* aBrowsingContext,
+                    const nsAString& title, const nsAString& aInitialColor,
                     const nsTArray<nsString>& aDefaultColors) {
-  MOZ_ASSERT(parent,
-             "Null parent passed to colorpicker, no color picker for you!");
+  MOZ_ASSERT(
+      aBrowsingContext,
+      "Null browsingContext passed to colorpicker, no color picker for you!");
   mParentWidget =
-      WidgetUtils::DOMWindowToWidget(nsPIDOMWindowOuter::From(parent));
+      aBrowsingContext->Canonical()->GetParentProcessWidgetContaining();
   mInitialColor = ColorStringToRGB(aInitialColor);
   mDefaultColors.Assign(aDefaultColors);
   return NS_OK;

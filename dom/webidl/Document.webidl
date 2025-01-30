@@ -13,6 +13,7 @@
  * https://drafts.csswg.org/cssom/#extensions-to-the-document-interface
  * https://drafts.csswg.org/cssom-view/#extensions-to-the-document-interface
  * https://wicg.github.io/feature-policy/#policy
+ * https://wicg.github.io/scroll-to-text-fragment/#feature-detectability
  */
 
 interface ContentSecurityPolicy;
@@ -98,8 +99,6 @@ interface Document : Node {
   HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
   [Pure]
   HTMLCollection getElementsByClassName(DOMString classNames);
-  [Pure]
-  Element? getElementById(DOMString elementId);
 
   // These DOM methods cannot be accessed by UA Widget scripts
   // because the DOM element reflectors will be in the content scope,
@@ -151,12 +150,12 @@ interface Document : Node {
 
 // https://html.spec.whatwg.org/multipage/dom.html#the-document-object
 partial interface Document {
-  [Pref="dom.webcomponents.shadowdom.declarative.enabled"]
-  static Document parseHTMLUnsafe(DOMString html);
+  [Pref="dom.webcomponents.shadowdom.declarative.enabled", Throws]
+  static Document parseHTMLUnsafe((TrustedHTML or DOMString) html);
 
   [PutForwards=href, LegacyUnforgeable] readonly attribute Location? location;
   [SetterThrows]                           attribute DOMString domain;
-  readonly attribute DOMString referrer;
+  readonly attribute UTF8String referrer;
   [Throws] attribute DOMString cookie;
   readonly attribute DOMString lastModified;
   readonly attribute DOMString readyState;
@@ -189,9 +188,9 @@ partial interface Document {
   [CEReactions, Throws]
   undefined close();
   [CEReactions, Throws]
-  undefined write(DOMString... text);
+  undefined write((TrustedHTML or DOMString)... text);
   [CEReactions, Throws]
-  undefined writeln(DOMString... text);
+  undefined writeln((TrustedHTML or DOMString)... text);
 
   // user interaction
   [Pure]
@@ -202,7 +201,7 @@ partial interface Document {
            attribute DOMString designMode;
   [CEReactions, Throws, NeedsSubjectPrincipal]
   boolean execCommand(DOMString commandId, optional boolean showUI = false,
-                      optional DOMString value = "");
+                      optional (TrustedHTML or DOMString) value = "");
   [Throws, NeedsSubjectPrincipal]
   boolean queryCommandEnabled(DOMString commandId);
   [Throws]
@@ -380,27 +379,20 @@ partial interface Document {
     undefined enableStyleSheetsForSet (DOMString? name);
 };
 
+dictionary CaretPositionFromPointOptions {
+  [Pref="dom.shadowdom.new_caretPositionFromPoint_behavior.enabled"]
+  sequence<ShadowRoot> shadowRoots = [];
+};
+
 // https://drafts.csswg.org/cssom-view/#extensions-to-the-document-interface
 partial interface Document {
-    CaretPosition? caretPositionFromPoint (float x, float y);
+    CaretPosition? caretPositionFromPoint(float x, float y, optional CaretPositionFromPointOptions options = {});
 
     readonly attribute Element? scrollingElement;
 };
 
-// http://dev.w3.org/2006/webapi/selectors-api2/#interface-definitions
-partial interface Document {
-  [Throws, Pure]
-  Element?  querySelector(UTF8String selectors);
-  [Throws, Pure]
-  NodeList  querySelectorAll(UTF8String selectors);
-
-  //(Not implemented)Element?  find(DOMString selectors, optional (Element or sequence<Node>)? refNodes);
-  //(Not implemented)NodeList  findAll(DOMString selectors, optional (Element or sequence<Node>)? refNodes);
-};
-
 // https://drafts.csswg.org/web-animations/#extensions-to-the-document-interface
 partial interface Document {
-  [Func="Document::AreWebAnimationsTimelinesEnabled"]
   readonly attribute DocumentTimeline timeline;
 };
 
@@ -509,6 +501,16 @@ partial interface Document {
    */
   [ChromeOnly]
   sequence<ShadowRoot> getConnectedShadowRoots();
+
+  /**
+   * By default, we don't send resizes to inactive top browsers.
+   * Some callers (as of this writing the window sizing code and puppeteer)
+   * need to trigger these resizes.
+   *
+   * @param aIncludeInactive whether to include background tabs.
+   */
+  [ChromeOnly]
+  undefined synchronouslyUpdateRemoteBrowserDimensions(optional boolean aIncludeInactive = false);
 };
 
 dictionary BlockParsingOptions {
@@ -758,3 +760,23 @@ partial interface Document {
   [ChromeOnly]
   boolean isActive();
 };
+
+Document includes NonElementParentNode;
+
+/**
+ * Extension to add the fragmentDirective property.
+ * https://wicg.github.io/scroll-to-text-fragment/#feature-detectability
+ */
+partial interface Document {
+    [Pref="dom.text_fragments.enabled", SameObject]
+    readonly attribute FragmentDirective fragmentDirective;
+};
+
+// https://drafts.csswg.org/css-view-transitions-1/#additions-to-document-api
+partial interface Document {
+  [Pref="dom.viewTransitions.enabled"]
+  ViewTransition startViewTransition(optional ViewTransitionUpdateCallback updateCallback);
+};
+
+// https://github.com/w3c/csswg-drafts/pull/10767 for the name divergence in the spec
+callback ViewTransitionUpdateCallback = Promise<any> ();

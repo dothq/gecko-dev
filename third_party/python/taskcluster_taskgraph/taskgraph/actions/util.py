@@ -32,8 +32,15 @@ def get_parameters(decision_task_id):
     return get_artifact(decision_task_id, "public/parameters.yml")
 
 
-def fetch_graph_and_labels(parameters, graph_config):
-    decision_task_id = find_decision_task(parameters, graph_config)
+def fetch_graph_and_labels(parameters, graph_config, task_group_id=None):
+    try:
+        # Look up the decision_task id in the index
+        decision_task_id = find_decision_task(parameters, graph_config)
+    except KeyError:
+        if not task_group_id:
+            raise
+        # Not found (e.g. from github-pull-request), fall back to the task group id.
+        decision_task_id = task_group_id
 
     # First grab the graph and labels generated during the initial decision task
     full_task_graph = get_artifact(decision_task_id, "public/full-task-graph.json")
@@ -57,12 +64,19 @@ def fetch_graph_and_labels(parameters, graph_config):
                     raise
                 logger.debug(f"No label-to-taskid.json found for {task_id}: {e}")
 
-        namespace = "{}.v2.{}.pushlog-id.{}.actions".format(
+        # for backwards compatibility, look up actions via pushlog-id
+        pushlog_namespace = "{}.v2.{}.pushlog-id.{}.actions".format(
             graph_config["trust-domain"],
             parameters["project"],
             parameters["pushlog_id"],
         )
-        for task_id in list_tasks(namespace):
+        # ... but also look by revision, since github doesn't have pushlog-id
+        rev_namespace = "{}.v2.{}.revision.{}.actions".format(
+            graph_config["trust-domain"],
+            parameters["project"],
+            parameters["head_rev"],
+        )
+        for task_id in set(list_tasks(pushlog_namespace) + list_tasks(rev_namespace)):
             fetches.append(e.submit(fetch_action, task_id))
 
         # Similarly for cron tasks..
@@ -90,7 +104,7 @@ def fetch_graph_and_labels(parameters, graph_config):
     return (decision_task_id, full_task_graph, label_to_taskid)
 
 
-def create_task_from_def(task_id, task_def, level):
+def create_task_from_def(task_id, task_def, level, trust_domain):
     """Create a new task from a definition rather than from a label
     that is already in the full-task-graph. The task definition will
     have {relative-datestamp': '..'} rendered just like in a decision task.
@@ -98,7 +112,7 @@ def create_task_from_def(task_id, task_def, level):
     It is useful if you want to "edit" the full_task_graph and then hand
     it to this function. No dependencies will be scheduled. You must handle
     this yourself. Seeing how create_tasks handles it might prove helpful."""
-    task_def["schedulerId"] = f"gecko-level-{level}"
+    task_def["schedulerId"] = f"{trust_domain}-level-{level}"
     label = task_def["metadata"]["name"]
     session = get_session()
     create.create_task(session, task_id, label, task_def)
@@ -153,7 +167,8 @@ def create_tasks(
 
     target_graph = full_task_graph.graph.transitive_closure(to_run)
     target_task_graph = TaskGraph(
-        {l: modifier(full_task_graph[l]) for l in target_graph.nodes}, target_graph
+        {l: modifier(full_task_graph[l]) for l in target_graph.nodes},
+        target_graph,
     )
     target_task_graph.for_each_task(update_parent)
     if decision_task_id and decision_task_id != os.environ.get("TASK_ID"):

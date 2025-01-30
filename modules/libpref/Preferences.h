@@ -15,7 +15,9 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/ipc/SharedMemory.h"
 #include "nsCOMPtr.h"
 #include "nsIObserver.h"
 #include "nsIPrefBranch.h"
@@ -97,6 +99,8 @@ class Preferences final : public nsIPrefService,
   friend class ::nsPrefBranch;
 
  public:
+  using WritePrefFilePromise = MozPromise<bool, nsresult, false>;
+
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIPREFSERVICE
   NS_FORWARD_NSIPREFBRANCH(mRootBranch->)
@@ -406,8 +410,11 @@ class Preferences final : public nsIPrefService,
                                    bool aIsDestinationWebContentProcess);
   static void DeserializePreferences(char* aStr, size_t aPrefsLen);
 
-  static mozilla::ipc::FileDescriptor EnsureSnapshot(size_t* aSize);
-  static void InitSnapshot(const mozilla::ipc::FileDescriptor&, size_t aSize);
+#ifndef RUST_BINDGEN
+  static mozilla::ipc::SharedMemoryHandle EnsureSnapshot(size_t* aSize);
+  static void InitSnapshot(const mozilla::ipc::SharedMemoryHandle&,
+                           size_t aSize);
+#endif
 
   // When a single pref is changed in the parent process, these methods are
   // used to pass the update to content processes.
@@ -454,7 +461,9 @@ class Preferences final : public nsIPrefService,
 
   // Off main thread is only respected for the default aFile value (nullptr).
   nsresult SavePrefFileInternal(nsIFile* aFile, SaveMethod aSaveMethod);
-  nsresult WritePrefFile(nsIFile* aFile, SaveMethod aSaveMethod);
+  nsresult WritePrefFile(
+      nsIFile* aFile, SaveMethod aSaveMethod,
+      UniquePtr<MozPromiseHolder<WritePrefFilePromise>> aPromise = nullptr);
 
   nsresult ResetUserPrefs();
 
@@ -520,6 +529,8 @@ class Preferences final : public nsIPrefService,
 
  private:
   nsCOMPtr<nsIFile> mCurrentFile;
+  // Time since unix epoch in ms (JS Date compatible)
+  PRTime mUserPrefsFileLastModifiedAtStartup = 0;
   bool mDirty = false;
   bool mProfileShutdown = false;
   // We wait a bit after prefs are dirty before writing them. In this period,

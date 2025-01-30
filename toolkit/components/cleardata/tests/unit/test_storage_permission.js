@@ -62,7 +62,7 @@ add_task(async function test_removing_storage_permission() {
   await new Promise(aResolve => {
     Services.clearData.deleteData(
       Ci.nsIClearDataService.CLEAR_PERMISSIONS,
-      value => aResolve()
+      () => aResolve()
     );
   });
 });
@@ -138,7 +138,7 @@ add_task(async function test_removing_storage_permission_from_principal() {
   await new Promise(aResolve => {
     Services.clearData.deleteData(
       Ci.nsIClearDataService.CLEAR_PERMISSIONS,
-      value => aResolve()
+      () => aResolve()
     );
   });
 });
@@ -201,8 +201,9 @@ add_task(async function test_removing_storage_permission_from_base_domainl() {
   );
 
   await new Promise(aResolve => {
-    Services.clearData.deleteDataFromBaseDomain(
+    Services.clearData.deleteDataFromSite(
       "example.net",
+      {},
       true /* user request */,
       Ci.nsIClearDataService.CLEAR_STORAGE_ACCESS,
       value => {
@@ -240,7 +241,7 @@ add_task(async function test_removing_storage_permission_from_base_domainl() {
   await new Promise(aResolve => {
     Services.clearData.deleteData(
       Ci.nsIClearDataService.CLEAR_PERMISSIONS,
-      value => aResolve()
+      () => aResolve()
     );
   });
 });
@@ -392,7 +393,7 @@ add_task(async function test_deleteUserInteractionForClearingHistory() {
   await new Promise(aResolve => {
     Services.clearData.deleteData(
       Ci.nsIClearDataService.CLEAR_PERMISSIONS,
-      value => aResolve()
+      () => aResolve()
     );
   });
 });

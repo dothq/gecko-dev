@@ -10,6 +10,8 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
 
+#include "nsILoadInfo.h"
+
 // Helper Classes
 #include "mozilla/Maybe.h"
 #include "nsCOMPtr.h"
@@ -24,6 +26,7 @@ class nsIURI;
 class nsIDocShell;
 class nsIChannel;
 class nsIReferrerInfo;
+struct HTTPSFirstDowngradeData;
 namespace mozilla {
 class OriginAttributes;
 template <typename, class>
@@ -148,9 +151,18 @@ class nsDocShellLoadState final {
 
   void SetIsExemptFromHTTPSFirstMode(bool aIsExemptFromHTTPSFirstMode);
 
+  RefPtr<HTTPSFirstDowngradeData> GetHttpsFirstDowngradeData() const;
+
+  void SetHttpsFirstDowngradeData(
+      RefPtr<HTTPSFirstDowngradeData> const& aHttpsFirstTelemetryData);
+
   bool OriginalFrameSrc() const;
 
   void SetOriginalFrameSrc(bool aOriginalFrameSrc);
+
+  bool ShouldCheckForRecursion() const;
+
+  void SetShouldCheckForRecursion(bool aShouldCheckForRecursion);
 
   bool IsFormSubmission() const;
 
@@ -252,6 +264,10 @@ class nsDocShellLoadState final {
 
   void SetHasValidUserGestureActivation(bool HasValidUserGestureActivation);
 
+  void SetTextDirectiveUserActivation(bool aTextDirectiveUserActivation);
+
+  bool GetTextDirectiveUserActivation();
+
   const nsCString& TypeHint() const;
 
   void SetTypeHint(const nsCString& aTypeHint);
@@ -323,15 +339,24 @@ class nsDocShellLoadState final {
     return mRemoteTypeOverride;
   }
 
-  void SetRemoteTypeOverride(const nsCString& aRemoteTypeOverride) {
-    mRemoteTypeOverride = mozilla::Some(aRemoteTypeOverride);
+  void SetRemoteTypeOverride(const nsCString& aRemoteTypeOverride);
+
+  void SetSchemelessInput(nsILoadInfo::SchemelessInputType aSchemelessInput) {
+    mSchemelessInput = aSchemelessInput;
   }
 
-  void SetWasSchemelessInput(bool aWasSchemelessInput) {
-    mWasSchemelessInput = aWasSchemelessInput;
+  nsILoadInfo::SchemelessInputType GetSchemelessInput() {
+    return mSchemelessInput;
   }
 
-  bool GetWasSchemelessInput() { return mWasSchemelessInput; }
+  void SetHttpsUpgradeTelemetry(
+      nsILoadInfo::HTTPSUpgradeTelemetryType aHttpsUpgradeTelemetry) {
+    mHttpsUpgradeTelemetry = aHttpsUpgradeTelemetry;
+  }
+
+  nsILoadInfo::HTTPSUpgradeTelemetryType GetHttpsUpgradeTelemetry() {
+    return mHttpsUpgradeTelemetry;
+  }
 
   // Determine the remote type of the process which should be considered
   // responsible for this load for the purposes of security checks.
@@ -366,8 +391,7 @@ class nsDocShellLoadState final {
   // aIsEmbeddingBlockedError are expected to be Nothing when called from parent
   // process.
   nsLoadFlags CalculateChannelLoadFlags(
-      mozilla::dom::BrowsingContext* aBrowsingContext,
-      mozilla::Maybe<bool> aUriModified,
+      mozilla::dom::BrowsingContext* aBrowsingContext, bool aUriModified,
       mozilla::Maybe<bool> aIsEmbeddingBlockedError);
 
   mozilla::dom::DocShellLoadStateInit Serialize(
@@ -486,9 +510,19 @@ class nsDocShellLoadState final {
   // will be exempt from HTTPS-Only-Mode upgrades.
   bool mIsExemptFromHTTPSFirstMode;
 
+  // If set, this load is a HTTPS-First downgrade, and the downgrade data will
+  // be submitted to telemetry later if the load succeeds.
+  RefPtr<HTTPSFirstDowngradeData> mHttpsFirstDowngradeData;
+
   // If this attribute is true, this load corresponds to a frame
   // element loading its original src (or srcdoc) attribute.
   bool mOriginalFrameSrc;
+
+  // If this attribute is true, this load corresponds to a frame, object, or
+  // embed element that needs a recursion check when loading it's src (or data).
+  // Unlike mOriginalFrameSrc, this attribute will always be set regardless
+  // whether we've loaded the src already.
+  bool mShouldCheckForRecursion;
 
   // If this attribute is true, then the load was initiated by a
   // form submission.
@@ -541,6 +575,11 @@ class nsDocShellLoadState final {
 
   // Is this load triggered by a user gesture?
   bool mHasValidUserGestureActivation;
+
+  // True if a text directive can be scrolled to. This is true either if the
+  // load is triggered by a user, or the document has an unconsumed activation
+  // (eg. client redirect).
+  bool mTextDirectiveUserActivation = false;
 
   // Whether this load can steal the focus from the source browsing context.
   bool mAllowFocusMove;
@@ -602,8 +641,13 @@ class nsDocShellLoadState final {
   // Remote type of the process which originally requested the load.
   nsCString mTriggeringRemoteType;
 
-  // if the to-be-loaded address had it protocol added through a fixup
-  bool mWasSchemelessInput = false;
+  // if the address had an intentional protocol
+  nsILoadInfo::SchemelessInputType mSchemelessInput =
+      nsILoadInfo::SchemelessInputTypeUnset;
+
+  // Solely for the use of collecting Telemetry for HTTPS upgrades.
+  nsILoadInfo::HTTPSUpgradeTelemetryType mHttpsUpgradeTelemetry =
+      nsILoadInfo::NOT_INITIALIZED;
 };
 
 #endif /* nsDocShellLoadState_h__ */

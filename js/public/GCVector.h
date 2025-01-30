@@ -46,6 +46,7 @@ class GCVector {
 
  public:
   using ElementType = T;
+  static constexpr size_t InlineLength = decltype(vector)::InlineLength;
 
   explicit GCVector(AllocPolicy alloc) : vector(std::move(alloc)) {}
   GCVector() : GCVector(AllocPolicy()) {}
@@ -159,7 +160,7 @@ class GCVector {
   }
 
   size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
-    return vector.sizeOfIncludingThis(mallocSizeOf);
+    return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
   }
 
   void trace(JSTracer* trc) {

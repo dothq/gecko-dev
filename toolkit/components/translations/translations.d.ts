@@ -153,7 +153,7 @@ export namespace Bergamot {
     size(): number;
     getByteArrayView(): Uint8Array;
   }
-  
+
   /**
    * The response from the translation. This definition isn't complete, but just
    * contains a subset of the available methods.
@@ -164,7 +164,7 @@ export namespace Bergamot {
     getOriginalText(): string;
     getTranslatedText(): string;
   }
-  
+
   /**
    * The options to configure a translation response.
    *
@@ -204,15 +204,23 @@ interface LanguageTranslationModelFile {
 }
 
 /**
- * The files necessary to run the translations, these will be sent to the Bergamot
- * translation engine.
+ * The data required to construct a Bergamot Translation Model.
+ */
+interface TranslationModelPayload {
+  sourceLanguage: string,
+  targetLanguage: string,
+  languageModelFiles: LanguageTranslationModelFiles,
+};
+
+/**
+ * The files required to construct a Bergamot Translation Model's aligned memory.
  */
 interface LanguageTranslationModelFiles {
   // The machine learning language model.
   model: LanguageTranslationModelFile,
   // The lexical shortlist that limits possible output of the decoder and makes
   // inference faster.
-  lex: LanguageTranslationModelFile,
+  lex?: LanguageTranslationModelFile,
   // A model that can generate a translation quality estimation.
   qualityModel?: LanguageTranslationModelFile,
 
@@ -238,7 +246,7 @@ type LanguageTranslationModelFilesAligned = {
  */
 interface TranslationsEnginePayload {
   bergamotWasmArrayBuffer: ArrayBuffer,
-  languageModelFiles: LanguageTranslationModelFiles[]
+  translationModelPayloads: TranslationModelPayload[]
   isMocked: boolean,
 }
 
@@ -269,3 +277,29 @@ export interface SupportedLanguages {
 }
 
 export type TranslationErrors = "engine-load-error";
+
+export type SelectTranslationsPanelState =
+  // The panel is closed.
+  | { phase: "closed"; }
+
+  // The panel is idle after successful initialization and ready to attempt translation.
+  | { phase: "idle"; fromLanguage: string; toLanguage: string, sourceText: string, }
+
+  // The language dropdown menus failed to populate upon opening the panel.
+  // This state contains all of the information for the try-again button to close and re-open the panel.
+  | { phase: "init-failure"; event: Event, screenX: number, screenY: number, sourceText: string, isTextSelected: boolean, langPairPromise: Promise<{fromLang?: string, toLang?: string}> }
+
+  // The translation failed to complete.
+  | { phase: "translation-failure"; fromLanguage: string; toLanguage: string, sourceText: string, }
+
+  // The selected language pair is determined to be translatable.
+  | { phase: "translatable"; fromLanguage: string; toLanguage: string, sourceText: string, }
+
+  // The panel is actively translating the source text.
+  | { phase: "translating"; fromLanguage: string; toLanguage: string, sourceText: string, }
+
+  // The source text has been translated successfully.
+  | { phase: "translated"; fromLanguage: string; toLanguage: string, sourceText: string, translatedText: string, }
+
+  // The source language is not currently supported by Translations in Firefox.
+  | { phase: "unsupported"; detectedLanguage: string; toLanguage: string, sourceText: string }

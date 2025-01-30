@@ -35,7 +35,7 @@ class nsMimeTypeArray final : public nsISupports, public nsWrapperCache {
                                JS::Handle<JSObject*> aGivenProto) override;
 
   // MimeTypeArray WebIDL methods
-  uint32_t Length() { return ForceNoPlugins() ? 0 : ArrayLength(mMimeTypes); }
+  uint32_t Length() { return ForceNoPlugins() ? 0 : std::size(mMimeTypes); }
 
   nsMimeType* Item(uint32_t aIndex) {
     bool unused;
@@ -83,9 +83,7 @@ class nsMimeType final : public nsWrapperCache {
     retval.SetKnownLiveString(kMimeDescription);
   }
 
-  already_AddRefed<nsPluginElement> EnabledPlugin() const {
-    return do_AddRef(mPluginElement);
-  }
+  already_AddRefed<nsPluginElement> EnabledPlugin() const;
 
   void GetSuffixes(mozilla::dom::DOMString& retval) const {
     retval.SetKnownLiveString(kMimeSuffix);

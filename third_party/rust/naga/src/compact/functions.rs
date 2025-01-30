@@ -1,4 +1,4 @@
-use super::handle_set_map::HandleSet;
+use super::arena::HandleSet;
 use super::{FunctionMap, ModuleMap};
 
 pub struct FunctionTracer<'a> {
@@ -7,13 +7,13 @@ pub struct FunctionTracer<'a> {
 
     pub types_used: &'a mut HandleSet<crate::Type>,
     pub constants_used: &'a mut HandleSet<crate::Constant>,
-    pub const_expressions_used: &'a mut HandleSet<crate::Expression>,
+    pub global_expressions_used: &'a mut HandleSet<crate::Expression>,
 
     /// Function-local expressions used.
     pub expressions_used: HandleSet<crate::Expression>,
 }
 
-impl<'a> FunctionTracer<'a> {
+impl FunctionTracer<'_> {
     pub fn trace(&mut self) {
         for argument in self.function.arguments.iter() {
             self.types_used.insert(argument.ty);
@@ -52,7 +52,7 @@ impl<'a> FunctionTracer<'a> {
             types_used: self.types_used,
             constants_used: self.constants_used,
             expressions_used: &mut self.expressions_used,
-            const_expressions_used: Some(&mut self.const_expressions_used),
+            global_expressions_used: Some(&mut self.global_expressions_used),
         }
     }
 }

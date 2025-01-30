@@ -87,8 +87,6 @@ bool LoadLoadableRoots(const nsCString& dir);
  */
 bool LoadOSClientCertsModule(const nsCString& dir);
 
-extern const char* kOSClientCertsModuleName;
-
 /**
  * Loads the IPC client certs module.
  *
@@ -98,8 +96,6 @@ extern const char* kOSClientCertsModuleName;
  * @return true if the module was successfully loaded, false otherwise.
  */
 bool LoadIPCClientCertsModule(const nsCString& dir);
-
-extern const char* kIPCClientCertsModuleName;
 
 /**
  * Unloads the loadable roots module and os client certs module, if loaded.
@@ -135,8 +131,6 @@ pkix::Result BuildRevocationCheckArrays(pkix::Input certDER,
                                         /*out*/ nsTArray<uint8_t>& subjectBytes,
                                         /*out*/ nsTArray<uint8_t>& pubKeyBytes);
 
-void SaveIntermediateCerts(const nsTArray<nsTArray<uint8_t>>& certList);
-
 class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
  public:
   typedef mozilla::pkix::Result Result;
@@ -151,7 +145,9 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
 
   NSSCertDBTrustDomain(
       SECTrustType certDBTrustType, OCSPFetching ocspFetching,
-      OCSPCache& ocspCache, void* pinArg, mozilla::TimeDuration ocspTimeoutSoft,
+      OCSPCache& ocspCache, SignatureCache* signatureCache,
+      TrustCache* trustCache, void* pinArg,
+      mozilla::TimeDuration ocspTimeoutSoft,
       mozilla::TimeDuration ocspTimeoutHard, uint32_t certShortLifetimeInDays,
       unsigned int minRSABits, ValidityCheckingMode validityCheckingMode,
       NetscapeStepUpPolicy netscapeStepUpPolicy, CRLiteMode crliteMode,
@@ -305,8 +301,10 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
 
   const SECTrustType mCertDBTrustType;
   const OCSPFetching mOCSPFetching;
-  OCSPCache& mOCSPCache;  // non-owning!
-  void* mPinArg;          // non-owning!
+  OCSPCache& mOCSPCache;            // non-owning!
+  SignatureCache* mSignatureCache;  // non-owning!
+  TrustCache* mTrustCache;          // non-owning!
+  void* mPinArg;                    // non-owning!
   const mozilla::TimeDuration mOCSPTimeoutSoft;
   const mozilla::TimeDuration mOCSPTimeoutHard;
   const uint32_t mCertShortLifetimeInDays;

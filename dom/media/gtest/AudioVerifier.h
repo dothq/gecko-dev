@@ -59,7 +59,7 @@ class AudioVerifier {
   // Returns the maximum difference in value between two adjacent samples along
   // the sine curve.
   Sample MaxMagnitudeDifference() {
-    return static_cast<Sample>(AudioGenerator<Sample>::Amplitude() *
+    return static_cast<Sample>(AudioGenerator<Sample>::Amplitude() * 2 *
                                sin(2 * M_PI * mFrequency / mRate));
   }
 
@@ -99,7 +99,7 @@ class AudioVerifier {
   void CountZeroCrossing(Sample aCurrentSample) {
     if (mPrevious > 0 && aCurrentSample <= 0) {
       if (mZeroCrossCount++) {
-        MOZ_ASSERT(mZeroCrossCount > 1);
+        MOZ_RELEASE_ASSERT(mZeroCrossCount > 1);
         mSumPeriodInSamples += mTotalFramesSoFar - mLastZeroCrossPosition;
       }
       mLastZeroCrossPosition = mTotalFramesSoFar;
@@ -107,8 +107,9 @@ class AudioVerifier {
   }
 
   void CountDiscontinuities(Sample aCurrentSample) {
-    const bool discontinuity = fabs(fabs(aCurrentSample) - fabs(mPrevious)) >
-                               3 * MaxMagnitudeDifference();
+    // The factor of 2 tolerates up to 1 skipped frame.
+    const bool haveDiscontinuity =
+        fabs(aCurrentSample - mPrevious) > 2 * MaxMagnitudeDifference();
 
     if (mCurrentDiscontinuityFrameCount > 0) {
       if (++mCurrentDiscontinuityFrameCount == 5) {
@@ -120,8 +121,8 @@ class AudioVerifier {
       return;
     }
 
-    MOZ_ASSERT(mCurrentDiscontinuityFrameCount == 0);
-    if (!discontinuity) {
+    MOZ_RELEASE_ASSERT(mCurrentDiscontinuityFrameCount == 0);
+    if (!haveDiscontinuity) {
       return;
     }
 

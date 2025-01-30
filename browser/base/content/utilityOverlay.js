@@ -20,7 +20,6 @@ ChromeUtils.defineESModuleGetters(this, {
   ExtensionSettingsStore:
     "resource://gre/modules/ExtensionSettingsStore.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
-  ReportBrokenSite: "resource:///modules/ReportBrokenSite.sys.mjs",
   ShellService: "resource:///modules/ShellService.sys.mjs",
   URILoadingHelper: "resource:///modules/URILoadingHelper.sys.mjs",
 });
@@ -106,16 +105,6 @@ function openUILink(
     aPostData,
     aReferrerInfo
   );
-}
-
-// This is here for historical reasons. bug 1742889 covers cleaning this up.
-function getRootEvent(aEvent) {
-  return BrowserUtils.getRootEvent(aEvent);
-}
-
-// This is here for historical reasons. bug 1742889 covers cleaning this up.
-function whereToOpenLink(e, ignoreButton, ignoreAlt) {
-  return BrowserUtils.whereToOpenLink(e, ignoreButton, ignoreAlt);
 }
 
 function openTrustedLinkIn(url, where, params) {
@@ -294,7 +283,7 @@ function closeMenus(node) {
  *        to check if the close command key was pressed in aEvent.
  */
 function eventMatchesKey(aEvent, aKey) {
-  let keyPressed = aKey.getAttribute("key").toLowerCase();
+  let keyPressed = (aKey.getAttribute("key") || "").toLowerCase();
   let keyModifiers = aKey.getAttribute("modifiers");
   let modifiers = ["Alt", "Control", "Meta", "Shift"];
 
@@ -341,7 +330,7 @@ function gatherTextUnder(root) {
     } else if (HTMLImageElement.isInstance(node)) {
       // If it has an "alt" attribute, add that.
       var altText = node.getAttribute("alt");
-      if (altText && altText != "") {
+      if (altText) {
         text += " " + altText;
       }
     }

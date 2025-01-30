@@ -7,7 +7,7 @@ requestLongerTimeout(2);
 loadTestSubscript("head_sessions.js");
 
 add_task(async function test_sessions_get_recently_closed() {
-  async function openAndCloseWindow(url = "http://example.com", tabUrls) {
+  async function openAndCloseWindow(url = "https://example.com", tabUrls) {
     let win = await BrowserTestUtils.openNewBrowserWindow();
     BrowserTestUtils.startLoadingURIString(win.gBrowser.selectedBrowser, url);
     await BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser);
@@ -51,9 +51,8 @@ add_task(async function test_sessions_get_recently_closed() {
 
   await extension.startup();
 
-  let { recentlyClosed, currentWindowId } = await extension.awaitMessage(
-    "initialData"
-  );
+  let { recentlyClosed, currentWindowId } =
+    await extension.awaitMessage("initialData");
   recordInitialTimestamps(recentlyClosed.map(item => item.lastModified));
 
   await openAndCloseWindow();
@@ -77,13 +76,13 @@ add_task(async function test_sessions_get_recently_closed() {
 
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
-    "http://example.com"
+    "https://example.com"
   );
   BrowserTestUtils.removeTab(tab);
 
   tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
-    "http://example.com"
+    "https://example.com"
   );
   BrowserTestUtils.removeTab(tab);
 
@@ -123,7 +122,7 @@ add_task(async function test_sessions_get_recently_closed_navigated() {
       .then(recentlyClosed => {
         let tab = recentlyClosed[0].window.tabs[0];
         browser.test.assertEq(
-          "http://example.com/",
+          "https://example.com/",
           tab.url,
           "Tab in closed window has the expected url."
         );
@@ -144,7 +143,7 @@ add_task(async function test_sessions_get_recently_closed_navigated() {
 
   // Test with a window with navigation history.
   let win = await BrowserTestUtils.openNewBrowserWindow();
-  for (let url of ["about:robots", "about:mozilla", "http://example.com/"]) {
+  for (let url of ["about:robots", "about:mozilla", "https://example.com/"]) {
     BrowserTestUtils.startLoadingURIString(win.gBrowser.selectedBrowser, url);
     await BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser);
   }
@@ -178,7 +177,7 @@ add_task(
             "The second tab with empty.xpi has no url field due to empty history."
           );
           browser.test.assertEq(
-            "http://example.com/",
+            "https://example.com/",
             win.tabs[2].url,
             "The third tab is example.com."
           );
@@ -195,7 +194,7 @@ add_task(
 
     // Test with a window with empty history.
     let xpi =
-      "http://example.com/browser/browser/components/extensions/test/browser/empty.xpi";
+      "https://example.com/browser/browser/components/extensions/test/browser/empty.xpi";
     let newWin = await BrowserTestUtils.openNewBrowserWindow();
     await BrowserTestUtils.openNewForegroundTab({
       gBrowser: newWin.gBrowser,
@@ -205,7 +204,7 @@ add_task(
     });
     await BrowserTestUtils.openNewForegroundTab({
       gBrowser: newWin.gBrowser,
-      url: "http://example.com/",
+      url: "https://example.com/",
     });
     await BrowserTestUtils.closeWindow(newWin);
 

@@ -2,7 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::convert::TryInto;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -66,10 +65,6 @@ impl TimespanMetric {
     /// Set start time synchronously.
     #[doc(hidden)]
     pub fn set_start(&self, glean: &Glean, start_time: u64) {
-        if !self.should_record(glean) {
-            return;
-        }
-
         let mut lock = self
             .start_time
             .write()

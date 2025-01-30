@@ -154,6 +154,10 @@ typedef int __BLAPI_DEPRECATED __attribute__((deprecated));
 #define DH_MIN_P_BITS 128
 #define DH_MAX_P_BITS 16384
 
+/* max signature for all our supported signatures */
+/* currently RSA is the biggest */
+#define MAX_SIGNATURE_LEN ((RSA_MAX_MODULUS_BITS + 7) / 8)
+
 /*
  * The FIPS 186-1 algorithm for generating primes P and Q allows only 9
  * distinct values for the length of P, and only one value for the
@@ -415,8 +419,8 @@ struct ECFieldIDStr {
         SECItem poly;  /* irreducible binary polynomial for (GF2m) */
     } u;
     int k1; /* first coefficient of pentanomial or
-                         * the only coefficient of trinomial
-                         */
+             * the only coefficient of trinomial
+             */
     int k2; /* two remaining coefficients of pentanomial */
     int k3;
 };
@@ -424,8 +428,8 @@ typedef struct ECFieldIDStr ECFieldID;
 
 struct ECCurveStr {
     SECItem a; /* contains octet stream encoding of
-                         * field element (X9.62 section 4.3.3)
-             */
+                * field element (X9.62 section 4.3.3)
+                */
     SECItem b;
     SECItem seed;
 };
@@ -448,8 +452,8 @@ typedef struct ECParamsStr ECParams;
 struct ECPublicKeyStr {
     ECParams ecParams;
     SECItem publicValue; /* elliptic curve point encoded as
-                * octet stream.
-                */
+                          * octet stream.
+                          */
 };
 typedef struct ECPublicKeyStr ECPublicKey;
 

@@ -106,8 +106,12 @@
 }
 
 #userContext-label {
-  margin: 0;
-  color: var(--identity-tab-color);
+	color: var(--identity-tab-color);
+	margin: 0;
+  max-width: 8em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 #userContext-icons {
@@ -119,6 +123,13 @@
   height: 2px;
   border-radius: 2px;
   margin: -3px 2px 0;
+
+  #vertical-pinned-tabs-container &,
+  #tabbrowser-tabs[orient="vertical"] & {
+    height: 100%;
+    margin: 0 -2px;
+    width: 2px;
+  }
 }
 
 .userContext-icon,

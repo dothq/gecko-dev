@@ -12,7 +12,6 @@
 
 add_setup(async function () {
   useHttpServer();
-  await AddonTestUtils.promiseStartupManager();
 });
 
 add_task(async function test_nosettings() {
@@ -30,8 +29,8 @@ add_task(async function test_nosettings() {
   settingsFile.append(SETTINGS_FILENAME);
   Assert.ok(settingsFile.exists());
 
-  await SearchTestUtils.promiseNewSearchEngine({
-    url: `${gDataUrl}engine.xml`,
+  await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/opensearch/generic1.xml`,
   });
 
   info("Engine has been added, let's wait for the settings to be built");

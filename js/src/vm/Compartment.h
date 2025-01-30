@@ -201,11 +201,7 @@ class ObjectWrapperMap {
     return size;
   }
   size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) {
-    size_t size = map.shallowSizeOfIncludingThis(mallocSizeOf);
-    for (OuterMap::Enum e(map); !e.empty(); e.popFront()) {
-      size += e.front().value().sizeOfIncludingThis(mallocSizeOf);
-    }
-    return size;
+    return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
   }
 
   bool hasNurseryAllocatedWrapperEntries(const CompartmentFilter& f) {
@@ -417,7 +413,7 @@ class JS::Compartment {
    * dangling (full GCs naturally follow pointers across compartments) and
    * when compacting to update cross-compartment pointers.
    */
-  enum EdgeSelector { AllEdges, NonGrayEdges, GrayEdges };
+  enum EdgeSelector { AllEdges, NonGrayEdges, GrayEdges, BlackEdges };
   void traceWrapperTargetsInCollectedZones(JSTracer* trc,
                                            EdgeSelector whichEdges);
   static void traceIncomingCrossCompartmentEdgesForZoneGC(

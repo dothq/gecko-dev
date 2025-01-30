@@ -22,7 +22,7 @@
 #include "mozilla/dom/cache/PCacheChild.h"
 #include "mozilla/dom/cache/ReadStream.h"
 #include "mozilla/dom/cache/TypeUtils.h"
-#include "mozilla/dom/quota/QuotaManager.h"
+#include "mozilla/dom/quota/PrincipalUtils.h"
 #include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ipc/BackgroundChild.h"
@@ -42,7 +42,6 @@
 namespace mozilla::dom::cache {
 
 using mozilla::ErrorResult;
-using mozilla::dom::quota::QuotaManager;
 using mozilla::ipc::BackgroundChild;
 using mozilla::ipc::PBackgroundChild;
 using mozilla::ipc::PrincipalInfo;
@@ -145,7 +144,7 @@ already_AddRefed<CacheStorage> CacheStorage::CreateOnMainThread(
   QM_TRY(MOZ_TO_RESULT(PrincipalToPrincipalInfo(aPrincipal, &principalInfo)),
          nullptr, [&aRv](const nsresult rv) { aRv.Throw(rv); });
 
-  QM_TRY(OkIf(QuotaManager::IsPrincipalInfoValid(principalInfo)),
+  QM_TRY(OkIf(quota::IsPrincipalInfoValid(principalInfo)),
          RefPtr{new CacheStorage(NS_ERROR_DOM_SECURITY_ERR)}.forget(),
          [](const auto) {
            NS_WARNING("CacheStorage not supported on invalid origins.");
@@ -175,7 +174,7 @@ already_AddRefed<CacheStorage> CacheStorage::CreateOnWorker(
   MOZ_DIAGNOSTIC_ASSERT(aWorkerPrivate);
   aWorkerPrivate->AssertIsOnWorkerThread();
 
-  if (aWorkerPrivate->GetOriginAttributes().mPrivateBrowsingId > 0 &&
+  if (aWorkerPrivate->GetOriginAttributes().IsPrivateBrowsing() &&
       !StaticPrefs::dom_cache_privateBrowsing_enabled()) {
     NS_WARNING("CacheStorage not supported during private browsing.");
     RefPtr<CacheStorage> ref = new CacheStorage(NS_ERROR_DOM_SECURITY_ERR);
@@ -193,7 +192,7 @@ already_AddRefed<CacheStorage> CacheStorage::CreateOnWorker(
   const PrincipalInfo& principalInfo =
       aWorkerPrivate->GetEffectiveStoragePrincipalInfo();
 
-  QM_TRY(OkIf(QuotaManager::IsPrincipalInfoValid(principalInfo)), nullptr,
+  QM_TRY(OkIf(quota::IsPrincipalInfoValid(principalInfo)), nullptr,
          [&aRv](const auto) { aRv.Throw(NS_ERROR_FAILURE); });
 
   // We have a number of cases where we want to skip the https scheme
@@ -226,14 +225,15 @@ already_AddRefed<CacheStorage> CacheStorage::CreateOnWorker(
 }
 
 // static
-bool CacheStorage::DefineCaches(JSContext* aCx, JS::Handle<JSObject*> aGlobal) {
+bool CacheStorage::DefineCachesForSandbox(JSContext* aCx,
+                                          JS::Handle<JSObject*> aGlobal) {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_DIAGNOSTIC_ASSERT(JS::GetClass(aGlobal)->flags & JSCLASS_DOM_GLOBAL,
                         "Passed object is not a global object!");
   js::AssertSameCompartment(aCx, aGlobal);
 
-  if (NS_WARN_IF(!CacheStorage_Binding::GetConstructorObject(aCx) ||
-                 !Cache_Binding::GetConstructorObject(aCx))) {
+  if (NS_WARN_IF(!CacheStorage_Binding::CreateAndDefineOnGlobal(aCx) ||
+                 !Cache_Binding::CreateAndDefineOnGlobal(aCx))) {
     return false;
   }
 
@@ -298,7 +298,7 @@ CacheStorage::CacheStorage(nsresult aFailureResult)
 }
 
 already_AddRefed<Promise> CacheStorage::Match(
-    JSContext* aCx, const RequestOrUSVString& aRequest,
+    JSContext* aCx, const RequestOrUTF8String& aRequest,
     const MultiCacheQueryOptions& aOptions, ErrorResult& aRv) {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 

@@ -248,25 +248,6 @@ void gfxASurface::Finish() {
   cairo_surface_finish(mSurface);
 }
 
-already_AddRefed<gfxImageSurface> gfxASurface::CopyToARGB32ImageSurface() {
-  if (!mSurface || !mSurfaceValid) {
-    return nullptr;
-  }
-
-  const IntSize size = GetSize();
-  RefPtr<gfxImageSurface> imgSurface =
-      new gfxImageSurface(size, SurfaceFormat::A8R8G8B8_UINT32);
-
-  RefPtr<DrawTarget> dt = gfxPlatform::CreateDrawTargetForSurface(
-      imgSurface, IntSize(size.width, size.height));
-  RefPtr<SourceSurface> source =
-      gfxPlatform::GetSourceSurfaceForSurface(dt, this);
-
-  dt->CopySurface(source, IntRect(0, 0, size.width, size.height), IntPoint());
-
-  return imgSurface.forget();
-}
-
 int gfxASurface::CairoStatus() {
   if (!mSurfaceValid) return -1;
 
@@ -359,7 +340,7 @@ static const SurfaceMemoryReporterAttrs sSurfaceMemoryReporterAttrs[] = {
     {"gfx-surface-subsurface", nullptr},
 };
 
-static_assert(MOZ_ARRAY_LENGTH(sSurfaceMemoryReporterAttrs) ==
+static_assert(std::size(sSurfaceMemoryReporterAttrs) ==
                   size_t(gfxSurfaceType::Max),
               "sSurfaceMemoryReporterAttrs exceeds max capacity");
 static_assert(uint32_t(CAIRO_SURFACE_TYPE_SKIA) ==
@@ -394,7 +375,7 @@ class SurfaceMemoryReporter final : public nsIMemoryReporter {
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
                             nsISupports* aData, bool aAnonymize) override {
-    const size_t len = ArrayLength(sSurfaceMemoryReporterAttrs);
+    const size_t len = std::size(sSurfaceMemoryReporterAttrs);
     for (size_t i = 0; i < len; i++) {
       int64_t amount = sSurfaceMemoryUsed[i];
 

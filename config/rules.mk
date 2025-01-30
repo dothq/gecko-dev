@@ -128,7 +128,7 @@ LINK_PDBFILE = $(basename $@).pdb
 endif
 endif
 
-ifndef GNU_CC
+ifeq ($(CC_TYPE),clang-cl)
 
 ifdef SIMPLE_PROGRAMS
 COMPILE_PDB_FLAG ?= -Fd$(basename $(@F)).pdb
@@ -140,7 +140,7 @@ ifdef MOZ_DEBUG
 CODFILE=$(basename $(@F)).cod
 endif
 
-endif # !GNU_CC
+endif # CC_TYPE == clang-cl
 endif # WINNT
 
 ifeq (arm-Darwin,$(TARGET_CPU)-$(OS_TARGET))
@@ -203,10 +203,8 @@ endif
 HOST_COBJS = $(addprefix host_,$(notdir $(HOST_CSRCS:.c=.$(OBJ_SUFFIX))))
 # HOST_CPPOBJS can have different extensions (eg: .cpp, .cc)
 HOST_CPPOBJS = $(addprefix host_,$(notdir $(addsuffix .$(OBJ_SUFFIX),$(basename $(HOST_CPPSRCS)))))
-HOST_CMOBJS = $(addprefix host_,$(notdir $(HOST_CMSRCS:.m=.$(OBJ_SUFFIX))))
-HOST_CMMOBJS = $(addprefix host_,$(notdir $(HOST_CMMSRCS:.mm=.$(OBJ_SUFFIX))))
 ifndef HOST_OBJS
-_HOST_OBJS = $(HOST_COBJS) $(HOST_CPPOBJS) $(HOST_CMOBJS) $(HOST_CMMOBJS)
+_HOST_OBJS = $(HOST_COBJS) $(HOST_CPPOBJS)
 HOST_OBJS = $(strip $(_HOST_OBJS))
 endif
 else
@@ -268,7 +266,7 @@ TAG_PROGRAM		= xargs etags -a
 # (moved this from config.mk so that config.mk can be included
 #  before the CPPSRCS are defined)
 #
-ifneq ($(HOST_CPPSRCS)$(HOST_CMMSRCS),)
+ifneq ($(HOST_CPPSRCS),)
 HOST_CPP_PROG_LINK	= 1
 endif
 
@@ -279,7 +277,7 @@ endif
 ifeq ($(OS_ARCH),Darwin)
 ifneq (,$(SHARED_LIBRARY))
 _LOADER_PATH := @rpath
-EXTRA_DSO_LDOPTS	+= -dynamiclib -install_name $(_LOADER_PATH)/$@ -compatibility_version 1 -current_version 1
+EXTRA_DSO_LDOPTS	+= -dynamiclib -install_name $(_LOADER_PATH)/$(@F) -compatibility_version 1 -current_version 1
 endif
 endif
 
@@ -295,7 +293,7 @@ endif
 # MINGW32
 #
 ifeq ($(OS_ARCH),WINNT)
-ifdef GNU_CC
+ifneq ($(CC_TYPE),clang-cl)
 DSO_LDOPTS += -Wl,--out-implib -Wl,$(IMPORT_LIBRARY)
 endif
 endif
@@ -308,11 +306,11 @@ IFLAGS1 = -m 644
 IFLAGS2 = -m 755
 endif
 
-ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
+ifeq (clang-cl_WINNT,$(CC_TYPE)_$(OS_ARCH))
 OUTOPTION = -Fo# eol
 else
 OUTOPTION = -o # eol
-endif # WINNT && !GNU_CC
+endif # WINNT && clang-cl
 
 ifeq (,$(CROSS_COMPILE))
 HOST_OUTOPTION = $(OUTOPTION)
@@ -419,12 +417,12 @@ endef
 $(PROGRAM): $(PROGOBJS) $(STATIC_LIBS) $(EXTRA_DEPS) $(call resfile,$(PROGRAM)) $(GLOBAL_DEPS) $(call mkdir_deps,$(FINAL_TARGET))
 	$(REPORT_BUILD)
 	$(call BUILDSTATUS,START_Program $(@F))
-ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
+ifeq (clang-cl_WINNT,$(CC_TYPE)_$(OS_ARCH))
 	$(LINKER) -OUT:$@ -PDB:$(LINK_PDBFILE) -IMPLIB:$(basename $(@F)).lib $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $($(notdir $@)_OBJS) $(filter %.res,$^) $(STATIC_LIBS) $(SHARED_LIBS) $(OS_LIBS)
-else # !WINNT || GNU_CC
+else # !WINNT || !clang-cl
 	$(call EXPAND_CC_OR_CXX,$@) -o $@ $(COMPUTED_CXX_LDFLAGS) $($(notdir $@)_OBJS) $(filter %.res,$^) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(OS_LIBS)
 	$(call py_action,check_binary $(@F),$@)
-endif # WINNT && !GNU_CC
+endif # WINNT && clang-cl
 
 ifdef ENABLE_STRIP
 	$(STRIP) $(STRIP_FLAGS) $@
@@ -437,7 +435,7 @@ endif
 $(HOST_PROGRAM): $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS) $(call mkdir_deps,$(DEPTH)/dist/host/bin)
 	$(REPORT_BUILD)
 	$(call BUILDSTATUS,START_Program $(@F))
-ifeq (_WINNT,$(GNU_CC)_$(HOST_OS_ARCH))
+ifeq (clang-cl_WINNT,$(HOST_CC_TYPE)_$(HOST_OS_ARCH))
 	$(HOST_LINKER) -OUT:$@ -PDB:$(HOST_PDBFILE) $($(notdir $@)_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LINKER_LIBPATHS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
 ifeq ($(HOST_CPP_PROG_LINK),1)
@@ -464,12 +462,12 @@ $(foreach p,$(SIMPLE_PROGRAMS),$(eval $(call simple_program_deps,$(p))))
 $(SIMPLE_PROGRAMS):
 	$(REPORT_BUILD)
 	$(call BUILDSTATUS,START_Program $(@F))
-ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
+ifeq (clang-cl_WINNT,$(CC_TYPE)_$(OS_ARCH))
 	$(LINKER) -out:$@ -pdb:$(LINK_PDBFILE) $($@_OBJS) $(filter %.res,$^) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(OS_LIBS)
 else
 	$(call EXPAND_CC_OR_CXX,$@) $(COMPUTED_CXX_LDFLAGS) -o $@ $($@_OBJS) $(filter %.res,$^) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(OS_LIBS)
 	$(call py_action,check_binary $(@F),$@)
-endif # WINNT && !GNU_CC
+endif # WINNT && clang-cl
 
 ifdef ENABLE_STRIP
 	$(STRIP) $(STRIP_FLAGS) $@
@@ -482,7 +480,7 @@ endif
 $(HOST_SIMPLE_PROGRAMS): host_%$(HOST_BIN_SUFFIX): $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 	$(call BUILDSTATUS,START_Program $(@F))
-ifeq (WINNT_,$(HOST_OS_ARCH)_$(GNU_CC))
+ifeq (WINNT_clang-cl,$(HOST_OS_ARCH)_$(HOST_CC_TYPE))
 	$(HOST_LINKER) -OUT:$@ -PDB:$(HOST_PDBFILE) $($(notdir $@)_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LINKER_LIBPATHS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
 ifneq (,$(HOST_CPPSRCS)$(USE_HOST_CXX))
@@ -534,14 +532,14 @@ endif
 # symlinks back to the originals. The symlinks are a no-op for stabs debugging,
 # so no need to conditionalize on OS version or debugging format.
 
-$(SHARED_LIBRARY): $(OBJS) $(call resfile,$(SHARED_LIBRARY)) $(STATIC_LIBS) $(EXTRA_DEPS) $(GLOBAL_DEPS)
+$(SHARED_LIBRARY): $(OBJS) $(call resfile,$(SHARED_LIBRARY)) $(STATIC_LIBS) $(EXTRA_DEPS) $(GLOBAL_DEPS) $(call mkdir_deps,$(FINAL_TARGET))
 	$(REPORT_BUILD)
 	$(call BUILDSTATUS,START_SharedLib $@)
 	$(RM) $@
-	$(MKSHLIB) $($@_OBJS) $(filter %.res,$^) $(RELRHACK_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(OS_LIBS)
+	$(MKSHLIB) $(if $(filter clang-cl_WINNT,$(CC_TYPE)_$(OS_ARCH)),-IMPLIB:$(basename $(@F)).lib )$($(notdir $@)_OBJS) $(filter %.res,$^) $(RELRHACK_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(OS_LIBS)
 	$(call py_action,check_binary,$@)
 
-ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
+ifeq (clang-cl_WINNT,$(CC_TYPE)_$(OS_ARCH))
 endif	# WINNT && !GCC
 	chmod +x $@
 ifdef ENABLE_STRIP
@@ -558,7 +556,7 @@ define src_objdep
 $(basename $3$(notdir $1)).$2: $1 $$(call mkdir_deps,$$(MDDEPDIR))
 endef
 $(foreach f,$(CSRCS) $(SSRCS) $(CPPSRCS) $(CMSRCS) $(CMMSRCS) $(ASFILES),$(eval $(call src_objdep,$(f),$(OBJ_SUFFIX))))
-$(foreach f,$(HOST_CSRCS) $(HOST_CPPSRCS) $(HOST_CMSRCS) $(HOST_CMMSRCS),$(eval $(call src_objdep,$(f),$(OBJ_SUFFIX),host_)))
+$(foreach f,$(HOST_CSRCS) $(HOST_CPPSRCS),$(eval $(call src_objdep,$(f),$(OBJ_SUFFIX),host_)))
 $(foreach f,$(WASM_CSRCS) $(WASM_CPPSRCS),$(eval $(call src_objdep,$(f),wasm)))
 
 # The Rust compiler only outputs library objects, and so we need different
@@ -580,18 +578,6 @@ $(HOST_CPPOBJS):
 	$(REPORT_BUILD_VERBOSE)
 	$(call BUILDSTATUS,OBJECT_FILE $@)
 	$(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(NSPR_CFLAGS) $<
-	$(call BUILDSTATUS,END_Object $@)
-
-$(HOST_CMOBJS):
-	$(REPORT_BUILD_VERBOSE)
-	$(call BUILDSTATUS,OBJECT_FILE $@)
-	$(HOST_CC) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CFLAGS) $(HOST_CMFLAGS) $(NSPR_CFLAGS) $<
-	$(call BUILDSTATUS,END_Object $@)
-
-$(HOST_CMMOBJS):
-	$(REPORT_BUILD_VERBOSE)
-	$(call BUILDSTATUS,OBJECT_FILE $@)
-	$(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(HOST_CMMFLAGS) $(NSPR_CFLAGS) $<
 	$(call BUILDSTATUS,END_Object $@)
 
 $(COBJS):

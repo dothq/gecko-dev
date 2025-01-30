@@ -246,6 +246,20 @@ int16_t WebRtcOpus_DisableDtx(OpusEncInst* inst);
 int16_t WebRtcOpus_GetUseDtx(OpusEncInst* inst);
 
 /****************************************************************************
+ * WebRtcOpus_GetUseDtx()
+ *
+ * This function gets if the encoder is in DTX.
+ *
+ * Input:
+ *      - inst               : Encoder context
+ *
+ * Return value              :  0 - Encoder is not DTX.
+ *                              1 - Encoder is in DTX.
+ *                             -1 - Error.
+ */
+int16_t WebRtcOpus_GetInDtx(OpusEncInst* inst);
+
+/****************************************************************************
  * WebRtcOpus_EnableCbr()
  *
  * This function enables CBR for encoding.
@@ -319,20 +333,6 @@ int32_t WebRtcOpus_GetBandwidth(OpusEncInst* inst);
  *                             -1 - Error
  */
 int16_t WebRtcOpus_SetBandwidth(OpusEncInst* inst, int32_t bandwidth);
-
-/*
- * WebRtcOpus_GetInDtx(...)
- *
- * Gets the DTX state of the encoder.
- *
- * Input:
- *      - inst   : Encoder context
- *
- * Return value  : -1 - Error.
- *                 1  - Last encoded frame was comfort noise update during DTX.
- *                 0  - Last encoded frame was encoded with encoder not in DTX.
- */
-int32_t WebRtcOpus_GetInDtx(OpusEncInst* inst);
 
 /*
  * WebRtcOpus_SetForceChannels(...)

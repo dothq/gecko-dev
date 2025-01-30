@@ -79,7 +79,7 @@ kill_httpserv()
 
   echo "trying to kill httpserv with PID ${PID} at `date`"
 
-  if [ "${OS_ARCH}" = "WINNT" -o "${OS_ARCH}" = "WIN95" -o "${OS_ARCH}" = "OS2" ]; then
+  if [ "${OS_ARCH}" = "WINNT" ]; then
       echo "${KILL} ${PID}"
       ${KILL} ${PID}
   else
@@ -1321,6 +1321,14 @@ chains_run_httpserv random
 chains_main
 chains_stop_httpserv
 chains_run_httpserv get-unknown
+chains_main
+chains_stop_httpserv
+export NSS_COMBO_SIGNATURES=signonly
+chains_run_httpserv random
+chains_main
+chains_stop_httpserv
+export NSS_COMBO_SIGNATURES=vfynonly
+chains_run_httpserv random
 chains_main
 chains_stop_httpserv
 chains_cleanup

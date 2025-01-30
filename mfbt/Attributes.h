@@ -78,6 +78,13 @@
 #  define MOZ_HAVE_NO_STACK_PROTECTOR __attribute__((no_stack_protector))
 #endif
 
+/* if defined(__clang__) && __has_attribute (attr) may not be portable */
+#if defined(__clang__)
+#  define MOZ_HAS_CLANG_ATTRIBUTE(attr) __has_attribute(attr)
+#else
+#  define MOZ_HAS_CLANG_ATTRIBUTE(attr) 0
+#endif
+
 /*
  * When built with clang analyzer (a.k.a scan-build), define MOZ_HAVE_NORETURN
  * to mark some false positives
@@ -88,15 +95,13 @@
 #  endif
 #endif
 
-#if defined(__GNUC__) || \
-    (defined(__clang__) && __has_attribute(no_profile_instrument_function))
+#if defined(__GNUC__) || MOZ_HAS_CLANG_ATTRIBUTE(no_profile_instrument_function)
 #  define MOZ_NOPROFILE __attribute__((no_profile_instrument_function))
 #else
 #  define MOZ_NOPROFILE
 #endif
 
-#if defined(__GNUC__) || \
-    (defined(__clang__) && __has_attribute(no_instrument_function))
+#if defined(__GNUC__) || (MOZ_HAS_CLANG_ATTRIBUTE(no_instrument_function))
 #  define MOZ_NOINSTRUMENT __attribute__((no_instrument_function))
 #else
 #  define MOZ_NOINSTRUMENT
@@ -121,7 +126,7 @@
  *
  * This is useful to have clearer information on assertion failures.
  */
-#if defined(__clang__) && __has_attribute(nomerge)
+#if MOZ_HAS_CLANG_ATTRIBUTE(nomerge)
 #  define MOZ_NOMERGE __attribute__((nomerge))
 #else
 #  define MOZ_NOMERGE
@@ -616,6 +621,11 @@
  *   expression. If a member of another class uses this class, or if another
  *   class inherits from this class, then it is considered to be a non-heap
  *   class as well, although this attribute need not be provided in such cases.
+ * MOZ_CONSTINIT: pre-C++20 equivalent to `constinit`.
+ * MOZ_RUNINIT: Applies to global variables with runtime initialization.
+ * MOZ_GLOBINIT: Applies to global variables with potential runtime
+ *   initialization (e.g. inside macro or when initialisation status depends on
+ *   template parameter).
  * MOZ_HEAP_CLASS: Applies to all classes. Any class with this annotation is
  *   expected to live on the heap, so it is a compile-time error to use it, or
  *   an array of such objects, as the type of a variable declaration, or as a
@@ -853,12 +863,17 @@
 #    define MOZ_MAY_CALL_AFTER_MUST_RETURN \
       __attribute__((annotate("moz_may_call_after_must_return")))
 #    define MOZ_KNOWN_LIVE __attribute__((annotate("moz_known_live")))
-#    ifndef XGILL_PLUGIN
+#    ifdef MOZ_CLANG_PLUGIN
 #      define MOZ_UNANNOTATED __attribute__((annotate("moz_unannotated")))
 #      define MOZ_ANNOTATED __attribute__((annotate("moz_annotated")))
+#      define MOZ_RUNINIT __attribute__((annotate("moz_global_var")))
+#      define MOZ_GLOBINIT \
+        MOZ_RUNINIT __attribute__((annotate("moz_generated")))
 #    else
 #      define MOZ_UNANNOTATED /* nothing */
 #      define MOZ_ANNOTATED   /* nothing */
+#      define MOZ_RUNINIT     /* nothing */
+#      define MOZ_GLOBINIT    /* nothing */
 #    endif
 
 /*
@@ -866,11 +881,11 @@
  * warning, so use pragmas to disable the warning.
  */
 #    ifdef __clang__
-#      define MOZ_HEAP_ALLOCATOR                                 \
-        _Pragma("clang diagnostic push")                         \
-            _Pragma("clang diagnostic ignored \"-Wgcc-compat\"") \
-                __attribute__((annotate("moz_heap_allocator")))  \
-                _Pragma("clang diagnostic pop")
+#      define MOZ_HEAP_ALLOCATOR                                         \
+        _Pragma("clang diagnostic push")                                 \
+            _Pragma("clang diagnostic ignored \"-Wgcc-compat\"")         \
+                __attribute__((annotate("moz_heap_allocator"))) _Pragma( \
+                    "clang diagnostic pop")
 #    else
 #      define MOZ_HEAP_ALLOCATOR __attribute__((annotate("moz_heap_allocator")))
 #    endif
@@ -880,6 +895,8 @@
 #    define MOZ_CAN_RUN_SCRIPT_BOUNDARY                     /* nothing */
 #    define MOZ_MUST_OVERRIDE                               /* nothing */
 #    define MOZ_STATIC_CLASS                                /* nothing */
+#    define MOZ_RUNINIT                                     /* nothing */
+#    define MOZ_GLOBINIT                                    /* nothing */
 #    define MOZ_STATIC_LOCAL_CLASS                          /* nothing */
 #    define MOZ_STACK_CLASS                                 /* nothing */
 #    define MOZ_NONHEAP_CLASS                               /* nothing */
@@ -1029,6 +1046,25 @@
 #  define MOZ_EMPTY_BASES __declspec(empty_bases)
 #else
 #  define MOZ_EMPTY_BASES
+#endif
+
+/**
+ * Pre- C++20 equivalent to constinit
+ */
+#if defined(__cpp_constinit)
+#  define MOZ_CONSTINIT constinit
+#elif defined(__clang__)
+#  define MOZ_CONSTINIT [[clang::require_constant_initialization]]
+#else
+#  define MOZ_CONSTINIT
+#endif
+
+// XXX: GCC somehow does not allow attributes before lambda return types, while
+// clang requires so. See also bug 1627007.
+#ifdef __clang__
+#  define MOZ_CAN_RUN_SCRIPT_BOUNDARY_LAMBDA MOZ_CAN_RUN_SCRIPT_BOUNDARY
+#else
+#  define MOZ_CAN_RUN_SCRIPT_BOUNDARY_LAMBDA
 #endif
 
 #endif /* mozilla_Attributes_h */

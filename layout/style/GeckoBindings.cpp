@@ -201,7 +201,7 @@ void Gecko_ComputedStyle_Init(ComputedStyle* aStyle,
 }
 
 ServoComputedData::ServoComputedData(const ServoComputedDataForgotten aValue) {
-  PodAssign(this, aValue.mPtr);
+  memcpy((void*)this, aValue.mPtr, sizeof(*this));
 }
 
 MOZ_DEFINE_MALLOC_ENCLOSING_SIZE_OF(ServoStyleStructsMallocEnclosingSizeOf)
@@ -317,8 +317,21 @@ float Gecko_GetScrollbarInlineSize(const nsPresContext* aPc) {
   return aPc->DevPixelsToFloatCSSPixels(size);
 }
 
-PseudoStyleType Gecko_GetImplementedPseudo(const Element* aElement) {
+PseudoStyleType Gecko_GetImplementedPseudoType(const Element* aElement) {
   return aElement->GetPseudoElementType();
+}
+
+nsAtom* Gecko_GetImplementedPseudoIdentifier(const Element* aElement) {
+  if (!PseudoStyle::IsNamedViewTransitionPseudoElement(
+          aElement->GetPseudoElementType())) {
+    return nullptr;
+  }
+
+  if (!aElement->HasName()) {
+    return nullptr;
+  }
+
+  return aElement->GetParsedAttr(nsGkAtoms::name)->GetAtomValue();
 }
 
 uint32_t Gecko_CalcStyleDifference(const ComputedStyle* aOldStyle,
@@ -415,20 +428,13 @@ const StyleLockedDeclarationBlock* Gecko_GetUnvisitedLinkAttrDeclarationBlock(
   return attrStyles->GetServoUnvisitedLinkDecl();
 }
 
-StyleSheet* Gecko_StyleSheet_Clone(const StyleSheet* aSheet,
-                                   const StyleSheet* aNewParentSheet) {
+StyleSheet* Gecko_StyleSheet_Clone(const StyleSheet* aSheet) {
   MOZ_ASSERT(aSheet);
   MOZ_ASSERT(aSheet->GetParentSheet(), "Should only be used for @import");
-  MOZ_ASSERT(aNewParentSheet, "Wat");
-
+  // NOTE(emilio): We don't pass either the parent pointer of the stylesheet,
+  // nor fix up the child list (yet). This is fixed up in the StylesheetInner
+  // constructor.
   RefPtr<StyleSheet> newSheet = aSheet->Clone(nullptr, nullptr);
-
-  // NOTE(emilio): This code runs in the StylesheetInner constructor, which
-  // means that the inner pointer of `aNewParentSheet` still points to the old
-  // one.
-  //
-  // So we _don't_ update neither the parent pointer of the stylesheet, nor the
-  // child list (yet). This is fixed up in that same constructor.
   return static_cast<StyleSheet*>(newSheet.forget().take());
 }
 
@@ -440,6 +446,33 @@ void Gecko_StyleSheet_AddRef(const StyleSheet* aSheet) {
 void Gecko_StyleSheet_Release(const StyleSheet* aSheet) {
   MOZ_ASSERT(NS_IsMainThread());
   const_cast<StyleSheet*>(aSheet)->Release();
+}
+
+GeckoImplicitScopeRoot Gecko_StyleSheet_ImplicitScopeRoot(
+    const mozilla::StyleSheet* aSheet) {
+  if (aSheet->IsConstructed()) {
+    return GeckoImplicitScopeRoot{
+        .mHost = nullptr, .mRoot = nullptr, .mConstructed = true};
+  }
+  // https://drafts.csswg.org/css-cascade-6/#scope-limits
+  // "If no <scope-start> is specified, the scoping root is the parent element
+  // of the owner node of the stylesheet where the @scope rule is defined."
+  const auto* node = aSheet->GetOwnerNodeOfOutermostSheet();
+  if (!node) {
+    return GeckoImplicitScopeRoot{
+        .mHost = nullptr, .mRoot = nullptr, .mConstructed = false};
+  }
+  const auto* host = node->GetContainingShadowHost();
+
+  if (auto* aElement = node->GetParentElement()) {
+    return GeckoImplicitScopeRoot{
+        .mHost = host, .mRoot = aElement, .mConstructed = false};
+  }
+  // "[...] If no such element exists, then the scoping root is the root of the
+  // containing node tree." This really should only happen for stylesheets
+  // defined at the edge of the shadow root.
+  return GeckoImplicitScopeRoot{
+      .mHost = host, .mRoot = host, .mConstructed = false};
 }
 
 const StyleLockedDeclarationBlock* Gecko_GetVisitedLinkAttrDeclarationBlock(
@@ -474,10 +507,10 @@ bool Gecko_GetAnimationRule(const Element* aElement,
     return false;
   }
 
-  const auto [element, pseudoType] =
+  const auto [element, pseudoRequest] =
       AnimationUtils::GetElementPseudoPair(aElement);
   return presContext->EffectCompositor()->GetServoAnimationRule(
-      element, pseudoType, aCascadeLevel, aAnimationValues);
+      element, pseudoRequest, aCascadeLevel, aAnimationValues);
 }
 
 bool Gecko_StyleAnimationsEquals(const nsStyleAutoArray<StyleAnimation>* aA,
@@ -515,26 +548,26 @@ void Gecko_UpdateAnimations(const Element* aElement,
 
   nsAutoAnimationMutationBatch mb(aElement->OwnerDoc());
 
-  const auto [element, pseudoType] =
+  const auto [element, pseudoRequest] =
       AnimationUtils::GetElementPseudoPair(aElement);
 
   // Handle scroll/view timelines first because CSS animations may refer to the
   // timeline defined by itself.
   if (aTasks & UpdateAnimationsTasks::ScrollTimelines) {
     presContext->TimelineManager()->UpdateTimelines(
-        const_cast<Element*>(element), pseudoType, aComputedData,
+        const_cast<Element*>(element), pseudoRequest, aComputedData,
         TimelineManager::ProgressTimelineType::Scroll);
   }
 
   if (aTasks & UpdateAnimationsTasks::ViewTimelines) {
     presContext->TimelineManager()->UpdateTimelines(
-        const_cast<Element*>(element), pseudoType, aComputedData,
+        const_cast<Element*>(element), pseudoRequest, aComputedData,
         TimelineManager::ProgressTimelineType::View);
   }
 
   if (aTasks & UpdateAnimationsTasks::CSSAnimations) {
     presContext->AnimationManager()->UpdateAnimations(
-        const_cast<Element*>(element), pseudoType, aComputedData);
+        const_cast<Element*>(element), pseudoRequest, aComputedData);
   }
 
   // aComputedData might be nullptr if the target element is now in a
@@ -550,17 +583,17 @@ void Gecko_UpdateAnimations(const Element* aElement,
   if (aTasks & UpdateAnimationsTasks::CSSTransitions) {
     MOZ_ASSERT(aOldComputedData);
     presContext->TransitionManager()->UpdateTransitions(
-        const_cast<Element*>(element), pseudoType, *aOldComputedData,
+        const_cast<Element*>(element), pseudoRequest, *aOldComputedData,
         *aComputedData);
   }
 
   if (aTasks & UpdateAnimationsTasks::EffectProperties) {
     presContext->EffectCompositor()->UpdateEffectProperties(
-        aComputedData, const_cast<Element*>(element), pseudoType);
+        aComputedData, const_cast<Element*>(element), pseudoRequest);
   }
 
   if (aTasks & UpdateAnimationsTasks::CascadeResults) {
-    EffectSet* effectSet = EffectSet::Get(element, pseudoType);
+    EffectSet* effectSet = EffectSet::Get(element, pseudoRequest);
     // CSS animations/transitions might have been destroyed as part of the above
     // steps so before updating cascade results, we check if there are still any
     // animations to update.
@@ -571,62 +604,57 @@ void Gecko_UpdateAnimations(const Element* aElement,
       // it since we avoid mutating state as part of the Servo parallel
       // traversal.
       presContext->EffectCompositor()->UpdateCascadeResults(
-          *effectSet, const_cast<Element*>(element), pseudoType);
+          *effectSet, const_cast<Element*>(element), pseudoRequest);
     }
   }
 
   if (aTasks & UpdateAnimationsTasks::DisplayChangedFromNone) {
     presContext->EffectCompositor()->RequestRestyle(
-        const_cast<Element*>(element), pseudoType,
+        const_cast<Element*>(element), pseudoRequest,
         EffectCompositor::RestyleType::Standard,
         EffectCompositor::CascadeLevel::Animations);
   }
 }
 
 size_t Gecko_GetAnimationEffectCount(const Element* aElementOrPseudo) {
-  const auto [element, pseudoType] =
+  const auto [element, pseudo] =
       AnimationUtils::GetElementPseudoPair(aElementOrPseudo);
 
-  EffectSet* effectSet = EffectSet::Get(element, pseudoType);
+  EffectSet* effectSet = EffectSet::Get(element, pseudo);
   return effectSet ? effectSet->Count() : 0;
 }
 
 bool Gecko_ElementHasAnimations(const Element* aElement) {
-  const auto [element, pseudoType] =
-      AnimationUtils::GetElementPseudoPair(aElement);
-  return !!EffectSet::Get(element, pseudoType);
+  const auto [element, pseudo] = AnimationUtils::GetElementPseudoPair(aElement);
+  return !!EffectSet::Get(element, pseudo);
 }
 
 bool Gecko_ElementHasCSSAnimations(const Element* aElement) {
-  const auto [element, pseudoType] =
-      AnimationUtils::GetElementPseudoPair(aElement);
+  const auto [element, pseudo] = AnimationUtils::GetElementPseudoPair(aElement);
   auto* collection =
-      nsAnimationManager::CSSAnimationCollection::Get(element, pseudoType);
+      nsAnimationManager::CSSAnimationCollection::Get(element, pseudo);
   return collection && !collection->mAnimations.IsEmpty();
 }
 
 bool Gecko_ElementHasCSSTransitions(const Element* aElement) {
-  const auto [element, pseudoType] =
-      AnimationUtils::GetElementPseudoPair(aElement);
+  const auto [element, pseudo] = AnimationUtils::GetElementPseudoPair(aElement);
   auto* collection =
-      nsTransitionManager::CSSTransitionCollection::Get(element, pseudoType);
+      nsTransitionManager::CSSTransitionCollection::Get(element, pseudo);
   return collection && !collection->mAnimations.IsEmpty();
 }
 
 size_t Gecko_ElementTransitions_Length(const Element* aElement) {
-  const auto [element, pseudoType] =
-      AnimationUtils::GetElementPseudoPair(aElement);
+  const auto [element, pseudo] = AnimationUtils::GetElementPseudoPair(aElement);
   auto* collection =
-      nsTransitionManager::CSSTransitionCollection::Get(element, pseudoType);
+      nsTransitionManager::CSSTransitionCollection::Get(element, pseudo);
   return collection ? collection->mAnimations.Length() : 0;
 }
 
 static CSSTransition* GetCurrentTransitionAt(const Element* aElement,
                                              size_t aIndex) {
-  const auto [element, pseudoType] =
-      AnimationUtils::GetElementPseudoPair(aElement);
+  const auto [element, pseudo] = AnimationUtils::GetElementPseudoPair(aElement);
   auto* collection =
-      nsTransitionManager::CSSTransitionCollection ::Get(element, pseudoType);
+      nsTransitionManager::CSSTransitionCollection ::Get(element, pseudo);
   if (!collection) {
     return nullptr;
   }
@@ -683,14 +711,13 @@ bool Gecko_IsDocumentBody(const Element* aElement) {
 }
 
 bool Gecko_IsDarkColorScheme(const Document* aDoc,
-                             const StyleColorScheme* aStyle) {
-  return LookAndFeel::ColorSchemeForStyle(*aDoc, aStyle->bits) ==
-         ColorScheme::Dark;
+                             const StyleColorSchemeFlags* aStyle) {
+  return LookAndFeel::ColorSchemeForStyle(*aDoc, *aStyle) == ColorScheme::Dark;
 }
 
 nscolor Gecko_ComputeSystemColor(StyleSystemColor aColor, const Document* aDoc,
-                                 const StyleColorScheme* aStyle) {
-  auto colorScheme = LookAndFeel::ColorSchemeForStyle(*aDoc, aStyle->bits);
+                                 const StyleColorSchemeFlags* aStyle) {
+  auto colorScheme = LookAndFeel::ColorSchemeForStyle(*aDoc, *aStyle);
   const auto& prefs = PreferenceSheet::PrefsFor(*aDoc);
   if (prefs.mMustUseLightSystemColors) {
     colorScheme = ColorScheme::Light;
@@ -960,62 +987,6 @@ void Gecko_SetFontPaletteOverride(
       uint32_t(aIndex), gfx::sRGBColor::FromABGR(aColor->ToColor())});
 }
 
-void Gecko_CounterStyle_ToPtr(const StyleCounterStyle* aStyle,
-                              CounterStylePtr* aPtr) {
-  *aPtr = CounterStylePtr::FromStyle(*aStyle);
-}
-
-void Gecko_SetCounterStyleToNone(CounterStylePtr* aPtr) {
-  *aPtr = nsGkAtoms::none;
-}
-
-void Gecko_SetCounterStyleToString(CounterStylePtr* aPtr,
-                                   const nsACString* aSymbol) {
-  *aPtr = new AnonymousCounterStyle(NS_ConvertUTF8toUTF16(*aSymbol));
-}
-
-void Gecko_CopyCounterStyle(CounterStylePtr* aDst,
-                            const CounterStylePtr* aSrc) {
-  *aDst = *aSrc;
-}
-
-nsAtom* Gecko_CounterStyle_GetName(const CounterStylePtr* aPtr) {
-  return aPtr->IsAtom() ? aPtr->AsAtom() : nullptr;
-}
-
-const AnonymousCounterStyle* Gecko_CounterStyle_GetAnonymous(
-    const CounterStylePtr* aPtr) {
-  return aPtr->AsAnonymous();
-}
-
-void Gecko_EnsureTArrayCapacity(void* aArray, size_t aCapacity,
-                                size_t aElemSize) {
-  auto base =
-      reinterpret_cast<nsTArray_base<nsTArrayInfallibleAllocator,
-                                     nsTArray_RelocateUsingMemutils>*>(aArray);
-
-  base->EnsureCapacity<nsTArrayInfallibleAllocator>(aCapacity, aElemSize);
-}
-
-void Gecko_ClearPODTArray(void* aArray, size_t aElementSize,
-                          size_t aElementAlign) {
-  auto base =
-      reinterpret_cast<nsTArray_base<nsTArrayInfallibleAllocator,
-                                     nsTArray_RelocateUsingMemutils>*>(aArray);
-
-  base->template ShiftData<nsTArrayInfallibleAllocator>(
-      0, base->Length(), 0, aElementSize, aElementAlign);
-}
-
-void Gecko_ResizeTArrayForStrings(nsTArray<nsString>* aArray,
-                                  uint32_t aLength) {
-  aArray->SetLength(aLength);
-}
-
-void Gecko_ResizeAtomArray(nsTArray<RefPtr<nsAtom>>* aArray, uint32_t aLength) {
-  aArray->SetLength(aLength);
-}
-
 void Gecko_EnsureImageLayersLength(nsStyleImageLayers* aLayers, size_t aLen,
                                    nsStyleImageLayers::LayerType aLayerType) {
   size_t oldLength = aLayers->mLayers.Length();
@@ -1133,16 +1104,6 @@ Keyframe* Gecko_GetOrCreateFinalKeyframe(
   return GetOrCreateKeyframe(aKeyframes, 1., aTimingFunction, aComposition,
                              KeyframeSearchDirection::Backwards,
                              KeyframeInsertPosition::LastForOffset);
-}
-
-PropertyValuePair* Gecko_AppendPropertyValuePair(
-    nsTArray<PropertyValuePair>* aProperties,
-    const mozilla::AnimatedPropertyID* aProperty) {
-  MOZ_ASSERT(aProperties);
-  MOZ_ASSERT(
-      aProperty->IsCustom() ||
-      !nsCSSProps::PropHasFlags(aProperty->mID, CSSPropFlags::IsLogical));
-  return aProperties->AppendElement(PropertyValuePair{*aProperty});
 }
 
 void Gecko_GetComputedURLSpec(const StyleComputedUrl* aURL, nsCString* aOut) {
@@ -1289,8 +1250,7 @@ Length Gecko_nsStyleFont_ComputeMinSize(const nsStyleFont* aFont,
     return {0};
   }
 
-  minFontSize.ScaleBy(aFont->mMinFontSizeRatio);
-  minFontSize.ScaleBy(1.0f / 100.0f);
+  minFontSize.ScaleBy(aFont->mMinFontSizeRatio._0);
   return minFontSize;
 }
 
@@ -1410,7 +1370,7 @@ static already_AddRefed<StyleSheet> LoadImportSheet(
   MOZ_ASSERT(aLoader, "Should've catched this before");
   MOZ_ASSERT(aParent, "Only used for @import, so parent should exist!");
 
-  RefPtr<MediaList> media = new MediaList(std::move(aMediaList));
+  auto media = MakeRefPtr<MediaList>(std::move(aMediaList));
   nsCOMPtr<nsIURI> uri = aURL.GetURI();
   nsresult rv = uri ? NS_OK : NS_ERROR_FAILURE;
 
@@ -1555,12 +1515,14 @@ bool Gecko_ErrorReportingEnabled(const StyleSheet* aSheet,
   return true;
 }
 
-void Gecko_ReportUnexpectedCSSError(
-    const uint64_t aWindowId, nsIURI* aURI, const char* message,
-    const char* param, uint32_t paramLen, const char* prefix,
-    const char* prefixParam, uint32_t prefixParamLen, const char* suffix,
-    const char* source, uint32_t sourceLen, const char* selectors,
-    uint32_t selectorsLen, uint32_t lineNumber, uint32_t colNumber) {
+void Gecko_ReportUnexpectedCSSError(const uint64_t aWindowId, nsIURI* aURI,
+                                    const char* message, const char* param,
+                                    uint32_t paramLen, const char* prefix,
+                                    const char* prefixParam,
+                                    uint32_t prefixParamLen, const char* suffix,
+                                    const char* selectors,
+                                    uint32_t selectorsLen, uint32_t lineNumber,
+                                    uint32_t colNumber) {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   ErrorReporter reporter(aWindowId);
@@ -1588,10 +1550,8 @@ void Gecko_ReportUnexpectedCSSError(
   if (suffix) {
     reporter.ReportUnexpected(suffix);
   }
-  nsDependentCSubstring sourceValue(source, sourceLen);
   nsDependentCSubstring selectorsValue(selectors, selectorsLen);
-  reporter.OutputError(sourceValue, selectorsValue, lineNumber + 1, colNumber,
-                       aURI);
+  reporter.OutputError(selectorsValue, lineNumber + 1, colNumber, aURI);
 }
 
 void Gecko_ContentList_AppendAll(nsSimpleContentList* aList,
@@ -1712,11 +1672,13 @@ bool Gecko_AssertClassAttrValueIsSane(const nsAttrValue* aValue) {
 void Gecko_GetSafeAreaInsets(const nsPresContext* aPresContext, float* aTop,
                              float* aRight, float* aBottom, float* aLeft) {
   MOZ_ASSERT(aPresContext);
-  ScreenIntMargin safeAreaInsets = aPresContext->GetSafeAreaInsets();
-  *aTop = aPresContext->DevPixelsToFloatCSSPixels(safeAreaInsets.top);
-  *aRight = aPresContext->DevPixelsToFloatCSSPixels(safeAreaInsets.right);
-  *aBottom = aPresContext->DevPixelsToFloatCSSPixels(safeAreaInsets.bottom);
-  *aLeft = aPresContext->DevPixelsToFloatCSSPixels(safeAreaInsets.left);
+  const CSSMargin insets =
+      LayoutDeviceMargin(aPresContext->GetSafeAreaInsets()) /
+      aPresContext->CSSToDevPixelScale();
+  *aTop = insets.top;
+  *aRight = insets.right;
+  *aBottom = insets.bottom;
+  *aLeft = insets.left;
 }
 
 void Gecko_PrintfStderr(const nsCString* aStr) {

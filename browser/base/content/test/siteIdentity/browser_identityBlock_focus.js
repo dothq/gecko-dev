@@ -17,6 +17,9 @@ registerCleanupFunction(async function resetToolbar() {
 });
 
 add_task(async function setupHomeButton() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.scotchBonnet.enableOverride", false]],
+  });
   // Put the home button in the pre-proton placement to test focus states.
   CustomizableUI.addWidgetToArea(
     "home-button",
@@ -98,7 +101,7 @@ add_task(async function testWithNotifications() {
 // Checks that with invalid pageproxystate the identity block is ignored.
 add_task(async function testInvalidPageProxyState() {
   await SpecialPowers.pushPrefEnv({ set: [["accessibility.tabfocus", 7]] });
-  await BrowserTestUtils.withNewTab("about:blank", async function (browser) {
+  await BrowserTestUtils.withNewTab("about:blank", async function () {
     // Loading about:blank will automatically focus the urlbar, which, however, can
     // race with the test code. So we only send the shortcut if the urlbar isn't focused yet.
     if (document.activeElement != gURLBar.inputField) {

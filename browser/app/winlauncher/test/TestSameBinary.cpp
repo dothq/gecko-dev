@@ -158,8 +158,8 @@ static nsReturnRef<HANDLE> CreateSelfProcess(int argc, wchar_t* argv[]) {
 
   wchar_t* extraArgs[] = {strPid};
 
-  auto cmdLine = mozilla::MakeCommandLine(
-      argc, argv, mozilla::ArrayLength(extraArgs), extraArgs);
+  auto cmdLine =
+      mozilla::MakeCommandLine(argc, argv, std::size(extraArgs), extraArgs);
   if (!cmdLine) {
     PrintErrorMsg("MakeCommandLine failed");
     return empty.out();
@@ -193,8 +193,7 @@ static int ParentMain(int argc, wchar_t* argv[]) {
     return 1;
   }
 
-  MOZ_ASSERT_UNREACHABLE("This process should be terminated by now");
-  return 0;
+  MOZ_CRASH("This process should be terminated by now");
 }
 
 static int MonitorMain(int argc, wchar_t* argv[]) {

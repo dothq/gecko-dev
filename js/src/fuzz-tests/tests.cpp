@@ -12,6 +12,7 @@
 #include "js/GlobalObject.h"
 #include "js/Initialization.h"
 #include "js/Prefs.h"
+#include "js/RealmOptions.h"
 #include "js/RootingAPI.h"
 #include "js/Stack.h"
 #include "vm/JSContext.h"
@@ -22,12 +23,15 @@
 
 using namespace mozilla;
 
-JS::PersistentRootedObject gGlobal;
+MOZ_RUNINIT JS::PersistentRootedObject gGlobal;
 JSContext* gCx = nullptr;
 
 static const JSClass* getGlobalClass() {
-  static const JSClass c = {"global", JSCLASS_GLOBAL_FLAGS,
-                            &JS::DefaultGlobalClassOps};
+  static const JSClass c = {
+      "global",
+      JSCLASS_GLOBAL_FLAGS,
+      &JS::DefaultGlobalClassOps,
+  };
   return &c;
 }
 

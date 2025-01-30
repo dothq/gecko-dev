@@ -21,11 +21,18 @@ interface Selection {
   [NeedsCallerType]
   readonly attribute unsigned long focusOffset;
   readonly attribute boolean       isCollapsed;
+  [ChromeOnly]
+  readonly attribute boolean       areNormalAndCrossShadowBoundaryRangesCollapsed;
+
+  [ChromeOnly]
+  readonly attribute Node?         mayCrossShadowBoundaryFocusNode;
+
   /**
    * Returns the number of ranges in the selection.
    */
   readonly attribute unsigned long rangeCount;
   readonly attribute DOMString     type;
+  readonly attribute DOMString direction;
   /**
    * Returns the range at the specified index.  Throws if the index is
    * out of range.
@@ -49,6 +56,10 @@ interface Selection {
   undefined removeAllRanges();
   [Throws, BinaryName="RemoveAllRanges"]
   undefined empty();
+
+  [Pref="dom.shadowdom.selection_across_boundary_enabled"]
+  sequence<StaticRange> getComposedRanges(ShadowRoot... shadowRoots);
+
   [Throws, BinaryName="collapseJS"]
   undefined collapse(Node? node, optional unsigned long offset = 0);
   [Throws, BinaryName="collapseJS"]
@@ -110,22 +121,6 @@ partial interface Selection {
   [ChromeOnly,Throws,Pref="dom.testing.selection.GetRangesForInterval"]
   sequence<Range> GetRangesForInterval(Node beginNode, long beginOffset, Node endNode, long endOffset,
                                        boolean allowAdjacent);
-
-  /**
-   * Scrolls a region of the selection, so that it is visible in
-   * the scrolled view.
-   *
-   * @param aRegion the region inside the selection to scroll into view
-   *                (see selection region constants defined in
-   *                nsISelectionController).
-   * @param aIsSynchronous when true, scrolls the selection into view
-   *                       before returning. If false, posts a request which
-   *                       is processed at some point after the method returns.
-   * @param aVPercent how to align the frame vertically.
-   * @param aHPercent how to align the frame horizontally.
-   */
-  [ChromeOnly,Throws]
-  undefined scrollIntoView(short aRegion, boolean aIsSynchronous, short aVPercent, short aHPercent);
 
   /**
    * setColors() sets custom colors for the selection.

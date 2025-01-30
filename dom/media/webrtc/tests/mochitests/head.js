@@ -413,7 +413,7 @@ function setupEnvironment() {
       // If either fake audio or video is desired we enable fake streams.
       // If loopback devices are set they will be chosen instead of fakes in gecko.
       ["media.navigator.streams.fake", WANT_FAKE_AUDIO || WANT_FAKE_VIDEO],
-      ["media.getusermedia.audiocapture.enabled", true],
+      ["media.getusermedia.audio.capture.enabled", true],
       ["media.getusermedia.screensharing.enabled", true],
       ["media.getusermedia.window.focus_source.enabled", false],
       ["media.recorder.audio_node.enabled", true],
@@ -439,9 +439,8 @@ function setupEnvironment() {
 
   // Platform codec prefs should be matched because fake H.264 GMP codec doesn't
   // produce/consume real bitstreams. [TODO] remove after bug 1509012 is fixed.
-  const platformEncoderEnabled = SpecialPowers.getBoolPref(
-    "media.webrtc.platformencoder"
-  );
+  const platformEncoderEnabled =
+    SpecialPowers.getIntPref("media.webrtc.encoder_creation_strategy") == 1;
   defaultMochitestPrefs.set.push([
     "media.navigator.mediadatadecoder_h264_enabled",
     platformEncoderEnabled,
@@ -459,16 +458,35 @@ function setupEnvironment() {
 
 // [TODO] remove after bug 1509012 is fixed.
 async function matchPlatformH264CodecPrefs() {
-  const hasHW264 =
-    SpecialPowers.getBoolPref("media.webrtc.platformencoder") &&
-    !SpecialPowers.getBoolPref("media.webrtc.platformencoder.sw_only") &&
+  // Has hardware H.264 encoder support
+  const hardware =
+    SpecialPowers.getIntPref("media.webrtc.encoder_creation_strategy") == 1 &&
     (navigator.userAgent.includes("Android") ||
       navigator.userAgent.includes("Mac OS X"));
 
   await pushPrefs(
-    ["media.webrtc.platformencoder", hasHW264],
-    ["media.navigator.mediadatadecoder_h264_enabled", hasHW264]
+    ["media.webrtc.encoder_creation_strategy", hardware ? 1 : 0],
+    ["media.navigator.mediadatadecoder_h264_enabled", hardware]
   );
+
+  const software = !navigator.userAgent.includes("Android");
+  return {
+    hardware,
+    software,
+    any: hardware || software,
+  };
+}
+
+async function matchPlatformAV1CodecPrefs() {
+  // Has hardware AV1 encoder support
+  const hardware = false;
+  const software = !navigator.userAgent.includes("Android");
+  await pushPrefs(["media.webrtc.codec.video.av1.enabled", software]);
+  return {
+    hardware,
+    software,
+    any: hardware || software,
+  };
 }
 
 async function runTestWhenReady(testFunc) {
@@ -1260,7 +1278,7 @@ AudioStreamFlowingHelper.prototype = {
 class VideoFrameEmitter {
   constructor(color1, color2, width, height) {
     if (!width) {
-      width = 50;
+      width = 64;
     }
     if (!height) {
       height = width;

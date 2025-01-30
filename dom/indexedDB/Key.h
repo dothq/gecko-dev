@@ -19,12 +19,18 @@ struct ParamTraits;
 
 }  // namespace IPC
 
+namespace JS {
+class ArrayBufferOrView;
+class AutoCheckCannotGC;
+}  // namespace JS
+
 namespace mozilla::dom::indexedDB {
 
 class Key {
   friend struct IPC::ParamTraits<Key>;
 
   nsCString mBuffer;
+  CopyableTArray<uint32_t> mAutoIncrementKeyOffsets;
 
  public:
   enum {
@@ -86,7 +92,10 @@ class Key {
     return Compare(mBuffer, aOther.mBuffer) >= 0;
   }
 
-  void Unset() { mBuffer.SetIsVoid(true); }
+  void Unset() {
+    mBuffer.SetIsVoid(true);
+    mAutoIncrementKeyOffsets.Clear();
+  }
 
   bool IsUnset() const { return mBuffer.IsVoid(); }
 
@@ -174,6 +183,10 @@ class Key {
     return 0;
   }
 
+  void ReserveAutoIncrementKey(bool aFirstOfArray);
+
+  void MaybeUpdateAutoIncrementKey(int64_t aKey);
+
  private:
   class MOZ_STACK_CLASS ArrayValueEncoder;
 
@@ -210,7 +223,9 @@ class Key {
   Result<Ok, nsresult> EncodeString(Span<const T> aInput, uint8_t aTypeOffset);
 
   template <typename T>
-  Result<Ok, nsresult> EncodeAsString(Span<const T> aInput, uint8_t aType);
+  Result<Ok, nsresult> EncodeAsString(Span<const T> aInput,
+                                      JS::AutoCheckCannotGC&& aNoGC,
+                                      uint8_t aType);
 
   Result<Ok, nsresult> EncodeLocaleString(const nsAString& aString,
                                           uint8_t aTypeOffset,
@@ -218,8 +233,8 @@ class Key {
 
   Result<Ok, nsresult> EncodeNumber(double aFloat, uint8_t aType);
 
-  Result<Ok, nsresult> EncodeBinary(JSObject* aObject, bool aIsViewObject,
-                                    uint8_t aTypeOffset);
+  Result<Ok, nsresult> EncodeBinary(
+      const JS::ArrayBufferOrView& aArrayBufferOrView, uint8_t aTypeOffset);
 
   // Decoding functions. aPos points into mBuffer and is adjusted to point
   // past the consumed value. (Note: this may be beyond aEnd).
@@ -273,6 +288,8 @@ class Key {
 
   template <typename T>
   nsresult SetFromSource(T* aSource, uint32_t aIndex);
+
+  void WriteDoubleToUint64(char* aBuffer, double aValue);
 };
 
 }  // namespace mozilla::dom::indexedDB

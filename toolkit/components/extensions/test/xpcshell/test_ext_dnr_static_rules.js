@@ -5,9 +5,9 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   ExtensionDNR: "resource://gre/modules/ExtensionDNR.sys.mjs",
-  ExtensionDNRLimits: "resource://gre/modules/ExtensionDNRLimits.sys.mjs",
   ExtensionDNRStore: "resource://gre/modules/ExtensionDNRStore.sys.mjs",
   TestUtils: "resource://testing-common/TestUtils.sys.mjs",
+  sinon: "resource://testing-common/Sinon.sys.mjs",
 });
 
 AddonTestUtils.init(this);
@@ -17,129 +17,16 @@ Services.scriptloader.loadSubScript(
   Services.io.newFileURI(do_get_file("head_dnr.js")).spec,
   this
 );
+Services.scriptloader.loadSubScript(
+  Services.io.newFileURI(do_get_file("head_dnr_static_rules.js")).spec,
+  this
+);
 
 const server = createHttpServer({ hosts: ["example.com"] });
 server.registerPathHandler("/", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.write("response from server");
 });
-
-function backgroundWithDNRAPICallHandlers() {
-  browser.test.onMessage.addListener(async (msg, ...args) => {
-    let result;
-    switch (msg) {
-      case "getEnabledRulesets":
-        result = await browser.declarativeNetRequest.getEnabledRulesets();
-        break;
-      case "getAvailableStaticRuleCount":
-        result =
-          await browser.declarativeNetRequest.getAvailableStaticRuleCount();
-        break;
-      case "testMatchOutcome":
-        result = await browser.declarativeNetRequest
-          .testMatchOutcome(...args)
-          .catch(err =>
-            browser.test.fail(
-              `Unexpected rejection from testMatchOutcome call: ${err}`
-            )
-          );
-        break;
-      case "updateEnabledRulesets":
-        // Run (one or more than one concurrently) updateEnabledRulesets calls
-        // and report back the results.
-        result = await Promise.all(
-          args.map(arg => {
-            return browser.declarativeNetRequest
-              .updateEnabledRulesets(arg)
-              .catch(err => {
-                return { rejectedWithErrorMessage: err.message };
-              });
-          })
-        );
-        break;
-      default:
-        browser.test.fail(`Unexpected test message: ${msg}`);
-        return;
-    }
-
-    browser.test.sendMessage(`${msg}:done`, result);
-  });
-
-  browser.test.sendMessage("bgpage:ready");
-}
-
-function getDNRExtension({
-  id = "test-dnr-static-rules@test-extension",
-  version = "1.0",
-  background = backgroundWithDNRAPICallHandlers,
-  useAddonManager = "permanent",
-  rule_resources,
-  declarative_net_request,
-  files,
-}) {
-  // Omit declarative_net_request if rule_resources isn't defined
-  // (because declarative_net_request fails the manifest validation
-  // if rule_resources is missing).
-  const dnr = rule_resources ? { rule_resources } : undefined;
-
-  return {
-    background,
-    useAddonManager,
-    manifest: {
-      manifest_version: 3,
-      version,
-      permissions: ["declarativeNetRequest", "declarativeNetRequestFeedback"],
-      // Needed to make sure the upgraded extension will have the same id and
-      // same uuid (which is mapped based on the extension id).
-      browser_specific_settings: {
-        gecko: { id },
-      },
-      declarative_net_request: declarative_net_request
-        ? { ...declarative_net_request, ...(dnr ?? {}) }
-        : dnr,
-    },
-    files,
-  };
-}
-
-const assertDNRTestMatchOutcome = async (
-  { extension, testRequest, expected },
-  assertMessage
-) => {
-  extension.sendMessage("testMatchOutcome", testRequest);
-  Assert.deepEqual(
-    expected,
-    await extension.awaitMessage("testMatchOutcome:done"),
-    assertMessage ??
-      "Got the expected matched rules from testMatchOutcome API call"
-  );
-};
-
-const assertDNRGetAvailableStaticRuleCount = async (
-  extensionTestWrapper,
-  expectedCount,
-  assertMessage
-) => {
-  extensionTestWrapper.sendMessage("getAvailableStaticRuleCount");
-  Assert.deepEqual(
-    await extensionTestWrapper.awaitMessage("getAvailableStaticRuleCount:done"),
-    expectedCount,
-    assertMessage ??
-      "Got the expected count value from dnr.getAvailableStaticRuleCount API method"
-  );
-};
-
-const assertDNRGetEnabledRulesets = async (
-  extensionTestWrapper,
-  expectedRulesetIds
-) => {
-  extensionTestWrapper.sendMessage("getEnabledRulesets");
-  Assert.deepEqual(
-    await extensionTestWrapper.awaitMessage("getEnabledRulesets:done"),
-    expectedRulesetIds,
-    "Got the expected enabled ruleset ids from dnr.getEnabledRulesets API method"
-  );
-};
 
 add_setup(async () => {
   Services.prefs.setBoolPref("extensions.manifestV3.enabled", true);
@@ -152,12 +39,11 @@ add_setup(async () => {
 });
 
 add_task(async function test_load_static_rules() {
-  const ruleset1Data = [
-    getDNRRule({
-      action: { type: "allow" },
-      condition: { resourceTypes: ["main_frame"] },
-    }),
-  ];
+  const ruleInRuleset1 = getDNRRule({
+    action: { type: "allow" },
+    condition: { resourceTypes: ["main_frame"] },
+  });
+  const ruleset1Data = [ruleInRuleset1];
   const ruleset2Data = [
     getDNRRule({
       action: { type: "block" },
@@ -184,7 +70,20 @@ add_task(async function test_load_static_rules() {
   ];
   const files = {
     // Missing ruleset_3.json on purpose.
-    "ruleset_1.json": JSON.stringify(ruleset1Data),
+    "ruleset_1.json": JSON.stringify([
+      {
+        ...ruleInRuleset1,
+        // Unrecognized props should be allowed.  We add the here instead of
+        // above because unrecognized properties are discarded after
+        // normalization, and the assertions do not expect any unrecognized
+        // props in the resf of the test.
+        condition: {
+          ...ruleInRuleset1.condition,
+          nested_unexpected_prop: true,
+        },
+        unexpected_prop: true,
+      },
+    ]),
     "ruleset_2.json": JSON.stringify(ruleset2Data),
   };
 
@@ -414,6 +313,118 @@ add_task(async function test_load_static_rules() {
     !(await IOUtils.exists(storeFile)),
     `DNR storeFile ${storeFile} removed on addon uninstalled`
   );
+});
+
+// As an optimization, the hasEnabledStaticRules flag in StartupCache is used
+// to avoid unnecessarily trying to read and parse DNR rules from disk when an
+// extension does knowingly not have any.
+//
+// 1. When rule reading was skipped, necessary internal state was not correctly
+//    initialized, and consequently updateStaticRules() would reject.
+// 2. The hasDynamicRules/hasEnabledStaticRules flags were not cleared upon
+//    update, and consequently the flag stayed in the initial state (false),
+//    and the previously stored rules did not apply after a browser restart.
+//
+// See also test_register_dynamic_rules_after_restart in
+// test_ext_dnr_dynamic_rules.js for the similar test with dynamic rules.
+add_task(async function test_enable_disabled_static_rules_after_restart() {
+  // Through this test, we confirm that the underlying "expensive" rule data
+  // storage is accessed when needed, and skipped when no relevant rules had
+  // been detected at the previous session. Caching too much or too little in
+  // StartupCache will trigger test failures in assertStoreReadsSinceLastCall.
+  const sandboxStoreSpies = sinon.createSandbox();
+  const dnrStore = ExtensionDNRStore._getStoreForTesting();
+  const spyReadDNRStore = sandboxStoreSpies.spy(dnrStore, "_readData");
+
+  function assertStoreReadsSinceLastCall(expectedCount, description) {
+    equal(spyReadDNRStore.callCount, expectedCount, description);
+    spyReadDNRStore.resetHistory();
+  }
+
+  const rule_resources = [
+    {
+      id: "ruleset_initially_disabled",
+      enabled: false,
+      path: "ruleset_initially_disabled.json",
+    },
+  ];
+
+  const files = {
+    "ruleset_initially_disabled.json": JSON.stringify([getDNRRule()]),
+  };
+
+  const extension = ExtensionTestUtils.loadExtension(
+    getDNRExtension({ rule_resources, files, id: "dnr@initially-disabled" })
+  );
+  await extension.startup();
+  await extension.awaitMessage("bgpage:ready");
+
+  assertStoreReadsSinceLastCall(1, "Read once at initial startup");
+  await AddonTestUtils.promiseRestartManager();
+  // Note: ordinarily, event pages do not wake up after a browser restart,
+  // unless a relevant event such as runtime.onStartup is triggered. But as
+  // noted in bug 1822735, "event pages without any event listeners" will be
+  // awakened after a restart, so we can expect the bgpage:ready message here:
+  await extension.awaitMessage("bgpage:ready");
+  assertStoreReadsSinceLastCall(
+    0,
+    "Read skipped due to hasEnabledStaticRules=false"
+  );
+
+  // Regression test 1: before bug 1921353 was fixed, the test got stuck here
+  // because the updateStaticRules() call after a restart unexpectedly failed
+  // with "can't access property "disabledStaticRuleIds", data is undefined".
+  extension.sendMessage("updateStaticRules", {
+    rulesetId: "ruleset_initially_disabled",
+    enableRuleIds: [1234], // Does not exist, does not matter.
+  });
+  info("Trying to call declarativeNetRequest.updateStaticRules()...");
+  Assert.deepEqual(
+    await extension.awaitMessage("updateStaticRules:done"),
+    [undefined],
+    "updateStaticRules() succeeded without error"
+  );
+
+  // Now transition from zero rulesets to one (zero_to_one_rule).
+  extension.sendMessage("updateEnabledRulesets", {
+    enableRulesetIds: ["ruleset_initially_disabled"],
+  });
+  info("Trying to enable ruleset_initially_disabled...");
+  await extension.awaitMessage("updateEnabledRulesets:done");
+  await assertDNRGetEnabledRulesets(extension, ["ruleset_initially_disabled"]);
+
+  assertStoreReadsSinceLastCall(0, "No further reads before restart");
+  await AddonTestUtils.promiseRestartManager();
+  await extension.awaitMessage("bgpage:ready");
+
+  // Regression test 2: before bug 1921353 was fixed, even with a fix to the
+  // previous bug, the static rules would not be read at startup due to the
+  // wrong cached hasEnabledStaticRules flag in StartupCache.
+  // Verify that the static rules are still enabled.
+  assertStoreReadsSinceLastCall(1, "Read due to hasEnabledStaticRules=true");
+  await assertDNRGetEnabledRulesets(extension, ["ruleset_initially_disabled"]);
+
+  // For full coverage, also verify that when all static rules are disabled,
+  // that the initialization is skipped as expected.
+
+  extension.sendMessage("updateEnabledRulesets", {
+    disableRulesetIds: ["ruleset_initially_disabled"],
+  });
+  info("Trying to disable ruleset_initially_disabled...");
+  await extension.awaitMessage("updateEnabledRulesets:done");
+  await assertDNRGetEnabledRulesets(extension, []);
+
+  await AddonTestUtils.promiseRestartManager();
+  await extension.awaitMessage("bgpage:ready");
+  assertStoreReadsSinceLastCall(0, "Read skipped because rules were disabled");
+  await assertDNRGetEnabledRulesets(extension, []);
+  // declarativeNetRequest.getEnabledStaticRulesets() queries in-memory state,
+  // so we do not expect another read from disk.
+  assertStoreReadsSinceLastCall(0, "Read still skipped despite API call");
+
+  await extension.unload();
+
+  sandboxStoreSpies.restore();
 });
 
 add_task(async function test_load_from_corrupted_data() {
@@ -956,415 +967,6 @@ add_task(async function test_updateEnabledRuleset_id_validation() {
   await assertDNRStoreData(dnrStore, extension, {
     ruleset_2: getSchemaNormalizedRules(extension, ruleset2Data),
   });
-
-  await extension.unload();
-});
-
-add_task(async function test_getAvailableStaticRulesCountAndLimits() {
-  // NOTE: this test is going to load and validate the maximum amount of static rules
-  // that an extension can enable, which on slower builds (in particular in tsan builds,
-  // e.g. see Bug 1803801) have a higher chance that the test extension may have hit the
-  // idle timeout and being suspended by the time the test is going to trigger API method
-  // calls through test API events (which do not expect the lifetime of the event page).
-  Services.prefs.setBoolPref("extensions.background.idle.enabled", false);
-
-  const dnrStore = ExtensionDNRStore._getStoreForTesting();
-  const { GUARANTEED_MINIMUM_STATIC_RULES } = ExtensionDNRLimits;
-  equal(
-    typeof GUARANTEED_MINIMUM_STATIC_RULES,
-    "number",
-    "Expect GUARANTEED_MINIMUM_STATIC_RULES to be a number"
-  );
-
-  const availableStaticRulesCount = GUARANTEED_MINIMUM_STATIC_RULES;
-
-  const rule_resources = [
-    {
-      id: "ruleset_0",
-      path: "/ruleset_0.json",
-      enabled: true,
-    },
-    {
-      id: "ruleset_1",
-      path: "/ruleset_1.json",
-      enabled: true,
-    },
-    // A ruleset initially disabled (to make sure it doesn't count for the
-    // rules count limit).
-    {
-      id: "ruleset_disabled",
-      path: "/ruleset_disabled.json",
-      enabled: false,
-    },
-    // A ruleset including an invalid rule and valid rule.
-    {
-      id: "ruleset_withInvalid",
-      path: "/ruleset_withInvalid.json",
-      enabled: false,
-    },
-    // An empty ruleset (to make sure it can still be enabled/disabled just fine,
-    // e.g. in case on some browser version all rules are technically invalid).
-    {
-      id: "ruleset_empty",
-      path: "/ruleset_empty.json",
-      enabled: false,
-    },
-  ];
-
-  const files = {};
-  const rules = {};
-
-  const rulesetDisabledData = [getDNRRule({ id: 1 })];
-  const ruleValid = getDNRRule({ id: 2, action: { type: "allow" } });
-  const rulesetWithInvalidData = [
-    getDNRRule({ id: 1, action: { type: "invalid_action" } }),
-    ruleValid,
-  ];
-
-  rules.ruleset_0 = [getDNRRule({ id: 1 }), getDNRRule({ id: 2 })];
-
-  rules.ruleset_1 = [];
-  for (let i = 0; i < availableStaticRulesCount; i++) {
-    rules.ruleset_1.push(getDNRRule({ id: i + 1 }));
-  }
-
-  for (const [k, v] of Object.entries(rules)) {
-    files[`${k}.json`] = JSON.stringify(v);
-  }
-  files[`ruleset_disabled.json`] = JSON.stringify(rulesetDisabledData);
-  files[`ruleset_withInvalid.json`] = JSON.stringify(rulesetWithInvalidData);
-  files[`ruleset_empty.json`] = JSON.stringify([]);
-
-  const extension = ExtensionTestUtils.loadExtension(
-    getDNRExtension({
-      id: "dnr-getAvailable-count-@mochitest",
-      rule_resources,
-      files,
-    })
-  );
-
-  await extension.startup();
-  await extension.awaitMessage("bgpage:ready");
-
-  async function updateEnabledRulesets({ expectedErrorMessage, ...options }) {
-    // Note: options = { disableRulesetIds, enableRulesetIds }
-    extension.sendMessage("updateEnabledRulesets", options);
-    let [result] = await extension.awaitMessage("updateEnabledRulesets:done");
-    if (expectedErrorMessage) {
-      Assert.deepEqual(
-        result,
-        { rejectedWithErrorMessage: expectedErrorMessage },
-        "updateEnabledRulesets() should reject with the given error"
-      );
-    } else {
-      Assert.deepEqual(
-        result,
-        undefined,
-        "updateEnabledRulesets() should resolve without error"
-      );
-    }
-  }
-
-  const expectedEnabledRulesets = {};
-  expectedEnabledRulesets.ruleset_0 = getSchemaNormalizedRules(
-    extension,
-    rules.ruleset_0
-  );
-
-  info(
-    "Expect ruleset_1 to not be enabled because along with ruleset_0 exceeded the static rules count limit"
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    availableStaticRulesCount - rules.ruleset_0.length,
-    "Got the available static rule count on ruleset_0 initially enabled"
-  );
-
-  // Try to enable ruleset_1 again from the API method.
-  await updateEnabledRulesets({
-    enableRulesetIds: ["ruleset_1"],
-    expectedErrorMessage: `Number of rules across all enabled static rulesets exceeds GUARANTEED_MINIMUM_STATIC_RULES if ruleset "ruleset_1" were to be enabled.`,
-  });
-
-  info(
-    "Expect ruleset_1 to not be enabled because still exceeded the static rules count limit"
-  );
-  await assertDNRGetEnabledRulesets(extension, ["ruleset_0"]);
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    availableStaticRulesCount - rules.ruleset_0.length,
-    "Got the available static rule count on ruleset_0 still the only one enabled"
-  );
-
-  await updateEnabledRulesets({
-    disableRulesetIds: ["ruleset_0"],
-    enableRulesetIds: ["ruleset_1"],
-  });
-
-  info("Expect ruleset_1 to be enabled along with disabling ruleset_0");
-  await assertDNRGetEnabledRulesets(extension, ["ruleset_1"]);
-  delete expectedEnabledRulesets.ruleset_0;
-  expectedEnabledRulesets.ruleset_1 = getSchemaNormalizedRules(
-    extension,
-    rules.ruleset_1
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets, {
-    // Assert total amount of expected rules and only the first and last rule
-    // individually, to avoid generating a huge amount of logs and potential
-    // timeout failures on slower builds.
-    assertIndividualRules: false,
-  });
-
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    0,
-    "Expect no additional static rules count available when ruleset_1 is enabled"
-  );
-
-  info(
-    "Expect ruleset_disabled to stay disabled because along with ruleset_1 exceeeds the limits"
-  );
-  await updateEnabledRulesets({
-    enableRulesetIds: ["ruleset_disabled"],
-    expectedErrorMessage: `Number of rules across all enabled static rulesets exceeds GUARANTEED_MINIMUM_STATIC_RULES if ruleset "ruleset_disabled" were to be enabled.`,
-  });
-  await assertDNRGetEnabledRulesets(extension, ["ruleset_1"]);
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets, {
-    // Assert total amount of expected rules and only the first and last rule
-    // individually, to avoid generating a huge amount of logs and potential
-    // timeout failures on slower builds.
-    assertIndividualRules: false,
-  });
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    0,
-    "Expect no additional static rules count available"
-  );
-
-  info("Expect ruleset_empty to be enabled despite having reached the limit");
-  await updateEnabledRulesets({
-    enableRulesetIds: ["ruleset_empty"],
-  });
-  await assertDNRGetEnabledRulesets(extension, ["ruleset_1", "ruleset_empty"]);
-  await assertDNRStoreData(
-    dnrStore,
-    extension,
-    {
-      ...expectedEnabledRulesets,
-      ruleset_empty: [],
-    },
-    // Assert total amount of expected rules and only the first and last rule
-    // individually, to avoid generating a huge amount of logs and potential
-    // timeout failures on slower builds.
-    { assertIndividualRules: false }
-  );
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    0,
-    "Expect no additional static rules count available"
-  );
-
-  info("Expect invalid rules to not be counted towards the limits");
-  await updateEnabledRulesets({
-    disableRulesetIds: ["ruleset_1", "ruleset_empty"],
-    enableRulesetIds: ["ruleset_withInvalid"],
-  });
-  await assertDNRGetEnabledRulesets(extension, ["ruleset_withInvalid"]);
-  await assertDNRStoreData(dnrStore, extension, {
-    // Only the valid rule has been actually loaded, and the invalid one
-    // ignored.
-    ruleset_withInvalid: [ruleValid],
-  });
-  await assertDNRGetAvailableStaticRuleCount(
-    extension,
-    availableStaticRulesCount - 1,
-    "Expect only valid rules to be counted"
-  );
-
-  await extension.unload();
-
-  Services.prefs.clearUserPref("extensions.background.idle.enabled");
-});
-
-add_task(async function test_static_rulesets_limits() {
-  const dnrStore = ExtensionDNRStore._getStoreForTesting();
-
-  const getRulesetManifestData = (rulesetNumber, enabled) => {
-    return {
-      id: `ruleset_${rulesetNumber}`,
-      enabled,
-      path: `ruleset_${rulesetNumber}.json`,
-    };
-  };
-  const {
-    MAX_NUMBER_OF_STATIC_RULESETS,
-    MAX_NUMBER_OF_ENABLED_STATIC_RULESETS,
-  } = ExtensionDNRLimits;
-
-  equal(
-    typeof MAX_NUMBER_OF_STATIC_RULESETS,
-    "number",
-    "Expect MAX_NUMBER_OF_STATIC_RULESETS to be a number"
-  );
-  equal(
-    typeof MAX_NUMBER_OF_ENABLED_STATIC_RULESETS,
-    "number",
-    "Expect MAX_NUMBER_OF_ENABLED_STATIC_RULESETS to be a number"
-  );
-  Assert.greater(
-    MAX_NUMBER_OF_STATIC_RULESETS,
-    MAX_NUMBER_OF_ENABLED_STATIC_RULESETS,
-    "Expect MAX_NUMBER_OF_STATIC_RULESETS to be greater"
-  );
-
-  const rules = [getDNRRule()];
-
-  const rule_resources = [];
-  const files = {};
-  for (let i = 0; i < MAX_NUMBER_OF_STATIC_RULESETS + 1; i++) {
-    const enabled = i < MAX_NUMBER_OF_ENABLED_STATIC_RULESETS + 1;
-    files[`ruleset_${i}.json`] = JSON.stringify(rules);
-    rule_resources.push(getRulesetManifestData(i, enabled));
-  }
-
-  let extension = ExtensionTestUtils.loadExtension(
-    getDNRExtension({
-      rule_resources,
-      files,
-    })
-  );
-
-  const expectedEnabledRulesets = {};
-
-  const { messages } = await AddonTestUtils.promiseConsoleOutput(async () => {
-    ExtensionTestUtils.failOnSchemaWarnings(false);
-    await extension.startup();
-    ExtensionTestUtils.failOnSchemaWarnings(true);
-    await extension.awaitMessage("bgpage:ready");
-
-    for (let i = 0; i < MAX_NUMBER_OF_ENABLED_STATIC_RULESETS; i++) {
-      expectedEnabledRulesets[`ruleset_${i}`] = getSchemaNormalizedRules(
-        extension,
-        rules
-      );
-    }
-
-    await assertDNRGetEnabledRulesets(
-      extension,
-      Array.from(Object.keys(expectedEnabledRulesets))
-    );
-    await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-  });
-
-  AddonTestUtils.checkMessages(messages, {
-    expected: [
-      // Warnings emitted from the manifest schema validation.
-      {
-        message:
-          /declarative_net_request: Static rulesets are exceeding the MAX_NUMBER_OF_STATIC_RULESETS limit/,
-      },
-      {
-        message:
-          /declarative_net_request: Enabled static rulesets are exceeding the MAX_NUMBER_OF_ENABLED_STATIC_RULESETS limit .* "ruleset_10"/,
-      },
-      // Error reported on the browser console as part of loading enabled rulesets)
-      // on enabled rulesets being ignored because exceeding the limit.
-      {
-        message:
-          /Ignoring enabled static ruleset exceeding the MAX_NUMBER_OF_ENABLED_STATIC_RULESETS .* "ruleset_10"/,
-      },
-    ],
-  });
-
-  info(
-    "Verify updateEnabledRulesets reject when the request is exceeding the enabled rulesets count limit"
-  );
-  extension.sendMessage("updateEnabledRulesets", {
-    disableRulesetIds: ["ruleset_0"],
-    enableRulesetIds: ["ruleset_10", "ruleset_11"],
-  });
-
-  await Assert.rejects(
-    extension.awaitMessage("updateEnabledRulesets:done").then(results => {
-      if (results[0].rejectedWithErrorMessage) {
-        return Promise.reject(new Error(results[0].rejectedWithErrorMessage));
-      }
-      return results[0];
-    }),
-    /updatedEnabledRulesets request is exceeding MAX_NUMBER_OF_ENABLED_STATIC_RULESETS/,
-    "Expected rejection on updateEnabledRulesets exceeting enabled rulesets count limit"
-  );
-
-  // Confirm that the expected rulesets didn't change neither.
-  await assertDNRGetEnabledRulesets(
-    extension,
-    Array.from(Object.keys(expectedEnabledRulesets))
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-
-  info(
-    "Verify updateEnabledRulesets applies the expected changes when resolves successfully"
-  );
-  extension.sendMessage(
-    "updateEnabledRulesets",
-    {
-      disableRulesetIds: ["ruleset_0"],
-      enableRulesetIds: ["ruleset_10"],
-    },
-    {
-      disableRulesetIds: ["ruleset_10"],
-      enableRulesetIds: ["ruleset_11"],
-    }
-  );
-  await extension.awaitMessage("updateEnabledRulesets:done");
-
-  // Expect ruleset_0 disabled, ruleset_10 to be enabled but then disabled by the
-  // second update queued after the first one, and ruleset_11 to be enabled.
-  delete expectedEnabledRulesets.ruleset_0;
-  expectedEnabledRulesets.ruleset_11 = getSchemaNormalizedRules(
-    extension,
-    rules
-  );
-
-  await assertDNRGetEnabledRulesets(
-    extension,
-    Array.from(Object.keys(expectedEnabledRulesets))
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-
-  // Ensure all changes were stored and reloaded from disk store and the
-  // DNR store update queue can accept new updates.
-  info("Verify static rules load and updates after extension is restarted");
-
-  // NOTE: promiseRestartManager will not be enough to make sure the
-  // DNR store data for the test extension is going to be loaded from
-  // the DNR startup cache file.
-  // See test_ext_dnr_startup_cache.js for a test case that more completely
-  // simulates ExtensionDNRStore initialization on browser restart.
-  await AddonTestUtils.promiseRestartManager();
-
-  await extension.awaitStartup();
-  await extension.awaitMessage("bgpage:ready");
-  await assertDNRGetEnabledRulesets(
-    extension,
-    Array.from(Object.keys(expectedEnabledRulesets))
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
-
-  extension.sendMessage("updateEnabledRulesets", {
-    disableRulesetIds: ["ruleset_11"],
-  });
-  await extension.awaitMessage("updateEnabledRulesets:done");
-  delete expectedEnabledRulesets.ruleset_11;
-  await assertDNRGetEnabledRulesets(
-    extension,
-    Array.from(Object.keys(expectedEnabledRulesets))
-  );
-  await assertDNRStoreData(dnrStore, extension, expectedEnabledRulesets);
 
   await extension.unload();
 });

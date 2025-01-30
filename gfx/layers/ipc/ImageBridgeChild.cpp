@@ -681,8 +681,8 @@ RefPtr<ImageClient> ImageBridgeChild::CreateImageClientNow(
     return nullptr;
   }
 
-  RefPtr<ImageClient> client =
-      ImageClient::CreateImageClient(aType, this, TextureFlags::NO_FLAGS);
+  RefPtr<ImageClient> client = ImageClient::CreateImageClient(
+      aType, aImageContainer->mUsageType, this, TextureFlags::NO_FLAGS);
   MOZ_ASSERT(client, "failed to create ImageClient");
   if (client) {
     client->Connect(aImageContainer);
@@ -958,7 +958,7 @@ bool ImageBridgeChild::CanSend() const {
 }
 
 void ImageBridgeChild::HandleFatalError(const char* aMsg) {
-  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aMsg, OtherPid());
+  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aMsg, OtherChildID());
 }
 
 wr::MaybeExternalImageId ImageBridgeChild::GetNextExternalImageId() {

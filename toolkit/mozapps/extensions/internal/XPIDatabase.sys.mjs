@@ -18,10 +18,6 @@ import { XPIExports } from "resource://gre/modules/addons/XPIExports.sys.mjs";
 
 const lazy = {};
 
-XPCOMUtils.defineLazyServiceGetters(lazy, {
-  ThirdPartyUtil: ["@mozilla.org/thirdpartyutil;1", "mozIThirdPartyUtil"],
-});
-
 ChromeUtils.defineESModuleGetters(lazy, {
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
   AddonManagerPrivate: "resource://gre/modules/AddonManager.sys.mjs",
@@ -31,8 +27,10 @@ ChromeUtils.defineESModuleGetters(lazy, {
   DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
   ExtensionData: "resource://gre/modules/Extension.sys.mjs",
   ExtensionUtils: "resource://gre/modules/ExtensionUtils.sys.mjs",
+  ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   PermissionsUtils: "resource://gre/modules/PermissionsUtils.sys.mjs",
   QuarantinedDomains: "resource://gre/modules/ExtensionPermissions.sys.mjs",
+  ExtensionPermissions: "resource://gre/modules/ExtensionPermissions.sys.mjs",
 });
 
 // WARNING: BuiltInThemes.sys.mjs may be provided by the host application (e.g.
@@ -192,16 +190,17 @@ const PROP_JSON_FIELDS = [
   "targetApplications",
   "targetPlatforms",
   "signedState",
+  "signedTypes",
   "signedDate",
   "seen",
   "dependencies",
   "incognito",
   "userPermissions",
   "optionalPermissions",
-  "sitePermissions",
-  "siteOrigin",
+  "requestedPermissions",
   "icons",
   "iconURL",
+  "blocklistAttentionDismissed",
   "blocklistState",
   "blocklistURL",
   "startupData",
@@ -212,13 +211,7 @@ const PROP_JSON_FIELDS = [
   "rootURI",
 ];
 
-const SIGNED_TYPES = new Set([
-  "extension",
-  "locale",
-  "theme",
-  // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-  "sitepermission-deprecated",
-]);
+const SIGNED_TYPES = new Set(["extension", "locale", "theme"]);
 
 // Time to wait before async save of XPI JSON database, in milliseconds
 const ASYNC_SAVE_DELAY_MS = 20;
@@ -329,7 +322,8 @@ export class AddonInternal {
     this.appDisabled = false;
     this.softDisabled = false;
     this.embedderDisabled = false;
-    this.blocklistState = Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
+    this.blocklistAttentionDismissed = false;
+    this.blocklistState = nsIBlocklistService.STATE_NOT_BLOCKED;
     this.blocklistURL = null;
     this.sourceURI = null;
     this.releaseNotesURI = null;
@@ -433,37 +427,6 @@ export class AddonInternal {
     // An empty install_origins prevents any install from 3rd party websites.
     if (!installOrigins.length) {
       return false;
-    }
-
-    // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-    if (this.type == "sitepermission-deprecated") {
-      // NOTE: This may move into a check for all addons later.
-      for (let origin of installOrigins) {
-        let host = new URL(origin).host;
-        // install_origin cannot be on a known etld (e.g. github.io).
-        if (Services.eTLD.getKnownPublicSuffixFromHost(host) == host) {
-          logger.warn(
-            `Addon ${this.id} Installation not allowed from the install_origin ${host} that is an eTLD`
-          );
-          return false;
-        }
-      }
-
-      if (!installOrigins.includes(new URL(source.spec).origin)) {
-        logger.warn(
-          `Addon ${this.id} Installation not allowed, "${source.spec}" is not included in the Addon install_origins`
-        );
-        return false;
-      }
-
-      if (lazy.ThirdPartyUtil.isThirdPartyURI(source, installFrom)) {
-        logger.warn(
-          `Addon ${this.id} Installation not allowed, installFrom "${installFrom.spec}" is third party to the Addon install_origins`
-        );
-        return false;
-      }
-
-      return true;
     }
 
     for (const [name, uri] of Object.entries({ installFrom, source })) {
@@ -711,6 +674,15 @@ export class AddonInternal {
     return app;
   }
 
+  updateBlocklistAttentionDismissed(val) {
+    if (!this.inDatabase || this.blocklistAttentionDismissed === val) {
+      return;
+    }
+    this.blocklistAttentionDismissed = val;
+    XPIDatabase.maybeUpdateBlocklistAttentionAddonIdsSet(this);
+    XPIDatabase.saveChanges();
+  }
+
   async findBlocklistEntry() {
     return lazy.Blocklist.getAddonBlocklistEntry(this.wrapper);
   }
@@ -726,6 +698,12 @@ export class AddonInternal {
 
     let entry = await this.findBlocklistEntry();
     let newState = entry ? entry.state : Services.blocklist.STATE_NOT_BLOCKED;
+
+    // Clear the blocklistAttentionDismissed flag if the blocklist state
+    // is changing.
+    if (this.blocklistState !== newState) {
+      this.updateBlocklistAttentionDismissed(false);
+    }
 
     this.blocklistState = newState;
     this.blocklistURL = entry && entry.url;
@@ -759,6 +737,19 @@ export class AddonInternal {
       }
       if (softDisabled !== undefined) {
         this.softDisabled = softDisabled;
+      }
+    }
+
+    if (oldState != newState) {
+      lazy.AddonManagerPrivate.callAddonListeners(
+        "onPropertyChanged",
+        this.wrapper,
+        ["blocklistState"]
+      );
+      if (this.active) {
+        // Make sure to sync the XPIState with the blocklistState
+        // set in the AddonDB if the addon is active.
+        XPIDatabase.updateXPIStates(this);
       }
     }
   }
@@ -848,6 +839,23 @@ export class AddonInternal {
   permissions() {
     let permissions = 0;
 
+    // The permission to "toggle the private browsing access" is locked down
+    // when the extension has opted out or it gets the permission automatically
+    // on every extension startup (as system, privileged and builtin addons).
+    if (
+      this.type === "extension" &&
+      this.incognito !== "not_allowed" &&
+      this.signedState !== lazy.AddonManager.SIGNEDSTATE_PRIVILEGED &&
+      this.signedState !== lazy.AddonManager.SIGNEDSTATE_SYSTEM &&
+      !this.location.isBuiltin
+    ) {
+      // NOTE: This permission is computed even for addons not in the database because
+      // it is being used in the first dialog part of the install flow, when the addon
+      // may not be installed yet (and so also not in the database), to determine if
+      // the private browsing permission toggle button should be shown.
+      permissions |= lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS;
+    }
+
     // Add-ons that aren't installed cannot be modified in any way
     if (!this.inDatabase) {
       return permissions;
@@ -905,21 +913,6 @@ export class AddonInternal {
       if (!this.location.isBuiltin) {
         permissions |= lazy.AddonManager.PERM_CAN_UNINSTALL;
       }
-    }
-
-    // The permission to "toggle the private browsing access" is locked down
-    // when the extension has opted out or it gets the permission automatically
-    // on every extension startup (as system, privileged and builtin addons).
-    if (
-      (this.type === "extension" ||
-        // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-        this.type == "sitepermission-deprecated") &&
-      this.incognito !== "not_allowed" &&
-      this.signedState !== lazy.AddonManager.SIGNEDSTATE_PRIVILEGED &&
-      this.signedState !== lazy.AddonManager.SIGNEDSTATE_SYSTEM &&
-      !this.location.isBuiltin
-    ) {
-      permissions |= lazy.AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS;
     }
 
     if (Services.policies) {
@@ -1303,6 +1296,16 @@ AddonWrapper = class {
     return null;
   }
 
+  get blocklistAttentionDismissed() {
+    let addon = addonFor(this);
+    return addon.blocklistAttentionDismissed;
+  }
+
+  set blocklistAttentionDismissed(val) {
+    let addon = addonFor(this);
+    addon.updateBlocklistAttentionDismissed(val);
+  }
+
   updateBlocklistState(applySoftBlock = true) {
     return addonFor(this).updateBlocklistState({ applySoftBlock });
   }
@@ -1424,12 +1427,76 @@ AddonWrapper = class {
     return addon.location.name == KEY_APP_PROFILE;
   }
 
+  /**
+   * Returns true if the addon is configured to be installed
+   * by enterprise policy.
+   */
+  get isInstalledByEnterprisePolicy() {
+    const policySettings = Services.policies?.getExtensionSettings(this.id);
+    return ["force_installed", "normal_installed"].includes(
+      policySettings?.installation_mode
+    );
+  }
+
+  /**
+   * Required permissions that extension has access to based on its manifest.
+   * In mv3 this doesn't include host_permissions.
+   */
   get userPermissions() {
     return addonFor(this).userPermissions;
   }
 
   get optionalPermissions() {
     return addonFor(this).optionalPermissions;
+  }
+
+  /**
+   * Additional permissions that extension is requesting in its manifest.
+   * Currently this is host_permissions in MV3.
+   */
+  get requestedPermissions() {
+    return addonFor(this).requestedPermissions;
+  }
+
+  /**
+   * A helper that returns all permissions for the install prompt.
+   */
+  get installPermissions() {
+    let required = this.userPermissions;
+    if (!required) {
+      return null;
+    }
+    let requested = this.requestedPermissions;
+    // Currently this can't result in duplicates, but if logic of what goes
+    // into these lists changes, make sure to check for dupes.
+    let perms = {
+      origins: required.origins.concat(requested?.origins ?? []),
+      permissions: required.permissions.concat(requested?.permissions ?? []),
+    };
+    return perms;
+  }
+
+  get optionalOriginsNormalized() {
+    const { permissions } = this.userPermissions ?? {};
+
+    const priv = this.isPrivileged && permissions?.includes("mozillaAddons");
+    const mps = new MatchPatternSet(this.optionalPermissions?.origins ?? [], {
+      restrictSchemes: !priv,
+      ignorePath: true,
+    });
+
+    let temp = [...lazy.ExtensionPermissions.tempOrigins.get(this.id)];
+    let origins = [
+      ...mps.patterns.map(matcher => matcher.pattern),
+      ...temp.filter(o =>
+        // Make sure origins are still in the current set of optional
+        // permissions, which might have changed on extension update.
+        mps.subsumes(new MatchPattern(o, { restrictSchemes: !priv }))
+      ),
+    ];
+
+    // De-dup the normalized host permission patterns.
+    return [...new Set(origins)];
   }
 
   isCompatibleWith(aAppVersion, aPlatformVersion) {
@@ -1556,8 +1623,7 @@ function defineAddonWrapperProperty(name, getter) {
   "validInstallOrigins",
   "dependencies",
   "signedState",
-  "sitePermissions",
-  "siteOrigin",
+  "signedTypes",
   "isCorrectlySigned",
   "isBuiltinColorwayTheme",
 ].forEach(function (aProp) {
@@ -1788,6 +1854,13 @@ export const XPIDatabase = {
   // supported.
   orphanedAddons: [],
 
+  // Set of the add-on ids for all the add-ons of type extension that are appDisabled or softDisabled
+  // through the blocklist, excluding the ones that the user has already explicitly dismissed before
+  // (used for the blocklist attention dot and messagebar to be shown in the extensions button/panel).
+  //
+  // Set<addonId: string>
+  blocklistAttentionAddonIdsSet: new Set(),
+
   _saveTask: null,
 
   // Saved error object if we fail to read an existing database
@@ -1965,6 +2038,8 @@ export const XPIDatabase = {
 
       let forEach = this.syncLoadingDB ? arrayForEach : idleForEach;
 
+      this.clearBlocklistAttentionAddonIdsSet();
+
       // If we got here, we probably have good data
       // Make AddonInternal instances from the loaded data and save them
       let addonDB = new Map();
@@ -1988,6 +2063,7 @@ export const XPIDatabase = {
         let newAddon = new AddonInternal(loadedAddon);
         if (loadedAddon.location) {
           addonDB.set(newAddon._key, newAddon);
+          this.maybeUpdateBlocklistAttentionAddonIdsSet(newAddon);
         } else {
           this.orphanedAddons.push(newAddon);
         }
@@ -2175,7 +2251,7 @@ export const XPIDatabase = {
    */
   async verifySignatures() {
     try {
-      let addons = await this.getAddonList(a => true);
+      let addons = await this.getAddonList(() => true);
 
       let changes = {
         enabled: [],
@@ -2188,17 +2264,53 @@ export const XPIDatabase = {
           continue;
         }
 
-        let signedState = await XPIExports.verifyBundleSignedState(
-          addon._sourceBundle,
-          addon
-        );
+        let { signedState, signedTypes } =
+          await XPIExports.verifyBundleSignedState(addon._sourceBundle, addon);
+
+        const changedProperties = [];
 
         if (signedState != addon.signedState) {
           addon.signedState = signedState;
+          changedProperties.push("signedState");
+        }
+
+        if (
+          addon.signedState === lazy.AddonManager.SIGNEDSTATE_SIGNED &&
+          Services.policies
+        ) {
+          // Manifest file for an installed extension can still become
+          // invalid (e.g. due to backward incompatible changes between
+          // Firefox versions).
+          try {
+            const addonDetailsFromFile =
+              await XPIExports.XPIInstall.loadManifestFromFile(
+                addon._sourceBundle,
+                addon.location
+              );
+            addon.adminInstallOnly = addonDetailsFromFile.adminInstallOnly;
+          } catch (err) {
+            // Simply log the error as a warning to be able to check
+            // the signature and potentially update the disabled state
+            // accordingly.
+            logger.warn(`XPI_verifySignature Warning on '${addon.id}': ${err}`);
+          }
+        }
+
+        if (
+          !lazy.ObjectUtils.deepEqual(
+            signedTypes?.toSorted(),
+            addon.signedTypes?.toSorted()
+          )
+        ) {
+          addon.signedTypes = signedTypes;
+          changedProperties.push("signedTypes");
+        }
+
+        if (changedProperties.length) {
           lazy.AddonManagerPrivate.callAddonListeners(
             "onPropertyChanged",
             addon.wrapper,
-            ["signedState"]
+            changedProperties
           );
         }
 
@@ -2414,6 +2526,95 @@ export const XPIDatabase = {
     );
   },
 
+  shouldShowBlocklistAttention() {
+    return !!this.blocklistAttentionAddonIdsSet.size;
+  },
+
+  shouldShowBlocklistAttentionForAddon(addonInternal) {
+    return (
+      !addonInternal.hidden &&
+      !addonInternal.blocklistAttentionDismissed &&
+      (addonInternal.appDisabled || addonInternal.softDisabled) &&
+      addonInternal.blocklistState > nsIBlocklistService.STATE_NOT_BLOCKED &&
+      // We currently only draw the attention of the users when new add-ons of
+      // type "extension" are being disabled by the blocklist.
+      addonInternal.type === "extension"
+    );
+  },
+
+  clearBlocklistAttentionAddonIdsSet() {
+    this.blocklistAttentionAddonIdsSet.clear();
+  },
+
+  maybeUpdateBlocklistAttentionAddonIdsSet(addonInternal) {
+    const blocklistAttentionSet = this.blocklistAttentionAddonIdsSet;
+    if (!this.shouldShowBlocklistAttentionForAddon(addonInternal)) {
+      blocklistAttentionSet.delete(addonInternal.id);
+      Services.obs.notifyObservers(
+        null,
+        "xpi-provider:blocklist-attention-updated"
+      );
+      return;
+    }
+
+    blocklistAttentionSet.add(addonInternal.id);
+    Services.obs.notifyObservers(
+      null,
+      "xpi-provider:blocklist-attention-updated"
+    );
+  },
+
+  removeFromBlocklistAttentionAddonIdsSet(addonInternal) {
+    this.blocklistAttentionAddonIdsSet.delete(addonInternal.id);
+    Services.obs.notifyObservers(
+      null,
+      "xpi-provider:blocklist-attention-updated"
+    );
+  },
+
+  async getBlocklistAttentionInfo() {
+    const attentionAddonIdsSet = this.blocklistAttentionAddonIdsSet;
+    const addonFilter = addonInternal =>
+      attentionAddonIdsSet.has(addonInternal.id) &&
+      this.shouldShowBlocklistAttentionForAddon(addonInternal);
+    let addons = attentionAddonIdsSet.size
+      ? await this.getAddonList(addonFilter)
+      : [];
+    // Filter the add-ons list once more synchronously in case any change may have happened
+    // while we were retrieving the add-ons list asynchronously and we may not need to include
+    // some in the blocklist attention message anymore (e.g. because they have been already
+    // dismissed, or changed blocklistState or soft-blocked addon being already re-enabled).
+    addons = addons.filter(addonFilter);
+
+    return {
+      get shouldShow() {
+        return addons.some(addonFilter);
+      },
+      get hasSoftBlocked() {
+        return addons.some(
+          addonInternal =>
+            addonInternal.blocklistState ===
+            nsIBlocklistService.STATE_SOFTBLOCKED
+        );
+      },
+      get hasHardBlocked() {
+        return addons.some(
+          addonInternal =>
+            addonInternal.blocklistState === nsIBlocklistService.STATE_BLOCKED
+        );
+      },
+      get extensionsCount() {
+        return addons.length;
+      },
+      get addons() {
+        return addons.map(addonInternal => addonInternal.wrapper);
+      },
+      dismiss() {
+        addons.forEach(addon => addon.updateBlocklistAttentionDismissed(true));
+      },
+    };
+  },
+
   /**
    * Synchronously gets all add-ons in the database.
    * This is only called from the preference observer for the default
@@ -2426,7 +2627,7 @@ export const XPIDatabase = {
     if (!this.addonDB) {
       return [];
     }
-    return _filterDB(this.addonDB, aAddon => true);
+    return _filterDB(this.addonDB, () => true);
   },
 
   /**
@@ -2520,6 +2721,25 @@ export const XPIDatabase = {
       if (Services.prefs.getBoolPref(PREF_XPI_SIGNATURES_DEV_ROOT, false)) {
         logger.warn(`Preference ${PREF_XPI_SIGNATURES_DEV_ROOT} is set.`);
       }
+      return false;
+    }
+
+    // When signatures are required, and the addon has the adminInstallOnly
+    // flag set to true, then we want to confirm if there is still an active
+    // enterprise policy setting for the same addon id, otherwise we should
+    // mark if as appDisabled.
+    //
+    // NOTE: the adminInstallOnly boolean flag is not being stored in the Addon DB,
+    // it is instead computed only when installing the addon and when we are
+    // re-verify the signatures once per day.
+    if (
+      this.mustSign(aAddon.type) &&
+      aAddon.adminInstallOnly &&
+      !aAddon.wrapper.isInstalledByEnterprisePolicy
+    ) {
+      logger.warn(
+        `Add-on ${aAddon.id} is installable only from policies, but no policy extension settings have been found.`
+      );
       return false;
     }
 
@@ -2650,6 +2870,7 @@ export const XPIDatabase = {
   removeAddonMetadata(aAddon) {
     this.addonDB.delete(aAddon._key);
     this.saveChanges();
+    this.removeFromBlocklistAttentionAddonIdsSet(aAddon);
   },
 
   updateXPIStates(addon) {
@@ -2928,6 +3149,7 @@ export const XPIDatabase = {
       }
 
       this.updateAddonActive(aAddon, !isDisabled);
+      this.maybeUpdateBlocklistAttentionAddonIdsSet(aAddon);
 
       let bootstrap = XPIExports.XPIInternal.BootstrapScope.get(aAddon);
       if (isDisabled) {
@@ -3084,24 +3306,11 @@ export const XPIDatabaseReconcile = {
    *        The new state of the add-on
    * @param {AddonInternal?} [aNewAddon]
    *        The manifest for the new add-on if it has already been loaded
-   * @param {string?} [aOldAppVersion]
-   *        The version of the application last run with this profile or null
-   *        if it is a new profile or the version is unknown
-   * @param {string?} [aOldPlatformVersion]
-   *        The version of the platform last run with this profile or null
-   *        if it is a new profile or the version is unknown
    * @returns {boolean}
    *        A boolean indicating if flushing caches is required to complete
    *        changing this add-on
    */
-  addMetadata(
-    aLocation,
-    aId,
-    aAddonState,
-    aNewAddon,
-    aOldAppVersion,
-    aOldPlatformVersion
-  ) {
+  addMetadata(aLocation, aId, aAddonState, aNewAddon) {
     logger.debug(`New add-on ${aId} installed in ${aLocation.name}`);
 
     // We treat this is a new install if,
@@ -3348,6 +3557,10 @@ export const XPIDatabaseReconcile = {
     let signedDateMissing =
       aOldAddon.signedDate === undefined &&
       (aOldAddon.signedState || checkSigning);
+    // signedTypes must be set if signedState is set.
+    let signedTypesMissing =
+      aOldAddon.signedTypes === undefined &&
+      (aOldAddon.signedState || checkSigning);
 
     // If maxVersion was inadvertently updated for a locale, force a reload
     // from the manifest.  See Bug 1646016 for details.
@@ -3360,7 +3573,12 @@ export const XPIDatabaseReconcile = {
     }
 
     let manifest = null;
-    if (checkSigning || aReloadMetadata || signedDateMissing) {
+    if (
+      checkSigning ||
+      aReloadMetadata ||
+      signedDateMissing ||
+      signedTypesMissing
+    ) {
       try {
         manifest = XPIExports.XPIInstall.syncLoadManifest(
           aAddonState,
@@ -3382,6 +3600,10 @@ export const XPIDatabaseReconcile = {
 
     if (signedDateMissing) {
       aOldAddon.signedDate = manifest.signedDate;
+    }
+
+    if (signedTypesMissing) {
+      aOldAddon.signedTypes = manifest.signedTypes;
     }
 
     // May be updating from a version of the app that didn't support all the

@@ -321,7 +321,7 @@ public:
      *  The caller must assume ownership of the object, and manage its reference count directly.
      *  No call to unref() will be made.
      */
-    T* SK_WARN_UNUSED_RESULT release() {
+    [[nodiscard]] T* release() {
         T* ptr = fPtr;
         fPtr = nullptr;
         return ptr;
@@ -366,6 +366,8 @@ template <typename C, typename CT, typename T>
 auto operator<<(std::basic_ostream<C, CT>& os, const sk_sp<T>& sp) -> decltype(os << sp.get()) {
     return os << sp.get();
 }
+
+template <typename T> sk_sp(T*) -> sk_sp<T>;
 
 template <typename T, typename... Args>
 sk_sp<T> sk_make_sp(Args&&... args) {

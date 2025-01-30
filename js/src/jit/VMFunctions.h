@@ -19,6 +19,8 @@
 #include "gc/AllocKind.h"
 #include "js/ScalarType.h"
 #include "js/TypeDecls.h"
+#include "vm/TypeofEqOperand.h"
+#include "vm/UsingHint.h"
 
 class JSJitInfo;
 class JSLinearString;
@@ -27,6 +29,7 @@ namespace js {
 
 class AbstractGeneratorObject;
 class ArrayObject;
+class DateObject;
 class GlobalObject;
 class InterpreterFrame;
 class LexicalScope;
@@ -561,6 +564,14 @@ bool GetNativeDataPropertyByValuePure(JSContext* cx, JSObject* obj,
                                       MegamorphicCacheEntry* cacheEntry,
                                       Value* vp);
 
+bool GetPropMaybeCached(JSContext* cx, HandleObject obj, HandleId id,
+                        MegamorphicCacheEntry* cacheEntry,
+                        MutableHandleValue result);
+
+bool GetElemMaybeCached(JSContext* cx, HandleObject obj, HandleValue id,
+                        MegamorphicCacheEntry* cacheEntry,
+                        MutableHandleValue result);
+
 template <bool HasOwn>
 bool HasNativeDataPropertyPure(JSContext* cx, JSObject* obj,
                                MegamorphicCacheEntry* cacheEntry, Value* vp);
@@ -581,6 +592,8 @@ bool SetPropertyMegamorphic(JSContext* cx, HandleObject obj, HandleId id,
 
 JSString* TypeOfNameObject(JSObject* obj, JSRuntime* rt);
 
+bool TypeOfEqObject(JSObject* obj, TypeofEqOperand operand);
+
 bool GetPrototypeOf(JSContext* cx, HandleObject target,
                     MutableHandleValue rval);
 
@@ -600,6 +613,8 @@ void TraceCreateObject(JSObject* obj);
 #endif
 
 bool DoStringToInt64(JSContext* cx, HandleString str, uint64_t* res);
+
+BigInt* CreateBigIntFromInt32(JSContext* cx, int32_t i32);
 
 #if JS_BITS_PER_WORD == 32
 BigInt* CreateBigIntFromInt64(JSContext* cx, uint32_t low, uint32_t high);
@@ -677,12 +692,34 @@ BigInt* AtomicsSub64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
 BigInt* AtomicsXor64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
                      const BigInt* value);
 
+float RoundFloat16ToFloat32(int32_t d);
+float RoundFloat16ToFloat32(float d);
+float RoundFloat16ToFloat32(double d);
+
+float Float16ToFloat32(int32_t value);
+int32_t Float32ToFloat16(float value);
+
+void DateFillLocalTimeSlots(DateObject* dateObj);
+
 JSAtom* AtomizeStringNoGC(JSContext* cx, JSString* str);
 
-bool SetObjectHas(JSContext* cx, HandleObject obj, HandleValue key, bool* rval);
-bool MapObjectHas(JSContext* cx, HandleObject obj, HandleValue key, bool* rval);
-bool MapObjectGet(JSContext* cx, HandleObject obj, HandleValue key,
+bool SetObjectHas(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
+                  bool* rval);
+bool SetObjectDelete(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
+                     bool* rval);
+bool SetObjectAdd(JSContext* cx, Handle<SetObject*> obj, HandleValue key);
+bool SetObjectAddFromIC(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
+                        MutableHandleValue rval);
+bool MapObjectHas(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                  bool* rval);
+bool MapObjectGet(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
                   MutableHandleValue rval);
+bool MapObjectDelete(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                     bool* rval);
+bool MapObjectSet(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                  HandleValue val);
+bool MapObjectSetFromIC(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                        HandleValue val, MutableHandleValue rval);
 
 void AssertSetObjectHash(JSContext* cx, SetObject* obj, const Value* value,
                          mozilla::HashNumber actualHash);

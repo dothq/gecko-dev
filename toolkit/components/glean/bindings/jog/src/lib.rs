@@ -19,12 +19,13 @@ struct ExtraMetricArgs {
     time_unit: Option<TimeUnit>,
     memory_unit: Option<MemoryUnit>,
     allowed_extra_keys: Option<Vec<String>>,
-    range_min: Option<u64>,
-    range_max: Option<u64>,
-    bucket_count: Option<u64>,
+    range_min: Option<i64>,
+    range_max: Option<i64>,
+    bucket_count: Option<i64>,
     histogram_type: Option<HistogramType>,
     numerators: Option<Vec<CommonMetricData>>,
     ordered_labels: Option<Vec<Cow<'static, str>>>,
+    permit_non_commutative_operations_over_ipc: Option<bool>,
 }
 
 /// Test-only method.
@@ -103,6 +104,7 @@ fn create_and_register_metric(
         extra_args.histogram_type,
         extra_args.numerators,
         extra_args.ordered_labels,
+        extra_args.permit_non_commutative_operations_over_ipc,
     );
     extern "C" {
         fn JOG_RegisterMetric(
@@ -139,12 +141,19 @@ pub extern "C" fn jog_test_register_ping(
     send_if_empty: bool,
     precise_timestamps: bool,
     include_info_sections: bool,
+    enabled: bool,
+    schedules_pings: &ThinVec<nsCString>,
     reason_codes: &ThinVec<nsCString>,
+    follows_collection_enabled: bool,
 ) -> u32 {
     let ping_name = name.to_string();
     let reason_codes = reason_codes
         .iter()
         .map(|reason| reason.to_string())
+        .collect();
+    let schedules_pings = schedules_pings
+        .iter()
+        .map(|ping| ping.to_string())
         .collect();
     create_and_register_ping(
         ping_name,
@@ -152,18 +161,25 @@ pub extern "C" fn jog_test_register_ping(
         send_if_empty,
         precise_timestamps,
         include_info_sections,
+        enabled,
+        schedules_pings,
         reason_codes,
+        follows_collection_enabled,
     )
     .expect("Creation or registration of ping failed.") // permitted to panic in test-only method.
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_and_register_ping(
     ping_name: String,
     include_client_id: bool,
     send_if_empty: bool,
     precise_timestamps: bool,
     include_info_sections: bool,
+    enabled: bool,
+    schedules_pings: Vec<String>,
     reason_codes: Vec<String>,
+    follows_collection_enabled: bool,
 ) -> Result<u32, Box<dyn std::error::Error>> {
     let ns_name = nsCString::from(&ping_name);
     let ping_id = factory::create_and_register_ping(
@@ -172,7 +188,10 @@ fn create_and_register_ping(
         send_if_empty,
         precise_timestamps,
         include_info_sections,
+        enabled,
+        schedules_pings,
         reason_codes,
+        follows_collection_enabled,
     );
     extern "C" {
         fn JOG_RegisterPing(name: &nsACString, ping_id: u32);
@@ -219,7 +238,10 @@ struct PingDefinitionData {
     send_if_empty: bool,
     precise_timestamps: bool,
     include_info_sections: bool,
+    enabled: bool,
+    schedules_pings: Option<Vec<String>>,
     reason_codes: Option<Vec<String>>,
+    follows_collection_enabled: bool,
 }
 
 /// Read the file at the provided location, interpret it as a jogfile,
@@ -266,7 +288,10 @@ pub extern "C" fn jog_load_jogfile(jogfile_path: &nsAString) -> bool {
             ping.send_if_empty,
             ping.precise_timestamps,
             ping.include_info_sections,
+            ping.enabled,
+            ping.schedules_pings.unwrap_or_else(Vec::new),
             ping.reason_codes.unwrap_or_else(Vec::new),
+            ping.follows_collection_enabled,
         );
     }
     true

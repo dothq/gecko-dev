@@ -42,7 +42,7 @@ You can download the source code and have Firefox automatically download and ins
 
 Downloading can take from 40 minutes to two hours (depending on your connection) and the repository should be less than 5GB (~ 20GB after the build).
 
-The default options are recommended.
+The **default options are recommended**.
 If you're not planning to write C++ or Rust code, select :ref:`Artifact Mode <Understanding Artifact Builds>`
 and follow the instructions at the end of the bootstrap for creating a mozconfig file.
 
@@ -55,6 +55,11 @@ To Setup Firefox On Windows
     $ mkdir mozilla-source
     $ cd mozilla-source
     $ wget https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py
+
+    # To use Git as your VCS
+    $ python3 bootstrap.py --vcs=git
+
+    # To use Mercurial as your VCS
     $ python3 bootstrap.py
 
 More information on :ref:`building Firefox for Windows <Building Firefox On Windows>`.
@@ -65,9 +70,29 @@ To Setup Firefox On macOS and Linux
 .. code-block:: shell
 
     $ curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+
+    # To use Git as your VCS
+    $ python3 bootstrap.py --vcs=git
+
+    # To use Mercurial as your VCS
     $ python3 bootstrap.py
 
 More information on :ref:`building Firefox for Linux <Building Firefox On Linux>` and :ref:`building Firefox for MacOS <Building Firefox On MacOS>`.
+
+To Setup Firefox for Android
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: shell
+
+    $ curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+
+    # To use Git as your VCS
+    $ python3 bootstrap.py --vcs=git
+
+    # To use Mercurial as your VCS
+    $ python3 bootstrap.py
+
+More information on :ref:`building Firefox for Android <Firefox for Android>`
 
 To set up your editor
 ---------------------
@@ -398,6 +423,8 @@ GeckoView setup and contribution docs live in `geckoview.dev <https://geckoview.
 
 More documentation about contribution
 -------------------------------------
+
+:ref:`How to Contribute Code to Firefox`
 
 :ref:`Contributing to Mozilla projects`
 

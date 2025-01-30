@@ -13,7 +13,7 @@ ChromeUtils.defineESModuleGetters(this, {
 
 add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.urlbar.suggest.quickactions", false]],
+    set: [["browser.urlbar.scotchBonnet.enableOverride", false]],
   });
 
   // We'll later replace this, so ensure it's restored.
@@ -183,7 +183,7 @@ add_task(async function staleReplacedWithFresh() {
   await SpecialPowers.pushPrefEnv({
     set: [["browser.urlbar.suggest.searches", true]],
   });
-  let engine = await SearchTestUtils.promiseNewSearchEngine({
+  let engine = await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + "searchSuggestionEngineSlow.xml",
   });
   let oldDefaultEngine = await Services.search.getDefault();

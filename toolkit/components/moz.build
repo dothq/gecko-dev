@@ -22,6 +22,7 @@ DIRS += [
     "backgroundhangmonitor",
     "bitsdownload",
     "browser",
+    "captchadetection",
     "cascade_bloom_filter",
     "certviewer",
     "cleardata",
@@ -30,6 +31,7 @@ DIRS += [
     "commandlines",
     "contentanalysis",
     "contentprefs",
+    "contentrelevancy",
     "contextualidentity",
     "crashes",
     "crashmonitor",
@@ -37,7 +39,6 @@ DIRS += [
     "downloads",
     "enterprisepolicies",
     "extensions",
-    "featuregates",
     "formautofill",
     "finalizationwitness",
     "find",
@@ -53,7 +54,6 @@ DIRS += [
     "parentalcontrols",
     "passwordmgr",
     "pdfjs",
-    "pictureinpicture",
     "places",
     "processtools",
     "processsingleton",
@@ -95,6 +95,7 @@ if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
     DIRS += [
         "aboutconfig",
         "narrate",
+        "pictureinpicture",
         "reader",
         "viaduct",
         "uniffi-js",
@@ -130,20 +131,18 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] not in ("android", "windows"):
     DIRS += ["aboutwebauthn"]
 
 if CONFIG["MOZ_BUILD_APP"] == "browser":
-    DIRS += ["normandy", "messaging-system"]
+    DIRS += ["featuregates", "messaging-system", "normandy"]
 
 DIRS += ["nimbus"]
 
 if CONFIG["MOZ_BACKGROUNDTASKS"]:
     DIRS += ["backgroundtasks"]
 
-# This is only packaged for browser since corrupt JAR and XPI files tend to be a desktop-OS problem.
-if CONFIG["MOZ_BUILD_APP"] == "browser":
-    DIRS += ["corroborator"]
-
 if CONFIG["MOZ_UNIFFI_FIXTURES"]:
     DIRS += ["uniffi-bindgen-gecko-js/fixtures"]
 
+if CONFIG["NIGHTLY_BUILD"]:
+    DIRS += ["aboutinference"]
 
 UNIFIED_SOURCES += [
     "/toolkit/components/antitracking/ContentBlockingAllowList.cpp",

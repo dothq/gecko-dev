@@ -43,6 +43,52 @@ class Configuration(DescriptorProvider):
     the configuration file.
     """
 
+    class IDLAttrGetterOrSetterTemplate:
+        class TemplateAdditionalArg:
+            def __init__(self, type, name, value=None):
+                self.type = type
+                self.name = name
+                self.value = value
+
+        def __init__(self, template, getter, setter, argument, attrName):
+            self.descriptor = None
+            self.usedInOtherInterfaces = False
+            self.getter = getter
+            self.setter = setter
+            self.argument = (
+                Configuration.IDLAttrGetterOrSetterTemplate.TemplateAdditionalArg(
+                    *argument
+                )
+            )
+            self.attrNameString = attrName
+            self.attr = None
+
+    class TemplateIDLAttribute:
+        def __init__(self, attr):
+            assert attr.isAttr()
+            assert not attr.isMaplikeOrSetlikeAttr()
+            assert not attr.slotIndices
+
+            self.identifier = attr.identifier
+            self.type = attr.type
+            self.extendedAttributes = attr.getExtendedAttributes()
+            self.slotIndices = None
+
+        def getExtendedAttribute(self, name):
+            return self.extendedAttributes.get(name)
+
+        def isAttr(self):
+            return True
+
+        def isMaplikeOrSetlikeAttr(self):
+            return False
+
+        def isMethod(self):
+            return False
+
+        def isStatic(self):
+            return False
+
     def __init__(self, filename, webRoots, parseData, generatedEvents=[]):
         DescriptorProvider.__init__(self)
 
@@ -51,28 +97,12 @@ class Configuration(DescriptorProvider):
         exec(io.open(filename, encoding="utf-8").read(), glbl)
         config = glbl["DOMInterfaces"]
 
-        class IDLAttrGetterOrSetterTemplate:
-            def __init__(self, template, getter, setter, argument, attrName):
-                class TemplateAdditionalArg:
-                    def __init__(self, type, name, value=None):
-                        self.type = type
-                        self.name = name
-                        self.value = value
-
-                self.descriptor = None
-                self.usedInOtherInterfaces = False
-                self.getter = getter
-                self.setter = setter
-                self.argument = TemplateAdditionalArg(*argument)
-                self.attrNameString = attrName
-                self.attr = None
-
         self.attributeTemplates = dict()
         attributeTemplatesByInterface = dict()
         for interface, templates in glbl["TemplatedAttributes"].items():
             for template in templates:
                 name = template.get("template")
-                t = IDLAttrGetterOrSetterTemplate(**template)
+                t = Configuration.IDLAttrGetterOrSetterTemplate(**template)
                 self.attributeTemplates[name] = t
                 attributeTemplatesByInterface.setdefault(interface, list()).append(t)
 
@@ -289,6 +319,10 @@ class Configuration(DescriptorProvider):
             d.interface.getClassName()
             for d in self.getDescriptors(hasInterfaceOrInterfacePrototypeObject=True)
         )
+        names.update(
+            d.interface.getClassName()
+            for d in self.getDescriptors(hasOrdinaryObjectPrototype=True)
+        )
 
         # Now also add the names from windowGlobalNames, we need them for the
         # perfect hash that we build for these.
@@ -351,33 +385,8 @@ class Configuration(DescriptorProvider):
                 )
 
             # This mimics a real IDL attribute for templated bindings.
-            class TemplateIDLAttribute:
-                def __init__(self, attr):
-                    assert attr.isAttr()
-                    assert not attr.isMaplikeOrSetlikeAttr()
-                    assert not attr.slotIndices
 
-                    self.identifier = attr.identifier
-                    self.type = attr.type
-                    self.extendedAttributes = attr.getExtendedAttributes()
-                    self.slotIndices = None
-
-                def getExtendedAttribute(self, name):
-                    return self.extendedAttributes.get(name)
-
-                def isAttr(self):
-                    return True
-
-                def isMaplikeOrSetlikeAttr(self):
-                    return False
-
-                def isMethod(self):
-                    return False
-
-                def isStatic(self):
-                    return False
-
-            template.attr = TemplateIDLAttribute(firstAttribute)
+            template.attr = Configuration.TemplateIDLAttribute(firstAttribute)
 
             def filterExtendedAttributes(extendedAttributes):
                 # These are the extended attributes that we allow to have
@@ -519,6 +528,11 @@ class Configuration(DescriptorProvider):
 
                 def getter(x):
                     return x.hasInterfaceOrInterfacePrototypeObject()
+
+            elif key == "hasOrdinaryObjectPrototype":
+
+                def getter(x):
+                    return x.hasOrdinaryObjectPrototype()
 
             elif key == "isCallback":
 
@@ -821,6 +835,9 @@ class Descriptor(DescriptorProvider):
                         )
                     addOperation("LegacyCaller", m)
 
+            if desc.get("hasOrdinaryObjectPrototype", False):
+                iface.setUserData("hasOrdinaryObjectPrototype", True)
+
             while iface:
                 for m in iface.members:
                     if not m.isMethod():
@@ -951,8 +968,6 @@ class Descriptor(DescriptorProvider):
                 config.maxProtoChainLength, len(self.prototypeChain)
             )
 
-        self.hasOrdinaryObjectPrototype = desc.get("hasOrdinaryObjectPrototype", False)
-
     def binaryNameFor(self, name, isStatic):
         return self._binaryNames.get((name, isStatic), name)
 
@@ -971,6 +986,9 @@ class Descriptor(DescriptorProvider):
             self.interface.hasInterfaceObject()
             or self.interface.hasInterfacePrototypeObject()
         )
+
+    def hasOrdinaryObjectPrototype(self):
+        return self.interface.getUserData("hasOrdinaryObjectPrototype", False)
 
     @property
     def hasNamedPropertiesObject(self):

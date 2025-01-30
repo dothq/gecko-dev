@@ -8,11 +8,13 @@
 
 #include "nsSocketTransport2.h"
 
-#include "IOActivityMonitor.h"
+#include "MockNetworkLayer.h"
+#include "MockNetworkLayerController.h"
 #include "NSSErrorsService.h"
 #include "NetworkDataCountLayer.h"
 #include "QuicSocketControl.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
@@ -864,7 +866,7 @@ nsresult nsSocketTransport::InitWithConnectedSocket(PRFileDesc* fd,
   }
   mPort = ntohs(port);
 
-  memcpy(&mNetAddr, addr, sizeof(NetAddr));
+  mNetAddr = *addr;
 
   mPollFlags = (PR_POLL_READ | PR_POLL_WRITE | PR_POLL_EXCEPT);
   mState = STATE_TRANSFERRING;
@@ -963,7 +965,7 @@ nsresult nsSocketTransport::ResolveHost() {
       // When not resolving mHost locally, we still want to ensure that
       // it only contains valid characters.  See bug 304904 for details.
       // Sometimes the end host is not yet known and mHost is *
-      if (!net_IsValidHostName(mHost) && !mHost.EqualsLiteral("*")) {
+      if (!net_IsValidDNSHost(mHost) && !mHost.EqualsLiteral("*")) {
         SOCKET_LOG(("  invalid hostname %s\n", mHost.get()));
         return NS_ERROR_UNKNOWN_HOST;
       }
@@ -1231,6 +1233,19 @@ nsresult nsSocketTransport::BuildSocket(PRFileDesc*& fd, bool& proxyTransparent,
   return rv;
 }
 
+static bool ShouldBlockAddress(const NetAddr& aAddr) {
+  if (!xpc::AreNonLocalConnectionsDisabled()) {
+    return false;
+  }
+
+  NetAddr overrideAddr;
+  bool hasOverride = FindNetAddrOverride(aAddr, overrideAddr);
+  const NetAddr& addrToCheck = hasOverride ? overrideAddr : aAddr;
+
+  return !(addrToCheck.IsIPAddrAny() || addrToCheck.IsIPAddrLocal() ||
+           addrToCheck.IsIPAddrShared() || addrToCheck.IsLoopbackAddr());
+}
+
 nsresult nsSocketTransport::InitiateSocket() {
   SOCKET_LOG(("nsSocketTransport::InitiateSocket [this=%p]\n", this));
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
@@ -1242,6 +1257,23 @@ nsresult nsSocketTransport::InitiateSocket() {
   if (gIOService->IsNetTearingDown()) {
     return NS_ERROR_ABORT;
   }
+
+  // Since https://github.com/whatwg/fetch/pull/1763,
+  // we need to disable access to 0.0.0.0 for non-test purposes
+  if (mNetAddr.IsIPAddrAny() && !mProxyTransparentResolvesHost) {
+    if (StaticPrefs::network_socket_ip_addr_any_disabled()) {
+      mozilla::glean::networking::http_ip_addr_any_count
+          .Get("blocked_requests"_ns)
+          .Add(1);
+      SOCKET_LOG(("connection refused NS_ERROR_CONNECTION_REFUSED\n"));
+      return NS_ERROR_CONNECTION_REFUSED;
+    }
+
+    mozilla::glean::networking::http_ip_addr_any_count
+        .Get("not_blocked_requests"_ns)
+        .Add(1);
+  }
+
   if (gIOService->IsOffline()) {
     if (StaticPrefs::network_disable_localhost_when_offline() || !isLocal) {
       return NS_ERROR_OFFLINE;
@@ -1255,9 +1287,7 @@ nsresult nsSocketTransport::InitiateSocket() {
     }
 #endif
 
-    if (NS_SUCCEEDED(mCondition) && xpc::AreNonLocalConnectionsDisabled() &&
-        !(mNetAddr.IsIPAddrAny() || mNetAddr.IsIPAddrLocal() ||
-          mNetAddr.IsIPAddrShared())) {
+    if (NS_SUCCEEDED(mCondition) && ShouldBlockAddress(mNetAddr)) {
       nsAutoCString ipaddr;
       RefPtr<nsNetAddr> netaddr = new nsNetAddr(&mNetAddr);
       netaddr->GetAddress(ipaddr);
@@ -1343,9 +1373,6 @@ nsresult nsSocketTransport::InitiateSocket() {
         ("  BuildSocket failed [rv=%" PRIx32 "]\n", static_cast<uint32_t>(rv)));
     return rv;
   }
-
-  // create proxy via IOActivityMonitor
-  IOActivityMonitor::MonitorSocket(fd);
 
 #ifdef FUZZING
   if (StaticPrefs::fuzzing_necko_enabled()) {
@@ -1524,6 +1551,15 @@ nsresult nsSocketTransport::InitiateSocket() {
       SOCKET_LOG(
           ("nsSocketTransport::InitiateSocket "
            "AttachNetworkDataCountLayer failed [this=%p]\n",
+           this));
+    }
+  }
+  if (StaticPrefs::network_socket_attach_mock_network_layer() &&
+      xpc::AreNonLocalConnectionsDisabled()) {
+    if (NS_FAILED(AttachMockNetworkLayer(fd))) {
+      SOCKET_LOG(
+          ("nsSocketTransport::InitiateSocket "
+           "AttachMockNetworkLayer failed [this=%p]\n",
            this));
     }
   }
@@ -2581,7 +2617,7 @@ nsSocketTransport::GetPeerAddr(NetAddr* addr) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  memcpy(addr, &mNetAddr, sizeof(NetAddr));
+  *addr = mNetAddr;
   return NS_OK;
 }
 
@@ -2600,7 +2636,7 @@ nsSocketTransport::GetSelfAddr(NetAddr* addr) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  memcpy(addr, &mSelfAddr, sizeof(NetAddr));
+  *addr = mSelfAddr;
   return NS_OK;
 }
 
@@ -2614,8 +2650,7 @@ nsSocketTransport::Bind(NetAddr* aLocalAddr) {
     return NS_ERROR_FAILURE;
   }
 
-  mBindAddr = MakeUnique<NetAddr>();
-  memcpy(mBindAddr.get(), aLocalAddr, sizeof(NetAddr));
+  mBindAddr = MakeUnique<NetAddr>(*aLocalAddr);
 
   return NS_OK;
 }

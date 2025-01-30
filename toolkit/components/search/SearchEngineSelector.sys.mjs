@@ -17,6 +17,18 @@ ChromeUtils.defineLazyGetter(lazy, "logConsole", () => {
 });
 
 /**
+ * @typedef {object} RefinedConfig
+ * @property {object[]} engines
+ *   An array of objects defining the engines that should be presented to the user.
+ * @property {string} appDefaultEngineId
+ *   The identifier of the engine that should be used for the application
+ *   default engine.
+ * @property {string} [appPrivateDefaultEngineId]
+ *   If specified, the identifier of the engine that should be used for the
+ *   application default engine in private browsing mode.
+ */
+
+/**
  * SearchEngineSelector parses the JSON configuration for
  * search engines and returns the applicable engines depending
  * on their region + locale.
@@ -27,9 +39,9 @@ export class SearchEngineSelector {
    *   A listener for configuration update changes.
    */
   constructor(listener) {
-    this._remoteConfig = lazy.RemoteSettings(lazy.SearchUtils.NEW_SETTINGS_KEY);
+    this._remoteConfig = lazy.RemoteSettings(lazy.SearchUtils.SETTINGS_KEY);
     this._remoteConfigOverrides = lazy.RemoteSettings(
-      lazy.SearchUtils.NEW_SETTINGS_OVERRIDES_KEY
+      lazy.SearchUtils.SETTINGS_OVERRIDES_KEY
     );
     this._listenerAdded = false;
     this._onConfigurationUpdated = this._onConfigurationUpdated.bind(this);
@@ -54,6 +66,9 @@ export class SearchEngineSelector {
 
   /**
    * Handles getting the configuration from remote settings.
+   *
+   * @returns {object}
+   *   The configuration data.
    */
   async getEngineConfiguration() {
     if (this._getConfigurationPromise) {
@@ -89,7 +104,60 @@ export class SearchEngineSelector {
   }
 
   /**
+   * Finds an engine configuration that has a matching host.
+   *
+   * @param {string} host
+   *   The host to match.
+   *
+   * @returns {object}
+   *   The configuration data for an engine.
+   */
+  async findContextualSearchEngineByHost(host) {
+    for (let config of this._configuration) {
+      if (config.recordType !== "engine") {
+        continue;
+      }
+      let searchHost = new URL(config.base.urls.search.base).hostname;
+      if (searchHost.startsWith("www.")) {
+        searchHost = searchHost.slice(4);
+      }
+      if (searchHost.startsWith(host)) {
+        let engine = structuredClone(config.base);
+        engine.identifier = config.identifier;
+        return engine;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Finds an engine configuration that has a matching identifier.
+   *
+   * @param {string} id
+   *   The identifier to match.
+   *
+   * @returns {object}
+   *   The configuration data for an engine.
+   */
+  async findContextualSearchEngineById(id) {
+    for (let config of this._configuration) {
+      if (config.recordType !== "engine") {
+        continue;
+      }
+      if (config.identifier == id) {
+        let engine = structuredClone(config.base);
+        engine.identifier = config.identifier;
+        return engine;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Used by tests to get the configuration overrides.
+   *
+   * @returns {object}
+   *   The engine overrides data.
    */
   async getEngineConfigurationOverrides() {
     await this.getEngineConfiguration();
@@ -208,10 +276,9 @@ export class SearchEngineSelector {
    *   The name of the application.
    * @param {string} [options.version]
    *   The version of the application.
-   * @returns {object}
-   *   An object with "engines" field, a sorted list of engines and
-   *   optionally "privateDefault" which is an object containing the engine
-   *   details for the engine which should be the default in Private Browsing mode.
+   * @returns {RefinedConfig}
+   *   An object which contains the refined configuration with a filtered list
+   *   of search engines, and the identifiers for the application default engines.
    */
   async fetchEngineConfiguration({
     locale,
@@ -261,20 +328,24 @@ export class SearchEngineSelector {
         continue;
       }
 
-      let variants =
-        config.variants?.filter(variant =>
-          this.#matchesUserEnvironment(variant, userEnv)
-        ) ?? [];
+      let variant = config.variants?.findLast(v =>
+        this.#matchesUserEnvironment(v, userEnv)
+      );
 
-      if (!variants.length) {
+      if (!variant) {
         continue;
       }
 
+      let subVariant = variant.subVariants?.findLast(sv =>
+        this.#matchesUserEnvironment(sv, userEnv)
+      );
+
       let engine = structuredClone(config.base);
       engine.identifier = config.identifier;
+      engine = this.#deepCopyObject(engine, variant);
 
-      for (let variant of variants) {
-        engine = this.#deepCopyObject(engine, variant);
+      if (subVariant) {
+        engine = this.#deepCopyObject(engine, subVariant);
       }
 
       for (let override of this._configurationOverrides) {
@@ -300,12 +371,25 @@ export class SearchEngineSelector {
       }
     }
 
+    if (!defaultEngine) {
+      if (engines.length) {
+        lazy.logConsole.error(
+          "Could not find a matching default engine, using the first one in the list"
+        );
+        defaultEngine = engines[0];
+      } else {
+        throw new Error(
+          "Could not find any engines in the filtered configuration"
+        );
+      }
+    }
+
     engines.sort(this._sort.bind(this, defaultEngine, privateDefault));
 
-    let result = { engines };
+    let result = { engines, appDefaultEngineId: defaultEngine.identifier };
 
     if (privateDefault) {
-      result.privateDefault = privateDefault;
+      result.appPrivateDefaultEngineId = privateDefault.identifier;
     }
 
     if (lazy.SearchUtils.loggingEnabled) {
@@ -356,6 +440,10 @@ export class SearchEngineSelector {
   #deepCopyObject(target, source) {
     for (let key in source) {
       if (["environment"].includes(key)) {
+        continue;
+      }
+
+      if (["subVariants"].includes(key)) {
         continue;
       }
 
@@ -431,14 +519,15 @@ export class SearchEngineSelector {
         user.version
       ) &&
       this.#matchesChannel(config.environment.channels, user.channel) &&
-      this.#matchesApplication(config.environment.applications, user.appName)
+      this.#matchesApplication(config.environment.applications, user.appName) &&
+      !this.#hasDeviceType(config.environment)
     );
   }
 
   /**
    * @param {string} userDistro
    *  The distribution from the user's environment.
-   * @param {Array} configDistro
+   * @param {string[]} configDistro
    *  An array of distributions for the particular environment in the config.
    * @returns {boolean}
    *  True if the user's distribution is included in the config distribution
@@ -497,7 +586,7 @@ export class SearchEngineSelector {
   }
 
   /**
-   * @param {Array} configChannels
+   * @param {string[]} configChannels
    *  Release channels such as nightly, beta, release, esr.
    * @param {string} userChannel
    *  The user's channel.
@@ -514,7 +603,7 @@ export class SearchEngineSelector {
   }
 
   /**
-   * @param {Array} configApps
+   * @param {string[]} configApps
    *  The applications such as firefox, firefox-android, firefox-ios,
    *  focus-android, and focus-ios.
    * @param {string} userApp
@@ -529,6 +618,21 @@ export class SearchEngineSelector {
     }
 
     return configApps.includes(userApp);
+  }
+
+  /**
+   * Generally the device type option should only be used when the application
+   * is selected to be on an android or iOS based product. However, we support
+   * rejecting if this is non-empty in case of future requirements that we haven't
+   * predicted.
+   *
+   * @param {object} environment
+   *   An environment section from the engine configuration.
+   * @returns {boolean}
+   *   Returns true if there is a device type section and it is not empty.
+   */
+  #hasDeviceType(environment) {
+    return !!environment.deviceType?.length;
   }
 
   /**

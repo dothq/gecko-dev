@@ -16,29 +16,40 @@ authors = [
     "Chun-Min Chang <chun.m.chang@gmail.com>",
     "Paul Adenot <paul@paul.cx>",
 ]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 readme = "README.md"
 license = "ISC"
 
 [lib]
+name = "cubeb_coreaudio"
 crate-type = [
     "staticlib",
     "rlib",
 ]
+path = "src/lib.rs"
 
 [dependencies]
 atomic = "0.4"
-audio-mixer = "0.1"
+audio-mixer = "0.2"
 bitflags = "2"
-cubeb-backend = "0.12.0"
+cubeb-backend = "0.13"
 float-cmp = "0.6"
-lazy_static = "1.2"
 libc = "0.2"
 mach = "0.3"
 ringbuf = "0.2.6"
 triple_buffer = "5.0.5"
+whatsys = "0.3"
 
 [dependencies.coreaudio-sys-utils]
 path = "coreaudio-sys-utils"
 
 [dev-dependencies]
 itertools = "0.11"
+
+[features]
+audio-dump = []

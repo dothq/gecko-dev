@@ -31,11 +31,12 @@
  * A note about GUIDs and item-ids
  * -------------------------------
  * There's an ongoing effort (see bug 1071511) to deprecate item-ids in Places
- * in favor of GUIDs.  Both because new APIs (e.g. Bookmark.jsm) expose them to
- * the minimum necessary, and because GUIDs play much better with implementing
- * |redo|, this API doesn't support item-ids at all, and only accepts bookmark
- * GUIDs, both for input (e.g. for setting the parent folder for a new bookmark)
- * and for output (when the GUID for such a bookmark is propagated).
+ * in favor of GUIDs.  Both because new APIs (e.g. Bookmarks.sys.mjs) expose them
+ * to the minimum necessary, and because GUIDs play much better with
+ * implementing |redo|, this API doesn't support item-ids at all, and only
+ * accepts bookmark GUIDs, both for input (e.g. for setting the parent folder
+ * for a new bookmark) and for output (when the GUID for such a bookmark is
+ * propagated).
  *
  * Constructing transactions
  * -------------------------
@@ -128,11 +129,6 @@
  * implementation is asynchronous, the order in which PlacesTransactions methods
  * is called does guarantee the order in which they are to be invoked.
  *
- * The only exception to this rule is |transact| calls done during a batch (see
- * above).  |transact| calls are serialized with each other (and with undo, redo
- * and clearTransactionsHistory), but they  are, of course, not serialized with
- * batches.
- *
  * The transactions-history structure
  * ----------------------------------
  * The transactions-history is a two-dimensional stack of transactions: the
@@ -155,18 +151,6 @@
  */
 
 const TRANSACTIONS_QUEUE_TIMEOUT_MS = 240000; // 4 Mins.
-
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
-// Use a single queue bookmarks transaction manager. This pref exists as an
-// emergency switch-off, it will go away in the future.
-const prefs = {};
-XPCOMUtils.defineLazyPreferenceGetter(
-  prefs,
-  "USE_SINGLE_QUEUE",
-  "places.bookmarks.useSingleQueueTransactionManager",
-  true
-);
 
 import { PlacesUtils } from "resource://gre/modules/PlacesUtils.sys.mjs";
 
@@ -469,7 +453,7 @@ export var PlacesTransactions = {
  * that they are never executed in parallel.
  *
  * In other words: Enqueuer.enqueue(aFunc1); Enqueuer.enqueue(aFunc2) is roughly
- * the same as Task.spawn(aFunc1).then(Task.spawn(aFunc2)).
+ * the same as asyncFunc1.then(asyncFunc2).
  */
 function Enqueuer(name) {
   this._promise = Promise.resolve();
@@ -477,8 +461,7 @@ function Enqueuer(name) {
 }
 Enqueuer.prototype = {
   /**
-   * Spawn a functions once all previous functions enqueued are done running,
-   * and all promises passed to alsoWaitFor are no longer pending.
+   * Spawn a functions once all previous functions enqueued are done running.
    *
    * @param   func
    *          a function returning a promise.
@@ -512,41 +495,6 @@ Enqueuer.prototype = {
   },
 
   /**
-   * Same as above, but for a promise returned by a function that already run.
-   * This is useful, for example, for serializing transact calls with undo calls,
-   * even though transact has its own Enqueuer.
-   *
-   * @param {Promise} otherPromise
-   *        any promise.
-   * @param {string} source
-   *        source for logging purposes
-   */
-  alsoWaitFor(otherPromise, source) {
-    lazy.logger.debug(`${this._name} alsoWaitFor: ${source}`);
-    // We don't care if aPromise resolves or rejects, but just that is not
-    // pending anymore.
-    // If a transaction awaits on a never resolved promise, or is mistakenly
-    // nested, it could hang the transactions queue forever.  Thus we timeout
-    // the execution after a meaningful amount of time, to ensure in any case
-    // we'll proceed after a while.
-    let timeoutPromise = new Promise((resolve, reject) => {
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              "PlacesTransaction timeout, most likely caused by unresolved pending work."
-            )
-          ),
-        TRANSACTIONS_QUEUE_TIMEOUT_MS
-      );
-    });
-    let promise = Promise.race([otherPromise, timeoutPromise]).catch(
-      console.error
-    );
-    this._promise = Promise.all([this._promise, promise]);
-  },
-
-  /**
    * The promise for this queue.
    */
   get promise() {
@@ -555,10 +503,9 @@ Enqueuer.prototype = {
 };
 
 var TransactionsManager = {
-  // See the documentation at the top of this file. |transact| calls are not
-  // serialized with |batch| calls.
+  // Used to guarantee order of execution.
+  // See the documentation at the top of this file.
   _mainEnqueuer: new Enqueuer("MainEnqueuer"),
-  _transactEnqueuer: new Enqueuer("TransactEnqueuer"),
 
   // Transactions object should never be recycled (that is, |execute| should
   // only be called once (or not at all) after they're constructed.
@@ -589,7 +536,10 @@ var TransactionsManager = {
     // sameTxn.transact(); sameTxn.transact();
     this._executedTransactions.add(rawTxn);
 
-    let task = async () => {
+    // TODO: This may be cleaned up by changing transact() to an async function,
+    // but we must check if converting synhronous exceptions to an asynchronous
+    // rejection may cause issues.
+    return (async () => {
       lazy.logger.debug(`transact execute(): ${txnProxy}`);
       // Don't try to catch exceptions. If execute fails, we better not add the
       // transaction to the undo stack.
@@ -600,15 +550,7 @@ var TransactionsManager = {
 
       this._updateCommandsOnActiveWindow();
       return retval;
-    };
-
-    if (prefs.USE_SINGLE_QUEUE) {
-      return task();
-    }
-
-    let promise = this._transactEnqueuer.enqueue(task);
-    this._mainEnqueuer.alsoWaitFor(promise, "transact");
-    return promise;
+    })();
   },
 
   batch(task) {
@@ -640,9 +582,6 @@ var TransactionsManager = {
       lazy.TransactionsHistory._undoPosition++;
       this._updateCommandsOnActiveWindow();
     });
-    if (!prefs.USE_SINGLE_QUEUE) {
-      this._transactEnqueuer.alsoWaitFor(promise, "undo");
-    }
     return promise;
   },
 
@@ -676,9 +615,6 @@ var TransactionsManager = {
       lazy.TransactionsHistory._undoPosition--;
       this._updateCommandsOnActiveWindow();
     });
-    if (!prefs.USE_SINGLE_QUEUE) {
-      this._transactEnqueuer.alsoWaitFor(promise, "redo");
-    }
     return promise;
   },
 
@@ -695,10 +631,6 @@ var TransactionsManager = {
         throw new Error("either aUndoEntries or aRedoEntries should be true");
       }
     });
-
-    if (!prefs.USE_SINGLE_QUEUE) {
-      this._transactEnqueuer.alsoWaitFor(promise, "clearTransactionsHistory");
-    }
     return promise;
   },
 
@@ -1458,7 +1390,7 @@ PT.SortByName.prototype = {
     // This is not great, since it does main-thread IO.
     // PromiseBookmarksTree can't be used, since it' won't stop at the first level'.
     let root = PlacesUtils.getFolderContents(guid, false, false).root;
-    for (let i = 0; i < root.childCount; ++i) {
+    for (let i = 0, count = root.childCount; i < count; ++i) {
       let node = root.getChild(i);
       oldOrderGuids.push(node.bookmarkGuid);
       if (PlacesUtils.nodeIsSeparator(node)) {
@@ -1527,13 +1459,16 @@ PT.Remove.prototype = {
     await removeThem();
 
     this.undo = async function () {
+      let createdItems = [];
       for (let info of removedItems) {
         try {
           await createItemsFromBookmarksTree(info, true);
+          createdItems.push(info);
         } catch (ex) {
           console.error(`Unable to undo removal of ${info.guid}`);
         }
       }
+      removedItems = createdItems;
     };
     this.redo = removeThem;
   },

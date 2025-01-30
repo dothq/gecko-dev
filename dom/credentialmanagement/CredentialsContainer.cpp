@@ -4,11 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/Components.h"
+#include "mozilla/CredentialChosenCallback.h"
 #include "mozilla/dom/Credential.h"
 #include "mozilla/dom/CredentialsContainer.h"
 #include "mozilla/dom/FeaturePolicyUtils.h"
 #include "mozilla/dom/IdentityCredential.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/Promise-inl.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_security.h"
 #include "mozilla/dom/WebAuthnManager.h"
@@ -16,6 +19,7 @@
 #include "mozilla/dom/WindowContext.h"
 #include "nsContentUtils.h"
 #include "nsFocusManager.h"
+#include "nsICredentialChooserService.h"
 #include "nsIDocShell.h"
 
 namespace mozilla::dom {
@@ -172,7 +176,7 @@ already_AddRefed<Promise> CredentialsContainer::Get(
     MOZ_ASSERT(mParent);
     if (!FeaturePolicyUtils::IsFeatureAllowed(
             mParent->GetExtantDoc(), u"publickey-credentials-get"_ns) ||
-        !IsInActiveTab(mParent)) {
+        !(IsInActiveTab(mParent) || conditionallyMediated)) {
       return CreateAndRejectWithNotAllowed(mParent, aRv);
     }
 
@@ -214,19 +218,20 @@ already_AddRefed<Promise> CredentialsContainer::Get(
 
     RefPtr<CredentialsContainer> self = this;
 
-    IdentityCredential::DiscoverFromExternalSource(
-        mParent, aOptions, IsSameOriginWithAncestors(mParent))
-        ->Then(
-            GetCurrentSerialEventTarget(), __func__,
-            [self, promise](const RefPtr<IdentityCredential>& credential) {
-              self->mActiveIdentityRequest = false;
-              promise->MaybeResolve(credential);
-            },
-            [self, promise](nsresult error) {
-              self->mActiveIdentityRequest = false;
-              promise->MaybeReject(error);
-            });
+    promise->AddCallbacksWithCycleCollectedArgs(
+        [](JSContext* aCx, JS::Handle<JS::Value> aValue, ErrorResult& aRv,
+           const RefPtr<CredentialsContainer>& aContainer) {
+          aContainer->mActiveIdentityRequest = false;
+        },
+        [](JSContext* aCx, JS::Handle<JS::Value> aValue, ErrorResult& aRv,
+           const RefPtr<CredentialsContainer>& aContainer) {
+          aContainer->mActiveIdentityRequest = false;
+        },
+        self);
 
+    IdentityCredentialRequestOptions options(aOptions.mIdentity.Value());
+    IdentityCredential::GetCredential(
+        mParent, aOptions, IsSameOriginWithAncestors(mParent), promise);
     return promise.forget();
   }
 
@@ -265,6 +270,27 @@ already_AddRefed<Promise> CredentialsContainer::Create(
                                     aOptions.mSignal, aRv);
   }
 
+  if (aOptions.mIdentity.WasPassed() &&
+      StaticPrefs::dom_security_credentialmanagement_identity_enabled() &&
+      StaticPrefs::
+          dom_security_credentialmanagement_identity_lightweight_enabled()) {
+    MOZ_ASSERT(mParent);
+    RefPtr<Promise> promise = CreatePromise(mParent, aRv);
+    if (!promise) {
+      return nullptr;
+    }
+
+    IdentityCredential::Create(mParent, aOptions,
+                               IsSameOriginWithAncestors(mParent))
+        ->Then(
+            GetCurrentSerialEventTarget(), __func__,
+            [promise](const RefPtr<IdentityCredential>& credential) {
+              promise->MaybeResolve(credential);
+            },
+            [promise](nsresult error) { promise->MaybeReject(error); });
+    return promise.forget();
+  }
+
   return CreateAndRejectWithNotSupported(mParent, aRv);
 }
 
@@ -283,10 +309,24 @@ already_AddRefed<Promise> CredentialsContainer::Store(
   }
 
   if (type.EqualsLiteral("identity") &&
-      StaticPrefs::dom_security_credentialmanagement_identity_enabled()) {
-    return CreateAndRejectWithNotSupported(mParent, aRv);
-  }
+      StaticPrefs::dom_security_credentialmanagement_identity_enabled() &&
+      StaticPrefs::
+          dom_security_credentialmanagement_identity_lightweight_enabled()) {
+    MOZ_ASSERT(mParent);
+    RefPtr<Promise> promise = CreatePromise(mParent, aRv);
+    if (!promise) {
+      return nullptr;
+    }
 
+    IdentityCredential::Store(
+        mParent, static_cast<const IdentityCredential*>(&aCredential),
+        IsSameOriginWithAncestors(mParent))
+        ->Then(
+            GetCurrentSerialEventTarget(), __func__,
+            [promise](bool success) { promise->MaybeResolveWithUndefined(); },
+            [promise](nsresult error) { promise->MaybeReject(error); });
+    return promise.forget();
+  }
   return CreateAndRejectWithNotSupported(mParent, aRv);
 }
 
@@ -303,7 +343,12 @@ already_AddRefed<Promise> CredentialsContainer::PreventSilentAccess(
     return nullptr;
   }
 
-  promise->MaybeResolveWithUndefined();
+  RefPtr<WindowGlobalChild> wgc = mParent->GetWindowGlobalChild();
+  MOZ_ASSERT(wgc);
+
+  wgc->SendPreventSilentAccess()->Then(
+      GetCurrentSerialEventTarget(), __func__,
+      [promise] { promise->MaybeResolveWithUndefined(); });
   return promise.forget();
 }
 

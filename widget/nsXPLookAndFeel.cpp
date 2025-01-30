@@ -22,6 +22,7 @@
 #include "SurfaceCacheUtils.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/ServoStyleSet.h"
@@ -37,7 +38,7 @@
 #include "mozilla/widget/WidgetMessageUtils.h"
 #include "mozilla/dom/KeyboardEventBinding.h"
 #include "mozilla/RelativeLuminanceUtils.h"
-#include "mozilla/Telemetry.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/TelemetryScalarEnums.h"
 #include "mozilla/Try.h"
 
@@ -114,7 +115,8 @@ static ColorCaches sColorCaches;
 
 static EnumeratedCache<FloatID, Maybe<float>, FloatID::End> sFloatCache;
 static EnumeratedCache<IntID, Maybe<int32_t>, IntID::End> sIntCache;
-static EnumeratedCache<FontID, widget::LookAndFeelFont, FontID::End> sFontCache;
+MOZ_RUNINIT static EnumeratedCache<FontID, widget::LookAndFeelFont, FontID::End>
+    sFontCache;
 
 // To make one of these prefs toggleable from a reftest add a user
 // pref in testing/profiles/reftest/user.js. For example, to make
@@ -128,7 +130,6 @@ static const char sIntPrefs[][45] = {
     "ui.caretBlinkTime",
     "ui.caretBlinkCount",
     "ui.caretWidth",
-    "ui.caretVisibleWithSelection",
     "ui.selectTextfieldsOnKeyFocus",
     "ui.submenuDelay",
     "ui.menusCanOverlapOSBar",
@@ -147,11 +148,12 @@ static const char sIntPrefs[][45] = {
     "ui.treeLazyScrollDelay",
     "ui.treeScrollDelay",
     "ui.treeScrollLinesMax",
-    "accessibility.tabfocus",  // Weird one...
     "ui.chosenMenuItemsShouldBlink",
     "ui.windowsAccentColorInTitlebar",
+    "ui.windowsMica",
     "ui.macBigSurTheme",
     "ui.macRTL",
+    "ui.macTitlebarHeight",
     "ui.alertNotificationOrigin",
     "ui.scrollToClick",
     "ui.IMERawInputUnderlineStyle",
@@ -167,7 +169,9 @@ static const char sIntPrefs[][45] = {
     "ui.scrollbarFadeDuration",
     "ui.contextMenuOffsetVertical",
     "ui.contextMenuOffsetHorizontal",
+    "ui.tooltipOffsetVertical",
     "ui.GtkCSDAvailable",
+    "ui.GtkCSDTransparencyAvailable",
     "ui.GtkCSDMinimizeButton",
     "ui.GtkCSDMaximizeButton",
     "ui.GtkCSDCloseButton",
@@ -186,13 +190,14 @@ static const char sIntPrefs[][45] = {
     "ui.titlebarRadius",
     "ui.titlebarButtonSpacing",
     "ui.dynamicRange",
-    "ui.videoDynamicRange",
     "ui.panelAnimations",
     "ui.hideCursorWhileTyping",
     "ui.gtkThemeFamily",
+    "ui.fullKeyboardAccess",
+    "ui.pointingDeviceKinds",
 };
 
-static_assert(ArrayLength(sIntPrefs) == size_t(LookAndFeel::IntID::End),
+static_assert(std::size(sIntPrefs) == size_t(LookAndFeel::IntID::End),
               "Should have a pref for each int value");
 
 // This array MUST be kept in the same order as the float id list in
@@ -207,7 +212,7 @@ static const char sFloatPrefs[][37] = {
 };
 // clang-format on
 
-static_assert(ArrayLength(sFloatPrefs) == size_t(LookAndFeel::FloatID::End),
+static_assert(std::size(sFloatPrefs) == size_t(LookAndFeel::FloatID::End),
               "Should have a pref for each float value");
 
 // This array MUST be kept in the same order as the color list in
@@ -297,6 +302,8 @@ static const char sColorPrefs[][41] = {
     "ui.textSelectAttentionForeground",
     "ui.textHighlightBackground",
     "ui.textHighlightForeground",
+    "ui.targetTextBackground",
+    "ui.targetTextForeground",
     "ui.IMERawInputBackground",
     "ui.IMERawInputForeground",
     "ui.IMERawInputUnderline",
@@ -318,7 +325,7 @@ static const char sColorPrefs[][41] = {
     "ui.themedScrollbarThumbInactive",
 };
 
-static_assert(ArrayLength(sColorPrefs) == size_t(LookAndFeel::ColorID::End),
+static_assert(std::size(sColorPrefs) == size_t(LookAndFeel::ColorID::End),
               "Should have a pref for each color value");
 
 // This array MUST be kept in the same order as the SystemFont enum.
@@ -335,7 +342,7 @@ static const char sFontPrefs[][41] = {
     "ui.font.-moz-field",
 };
 
-static_assert(ArrayLength(sFontPrefs) == size_t(LookAndFeel::FontID::End),
+static_assert(std::size(sFontPrefs) == size_t(LookAndFeel::FontID::End),
               "Should have a pref for each font value");
 
 const char* nsXPLookAndFeel::GetColorPrefName(ColorID aId) {
@@ -527,9 +534,6 @@ void nsXPLookAndFeel::Init() {
   //     for each types.  Then, we could reduce the unnecessary loop from
   //     nsXPLookAndFeel::OnPrefChanged().
   Preferences::RegisterPrefixCallback(OnPrefChanged, "ui.");
-  // We really do just want the accessibility.tabfocus pref, not other prefs
-  // that start with that string.
-  Preferences::RegisterCallback(OnPrefChanged, "accessibility.tabfocus");
 
   for (const auto& pref : kMediaQueryPrefs) {
     Preferences::RegisterCallback(
@@ -546,38 +550,6 @@ nsXPLookAndFeel::~nsXPLookAndFeel() {
   NS_ASSERTION(sInstance == this,
                "This destroying instance isn't the singleton instance");
   sInstance = nullptr;
-}
-
-static bool IsSpecialColor(LookAndFeel::ColorID aID, nscolor aColor) {
-  using ColorID = LookAndFeel::ColorID;
-
-  if (aColor == NS_SAME_AS_FOREGROUND_COLOR) {
-    return true;
-  }
-
-  switch (aID) {
-    case ColorID::IMESelectedRawTextBackground:
-    case ColorID::IMESelectedConvertedTextBackground:
-    case ColorID::IMERawInputBackground:
-    case ColorID::IMEConvertedTextBackground:
-    case ColorID::IMESelectedRawTextForeground:
-    case ColorID::IMESelectedConvertedTextForeground:
-    case ColorID::IMERawInputForeground:
-    case ColorID::IMEConvertedTextForeground:
-    case ColorID::IMERawInputUnderline:
-    case ColorID::IMEConvertedTextUnderline:
-    case ColorID::IMESelectedRawTextUnderline:
-    case ColorID::IMESelectedConvertedTextUnderline:
-    case ColorID::SpellCheckerUnderline:
-      return NS_IS_SELECTION_SPECIAL_COLOR(aColor);
-    default:
-      break;
-  }
-  /*
-   * In GetColor(), every color that is not a special color is color
-   * corrected. Use false to make other colors color corrected.
-   */
-  return false;
 }
 
 nscolor nsXPLookAndFeel::GetStandinForNativeColor(ColorID aID,
@@ -711,6 +683,9 @@ nscolor nsXPLookAndFeel::GetStandinForNativeColor(ColorID aID,
       // Seems to be the default color (hardcoded because of bug 1065998)
       COLOR(MozNativehyperlinktext, 0x00, 0x66, 0xCC)
       COLOR(MozNativevisitedhyperlinktext, 0x55, 0x1A, 0x8B)
+      COLOR(MozAutofillBackground, 0xff, 0xfc, 0xc8)
+      COLOR(TargetTextBackground, 0xff, 0xeb, 0xcd)
+      COLOR(TargetTextForeground, 0x00, 0x00, 0x00)
     default:
       break;
   }
@@ -754,7 +729,7 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
 
     case ColorID::MozEventreerow:
     case ColorID::MozOddtreerow:
-    case ColorID::MozDialog:  // --in-content-box-background
+    case ColorID::MozDialog:  // --background-color-box
       color = NS_RGB(35, 34, 43);
       break;
     case ColorID::Windowtext:  // --in-content-page-color
@@ -854,6 +829,11 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
     case ColorID::Activecaption:
     case ColorID::Inactivecaption:
       color = NS_RGB(28, 27, 34);
+      break;
+    case ColorID::MozAutofillBackground:
+      // This is the light version of this color, but darkened to have good
+      // contrast with our white-ish FieldText.
+      color = NS_RGB(0x72, 0x6c, 0x00);
       break;
     default:
       return Nothing();
@@ -1015,19 +995,6 @@ Maybe<nscolor> nsXPLookAndFeel::GetUncachedColor(ColorID aID,
     return Some(r);
   }
   if (NS_SUCCEEDED(NativeGetColor(aID, aScheme, r))) {
-    if (gfxPlatform::GetCMSMode() == CMSMode::All && !IsSpecialColor(aID, r)) {
-      qcms_transform* transform = gfxPlatform::GetCMSInverseRGBTransform();
-      if (transform) {
-        uint8_t color[4];
-        color[0] = NS_GET_R(r);
-        color[1] = NS_GET_G(r);
-        color[2] = NS_GET_B(r);
-        color[3] = NS_GET_A(r);
-        qcms_transform_data(transform, color, color, 1);
-        r = NS_RGBA(color[0], color[1], color[2], color[3]);
-      }
-    }
-
     return Some(r);
   }
   return Nothing();
@@ -1199,9 +1166,21 @@ void nsXPLookAndFeel::RecordTelemetry() {
   sRecordedLookAndFeelTelemetry = true;
 
   int32_t i;
-  Telemetry::ScalarSet(
-      Telemetry::ScalarID::WIDGET_DARK_MODE,
+  glean::widget::dark_mode.Set(
       NS_SUCCEEDED(GetIntValue(IntID::SystemUsesDarkTheme, i)) && i != 0);
+
+  auto devices =
+      static_cast<PointingDeviceKinds>(GetInt(IntID::PointingDeviceKinds, 0));
+
+  glean::widget::pointing_devices
+      .EnumGet(glean::widget::PointingDevicesLabel::eMouse)
+      .Set(!!(devices & PointingDeviceKinds::Mouse));
+  glean::widget::pointing_devices
+      .EnumGet(glean::widget::PointingDevicesLabel::eTouch)
+      .Set(!!(devices & PointingDeviceKinds::Touch));
+  glean::widget::pointing_devices
+      .EnumGet(glean::widget::PointingDevicesLabel::ePen)
+      .Set(!!(devices & PointingDeviceKinds::Pen));
 
   RecordLookAndFeelSpecificTelemetry();
 }
@@ -1231,8 +1210,7 @@ void LookAndFeel::DoHandleGlobalThemeChange() {
   //
   // We can use the *DoNotUseDirectly functions directly here, because we want
   // to notify all possible themes in a given process (but just once).
-  if (XRE_IsParentProcess() ||
-      !StaticPrefs::widget_non_native_theme_enabled()) {
+  if (XRE_IsParentProcess()) {
     if (nsCOMPtr<nsITheme> theme = do_GetNativeThemeDoNotUseDirectly()) {
       theme->ThemeChanged();
     }
@@ -1542,6 +1520,11 @@ void LookAndFeel::NativeInit() { nsLookAndFeel::GetInstance()->NativeInit(); }
 // static
 void LookAndFeel::SetData(widget::FullLookAndFeel&& aTables) {
   nsLookAndFeel::GetInstance()->SetDataImpl(std::move(aTables));
+}
+
+// static
+nsresult LookAndFeel::GetKeyboardLayout(nsACString& aLayout) {
+  return nsLookAndFeel::GetInstance()->GetKeyboardLayoutImpl(aLayout);
 }
 
 }  // namespace mozilla

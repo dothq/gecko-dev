@@ -10,13 +10,33 @@
 
 
 %{ C++
+#include "mozilla/EventForwards.h"
+#include "nsIWidget.h"
 #include "nsSize.h"
+#include "Units.h"
+
+class nsIFrame;
+class nsIWidget;
+
+namespace mozilla {
+namespace dom {
+class BrowserParent;
+} // namespace dom
+} // namespace mozilla
 %}
+
 interface nsIContentSecurityPolicy;
 
+[ptr] native BrowserParentPtr(mozilla::dom::BrowserParent);
+native EventMessage(mozilla::EventMessage);
+[ref] native LayoutDeviceIntPoint(mozilla::LayoutDeviceIntPoint);
+[ptr] native nsIFramePtr(nsIFrame);
+[ptr] native nsIWidgetPtr(nsIWidget);
 native nsSize(nsSize);
 
 webidl DataTransfer;
+webidl DragEvent;
+webidl Element;
 webidl WindowContext;
 webidl Node;
 webidl Selection;
@@ -128,6 +148,12 @@ interface nsIDragSession : nsISupports
   void updateDragImage(in Node aImage, in long aImageX, in long aImageY);
 
   /**
+   * Tell Gecko that this session is generated for automated testing.
+   * This should be called immediately after StartDragSession when testing.
+   */
+  [noscript] void InitForTests(in uint32_t aAllowedEffect);
+
+  /**
    * Returns effects allowed at starting the session for tests.
    */
   [notxpcom, nostdcall] unsigned long getEffectAllowedForTests();
@@ -135,7 +161,12 @@ interface nsIDragSession : nsISupports
   /**
    * Returns true if current session was started with synthesized drag start.
    */
-  [notxpcom, nostdcall] bool isSynthesizedForTests();
+  [notxpcom, nostdcall] boolean isSynthesizedForTests();
+
+  /**
+   * Sets the drag end point.  Position is relative to screen in device coords.
+   */
+  void setDragEndPoint(in long aScreenX, in long aScreenY);
 
   /**
    * Sets drag end point of synthesized session when the test does not dispatch
@@ -147,5 +178,92 @@ interface nsIDragSession : nsISupports
    * Returns true if the session is for dragging text in a text in text control
    * element.
    */
-  [notxpcom, nostdcall] bool isDraggingTextInTextControl();
+  [notxpcom, nostdcall] boolean isDraggingTextInTextControl();
+
+  /**
+   * Called when HTMLEditor maybe deleted the source node from the document.
+   *
+   * @param aEditingHost    The editing host when the editor deletes selection.
+   */
+  [noscript] void maybeEditorDeletedSourceNode(in Element aEditingHost);
+
+  /**
+    * aX and aY are in LayoutDevice pixels.
+    */
+  [noscript] void dragMoved(in long aX, in long aY);
+
+  /**
+   * Fire a drag event at the source of the drag
+   */
+  [noscript, can_run_script]
+  void fireDragEventAtSource(in EventMessage aEventMessage,
+                             in unsigned long aKeyModifiers);
+
+  [notxpcom, nostdcall] boolean maybeAddBrowser(in BrowserParentPtr aBP);
+  [notxpcom, nostdcall] boolean removeAllBrowsers();
+
+  /**
+    * Tells the Drag Service to end a drag session.
+    *
+    * If aDoneDrag is true, the drag has finished, otherwise the drag has
+    * just left the window.
+    *
+    * @param aDoneDrag       If true, reports the drag as complete.
+    * @param aKeyModifiers   Key state to assume while ending the session.
+    */
+  [can_run_script]
+  void endDragSession(in boolean aDoneDrag,
+                      [optional] in unsigned long aKeyModifiers);
+
+  /**
+   * Tell the drag session for the given browser that it
+   * should store the would-be target of the aEvent (a drop event) and delay
+   * calls to EndDragSession.  This is used in the main process.
+   *
+   * @param aEvent The drag event
+   */
+  void sendStoreDropTargetAndDelayEndDragSession(
+      in DragEvent aEvent);
+
+  /**
+   * After sendStoreDropTargetAndDelayEndDragSession, send a drop (if
+   * aShouldDrop is true) or dragexit event to the recorded drop target and
+   * then reissue any stored EndDragSession call.  This is used in the main
+   * process.
+   *
+   * @param aShouldDrop  True to send drop event, false to send dragexit event
+   */
+  void sendDispatchToDropTargetAndResumeEndDragSession(
+      in boolean aShouldDrop);
+
+  /**
+   * Store aElement and aDocFrame as the future drop/dragexit context, and
+   * delay calls to EndDragSession.  This is used in content processes.
+   *
+   * @param aElement        The element to drop onto
+   * @param aDocFrame       The frame to dispatch to
+   */
+  [noscript] void storeDropTargetAndDelayEndDragSession(
+      in Element aElement,
+      in nsIFramePtr aDocFrame
+  );
+
+  /**
+   * Issue drop or dragexit to the stored drop target (if any) and issue
+   * any delayed call to EndDragSession.  This is used in content processes.
+   *
+   * @param aWidget      The widget on which the drop will happen
+   * @param aPt          Screen coords of drop
+   * @param aShouldDrop  If true, send a drop event.  Otherwise send dragexit.
+   */
+  [noscript, can_run_script]
+  void dispatchToDropTargetAndResumeEndDragSession(
+      in nsIWidgetPtr aWidget,
+      [const] in LayoutDeviceIntPoint aPt,
+      in boolean aShouldDrop);
+
+  /**
+   * Retrun true if nsIDragSession's data is updated.
+   */
+  [notxpcom, nostdcall] boolean mustUpdateDataTransfer(in EventMessage aMessage);
 };

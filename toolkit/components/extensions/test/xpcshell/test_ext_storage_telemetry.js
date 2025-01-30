@@ -11,59 +11,43 @@ const { getTrimmedString } = ChromeUtils.importESModule(
 const { TelemetryController } = ChromeUtils.importESModule(
   "resource://gre/modules/TelemetryController.sys.mjs"
 );
-const { TelemetryTestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/TelemetryTestUtils.sys.mjs"
-);
 
-const HISTOGRAM_JSON_IDS = [
-  "WEBEXT_STORAGE_LOCAL_SET_MS",
-  "WEBEXT_STORAGE_LOCAL_GET_MS",
-];
-const KEYED_HISTOGRAM_JSON_IDS = [
-  "WEBEXT_STORAGE_LOCAL_SET_MS_BY_ADDONID",
-  "WEBEXT_STORAGE_LOCAL_GET_MS_BY_ADDONID",
-];
-
-const HISTOGRAM_IDB_IDS = [
+const HISTOGRAM_IDS = [
   "WEBEXT_STORAGE_LOCAL_IDB_SET_MS",
   "WEBEXT_STORAGE_LOCAL_IDB_GET_MS",
 ];
-const KEYED_HISTOGRAM_IDB_IDS = [
+const KEYED_HISTOGRAM_IDS = [
   "WEBEXT_STORAGE_LOCAL_IDB_SET_MS_BY_ADDONID",
   "WEBEXT_STORAGE_LOCAL_IDB_GET_MS_BY_ADDONID",
 ];
-
-const HISTOGRAM_IDS = [].concat(HISTOGRAM_JSON_IDS, HISTOGRAM_IDB_IDS);
-const KEYED_HISTOGRAM_IDS = [].concat(
-  KEYED_HISTOGRAM_JSON_IDS,
-  KEYED_HISTOGRAM_IDB_IDS
-);
 
 const EXTENSION_ID1 = "@test-extension1";
 const EXTENSION_ID2 = "@test-extension2";
 
 async function test_telemetry_background() {
   const { GleanTimingDistribution } = globalThis;
+
+  // NOTE: we do not collect telemetry for the legacy JSON backend anymore
+  // and so if the IDB backend is not enabled we expect the related telemetry
+  // histograms and timing distributions to be empty.
   const expectedEmptyGleanMetrics = ExtensionStorageIDB.isBackendEnabled
-    ? ["storageLocalGetJson", "storageLocalSetJson"]
+    ? []
     : ["storageLocalGetIdb", "storageLocalSetIdb"];
   const expectedNonEmptyGleanMetrics = ExtensionStorageIDB.isBackendEnabled
     ? ["storageLocalGetIdb", "storageLocalSetIdb"]
-    : ["storageLocalGetJson", "storageLocalSetJson"];
-
+    : [];
   const expectedEmptyHistograms = ExtensionStorageIDB.isBackendEnabled
-    ? HISTOGRAM_JSON_IDS
-    : HISTOGRAM_IDB_IDS;
+    ? []
+    : HISTOGRAM_IDS;
   const expectedEmptyKeyedHistograms = ExtensionStorageIDB.isBackendEnabled
-    ? KEYED_HISTOGRAM_JSON_IDS
-    : KEYED_HISTOGRAM_IDB_IDS;
-
+    ? []
+    : KEYED_HISTOGRAM_IDS;
   const expectedNonEmptyHistograms = ExtensionStorageIDB.isBackendEnabled
-    ? HISTOGRAM_IDB_IDS
-    : HISTOGRAM_JSON_IDS;
+    ? HISTOGRAM_IDS
+    : [];
   const expectedNonEmptyKeyedHistograms = ExtensionStorageIDB.isBackendEnabled
-    ? KEYED_HISTOGRAM_IDB_IDS
-    : KEYED_HISTOGRAM_JSON_IDS;
+    ? KEYED_HISTOGRAM_IDS
+    : [];
 
   const server = createHttpServer();
   server.registerDirectory("/data/", do_get_file("data"));
@@ -439,11 +423,6 @@ add_task(async function test_telemetry_storage_local_unexpected_error() {
       });
     }
   }
-
-  await TelemetryTestUtils.assertEvents(expectedEvents, {
-    category: "extensions.data",
-    method: "storageLocalError",
-  });
 
   let glean = Glean.extensionsData.storageLocalError.testGetValue() ?? [];
   equal(glean.length, expectedEvents.length, "Correct number of events.");

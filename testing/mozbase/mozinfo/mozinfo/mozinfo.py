@@ -54,18 +54,21 @@ info = {
 # get os information and related data
 if system in ["Microsoft", "Windows"]:
     info["os"] = "win"
-    # There is a Python bug on Windows to determine platform values
-    # http://bugs.python.org/issue7860
-    if "PROCESSOR_ARCHITEW6432" in os.environ:
-        processor = os.environ.get("PROCESSOR_ARCHITEW6432", processor)
-    else:
-        processor = os.environ.get("PROCESSOR_ARCHITECTURE", processor)
+    # uname().processor on Windows gives the full CPU name but
+    # mozinfo.processor is only about CPU architecture
+    processor = machine
     system = os.environ.get("OS", system).replace("_", " ")
     (major, minor, build_number, _, _) = os.sys.getwindowsversion()
     version = "%d.%d.%d" % (major, minor, build_number)
     if major == 10 and minor == 0 and build_number >= 22000:
         major = 11
-    os_version = "%d.%d" % (major, minor)
+
+    # 2009 == 22H2 software update.  These are the build numbers
+    # we use 2009 as the "build" which maps to what taskcluster tasks see
+    if build_number == 22621 or build_number == 19045:
+        build_number = 2009
+
+    os_version = "%d.%d" % (major, build_number)
 elif system.startswith(("MINGW", "MSYS_NT")):
     # windows/mingw python build (msys)
     info["os"] = "win"
@@ -101,16 +104,16 @@ elif system == "Linux":
     info["os"] = "linux"
     info["linux_distro"] = distribution
 elif system in ["DragonFly", "FreeBSD", "NetBSD", "OpenBSD"]:
-    info["os"] = "bsd"
+    info["os"] = "bsd"  # community builds
     version = os_version = sys.platform
 elif system == "Darwin":
     (release, versioninfo, machine) = platform.mac_ver()
     version = "OS X %s" % release
     versionNums = release.split(".")[:2]
-    os_version = "%s.%s" % (versionNums[0], versionNums[1])
+    os_version = "%s.%s" % (versionNums[0], versionNums[1].ljust(2, "0"))
     info["os"] = "mac"
 elif sys.platform in ("solaris", "sunos5"):
-    info["os"] = "unix"
+    info["os"] = "unix"  # community builds
     os_version = version = sys.platform
 else:
     os_version = version = unknown
@@ -140,7 +143,6 @@ info["version"] = version
 info["os_version"] = StringVersion(os_version)
 info["is_ubuntu"] = "Ubuntu" in version
 
-
 # processor type and bits
 if processor in ["i386", "i686"]:
     if bits == "32bit":
@@ -153,8 +155,6 @@ elif processor.upper() == "AMD64":
 elif processor.upper() == "ARM64":
     bits = "64bit"
     processor = "aarch64"
-elif processor == "Power Macintosh":
-    processor = "ppc"
 elif processor == "arm" and bits == "64bit":
     processor = "aarch64"
 
@@ -185,9 +185,9 @@ else:
 
 # standard value of choices, for easy inspection
 choices = {
-    "os": ["linux", "bsd", "win", "mac", "unix"],
+    "os": ["linux", "win", "mac"],
     "bits": [32, 64],
-    "processor": ["x86", "x86_64", "ppc"],
+    "processor": ["x86", "x86_64", "aarch64"],
 }
 
 
@@ -233,9 +233,6 @@ def update(new_info):
     # convenience data for os access
     for os_name in choices["os"]:
         globals()["is" + os_name.title()] = info["os"] == os_name
-    # unix is special
-    if isLinux or isBsd:  # noqa
-        globals()["isUnix"] = True
 
 
 def find_and_update_from_json(*dirs, **kwargs):
@@ -277,8 +274,8 @@ def find_and_update_from_json(*dirs, **kwargs):
     except (BuildEnvironmentNotFoundException, MozconfigFindException):
         pass
 
-    for d in dirs:
-        d = _os.path.abspath(d)
+    for dir in dirs:
+        d = _os.path.abspath(dir)
         json_path = _os.path.join(d, "mozinfo.json")
         if _os.path.isfile(json_path):
             update(json_path)

@@ -69,20 +69,22 @@ struct Option {
   const char* help;
   OptionKind kind;
   char shortflag;
-  bool terminatesOptions;
+  bool terminatesOptions = false;
+  bool ignoresUnknownOptions = false;
 
   Option(OptionKind kind, char shortflag, const char* longflag,
          const char* help)
-      : longflag(longflag),
-        help(help),
-        kind(kind),
-        shortflag(shortflag),
-        terminatesOptions(false) {}
+      : longflag(longflag), help(help), kind(kind), shortflag(shortflag) {}
 
   virtual ~Option() = 0;
 
   void setTerminatesOptions(bool enabled) { terminatesOptions = enabled; }
   bool getTerminatesOptions() const { return terminatesOptions; }
+
+  void setIgnoresUnknownOptions(bool enabled) {
+    ignoresUnknownOptions = enabled;
+  }
+  bool getIgnoresUnknownOptions() const { return ignoresUnknownOptions; }
 
   virtual bool isValued() const { return false; }
 
@@ -185,7 +187,7 @@ struct MultiStringOption : public ValuedOption {
 } /* namespace detail */
 
 class MultiStringRange {
-  typedef detail::StringArg StringArg;
+  using StringArg = detail::StringArg;
   const StringArg* cur;
   const StringArg* end;
 
@@ -231,9 +233,9 @@ class OptionParser {
   };
 
  private:
-  typedef Vector<detail::Option*, 0, detail::OptionAllocPolicy> Options;
-  typedef detail::Option Option;
-  typedef detail::BoolOption BoolOption;
+  using Options = Vector<detail::Option*, 0, detail::OptionAllocPolicy>;
+  using Option = detail::Option;
+  using BoolOption = detail::BoolOption;
 
   Options options;
   Options arguments;
@@ -293,6 +295,7 @@ class OptionParser {
   void setDescription(const char* description) { descr = description; }
   void setHelpOption(char shortflag, const char* longflag, const char* help);
   void setArgTerminatesOptions(const char* name, bool enabled);
+  void setIgnoresUnknownOptions(const char* name, bool enabled);
   void setArgCapturesRest(const char* name);
 
   /* Arguments: no further arguments may be added after a variadic argument. */

@@ -148,6 +148,29 @@ assert.open = function (browsingContext, msg = "") {
 };
 
 /**
+ * Asserts that the browsing context is top-level.
+ *
+ * @param {BrowsingContext} browsingContext
+ *     Browsing context to check.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @returns {BrowsingContext}
+ *     <var>browsingContext</var> is returned unaltered.
+ *
+ * @throws {InvalidArgumentError}
+ *     If <var>browsingContext</var> is not top-level.
+ */
+assert.topLevel = function (browsingContext, msg = "") {
+  msg = msg || `Browsing context is not top-level`;
+  return assert.that(
+    () => !browsingContext.parent,
+    msg,
+    lazy.error.InvalidArgumentError
+  )(browsingContext);
+};
+
+/**
  * Asserts that there is no current user prompt.
  *
  * @param {modal.Dialog} dialog
@@ -407,6 +430,36 @@ assert.object = function (obj, msg = "") {
     let s = Object.prototype.toString.call(o);
     return s == "[object Object]" || s == "[object nsJSIID]";
   }, msg)(obj);
+};
+
+/**
+ * Asserts that <var>obj</var> is an instance of a specified class.
+ * <var>constructor</var> should have a static isInstance method implemented.
+ *
+ * @param {?} obj
+ *     Value to test.
+ * @param {?} constructor
+ *     Class constructor.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @returns {object}
+ *     <var>obj</var> is returned unaltered.
+ *
+ * @throws {InvalidArgumentError}
+ *     If <var>obj</var> is not an instance of a specified class.
+ */
+assert.isInstance = function (obj, constructor, msg = "") {
+  assert.object(obj, msg);
+  assert.object(constructor.prototype, msg);
+
+  msg =
+    msg ||
+    lazy.pprint`Expected ${obj} to be an instance of ${constructor.name}`;
+  return assert.that(
+    o => Object.hasOwn(constructor, "isInstance") && constructor.isInstance(o),
+    msg
+  )(obj);
 };
 
 /**

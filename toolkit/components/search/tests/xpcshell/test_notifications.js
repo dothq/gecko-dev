@@ -7,7 +7,6 @@ let engine;
 let appDefaultEngine;
 
 add_setup(async function () {
-  await AddonTestUtils.promiseStartupManager();
   useHttpServer();
 
   Services.prefs.setBoolPref(
@@ -32,8 +31,8 @@ add_task(async function test_addingEngine_opensearch() {
     SearchUtils.MODIFIED_TYPE.ADDED
   );
 
-  await SearchTestUtils.promiseNewSearchEngine({
-    url: gDataUrl + "engine.xml",
+  await SearchTestUtils.installOpenSearchEngine({
+    url: `${gHttpURL}/opensearch/generic1.xml`,
   });
 
   engine = await addEngineObserver.promise;

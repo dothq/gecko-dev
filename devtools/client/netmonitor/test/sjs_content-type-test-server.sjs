@@ -20,7 +20,7 @@ function gzipCompressString(string, obs) {
   const stringStream = Cc[
     "@mozilla.org/io/string-input-stream;1"
   ].createInstance(Ci.nsIStringInputStream);
-  stringStream.data = string;
+  stringStream.setByteStringData(string);
   converter.onStartRequest(null);
   converter.onDataAvailable(null, stringStream, 0, string.length);
   converter.onStopRequest(null, null);
@@ -369,6 +369,18 @@ function handleRequest(request, response) {
           response.setHeader("Content-Length", "10", false);
           // Use static data since we cannot encode brotli.
           response.write("\x1b\x3f\x00\x00\x24\xb0\xe2\x99\x80\x12");
+          response.finish();
+          break;
+        }
+        case "zstd": {
+          response.setStatusLine(request.httpVersion, status, "OK");
+          response.setHeader("Content-Type", "text/json", false);
+          response.setHeader("Content-Encoding", "zstd", false);
+          setCacheHeaders();
+          // Use static data since we cannot encode zstandard.
+          const data = "(\xb5/\xfd @E\x00\x00\x10XX\x01\x00\x93\x00\x16";
+          response.setHeader("Content-Length", "" + data.length, false);
+          response.write(data);
           response.finish();
           break;
         }

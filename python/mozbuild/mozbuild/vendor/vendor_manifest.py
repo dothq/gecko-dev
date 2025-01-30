@@ -211,38 +211,28 @@ class VendorManifest(MozbuildObject):
         # blame.  So really all we can do is just download and replace the
         # files and see if they changed...
 
-        def download_and_write_file(url, destination):
+        def download_file_revision(upstream_path, revision, destination):
+            url = self.source_host.upstream_path_to_file(revision, upstream_path)
             self.logInfo(
                 {"local_file": destination, "url": url},
                 "Downloading {local_file} from {url}...",
             )
 
-            with mozfile.NamedTemporaryFile() as tmpfile:
-                try:
-                    req = requests.get(url, stream=True)
-                    for data in req.iter_content(4096):
-                        tmpfile.write(data)
-                    tmpfile.seek(0)
-
-                    shutil.copy2(tmpfile.name, destination)
-                except Exception as e:
-                    raise (e)
+            self.source_host.download_single_file(url, destination)
 
         # Only one of these loops will have content, so just do them both
         for f in self.manifest["vendoring"].get("individual-files", []):
-            url = self.source_host.upstream_path_to_file(new_revision, f["upstream"])
             destination = self.get_full_path(f["destination"])
-            download_and_write_file(url, destination)
+            download_file_revision(f["upstream"], new_revision, destination)
 
         for f in self.manifest["vendoring"].get("individual-files-list", []):
-            url = self.source_host.upstream_path_to_file(
-                new_revision,
-                self.manifest["vendoring"]["individual-files-default-upstream"] + f,
+            upstream_path = (
+                self.manifest["vendoring"]["individual-files-default-upstream"] + f
             )
             destination = self.get_full_path(
                 self.manifest["vendoring"]["individual-files-default-destination"] + f
             )
-            download_and_write_file(url, destination)
+            download_file_revision(upstream_path, new_revision, destination)
 
     def process_regular_or_individual(
         self, is_individual, new_revision, timestamp, ignore_modified, add_to_exports
@@ -348,6 +338,23 @@ class VendorManifest(MozbuildObject):
             from mozbuild.vendor.host_codeberg import CodebergHost
 
             return CodebergHost(self.manifest)
+        elif self.manifest["vendoring"]["source-hosting"] == "yaml-dir":
+            import importlib.util
+
+            modulename, classname = self.manifest["vendoring"][
+                "source-host-path"
+            ].rsplit(".", 1)
+            spec = importlib.util.spec_from_file_location(
+                modulename,
+                os.path.join(
+                    os.path.dirname(self.yaml_file),
+                    modulename.replace(".", os.sep) + ".py",
+                ),
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[modulename] = module
+            spec.loader.exec_module(module)
+            return getattr(module, classname)(self.manifest)
         else:
             raise Exception(
                 "Unknown source host: " + self.manifest["vendoring"]["source-hosting"]
@@ -377,21 +384,26 @@ class VendorManifest(MozbuildObject):
         for pattern in patterns:
             pattern_full_path = mozpath.join(directory, pattern)
             # If pattern is a directory recursively add contents of directory
+            # Sort the list to ensure we preserve 01_, 02_ ordering
             if os.path.isdir(pattern_full_path):
                 # Append double asterisk to the end to make glob.iglob recursively match
                 # contents of directory
                 paths.extend(
-                    iglob_hidden(mozpath.join(pattern_full_path, "**"), recursive=True)
+                    sorted(
+                        iglob_hidden(
+                            mozpath.join(pattern_full_path, "**"), recursive=True
+                        )
+                    )
                 )
             # Otherwise pattern is a file or wildcard expression so add it without altering it
+            # Sort the list to ensure we preserve 01_, 02_ ordering for e.g. *.patch globs
             else:
-                paths.extend(iglob_hidden(pattern_full_path, recursive=True))
+                paths.extend(sorted(iglob_hidden(pattern_full_path, recursive=True)))
         # Remove folder names from list of paths in order to avoid prematurely
         # truncating directories elsewhere
-        # Sort the final list to ensure we preserve 01_, 02_ ordering for e.g. *.patch globs
-        final_paths = sorted(
-            [mozpath.normsep(path) for path in paths if not os.path.isdir(path)]
-        )
+        final_paths = [
+            mozpath.normsep(path) for path in paths if not os.path.isdir(path)
+        ]
         return final_paths
 
     def fetch_and_unpack(self, revision):
@@ -587,7 +599,9 @@ class VendorManifest(MozbuildObject):
                 # Then copy over the directories
                 if self.should_perform_step("move-contents"):
                     self.logInfo({"d": vendor_dir}, "Copying to {d}.")
-                    mozfile.copy_contents(tmpextractdir.name, vendor_dir)
+                    mozfile.copy_contents(
+                        tmpextractdir.name, vendor_dir, ignore_dangling_symlinks=True
+                    )
                 else:
                     self.logInfo({}, "Skipping copying contents into tree.")
                     self._extract_directory = lambda: tmpextractdir.name
@@ -856,17 +870,31 @@ class VendorManifest(MozbuildObject):
 
     def import_local_patches(self, patches, yaml_dir, vendor_dir):
         self.logInfo({}, "Importing local patches...")
-        for patch in self.convert_patterns_to_paths(yaml_dir, patches):
-            script = [
-                "patch",
-                "-p1",
-                "--directory",
-                vendor_dir,
-                "--input",
-                os.path.abspath(patch),
-                "--no-backup-if-mismatch",
-            ]
-            self.run_process(
-                args=script,
-                log_name=script,
+        try:
+            for patch in self.convert_patterns_to_paths(yaml_dir, patches):
+                script = [
+                    "patch",
+                    "-p1",
+                    "-r",
+                    "/dev/stdout",
+                    "--directory",
+                    vendor_dir,
+                    "--input",
+                    os.path.abspath(patch),
+                    "--no-backup-if-mismatch",
+                ]
+                self.run_process(
+                    args=script,
+                    log_name=script,
+                )
+        except Exception as e:
+            msgs = [f"Could not apply {patch}, possible reasons:"]
+            msgs.append(" - You ran --patch-mode=only before running --patch-mode=none")
+            msgs.append(" - You tried to apply the patches twice")
+            msgs.append(
+                " - The library update has modified the files so the patch no longer applies cleanly"
             )
+            msgs.append("I am going to re-throw the exception now.")
+            for m in msgs:
+                self.log(logging.WARN, "vendor", {}, m)
+            raise e

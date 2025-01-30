@@ -9,6 +9,7 @@
 #include <string.h>  // for strcmp
 
 #include "AutoRangeArray.h"  // for AutoRangeArray
+#include "AutoSelectionRestorer.h"
 #include "ChangeAttributeTransaction.h"
 #include "CompositionTransaction.h"
 #include "DeleteContentTransactionBase.h"
@@ -16,8 +17,9 @@
 #include "DeleteNodeTransaction.h"
 #include "DeleteRangeTransaction.h"
 #include "DeleteTextTransaction.h"
-#include "EditAction.h"           // for EditSubAction
-#include "EditorDOMPoint.h"       // for EditorDOMPoint
+#include "EditAction.h"      // for EditSubAction
+#include "EditorDOMPoint.h"  // for EditorDOMPoint
+#include "EditorForwards.h"
 #include "EditorUtils.h"          // for various helper classes.
 #include "EditTransactionBase.h"  // for EditTransactionBase
 #include "EditorEventListener.h"  // for EditorEventListener
@@ -34,6 +36,8 @@
 #include "ErrorList.h"
 #include "gfxFontUtils.h"  // for gfxFontUtils
 #include "mozilla/Assertions.h"
+#include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/EditorDOMPoint.h"
 #include "mozilla/intl/BidiEmbeddingLevel.h"
 #include "mozilla/BasePrincipal.h"            // for BasePrincipal
 #include "mozilla/CheckedInt.h"               // for CheckedInt
@@ -55,6 +59,7 @@
 #include "mozilla/Preferences.h"            // for Preferences
 #include "mozilla/PresShell.h"              // for PresShell
 #include "mozilla/RangeBoundary.h"       // for RawRangeBoundary, RangeBoundary
+#include "mozilla/ScopeExit.h"           // for MakeScopeExit
 #include "mozilla/Services.h"            // for GetObserverService
 #include "mozilla/StaticPrefs_bidi.h"    // for StaticPrefs::bidi_*
 #include "mozilla/StaticPrefs_dom.h"     // for StaticPrefs::dom_*
@@ -65,17 +70,19 @@
 #include "mozilla/TextInputListener.h"   // for TextInputListener
 #include "mozilla/TextServicesDocument.h"  // for TextServicesDocument
 #include "mozilla/TextEvents.h"
-#include "mozilla/TransactionManager.h"   // for TransactionManager
-#include "mozilla/dom/AbstractRange.h"    // for AbstractRange
-#include "mozilla/dom/Attr.h"             // for Attr
-#include "mozilla/dom/BrowsingContext.h"  // for BrowsingContext
-#include "mozilla/dom/CharacterData.h"    // for CharacterData
-#include "mozilla/dom/DataTransfer.h"     // for DataTransfer
-#include "mozilla/dom/Document.h"         // for Document
-#include "mozilla/dom/DocumentInlines.h"  // for GetObservingPresShell
-#include "mozilla/dom/DragEvent.h"        // for DragEvent
-#include "mozilla/dom/Element.h"          // for Element, nsINode::AsElement
-#include "mozilla/dom/EventTarget.h"      // for EventTarget
+#include "mozilla/TransactionManager.h"    // for TransactionManager
+#include "mozilla/dom/AbstractRange.h"     // for AbstractRange
+#include "mozilla/dom/Attr.h"              // for Attr
+#include "mozilla/dom/BorrowedAttrInfo.h"  // for BorrowedAttrInfo
+#include "mozilla/dom/BrowsingContext.h"   // for BrowsingContext
+#include "mozilla/dom/CharacterData.h"     // for CharacterData
+#include "mozilla/dom/ContentParent.h"     // for ContentParent
+#include "mozilla/dom/DataTransfer.h"      // for DataTransfer
+#include "mozilla/dom/Document.h"          // for Document
+#include "mozilla/dom/DocumentInlines.h"   // for GetObservingPresShell
+#include "mozilla/dom/DragEvent.h"         // for DragEvent
+#include "mozilla/dom/Element.h"           // for Element, nsINode::AsElement
+#include "mozilla/dom/EventTarget.h"       // for EventTarget
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/dom/HTMLBRElement.h"
 #include "mozilla/dom/Selection.h"    // for Selection, etc.
@@ -844,8 +851,16 @@ nsresult EditorBase::GetSelection(SelectionType aSelectionType,
 
 nsresult EditorBase::DoTransactionInternal(nsITransaction* aTransaction) {
   MOZ_ASSERT(IsEditActionDataAvailable());
-  MOZ_ASSERT(!ShouldAlreadyHaveHandledBeforeInputEventDispatching(),
-             "beforeinput event hasn't been dispatched yet");
+  MOZ_ASSERT_IF(
+      // If the DOM is modified by a clipboard event handler,
+      // HTMLEditor::OnModifyDocument() may need to do some transactions before
+      // dispatching `beforeinput`.
+      // FIXME: It shouldn't happen, and I think that it should be done once
+      // before dispatching `input` event to hide the our editor hack from
+      // the event listeners.
+      GetEditAction() != EditAction::ePaste &&
+          GetEditAction() != EditAction::eCut,
+      !ShouldAlreadyHaveHandledBeforeInputEventDispatching());
 
   if (mPlaceholderBatch && !mPlaceholderTransaction) {
     MOZ_DIAGNOSTIC_ASSERT(mPlaceholderName);
@@ -1578,9 +1593,26 @@ bool EditorBase::CheckForClipboardCommandListener(
   return false;
 }
 
+already_AddRefed<DataTransfer> EditorBase::CreateDataTransferForPaste(
+    EventMessage aEventMessage,
+    nsIClipboard::ClipboardType aClipboardType) const {
+  nsIGlobalObject* scopeObject = nullptr;
+  if (PresShell* presShell = GetPresShell()) {
+    if (Document* doc = presShell->GetDocument()) {
+      scopeObject = doc->GetScopeObject();
+    }
+  }
+
+  auto dataTransfer = MakeRefPtr<DataTransfer>(scopeObject, aEventMessage, true,
+                                               Some(aClipboardType));
+  return dataTransfer.forget();
+}
+
 Result<EditorBase::ClipboardEventResult, nsresult>
-EditorBase::DispatchClipboardEventAndUpdateClipboard(EventMessage aEventMessage,
-                                                     int32_t aClipboardType) {
+EditorBase::DispatchClipboardEventAndUpdateClipboard(
+    EventMessage aEventMessage,
+    Maybe<nsIClipboard::ClipboardType> aClipboardType,
+    DataTransfer* aDataTransfer /* = nullptr */) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
   const bool isPasting =
@@ -1610,7 +1642,8 @@ EditorBase::DispatchClipboardEventAndUpdateClipboard(EventMessage aEventMessage,
 
   bool actionTaken = false;
   const bool doDefault = nsCopySupport::FireClipboardEvent(
-      aEventMessage, aClipboardType, presShell, sel, &actionTaken);
+      aEventMessage, aClipboardType, presShell, sel, aDataTransfer,
+      &actionTaken);
   NotifyOfDispatchingClipboardEvent();
 
   if (NS_WARN_IF(Destroyed())) {
@@ -1661,7 +1694,7 @@ nsresult EditorBase::CutAsAction(nsIPrincipal* aPrincipal) {
 
     Result<ClipboardEventResult, nsresult> ret =
         DispatchClipboardEventAndUpdateClipboard(
-            eCut, nsIClipboard::kGlobalClipboard);
+            eCut, Some(nsIClipboard::kGlobalClipboard));
     if (MOZ_UNLIKELY(ret.isErr())) {
       NS_WARNING(
           "EditorBase::DispatchClipboardEventAndUpdateClipboard(eCut, "
@@ -1750,8 +1783,8 @@ NS_IMETHODIMP EditorBase::Copy() {
   }
 
   Result<ClipboardEventResult, nsresult> ret =
-      DispatchClipboardEventAndUpdateClipboard(eCopy,
-                                               nsIClipboard::kGlobalClipboard);
+      DispatchClipboardEventAndUpdateClipboard(
+          eCopy, Some(nsIClipboard::kGlobalClipboard));
   if (MOZ_UNLIKELY(ret.isErr())) {
     NS_WARNING(
         "EditorBase::DispatchClipboardEventAndUpdateClipboard(eCopy, "
@@ -1792,7 +1825,10 @@ bool EditorBase::IsCopyCommandEnabled() const {
   return CheckForClipboardCommandListener(nsGkAtoms::oncopy, eCopy);
 }
 
-NS_IMETHODIMP EditorBase::Paste(int32_t aClipboardType) {
+NS_IMETHODIMP EditorBase::Paste(nsIClipboard::ClipboardType aClipboardType) {
+  if (uint32_t(aClipboardType) >= nsIClipboard::kClipboardTypeCount) {
+    return NS_ERROR_INVALID_ARG;
+  }
   const nsresult rv = PasteAsAction(aClipboardType, DispatchPasteEvent::Yes);
   NS_WARNING_ASSERTION(
       NS_SUCCEEDED(rv),
@@ -1800,15 +1836,35 @@ NS_IMETHODIMP EditorBase::Paste(int32_t aClipboardType) {
   return rv;
 }
 
-nsresult EditorBase::PasteAsAction(int32_t aClipboardType,
+nsresult EditorBase::PasteAsAction(nsIClipboard::ClipboardType aClipboardType,
                                    DispatchPasteEvent aDispatchPasteEvent,
+                                   DataTransfer* aDataTransfer /* = nullptr */,
                                    nsIPrincipal* aPrincipal /* = nullptr */) {
   if (IsHTMLEditor() && IsReadonly()) {
     return NS_OK;
   }
 
+  // Create the same DataTransfer object here so we can share it between
+  // the clipboard event and the call to HandlePaste below. This prevents
+  // race conditions with Content Analysis on like we see in bug 1918027.
+  // Note that this is not needed if we're not going to dispatch the paste
+  // event.
+  RefPtr<DataTransfer> dataTransfer;
+  if (aDispatchPasteEvent == DispatchPasteEvent::Yes) {
+    dataTransfer = aDataTransfer
+                       ? RefPtr<DataTransfer>(aDataTransfer)
+                       : RefPtr<DataTransfer>(CreateDataTransferForPaste(
+                             ePaste, aClipboardType));
+  }
   AutoEditActionDataSetter editActionData(*this, EditAction::ePaste,
                                           aPrincipal);
+  const auto clearDataTransfer = MakeScopeExit([&] {
+    // If the caller passed in aDataTransfer, they are responsible for clearing
+    // this.
+    if (!aDataTransfer && dataTransfer) {
+      dataTransfer->ClearForPaste();
+    }
+  });
   if (NS_WARN_IF(!editActionData.CanHandle())) {
     return NS_ERROR_NOT_INITIALIZED;
   }
@@ -1820,13 +1876,22 @@ nsresult EditorBase::PasteAsAction(int32_t aClipboardType,
     }
     const RefPtr<Element> focusedElement = focusManager->GetFocusedElement();
 
-    Result<ClipboardEventResult, nsresult> ret =
-        DispatchClipboardEventAndUpdateClipboard(ePaste, aClipboardType);
-    if (MOZ_UNLIKELY(ret.isErr())) {
-      NS_WARNING(
-          "EditorBase::DispatchClipboardEventAndUpdateClipboard(ePaste) "
-          "failed");
-      return EditorBase::ToGenericNSResult(ret.unwrapErr());
+    Result<ClipboardEventResult, nsresult> ret = Err(NS_ERROR_FAILURE);
+    {
+      // This method is not set up to pass back the new aDataTransfer
+      // if it changes. If we need this in the future, we can change
+      // aDataTransfer to be a RefPtr<DataTransfer>*.
+      MOZ_ASSERT(!aDataTransfer);
+      AutoTrackDataTransferForPaste trackDataTransfer(*this, dataTransfer);
+
+      ret = DispatchClipboardEventAndUpdateClipboard(
+          ePaste, Some(aClipboardType), dataTransfer);
+      if (MOZ_UNLIKELY(ret.isErr())) {
+        NS_WARNING(
+            "EditorBase::DispatchClipboardEventAndUpdateClipboard(ePaste) "
+            "failed");
+        return EditorBase::ToGenericNSResult(ret.unwrapErr());
+      }
     }
     switch (ret.inspect()) {
       case ClipboardEventResult::DoDefault:
@@ -1855,7 +1920,7 @@ nsresult EditorBase::PasteAsAction(int32_t aClipboardType,
       }
       if (editorBase != this) {
         nsresult rv = editorBase->PasteAsAction(
-            aClipboardType, DispatchPasteEvent::No, aPrincipal);
+            aClipboardType, DispatchPasteEvent::No, dataTransfer, aPrincipal);
         NS_WARNING_ASSERTION(
             NS_SUCCEEDED(rv),
             "EditorBase::PasteAsAction(DispatchPasteEvent::No) failed");
@@ -1866,14 +1931,15 @@ nsresult EditorBase::PasteAsAction(int32_t aClipboardType,
     // The caller must already have dispatched a "paste" event.
     editActionData.NotifyOfDispatchingClipboardEvent();
   }
-
-  nsresult rv = HandlePaste(editActionData, aClipboardType);
+  nsresult rv = HandlePaste(editActionData, aClipboardType, dataTransfer);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "EditorBase::HandlePaste() failed");
   return EditorBase::ToGenericNSResult(rv);
 }
 
 nsresult EditorBase::PasteAsQuotationAsAction(
-    int32_t aClipboardType, DispatchPasteEvent aDispatchPasteEvent,
+    nsIClipboard::ClipboardType aClipboardType,
+    DispatchPasteEvent aDispatchPasteEvent,
+    DataTransfer* aDataTransfer /* = nullptr */,
     nsIPrincipal* aPrincipal /* = nullptr */) {
   MOZ_ASSERT(aClipboardType == nsIClipboard::kGlobalClipboard ||
              aClipboardType == nsIClipboard::kSelectionClipboard);
@@ -1882,6 +1948,26 @@ nsresult EditorBase::PasteAsQuotationAsAction(
     return NS_OK;
   }
 
+  // Create the same DataTransfer object here so we can share it between
+  // the clipboard event and the call to HandlePasteAsQuotation below. This
+  // prevents race conditions with Content Analysis on like we see in bug
+  // 1918027.
+  // Note that this is not needed if we're not going to dispatch the paste
+  // event.
+  RefPtr<DataTransfer> dataTransfer;
+  if (aDispatchPasteEvent == DispatchPasteEvent::Yes) {
+    dataTransfer = aDataTransfer
+                       ? RefPtr<DataTransfer>(aDataTransfer)
+                       : RefPtr<DataTransfer>(CreateDataTransferForPaste(
+                             ePaste, aClipboardType));
+  }
+  const auto clearDataTransfer = MakeScopeExit([&] {
+    // If the caller passed in aDataTransfer, they are responsible for clearing
+    // this.
+    if (!aDataTransfer && dataTransfer) {
+      dataTransfer->ClearForPaste();
+    }
+  });
   AutoEditActionDataSetter editActionData(*this, EditAction::ePasteAsQuotation,
                                           aPrincipal);
   if (NS_WARN_IF(!editActionData.CanHandle())) {
@@ -1895,13 +1981,22 @@ nsresult EditorBase::PasteAsQuotationAsAction(
     }
     const RefPtr<Element> focusedElement = focusManager->GetFocusedElement();
 
-    Result<ClipboardEventResult, nsresult> ret =
-        DispatchClipboardEventAndUpdateClipboard(ePaste, aClipboardType);
-    if (MOZ_UNLIKELY(ret.isErr())) {
-      NS_WARNING(
-          "EditorBase::DispatchClipboardEventAndUpdateClipboard(ePaste) "
-          "failed");
-      return EditorBase::ToGenericNSResult(ret.unwrapErr());
+    Result<ClipboardEventResult, nsresult> ret = Err(NS_ERROR_FAILURE);
+    {
+      // This method is not set up to pass back the new aDataTransfer
+      // if it changes. If we need this in the future, we can change
+      // aDataTransfer to be a RefPtr<DataTransfer>*.
+      MOZ_ASSERT(!aDataTransfer);
+      AutoTrackDataTransferForPaste trackDataTransfer(*this, dataTransfer);
+
+      ret = DispatchClipboardEventAndUpdateClipboard(
+          ePaste, Some(aClipboardType), dataTransfer);
+      if (MOZ_UNLIKELY(ret.isErr())) {
+        NS_WARNING(
+            "EditorBase::DispatchClipboardEventAndUpdateClipboard(ePaste) "
+            "failed");
+        return EditorBase::ToGenericNSResult(ret.unwrapErr());
+      }
     }
     switch (ret.inspect()) {
       case ClipboardEventResult::DoDefault:
@@ -1930,7 +2025,7 @@ nsresult EditorBase::PasteAsQuotationAsAction(
       }
       if (editorBase != this) {
         nsresult rv = editorBase->PasteAsQuotationAsAction(
-            aClipboardType, DispatchPasteEvent::No, aPrincipal);
+            aClipboardType, DispatchPasteEvent::No, dataTransfer, aPrincipal);
         NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                              "EditorBase::PasteAsQuotationAsAction("
                              "DispatchPasteEvent::No) failed");
@@ -1942,7 +2037,8 @@ nsresult EditorBase::PasteAsQuotationAsAction(
     editActionData.NotifyOfDispatchingClipboardEvent();
   }
 
-  nsresult rv = HandlePasteAsQuotation(editActionData, aClipboardType);
+  nsresult rv =
+      HandlePasteAsQuotation(editActionData, aClipboardType, dataTransfer);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "EditorBase::HandlePasteAsQuotation() failed");
   return EditorBase::ToGenericNSResult(rv);
@@ -1970,12 +2066,13 @@ nsresult EditorBase::PasteTransferableAsAction(
     }
     const RefPtr<Element> focusedElement = focusManager->GetFocusedElement();
 
-    // Use an invalid value for the clipboard type as data comes from
+    // Use a nothing value for the clipboard type as data comes from
     // aTransferable and we don't currently implement a way to put that in the
     // data transfer in TextEditor yet.
     Result<ClipboardEventResult, nsresult> ret =
         DispatchClipboardEventAndUpdateClipboard(
-            ePaste, IsTextEditor() ? -1 : nsIClipboard::kGlobalClipboard);
+            ePaste,
+            IsTextEditor() ? Nothing() : Some(nsIClipboard::kGlobalClipboard));
     if (MOZ_UNLIKELY(ret.isErr())) {
       NS_WARNING(
           "EditorBase::DispatchClipboardEventAndUpdateClipboard(ePaste) "
@@ -2113,7 +2210,11 @@ NS_IMETHODIMP EditorBase::PasteTransferable(nsITransferable* aTransferable) {
   return rv;
 }
 
-NS_IMETHODIMP EditorBase::CanPaste(int32_t aClipboardType, bool* aCanPaste) {
+NS_IMETHODIMP EditorBase::CanPaste(nsIClipboard::ClipboardType aClipboardType,
+                                   bool* aCanPaste) {
+  if (uint32_t(aClipboardType) >= nsIClipboard::kClipboardTypeCount) {
+    return NS_ERROR_INVALID_ARG;
+  }
   if (NS_WARN_IF(!aCanPaste)) {
     return NS_ERROR_INVALID_ARG;
   }
@@ -2404,7 +2505,9 @@ EditorBase::InsertPaddingBRElementForEmptyLastLineWithTransaction(
     pointToInsert = aPointToInsert;
   } else {
     Result<EditorDOMPoint, nsresult> maybePointToInsert =
-        MOZ_KnownLive(AsHTMLEditor())->PrepareToInsertBRElement(aPointToInsert);
+        MOZ_KnownLive(AsHTMLEditor())
+            ->PrepareToInsertLineBreak(HTMLEditor::LineBreakType::BRElement,
+                                       aPointToInsert);
     if (maybePointToInsert.isErr()) {
       return maybePointToInsert.propagateErr();
     }
@@ -2412,17 +2515,85 @@ EditorBase::InsertPaddingBRElementForEmptyLastLineWithTransaction(
     pointToInsert = maybePointToInsert.unwrap();
   }
 
-  RefPtr<Element> newBRElement = CreateHTMLContent(nsGkAtoms::br);
+  RefPtr<HTMLBRElement> newBRElement =
+      HTMLBRElement::FromNodeOrNull(RefPtr{CreateHTMLContent(nsGkAtoms::br)});
   if (NS_WARN_IF(!newBRElement)) {
     return Err(NS_ERROR_FAILURE);
   }
-  newBRElement->SetFlags(NS_PADDING_FOR_EMPTY_LAST_LINE);
+  nsresult rv = UpdateBRElementType(*newBRElement,
+                                    BRElementType::PaddingForEmptyLastLine);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("EditorBase::UpdateBRElementType() failed");
+    return Err(rv);
+  }
 
   Result<CreateElementResult, nsresult> insertBRElementResult =
       InsertNodeWithTransaction<Element>(*newBRElement, pointToInsert);
   NS_WARNING_ASSERTION(insertBRElementResult.isOk(),
                        "EditorBase::InsertNodeWithTransaction() failed");
   return insertBRElementResult;
+}
+
+nsresult EditorBase::UpdateBRElementType(HTMLBRElement& aBRElement,
+                                         BRElementType aNewType) {
+  const bool brElementIsHidden = aBRElement.IsPaddingForEmptyEditor() ||
+                                 aBRElement.IsPaddingForEmptyLastLine();
+  const bool brElementWillBeHidden = aNewType != BRElementType::Normal;
+  const auto SetBRElementFlags = [&]() {
+    switch (aNewType) {
+      case BRElementType::Normal:
+        if (brElementIsHidden) {
+          aBRElement.UnsetFlags(NS_PADDING_FOR_EMPTY_EDITOR |
+                                NS_PADDING_FOR_EMPTY_LAST_LINE);
+        }
+        break;
+      case BRElementType::PaddingForEmptyEditor:
+        if (brElementIsHidden) {
+          aBRElement.UnsetFlags(NS_PADDING_FOR_EMPTY_LAST_LINE);
+        }
+        aBRElement.SetFlags(NS_PADDING_FOR_EMPTY_EDITOR);
+        break;
+      case BRElementType::PaddingForEmptyLastLine:
+        if (brElementIsHidden) {
+          aBRElement.UnsetFlags(NS_PADDING_FOR_EMPTY_EDITOR);
+        }
+        aBRElement.SetFlags(NS_PADDING_FOR_EMPTY_LAST_LINE);
+        break;
+    }
+  };
+  // If the <br> element is in the composed doc, it must be observed by
+  // IMEContentObserver.  However, IMEContentObserver cannot observe the state
+  // change, but changing the <br> type may make the <br> element visible or
+  // invisible for ContentEventHandler.  Therefore, IMEContentObserver needs to
+  // notify IME of the state change as a text change notification of adding or
+  // removing a line break.  Therefore, we need to reconnect the <br> element
+  // temporarily for making IMEContentObserver observable this change.
+  if (!aBRElement.IsInComposedDoc() ||
+      brElementIsHidden == brElementWillBeHidden) {
+    SetBRElementFlags();
+    return NS_OK;
+  }
+  EditorDOMPoint pointToInsert(&aBRElement);
+  {
+    AutoEditorDOMPointChildInvalidator lockOffset(pointToInsert);
+    nsresult rv = DeleteNodeWithTransaction(aBRElement);
+    if (NS_FAILED(rv)) {
+      NS_WARNING("EditorBase::DeleteNodeWithTransaction() failed");
+      return rv;
+    }
+  }
+  if (NS_WARN_IF(!pointToInsert.IsSetAndValid())) {
+    return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+  }
+  SetBRElementFlags();
+  Result<CreateElementResult, nsresult> result =
+      InsertNodeWithTransaction<Element>(aBRElement, pointToInsert);
+  if (MOZ_UNLIKELY(result.isErr())) {
+    NS_WARNING("EditorBase::InsertNodeWithTransaction() failed");
+    return result.unwrapErr();
+  }
+  result.inspect().IgnoreCaretPointSuggestion();
+  return NS_OK;
 }
 
 NS_IMETHODIMP EditorBase::DeleteNode(nsINode* aNode, bool aPreserveSelection,
@@ -2616,12 +2787,14 @@ void EditorBase::DispatchInputEvent() {
     return;
   }
   RefPtr<DataTransfer> dataTransfer = GetInputEventDataTransfer();
+  mEditActionData->WillDispatchInputEvent();
   DebugOnly<nsresult> rvIgnored = nsContentUtils::DispatchInputEvent(
       targetElement, eEditorInput, ToInputType(GetEditAction()), this,
       dataTransfer ? InputEventOptions(dataTransfer,
                                        InputEventOptions::NeverCancelable::No)
                    : InputEventOptions(GetInputEventData(),
                                        InputEventOptions::NeverCancelable::No));
+  mEditActionData->DidDispatchInputEvent();
   NS_WARNING_ASSERTION(
       NS_SUCCEEDED(rvIgnored),
       "nsContentUtils::DispatchInputEvent() failed, but ignored");
@@ -2939,33 +3112,52 @@ void EditorBase::CloneAttributesWithTransaction(Element& aDestElement,
   bool isDestElementInBody = rootElement->Contains(destElement);
 
   // Clear existing attributes
-  RefPtr<nsDOMAttributeMap> destAttributes = destElement->Attributes();
-  while (RefPtr<Attr> attr = destAttributes->Item(0)) {
+  AutoTArray<OwningNonNull<nsAtom>, 16> destElementAttributes;
+  if (const uint32_t attrCount = destElement->GetAttrCount()) {
+    destElementAttributes.SetCapacity(attrCount);
+    for (const uint32_t i : IntegerRange(attrCount)) {
+      if (const nsAttrName* attrName = destElement->GetUnsafeAttrNameAt(i)) {
+        MOZ_ASSERT(attrName->LocalName());
+        destElementAttributes.AppendElement(*attrName->LocalName());
+      }
+    }
+  }
+  for (const OwningNonNull<nsAtom>& attr : destElementAttributes) {
     if (isDestElementInBody) {
-      DebugOnly<nsresult> rvIgnored = RemoveAttributeWithTransaction(
-          destElement, MOZ_KnownLive(*attr->NodeInfo()->NameAtom()));
+      DebugOnly<nsresult> rvIgnored =
+          RemoveAttributeWithTransaction(destElement, MOZ_KnownLive(*attr));
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rvIgnored),
           "EditorBase::RemoveAttributeWithTransaction() failed, but ignored");
     } else {
-      DebugOnly<nsresult> rvIgnored = destElement->UnsetAttr(
-          kNameSpaceID_None, attr->NodeInfo()->NameAtom(), true);
+      DebugOnly<nsresult> rvIgnored =
+          destElement->UnsetAttr(kNameSpaceID_None, attr, true);
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                            "Element::UnsetAttr() failed, but ignored");
     }
   }
 
   // Set just the attributes that the source element has
-  RefPtr<nsDOMAttributeMap> sourceAttributes = sourceElement->Attributes();
-  uint32_t sourceCount = sourceAttributes->Length();
-  for (uint32_t i = 0; i < sourceCount; i++) {
-    RefPtr<Attr> attr = sourceAttributes->Item(i);
-    nsAutoString value;
-    attr->GetValue(value);
+  AutoTArray<std::pair<OwningNonNull<nsAtom>, nsString>, 16>
+      sourceElementAttributes;
+  if (const uint32_t attrCount = sourceElement->GetAttrCount()) {
+    sourceElementAttributes.SetCapacity(attrCount);
+    for (const uint32_t i : IntegerRange(attrCount)) {
+      const BorrowedAttrInfo attrInfo = sourceElement->GetAttrInfoAt(i);
+      if (const nsAttrName* attrName = attrInfo.mName) {
+        MOZ_ASSERT(attrName->LocalName());
+        MOZ_ASSERT(attrInfo.mValue);
+        nsString value;
+        attrInfo.mValue->ToString(value);
+        sourceElementAttributes.AppendElement(std::make_pair(
+            OwningNonNull<nsAtom>(*attrName->LocalName()), std::move(value)));
+      }
+    }
+  }
+  for (const auto& attr : sourceElementAttributes) {
     if (isDestElementInBody) {
       DebugOnly<nsresult> rvIgnored = SetAttributeOrEquivalent(
-          destElement, MOZ_KnownLive(attr->NodeInfo()->NameAtom()), value,
-          false);
+          destElement, MOZ_KnownLive(attr.first), attr.second, false);
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rvIgnored),
           "EditorBase::SetAttributeOrEquivalent() failed, but ignored");
@@ -2973,8 +3165,7 @@ void EditorBase::CloneAttributesWithTransaction(Element& aDestElement,
       // The element is not inserted in the document yet, we don't want to put
       // a transaction on the UndoStack
       DebugOnly<nsresult> rvIgnored = SetAttributeOrEquivalent(
-          destElement, MOZ_KnownLive(attr->NodeInfo()->NameAtom()), value,
-          true);
+          destElement, MOZ_KnownLive(attr.first), attr.second, true);
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rvIgnored),
           "EditorBase::SetAttributeOrEquivalent() failed, but ignored");
@@ -2989,9 +3180,8 @@ nsresult EditorBase::ScrollSelectionFocusIntoView() const {
   }
 
   DebugOnly<nsresult> rvIgnored = selectionController->ScrollSelectionIntoView(
-      nsISelectionController::SELECTION_NORMAL,
-      nsISelectionController::SELECTION_FOCUS_REGION,
-      nsISelectionController::SCROLL_OVERFLOW_HIDDEN);
+      SelectionType::eNormal, nsISelectionController::SELECTION_FOCUS_REGION,
+      ScrollAxis(), ScrollAxis(), ScrollFlags::ScrollOverflowHidden);
   NS_WARNING_ASSERTION(
       NS_SUCCEEDED(rvIgnored),
       "nsISelectionController::ScrollSelectionIntoView() failed, but ignored");
@@ -3000,7 +3190,10 @@ nsresult EditorBase::ScrollSelectionFocusIntoView() const {
 
 Result<InsertTextResult, nsresult> EditorBase::InsertTextWithTransaction(
     Document& aDocument, const nsAString& aStringToInsert,
-    const EditorDOMPoint& aPointToInsert) {
+    const EditorDOMPoint& aPointToInsert, InsertTextTo aInsertTextTo) {
+  MOZ_ASSERT_IF(IsTextEditor(),
+                aInsertTextTo == InsertTextTo::ExistingTextNodeIfAvailable);
+
   if (NS_WARN_IF(!aPointToInsert.IsSet())) {
     return Err(NS_ERROR_INVALID_ARG);
   }
@@ -3018,8 +3211,55 @@ Result<InsertTextResult, nsresult> EditorBase::InsertTextWithTransaction(
     if (IsTextEditor()) {
       return AsTextEditor()->FindBetterInsertionPoint(aPointToInsert);
     }
-    return aPointToInsert
-        .GetPointInTextNodeIfPointingAroundTextNode<EditorDOMPoint>();
+    auto pointToInsert =
+        aPointToInsert
+            .GetPointInTextNodeIfPointingAroundTextNode<EditorDOMPoint>();
+    // If the candidate point is in a Text node which has only a preformatted
+    // linefeed, we should not insert text into the node because it may have
+    // been inserted by us and that's compatible behavior with Chrome.
+    if (pointToInsert.IsInTextNode() &&
+        HTMLEditUtils::TextHasOnlyOnePreformattedLinefeed(
+            *pointToInsert.ContainerAs<Text>())) {
+      if (pointToInsert.IsStartOfContainer()) {
+        if (Text* const previousText = Text::FromNodeOrNull(
+                pointToInsert.ContainerAs<Text>()->GetPreviousSibling())) {
+          pointToInsert = EditorDOMPoint::AtEndOf(*previousText);
+        } else {
+          pointToInsert = pointToInsert.ParentPoint();
+        }
+      } else {
+        MOZ_ASSERT(pointToInsert.IsEndOfContainer());
+        if (Text* const nextText = Text::FromNodeOrNull(
+                pointToInsert.ContainerAs<Text>()->GetNextSibling())) {
+          pointToInsert = EditorDOMPoint(nextText, 0u);
+        } else {
+          pointToInsert = pointToInsert.AfterContainer();
+        }
+      }
+    }
+    if (aInsertTextTo == InsertTextTo::AlwaysCreateNewTextNode) {
+      NS_WARNING_ASSERTION(!pointToInsert.IsInTextNode() ||
+                               pointToInsert.IsStartOfContainer() ||
+                               pointToInsert.IsEndOfContainer(),
+                           "aPointToInsert is \"AlwaysCreateNewTextNode\", but "
+                           "specified point middle of a `Text`");
+      if (!pointToInsert.IsInTextNode()) {
+        return pointToInsert;
+      }
+      return pointToInsert.IsStartOfContainer()
+                 ? EditorDOMPoint(pointToInsert.ContainerAs<Text>())
+                 : (pointToInsert.IsEndOfContainer()
+                        ? EditorDOMPoint::After(
+                              *pointToInsert.ContainerAs<Text>())
+                        : pointToInsert);
+    }
+    if (aInsertTextTo == InsertTextTo::ExistingTextNodeIfAvailableAndNotStart) {
+      return !(pointToInsert.IsInTextNode() &&
+               pointToInsert.IsStartOfContainer())
+                 ? pointToInsert
+                 : EditorDOMPoint(pointToInsert.ContainerAs<Text>());
+    }
+    return pointToInsert;
   }();
 
   if (ShouldHandleIMEComposition()) {
@@ -3076,7 +3316,7 @@ Result<InsertTextResult, nsresult> EditorBase::InsertTextWithTransaction(
   if (NS_WARN_IF(!newTextNode->IsInComposedDoc())) {
     return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
-  return InsertTextResult(EditorDOMPointInText::AtEndOf(*newTextNode),
+  return InsertTextResult(EditorDOMPoint::AtEndOf(*newTextNode),
                           EditorDOMPoint::AtEndOf(*newTextNode));
 }
 
@@ -3176,7 +3416,7 @@ EditorBase::InsertTextIntoTextNodeWithTransaction(
                  mComposition->GetContainerTextNode()->TextDataLength()));
   }();
 
-  EditorDOMPointInText endOfInsertedText(
+  EditorDOMPoint endOfInsertedText(
       pointToInsert.ContainerAs<Text>(),
       pointToInsert.Offset() + aStringToInsert.Length());
 
@@ -3221,13 +3461,20 @@ EditorBase::InsertTextIntoTextNodeWithTransaction(
   if (IsHTMLEditor() && isIMETransaction && mComposition) {
     RefPtr<Text> textNode = mComposition->GetContainerTextNode();
     if (textNode && !textNode->Length()) {
+      endOfInsertedText.Set(textNode);
+      AutoEditorDOMPointChildInvalidator lockIndex(endOfInsertedText);
       rv = DeleteNodeWithTransaction(*textNode);
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "EditorBase::DeleteNodeTransaction() failed");
       if (MOZ_LIKELY(!textNode->IsInComposedDoc())) {
         mComposition->OnTextNodeRemoved();
       }
       static_cast<CompositionTransaction*>(transaction.get())->MarkFixed();
+      if (NS_FAILED(rv)) {
+        NS_WARNING("EditorBase::DeleteNodeTransaction() failed");
+        return Err(rv);
+      }
+      if (NS_WARN_IF(!endOfInsertedText.IsSetAndValidInComposedDoc())) {
+        return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+      }
     }
   }
 
@@ -3607,8 +3854,12 @@ nsresult EditorBase::EnsurePaddingBRElementInMultilineEditor() {
   }
 
   // Morph it back to a padding <br> element for empty last line.
-  brElement->UnsetFlags(NS_PADDING_FOR_EMPTY_EDITOR);
-  brElement->SetFlags(NS_PADDING_FOR_EMPTY_LAST_LINE);
+  nsresult rv =
+      UpdateBRElementType(*brElement, BRElementType::PaddingForEmptyLastLine);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("EditorBase::UpdateBRElementType() failed");
+    return rv;
+  }
 
   return NS_OK;
 }
@@ -3714,32 +3965,20 @@ nsresult EditorBase::OnCompositionChange(
     return NS_ERROR_FAILURE;
   }
 
-  AutoEditActionDataSetter editActionData(*this,
-                                          EditAction::eUpdateComposition);
+  AutoEditActionDataSetter editActionData(
+      *this,
+      // We need to distinguish whether the composition change is followed by
+      // compositionend or not (i.e., wether IME has already ended the
+      // composition or still has the composition) because we need to dispatch
+      // `textInput` event only for the last composition change.
+      aCompositionChangeEvent.IsFollowedByCompositionEnd()
+          ? EditAction::eUpdateCompositionToCommit
+          : EditAction::eUpdateComposition);
   if (NS_WARN_IF(!editActionData.CanHandle())) {
     return NS_ERROR_NOT_INITIALIZED;
   }
-
-  // If:
-  // - new composition string is not empty,
-  // - there is no composition string in the DOM tree,
-  // - and there is non-collapsed Selection,
-  // the selected content will be removed by this composition.
-  if (aCompositionChangeEvent.mData.IsEmpty() &&
-      mComposition->String().IsEmpty() && !SelectionRef().IsCollapsed()) {
-    editActionData.UpdateEditAction(EditAction::eDeleteByComposition);
-  }
-
-  // If Input Events Level 2 is enabled, EditAction::eDeleteByComposition is
-  // mapped to EditorInputType::eDeleteByComposition and it requires null
-  // for InputEvent.data.  Therefore, only otherwise, we should set data.
-  if (ToInputType(editActionData.GetEditAction()) !=
-      EditorInputType::eDeleteByComposition) {
-    MOZ_ASSERT(ToInputType(editActionData.GetEditAction()) ==
-               EditorInputType::eInsertCompositionText);
-    MOZ_ASSERT(!aCompositionChangeEvent.mData.IsVoid());
-    editActionData.SetData(aCompositionChangeEvent.mData);
-  }
+  MOZ_ASSERT(!aCompositionChangeEvent.mData.IsVoid());
+  editActionData.SetData(aCompositionChangeEvent.mData);
 
   // If we're an `HTMLEditor` and this is second or later composition change,
   // we should set target range to the range of composition string.
@@ -4511,7 +4750,8 @@ nsresult EditorBase::HandleDropEvent(DragEvent* aDropEvent) {
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession();
+  RefPtr<nsIWidget> widget = GetWidget();
+  nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession(widget);
   if (NS_WARN_IF(!dragSession)) {
     return NS_ERROR_FAILURE;
   }
@@ -4688,7 +4928,7 @@ nsresult EditorBase::HandleDropEvent(DragEvent* aDropEvent) {
   // TODO: We need to add automated tests when dropping something into an
   //       editing host for contenteditable which is in a shadow DOM tree
   //       and its host which is in design mode.
-  else if (!AsHTMLEditor()->IsInDesignMode()) {
+  else if (!droppedAt.ContainerAs<nsIContent>()->IsInDesignMode()) {
     focusedElement = AsHTMLEditor()->ComputeEditingHost();
     if (focusedElement &&
         droppedAt.ContainerAs<nsIContent>()->IsInclusiveDescendantOf(
@@ -4819,9 +5059,10 @@ nsresult EditorBase::DeleteSelectionByDragAsAction(bool aDispatchInputEvent) {
   // they retarget the source node to the editing host.
   // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/page/drag_controller.cc;l=724;drc=d9ba13b8cd8ac0faed7afc3d1f7e4b67ebac2a0b
   if (editingHost) {
-    if (nsCOMPtr<nsIDragService> dragService =
-            do_GetService("@mozilla.org/widget/dragservice;1")) {
-      dragService->MaybeEditorDeletedSourceNode(editingHost);
+    RefPtr<nsIWidget> widget = GetWidget();
+    if (nsCOMPtr<nsIDragSession> dragSession =
+            nsContentUtils::GetDragSession(widget)) {
+      dragSession->MaybeEditorDeletedSourceNode(editingHost);
     }
   }
   return NS_WARN_IF(Destroyed()) ? NS_ERROR_EDITOR_DESTROYED : NS_OK;
@@ -5044,29 +5285,7 @@ Result<CaretPoint, nsresult> EditorBase::DeleteRangesWithTransaction(
     return Err(rv);
   }
 
-  EditorDOMPoint pointToPutCaret =
-      deleteSelectionTransaction->SuggestPointToPutCaret();
-  if (IsHTMLEditor() && aStripWrappers == nsIEditor::eStrip) {
-    const nsCOMPtr<nsIContent> anchorContent =
-        pointToPutCaret.GetContainerAs<nsIContent>();
-    if (MOZ_LIKELY(anchorContent) &&
-        MOZ_LIKELY(HTMLEditUtils::IsSimplyEditableNode(*anchorContent)) &&
-        // FIXME: Perhaps, this should use `HTMLEditor::IsEmptyNode` instead.
-        !anchorContent->Length()) {
-      AutoTrackDOMPoint trackPoint(RangeUpdaterRef(), &pointToPutCaret);
-      nsresult rv =
-          MOZ_KnownLive(AsHTMLEditor())
-              ->RemoveEmptyInclusiveAncestorInlineElements(*anchorContent);
-      if (NS_FAILED(rv)) {
-        NS_WARNING(
-            "HTMLEditor::RemoveEmptyInclusiveAncestorInlineElements() "
-            "failed");
-        return Err(rv);
-      }
-    }
-  }
-
-  return CaretPoint(std::move(pointToPutCaret));
+  return CaretPoint(deleteSelectionTransaction->SuggestPointToPutCaret());
 }
 
 already_AddRefed<Element> EditorBase::CreateHTMLContent(
@@ -5257,7 +5476,7 @@ nsresult EditorBase::OnInputText(const nsAString& aStringToInsert) {
 nsresult EditorBase::ReplaceTextAsAction(
     const nsAString& aString, nsRange* aReplaceRange,
     AllowBeforeInputEventCancelable aAllowBeforeInputEventCancelable,
-    nsIPrincipal* aPrincipal) {
+    PreventSetSelection aPreventSetSelection, nsIPrincipal* aPrincipal) {
   MOZ_ASSERT(aString.FindChar(nsCRT::CR) == kNotFound);
   MOZ_ASSERT_IF(!aReplaceRange, IsTextEditor());
 
@@ -5345,9 +5564,25 @@ nsresult EditorBase::ReplaceTextAsAction(
   // shouldn't receive such selectionchange before the first mutation.
   AutoUpdateViewBatch preventSelectionChangeEvent(*this, __FUNCTION__);
 
+  ErrorResult error;
+
+  AutoSelectionRestorer restorer(
+      aPreventSetSelection == PreventSetSelection::Yes ? this : nullptr);
+
+  auto raii = MakeScopeExit([&] {
+    if (aPreventSetSelection == PreventSetSelection::Yes) {
+      if (error.Failed()) {
+        restorer.Abort();
+        return;
+      }
+      if (NS_FAILED(rv)) {
+        restorer.Abort();
+      }
+    }
+  });
+
   // Select the range but as far as possible, we should not create new range
   // even if it's part of special Selection.
-  ErrorResult error;
   SelectionRef().RemoveAllRanges(error);
   if (error.Failed()) {
     NS_WARNING("Selection::RemoveAllRanges() failed");
@@ -5363,6 +5598,7 @@ nsresult EditorBase::ReplaceTextAsAction(
   rv = ReplaceSelectionAsSubAction(aString);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "EditorBase::ReplaceSelectionAsSubAction() failed");
+
   return EditorBase::ToGenericNSResult(rv);
 }
 
@@ -5447,14 +5683,6 @@ nsresult EditorBase::InitializeSelection(
   NS_WARNING_ASSERTION(
       NS_SUCCEEDED(rvIgnored),
       "nsISelectionController::SetCaretEnabled() failed, but ignored");
-  // NOTE(emilio): It's important for this call to be after
-  // SetCaretEnabled(true), since that would override mIgnoreUserModify to true.
-  //
-  // Also, make sure to always ignore it for designMode, since that effectively
-  // overrides everything and we allow to edit stuff with
-  // contenteditable="false" subtrees in such a document.
-  caret->SetIgnoreUserModify(aOriginalEventTargetNode.IsInDesignMode());
-
   // Init selection
   rvIgnored =
       selectionController->SetSelectionFlags(nsISelectionDisplay::DISPLAY_ALL);
@@ -5475,21 +5703,17 @@ nsresult EditorBase::InitializeSelection(
     SelectionRef().SetAncestorLimiter(nullptr);
   }
 
-  // If there is composition when this is called, we may need to restore IME
-  // selection because if the editor is reframed, this already forgot IME
-  // selection and the transaction.
-  if (mComposition && mComposition->IsMovingToNewTextNode()) {
-    MOZ_DIAGNOSTIC_ASSERT(IsTextEditor());
-    if (NS_WARN_IF(!IsTextEditor())) {
-      return NS_ERROR_UNEXPECTED;
-    }
+  // If there is composition in a text control when this method is called, we
+  // may need to restore IME selection because if the text control is reframed,
+  // this already forgot IME selection and the transaction.
+  // Note that if this is an HTMLEditor, updating composition makes the new
+  // composition string appear around IME or normal selection.  Therefore,
+  // we don't need to do nothing here.
+  if (IsTextEditor() && mComposition && mComposition->IsMovingToNewTextNode()) {
     // We need to look for the new text node from current selection.
     // XXX If selection is changed during reframe, this doesn't work well!
-    const nsRange* firstRange = SelectionRef().GetRangeAt(0);
-    if (NS_WARN_IF(!firstRange)) {
-      return NS_ERROR_FAILURE;
-    }
-    EditorRawDOMPoint atStartOfFirstRange(firstRange->StartRef());
+    const auto atStartOfFirstRange =
+        EditorBase::GetFirstSelectionStartPoint<EditorRawDOMPoint>();
     EditorRawDOMPoint betterInsertionPoint =
         AsTextEditor()->FindBetterInsertionPoint(atStartOfFirstRange);
     RefPtr<Text> textNode = betterInsertionPoint.GetContainerAs<Text>();
@@ -5533,7 +5757,6 @@ nsresult EditorBase::FinalizeSelection() {
   }
 
   if (RefPtr<nsCaret> caret = GetCaret()) {
-    caret->SetIgnoreUserModify(true);
     DebugOnly<nsresult> rvIgnored = selectionController->SetCaretEnabled(false);
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rvIgnored),
@@ -5728,12 +5951,7 @@ Element* EditorBase::GetFocusedElement() const {
     return nullptr;
   }
 
-  nsFocusManager* focusManager = nsFocusManager::GetFocusManager();
-  if (NS_WARN_IF(!focusManager)) {
-    return nullptr;
-  }
-
-  Element* focusedElement = focusManager->GetFocusedElement();
+  Element* const focusedElement = nsFocusManager::GetFocusedElementStatic();
   MOZ_ASSERT((focusedElement == eventTarget) ==
              SameCOMIdentity(focusedElement, eventTarget));
 
@@ -5843,11 +6061,6 @@ bool EditorBase::CanKeepHandlingFocusEvent(
     return false;
   }
 
-  nsFocusManager* focusManager = nsFocusManager::GetFocusManager();
-  if (MOZ_UNLIKELY(!focusManager)) {
-    return false;
-  }
-
   // If the event target is document mode, we only need to handle the focus
   // event when the document is still in designMode.  Otherwise, the
   // mode has been disabled by somebody while we're handling the focus event.
@@ -5859,7 +6072,9 @@ bool EditorBase::CanKeepHandlingFocusEvent(
   // If nobody has focus, the focus event target has been blurred by somebody
   // else.  So the editor shouldn't initialize itself to start to handle
   // anything.
-  if (!focusManager->GetFocusedElement()) {
+  const Element* const focusedElement =
+      nsFocusManager::GetFocusedElementStatic();
+  if (!focusedElement) {
     return false;
   }
 
@@ -5879,7 +6094,7 @@ bool EditorBase::CanKeepHandlingFocusEvent(
       aOriginalEventTargetNode.AsContent()
           ->FindFirstNonChromeOnlyAccessContent();
   const nsIContent* exposedFocusedContent =
-      focusManager->GetFocusedElement()->FindFirstNonChromeOnlyAccessContent();
+      focusedElement->FindFirstNonChromeOnlyAccessContent();
   return exposedTargetContent && exposedFocusedContent &&
          exposedTargetContent == exposedFocusedContent;
 }
@@ -6444,7 +6659,8 @@ void EditorBase::AutoEditActionDataSetter::InitializeDataTransfer(
 }
 
 void EditorBase::AutoEditActionDataSetter::InitializeDataTransferWithClipboard(
-    SettingDataTransfer aSettingDataTransfer, int32_t aClipboardType) {
+    SettingDataTransfer aSettingDataTransfer, DataTransfer* aDataTransfer,
+    nsIClipboard::ClipboardType aClipboardType) {
   MOZ_ASSERT(!HasTriedToDispatchBeforeInputEvent(),
              "It's too late to set dataTransfer since this may have already "
              "dispatched a beforeinput event");
@@ -6455,12 +6671,22 @@ void EditorBase::AutoEditActionDataSetter::InitializeDataTransferWithClipboard(
   // mDataTransfer will be used for eEditorInput event, but we can keep
   // using ePaste and ePasteNoFormatting here.  If we need to use eEditorInput,
   // we need to create eEditorInputNoFormatting or something...
-  mDataTransfer =
-      new DataTransfer(scopeObject,
-                       aSettingDataTransfer == SettingDataTransfer::eWithFormat
-                           ? ePaste
-                           : ePasteNoFormatting,
-                       true /* is external */, aClipboardType);
+  EventMessage message =
+      (aSettingDataTransfer == SettingDataTransfer::eWithFormat)
+          ? ePaste
+          : ePasteNoFormatting;
+  if (aDataTransfer) {
+    // The DataTransfer being passed in will be used in a paste event, which
+    // means it will be cleared after that event is done firing. We don't want
+    // that for "input" and "beforeinput" events, so make a copy of its data.
+    aDataTransfer->Clone(scopeObject, message,
+                         /* aUserCancelled = */ false,
+                         /* aIsCrossDomainSubFrameDrop = */ false,
+                         getter_AddRefs(mDataTransfer));
+  } else {
+    mDataTransfer = MakeRefPtr<DataTransfer>(
+        scopeObject, message, true /* is external */, Some(aClipboardType));
+  }
 }
 
 void EditorBase::AutoEditActionDataSetter::AppendTargetRange(
@@ -6513,6 +6739,13 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeFlushPendingNotifications()
   return NS_OK;
 }
 
+void EditorBase::AutoEditActionDataSetter::MarkEditActionCanceled() {
+  mBeforeInputEventCanceled = true;
+  if (mEditorBase.IsHTMLEditor()) {
+    mEditorBase.AsHTMLEditor()->mHasBeforeInputBeenCanceled = true;
+  }
+}
+
 nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
     nsIEditor::EDirection aDeleteDirectionAndAmount /* = nsIEditor::eNone */) {
   MOZ_ASSERT(!HasTriedToDispatchBeforeInputEvent(),
@@ -6527,6 +6760,11 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
 
   if (!IsBeforeInputEventEnabled()) {
     return NS_OK;
+  }
+
+  if (mEditorBase.IsHTMLEditor()) {
+    mEditorBase.AsHTMLEditor()->mLastCollapsibleWhiteSpaceAppendedTextNode =
+        nullptr;
   }
 
   // If we're called from OnCompositionEnd(), we shouldn't dispatch
@@ -6623,6 +6861,7 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
       mMakeBeforeInputEventNonCancelable
           ? InputEventOptions::NeverCancelable::Yes
           : InputEventOptions::NeverCancelable::No;
+  WillDispatchInputEvent();
   nsresult rv = nsContentUtils::DispatchInputEvent(
       targetElement, eEditorBeforeInput, inputType, editorBase,
       mDataTransfer
@@ -6630,6 +6869,7 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
                               neverCancelable)
           : InputEventOptions(mData, std::move(mTargetRanges), neverCancelable),
       &status);
+  DidDispatchInputEvent();
   if (NS_WARN_IF(mEditorBase.Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -6637,11 +6877,79 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
     NS_WARNING("nsContentUtils::DispatchInputEvent() failed");
     return rv;
   }
-  mBeforeInputEventCanceled = status == nsEventStatus_eConsumeNoDefault;
-  if (mBeforeInputEventCanceled && mEditorBase.IsHTMLEditor()) {
-    mEditorBase.AsHTMLEditor()->mHasBeforeInputBeenCanceled = true;
+  if (status == nsEventStatus_eConsumeNoDefault) {
+    MarkEditActionCanceled();
+    return NS_ERROR_EDITOR_ACTION_CANCELED;
   }
-  return mBeforeInputEventCanceled ? NS_ERROR_EDITOR_ACTION_CANCELED : NS_OK;
+
+  nsCOMPtr<nsIWidget> widget = editorBase->GetWidget();
+  if (!StaticPrefs::dom_events_textevent_enabled() ||
+      !targetElement->IsInComposedDoc() || !widget) {
+    return NS_OK;
+  }
+  nsString textInputData;
+  RefPtr<DataTransfer> textInputDataTransfer;
+  switch (inputType) {
+    case EditorInputType::eInsertCompositionText:
+      // If the composition is still being composed, we should not dispatch
+      // textInput event, but we need to dispatch it for the last composition
+      // change because web apps should know the inserting commit string as
+      // same as input from keyboard.
+      if (mEditAction == EditAction::eUpdateComposition) {
+        return NS_OK;
+      }
+      [[fallthrough]];
+    case EditorInputType::eInsertText:
+      textInputData = mData;
+      break;
+    case EditorInputType::eInsertFromDrop:
+    case EditorInputType::eInsertFromPaste:
+    case EditorInputType::eInsertFromPasteAsQuotation:
+      if (mDataTransfer) {
+        textInputDataTransfer = mDataTransfer;
+      } else {
+        textInputData = mData;
+      }
+      break;
+    case EditorInputType::eInsertLineBreak:
+    case EditorInputType::eInsertParagraph:
+      // Don't dispatch `textInput` on <input> because Chrome does not do it.
+      // On the other hand, we need to dispatch it on <textarea> and
+      // contenteditable.
+      if (mEditorBase.IsTextEditor() && mEditorBase.IsSingleLineEditor()) {
+        return NS_OK;
+      }
+      textInputData.Assign(u'\n');
+      break;
+    default:
+      return NS_OK;
+  }
+
+  InternalLegacyTextEvent textEvent(true, eLegacyTextInput, widget);
+  textEvent.mData = std::move(textInputData);
+  textEvent.mDataTransfer = std::move(textInputDataTransfer);
+  textEvent.mInputType = inputType;
+  // Make it always cancelable even though we ignore it when inserting or
+  // deleting composition.  This is compatible with Chrome.
+  // However, if and only if it's unsafe, let's set it not cancelable because of
+  // asynchronous dispatching.
+  textEvent.mFlags.mCancelable = nsContentUtils::IsSafeToRunScript();
+
+  status = nsEventStatus_eIgnore;
+  rv = AsyncEventDispatcher::RunDOMEventWhenSafe(*targetElement, textEvent,
+                                                 &status);
+  if (NS_WARN_IF(mEditorBase.Destroyed())) {
+    return NS_ERROR_EDITOR_DESTROYED;
+  }
+  if (NS_FAILED(rv)) {
+    NS_WARNING("AsyncEventDispatcher::RunDOMEventWhenSafe() failed");
+    return rv;
+  }
+  if (status == nsEventStatus_eConsumeNoDefault) {
+    MarkEditActionCanceled();
+    return NS_ERROR_EDITOR_ACTION_CANCELED;
+  }
+  return NS_OK;
 }
 
 /*****************************************************************************
@@ -6928,4 +7236,137 @@ nsISelectionController* EditorBase::GetSelectionController() const {
   return mDocument->GetPresShell();
 }
 
+bool EditorBase::ArePreservingSelection() const {
+  return IsEditActionDataAvailable() && SavedSelectionRef().RangeCount();
+}
+
+void EditorBase::PreserveSelectionAcrossActions() {
+  MOZ_ASSERT(IsEditActionDataAvailable());
+
+  SavedSelectionRef().SaveSelection(SelectionRef());
+  RangeUpdaterRef().RegisterSelectionState(SavedSelectionRef());
+}
+
+nsresult EditorBase::RestorePreservedSelection() {
+  MOZ_ASSERT(IsEditActionDataAvailable());
+
+  if (!SavedSelectionRef().RangeCount()) {
+    // XXX Returning error when it does not store is odd because no selection
+    //     ranges is not illegal case in general.
+    return NS_ERROR_FAILURE;
+  }
+  DebugOnly<nsresult> rvIgnored =
+      SavedSelectionRef().RestoreSelection(SelectionRef());
+  NS_WARNING_ASSERTION(
+      NS_SUCCEEDED(rvIgnored),
+      "SelectionState::RestoreSelection() failed, but ignored");
+  StopPreservingSelection();
+  return NS_OK;
+}
+
+void EditorBase::StopPreservingSelection() {
+  MOZ_ASSERT(IsEditActionDataAvailable());
+
+  RangeUpdaterRef().DropSelectionState(SavedSelectionRef());
+  SavedSelectionRef().RemoveAllRanges();
+}
+
+nsresult EditorBase::GetDataFromDataTransferOrClipboard(
+    DataTransfer* aDataTransfer, nsITransferable* aTransferable,
+    nsIClipboard::ClipboardType aClipboardType) const {
+  MOZ_ASSERT(aTransferable);
+  if (aDataTransfer) {
+    MOZ_ASSERT(aDataTransfer->ClipboardType() == Some(aClipboardType));
+    nsresult rv = [aDataTransfer, aTransferable]() -> nsresult {
+      nsIClipboardDataSnapshot* snapshot =
+          aDataTransfer->GetClipboardDataSnapshot();
+      MOZ_ASSERT(snapshot);
+      bool snapshotIsValid = false;
+      snapshot->GetValid(&snapshotIsValid);
+      if (!snapshotIsValid) {
+        NS_WARNING("DataTransfer::GetClipboardDataSnapshot() is not valid");
+        return NS_ERROR_FAILURE;
+      }
+      AutoTArray<nsCString, 10> transferableFlavors;
+      nsresult rv =
+          aTransferable->FlavorsTransferableCanImport(transferableFlavors);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("nsITransferable::FlavorsTransferableCanImport() failed");
+        return rv;
+      }
+      if (transferableFlavors.Length() == 1) {
+        // avoid creating unneeded temporary transferables
+        rv = snapshot->GetDataSync(aTransferable);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                             "nsIClipboardDataSnapshot::GetDataSync() failed");
+        return rv;
+      }
+      AutoTArray<nsCString, 5> snapshotFlavors;
+      rv = snapshot->GetFlavorList(snapshotFlavors);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("nsIClipboardDataSnapshot::GetFlavorList() failed");
+        return rv;
+      }
+      for (const auto& transferableFlavor : transferableFlavors) {
+        if (snapshotFlavors.Contains(transferableFlavor)) {
+          AutoTArray<nsCString, 1> singleTypeArray{transferableFlavor};
+          auto singleTransferableToCheck =
+              ContentParent::CreateClipboardTransferable(singleTypeArray);
+          if (singleTransferableToCheck.isErr()) {
+            NS_WARNING("Failed to CreateClipboardTransferable()");
+            return singleTransferableToCheck.unwrapErr();
+          }
+          nsCOMPtr<nsITransferable> singleTransferable =
+              singleTransferableToCheck.unwrap();
+          rv = snapshot->GetDataSync(singleTransferable);
+          if (NS_FAILED(rv)) {
+            NS_WARNING("nsIClipboardDataSnapshot::GetDataSync() failed");
+            return rv;
+          }
+          nsCOMPtr<nsISupports> data;
+          rv = singleTransferable->GetTransferData(transferableFlavor.get(),
+                                                   getter_AddRefs(data));
+          if (NS_FAILED(rv)) {
+            NS_WARNING("nsITransferable::GetTransferData() failed");
+            return rv;
+          }
+          rv = aTransferable->SetTransferData(transferableFlavor.get(), data);
+          if (NS_FAILED(rv)) {
+            NS_WARNING("nsITransferable::SetTransferData() failed");
+            return rv;
+          }
+          return NS_OK;
+        }
+      }
+      // Couldn't find any data so return an error so we try the fallback.
+      return NS_ERROR_FAILURE;
+    }();
+    if (NS_SUCCEEDED(rv)) {
+      return NS_OK;
+    }
+    // If this fails, the snapshot may have become invalidated. Fall back
+    // to getting data from the clipboard.
+  }
+
+  // Get Clipboard Service
+  nsresult rv;
+  nsCOMPtr<nsIClipboard> clipboard =
+      do_GetService("@mozilla.org/widget/clipboard;1", &rv);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to get nsIClipboard service");
+    return rv;
+  }
+
+  auto* windowContext = GetDocument()->GetWindowContext();
+  if (!windowContext) {
+    NS_WARNING("No window context");
+    return NS_ERROR_FAILURE;
+  }
+  rv = clipboard->GetData(aTransferable, aClipboardType, windowContext);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("nsIClipboard::GetData() failed");
+    return rv;
+  }
+  return NS_OK;
+}
 }  // namespace mozilla

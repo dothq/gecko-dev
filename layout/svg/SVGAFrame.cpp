@@ -33,10 +33,6 @@ class SVGAFrame final : public SVGDisplayContainerFrame {
             nsIFrame* aPrevInFlow) override;
 #endif
 
-  // nsIFrame:
-  nsresult AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
-                            int32_t aModType) override;
-
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override {
     return MakeFrameName(u"SVGA"_ns, aResult);
@@ -71,32 +67,5 @@ void SVGAFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
   SVGDisplayContainerFrame::Init(aContent, aParent, aPrevInFlow);
 }
 #endif /* DEBUG */
-
-nsresult SVGAFrame::AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
-                                     int32_t aModType) {
-  if (aNameSpaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::transform) {
-    // We don't invalidate for transform changes (the layers code does that).
-    // Also note that SVGTransformableElement::GetAttributeChangeHint will
-    // return nsChangeHint_UpdateOverflow for "transform" attribute changes
-    // and cause DoApplyRenderingChangeToTree to make the SchedulePaint call.
-    NotifySVGChanged(TRANSFORM_CHANGED);
-  }
-
-  // Currently our SMIL implementation does not modify the DOM attributes. Once
-  // we implement the SVG 2 SMIL behaviour this can be removed
-  // SVGAElement::SetAttr/UnsetAttr's ResetLinkState() call will be sufficient.
-  if (aModType == dom::MutationEvent_Binding::SMIL &&
-      aAttribute == nsGkAtoms::href &&
-      (aNameSpaceID == kNameSpaceID_None ||
-       aNameSpaceID == kNameSpaceID_XLink)) {
-    auto* content = static_cast<dom::SVGAElement*>(GetContent());
-
-    // SMIL may change whether an <a> element is a link, in which case we will
-    // need to update the link state.
-    content->ResetLinkState(true, content->ElementHasHref());
-  }
-
-  return NS_OK;
-}
 
 }  // namespace mozilla

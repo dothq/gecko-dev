@@ -20,6 +20,7 @@ namespace mozilla {
 
 namespace dom {
 class Blob;
+struct MediaTrackCapabilities;
 struct MediaTrackSettings;
 }  // namespace dom
 
@@ -189,6 +190,9 @@ class MediaEngineSourceInterface {
    * device settings as seen by js.
    */
   virtual void GetSettings(dom::MediaTrackSettings& aOutSettings) const = 0;
+
+  virtual void GetCapabilities(
+      dom::MediaTrackCapabilities& aOutCapabilities) const = 0;
 };
 
 /**
@@ -245,6 +249,8 @@ class MediaEngineSource : public MediaEngineSourceInterface {
       const override {
     return 0;
   }
+
+  virtual MediaEventSource<void>* CaptureEndedEvent() { return nullptr; }
 
  protected:
   virtual ~MediaEngineSource();

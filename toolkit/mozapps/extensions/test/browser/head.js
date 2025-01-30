@@ -204,7 +204,7 @@ function run_next_test() {
   executeSoon(() => log_exceptions(test));
 }
 
-var get_tooltip_info = async function (addonEl, managerWindow) {
+var get_tooltip_info = async function (addonEl) {
   // Extract from title attribute.
   const { addon } = addonEl;
   const name = addon.name;
@@ -324,7 +324,7 @@ function open_manager(
   aLongerTimeout,
   aWin = window
 ) {
-  let p = new Promise((resolve, reject) => {
+  let p = new Promise(resolve => {
     async function setup_manager(aManagerWindow) {
       if (aLoadCallback) {
         log_exceptions(aLoadCallback, aManagerWindow);
@@ -354,7 +354,7 @@ function open_manager(
     }
 
     info("Loading manager window in tab");
-    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
+    Services.obs.addObserver(function observer(aSubject, aTopic) {
       Services.obs.removeObserver(observer, aTopic);
       if (aSubject.location.href != MANAGER_URI) {
         info("Ignoring load event for " + aSubject.location.href);
@@ -434,7 +434,7 @@ function wait_for_window_open(aCallback) {
         );
       },
 
-      onCloseWindow(aWindow) {},
+      onCloseWindow() {},
     });
   });
 
@@ -487,7 +487,7 @@ function promiseAddonsByIDs(aIDs) {
  */
 async function install_addon(path, cb, pathPrefix = TESTROOT) {
   let install = await AddonManager.getInstallForURL(pathPrefix + path);
-  let p = new Promise((resolve, reject) => {
+  let p = new Promise(resolve => {
     install.addListener({
       onInstallEnded: () => resolve(install.addon),
     });
@@ -633,10 +633,23 @@ function addCertOverrides() {
 
 /** *** Mock Provider *****/
 
-function MockProvider(addonTypes) {
+function MockProvider(
+  addonTypes,
+  { supportsOperationsRequiringRestart = false } = {}
+) {
   this.addons = [];
   this.installs = [];
   this.addonTypes = addonTypes ?? ["extension"];
+  // NOTE: operationsRequiringRestart is an historical feature of the
+  // XPIProvider, which is not supported anymore, there may still be
+  // tests making assumptions about MockProvider behaviors related to
+  // it, and so this is a temporary measure to gradually remove the
+  // remaining bits of the deprecated feature from the MockProvider
+  // test helpers.
+  //
+  // TODO: (Bug 1921875) Remove operationsRequiringRestart-related
+  // behaviors from MockProvider.
+  this.supportsOperationsRequiringRestart = supportsOperationsRequiringRestart;
 
   var self = this;
   registerCleanupFunction(function () {
@@ -713,10 +726,11 @@ MockProvider.prototype = {
       return;
     }
 
-    let requiresRestart =
-      (aAddon.operationsRequiringRestart &
-        AddonManager.OP_NEEDS_RESTART_INSTALL) !=
-      0;
+    let requiresRestart = this.supportsOperationsRequiringRestart
+      ? (aAddon.operationsRequiringRestart &
+          AddonManager.OP_NEEDS_RESTART_INSTALL) !=
+        0
+      : false;
     AddonManagerPrivate.callInstallListeners(
       "onExternalInstall",
       null,
@@ -794,6 +808,14 @@ MockProvider.prototype = {
   createAddons: function MP_createAddons(aAddonProperties) {
     var newAddons = [];
     for (let addonProp of aAddonProperties) {
+      if (!this.supportsOperationsRequiringRestart) {
+        if (addonProp.operationsRequiringRestart !== undefined) {
+          throw new Error(
+            `Unexpected operationsRequiringRestart set on MockAddon ${addonProp.id}. MockProvider instance does not support operationsRequiringRestart.`
+          );
+        }
+        addonProp.operationsRequiringRestart = 0;
+      }
       let addon = new MockAddon(addonProp.id);
       for (let prop in addonProp) {
         if (prop == "id") {
@@ -805,6 +827,8 @@ MockProvider.prototype = {
           addon._appDisabled = addonProp[prop];
         } else if (prop == "userDisabled") {
           addon.setUserDisabled(addonProp[prop]);
+        } else if (prop == "softDisabled") {
+          addon.setSoftDisabled(addonProp[prop]);
         } else {
           addon[prop] = addonProp[prop];
         }
@@ -946,7 +970,7 @@ MockProvider.prototype = {
    *         true if the newly enabled add-on will only become enabled after a
    *         restart
    */
-  addonChanged: function MP_addonChanged(aId, aType, aPendingRestart) {
+  addonChanged: function MP_addonChanged() {
     // Not implemented
   },
 
@@ -965,7 +989,7 @@ MockProvider.prototype = {
    * @param  {object} aOptions
    *         Options for the install
    */
-  getInstallForURL: function MP_getInstallForURL(aUrl, aOptions) {
+  getInstallForURL: function MP_getInstallForURL() {
     // Not yet implemented
   },
 
@@ -975,7 +999,7 @@ MockProvider.prototype = {
    * @param  aFile
    *         The file to be installed
    */
-  getInstallForFile: function MP_getInstallForFile(aFile) {
+  getInstallForFile: function MP_getInstallForFile() {
     // Not yet implemented
   },
 
@@ -996,7 +1020,7 @@ MockProvider.prototype = {
    *         The mimetype to check for
    * @return true if the mimetype is supported
    */
-  supportsMimetype: function MP_supportsMimetype(aMimetype) {
+  supportsMimetype: function MP_supportsMimetype() {
     return false;
   },
 
@@ -1007,7 +1031,7 @@ MockProvider.prototype = {
    *         The URI being installed from
    * @return true if installing is allowed
    */
-  isInstallAllowed: function MP_isInstallAllowed(aUri) {
+  isInstallAllowed: function MP_isInstallAllowed() {
     return false;
   },
 };
@@ -1057,6 +1081,7 @@ MockAddon.prototype = {
     return (
       !this.appDisabled &&
       !this._userDisabled &&
+      !this._softDisabled &&
       !(this.pendingOperations & AddonManager.PENDING_UNINSTALL)
     );
   },
@@ -1081,15 +1106,27 @@ MockAddon.prototype = {
   },
 
   get userDisabled() {
-    return this._userDisabled;
+    // NOTE: the logic here should reseamble the logic
+    // from the AddonInstall getter with the same name.
+    return this._softDisabled || this._userDisabled;
   },
 
   set userDisabled(val) {
     throw new Error("No. Bad.");
   },
 
+  get softDisabled() {
+    return this._softDisabled;
+  },
+
+  set softDisabled(val) {
+    throw new Error("No. Bad.");
+  },
+
   setUserDisabled(val) {
-    if (val == this._userDisabled) {
+    // NOTE: the logic here should reseamble the logic
+    // from the AddonInstall method with the same name.
+    if (val == (this._userDisabled || this._softDisabled)) {
       return;
     }
 
@@ -1099,10 +1136,26 @@ MockAddon.prototype = {
     this._updateActiveState(currentActive, newActive);
   },
 
+  setSoftDisabled(val) {
+    // NOTE: the logic here should reseamble the logic
+    // from the AddonInstall method with the same name.
+    if (val == this._softDisabled) {
+      return;
+    }
+
+    var currentActive = this.shouldBeActive;
+    if (!this._userDisabled) {
+      this._softDisabled = val;
+    }
+    var newActive = this.shouldBeActive;
+    this._updateActiveState(currentActive, newActive);
+  },
+
   async enable() {
     await new Promise(resolve => Services.tm.dispatchToMainThread(resolve));
 
     this.setUserDisabled(false);
+    this.setSoftDisabled(false);
   },
   async disable() {
     await new Promise(resolve => Services.tm.dispatchToMainThread(resolve));
@@ -1112,10 +1165,8 @@ MockAddon.prototype = {
 
   get permissions() {
     let permissions = this._permissions;
-    if (this.appDisabled || !this._userDisabled) {
+    if (this.appDisabled) {
       permissions &= ~AddonManager.PERM_CAN_ENABLE;
-    }
-    if (this.appDisabled || this._userDisabled) {
       permissions &= ~AddonManager.PERM_CAN_DISABLE;
     }
     return permissions;
@@ -1143,11 +1194,11 @@ MockAddon.prototype = {
     ]);
   },
 
-  isCompatibleWith(aAppVersion, aPlatformVersion) {
+  isCompatibleWith() {
     return true;
   },
 
-  findUpdates(aListener, aReason, aAppVersion, aPlatformVersion) {
+  findUpdates() {
     // Tests can implement this if they need to
   },
 
@@ -1198,6 +1249,13 @@ MockAddon.prototype = {
 
   markAsSeen() {
     this.seen = true;
+  },
+
+  updateBlocklistState() {
+    // NOTE: this is currently a no-op meant to just prevent MockProvider
+    // addons to trigger an unexpected "addon.updateBlockistState is not a function"
+    // error in tests covering the blocklist (while there are also MockProvider
+    // installed addons).
   },
 
   _updateActiveState(currentActive, newActive) {
@@ -1297,7 +1355,7 @@ MockInstall.prototype = {
         this.state = AddonManager.STATE_DOWNLOADED;
         this.callListeners("onDownloadEnded");
       // fall through
-      case AddonManager.STATE_DOWNLOADED:
+      case AddonManager.STATE_DOWNLOADED: {
         this.state = AddonManager.STATE_INSTALLING;
         if (!this.callListeners("onInstallStarted")) {
           this.state = AddonManager.STATE_CANCELLED;
@@ -1305,9 +1363,10 @@ MockInstall.prototype = {
           return;
         }
 
-        let needsRestart =
-          this.operationsRequiringRestart &
-          AddonManager.OP_NEEDS_RESTART_INSTALL;
+        let needsRestart = this._provider?.supportsOperationsRequiringRestart
+          ? this.operationsRequiringRestart &
+            AddonManager.OP_NEEDS_RESTART_INSTALL
+          : false;
         AddonManagerPrivate.callAddonListeners(
           "onInstalling",
           this.addon,
@@ -1320,6 +1379,7 @@ MockInstall.prototype = {
         this.state = AddonManager.STATE_INSTALLED;
         this.callListeners("onInstallEnded");
         break;
+      }
       case AddonManager.STATE_DOWNLOADING:
       case AddonManager.STATE_CHECKING_UPDATE:
       case AddonManager.STATE_INSTALLING:
@@ -1488,12 +1548,21 @@ function waitAppMenuNotificationShown(
         if (!addon) {
           ok(false, `Addon with id "${addonId}" not found`);
         }
-        let hidden = !(
-          addon.permissions &
-          AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
-        );
+
         let checkbox = document.getElementById("addon-incognito-checkbox");
-        is(checkbox.hidden, hidden, "checkbox visibility is correct");
+        if (ExtensionsUI.POSTINSTALL_PRIVATEBROWSING_CHECKBOX) {
+          let hidden = !(
+            addon.permissions &
+            AddonManager.PERM_CAN_CHANGE_PRIVATEBROWSING_ACCESS
+          );
+          is(checkbox.hidden, hidden, "checkbox visibility is correct");
+        } else {
+          is(
+            checkbox.hidden,
+            true,
+            "incognito checkbox expected to be hidden in the post install dialog"
+          );
+        }
       }
       if (accept) {
         let popupnotificationID = PanelUI._getPopupId(notification);

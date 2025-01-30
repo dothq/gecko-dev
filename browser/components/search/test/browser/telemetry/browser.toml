@@ -6,9 +6,6 @@ prefs = ["browser.search.log=true"]
 ["browser_search_glean_serp_event_telemetry_categorization_enabled_by_nimbus_variable.js"]
 support-files = ["searchTelemetryDomainCategorizationReporting.html"]
 
-["browser_search_glean_serp_event_telemetry_enabled_by_nimbus_variable.js"]
-support-files = ["searchTelemetryAd.html"]
-
 ["browser_search_telemetry_abandonment.js"]
 support-files = [
   "searchTelemetry.html",
@@ -38,6 +35,15 @@ support-files = ["searchTelemetryAd_searchbox_with_content.html", "serp.css"]
 ["browser_search_telemetry_adImpression_component_skipCount_parent.js"]
 support-files = ["searchTelemetryAd_searchbox_with_content.html", "serp.css"]
 
+["browser_search_telemetry_adblock_count.js"]
+
+["browser_search_telemetry_categorization_experiment_info.js"]
+skip-if = ["artifact"] # Bug 1883857 - experimentInfo object is not accessible in artifact builds
+support-files = ["searchTelemetryDomainCategorizationReporting.html"]
+
+["browser_search_telemetry_categorization_missing_impression.js"]
+support-files = ["searchTelemetryDomainExtraction.html"]
+
 ["browser_search_telemetry_categorization_timing.js"]
 
 ["browser_search_telemetry_content.js"]
@@ -49,6 +55,15 @@ support-files = ["searchTelemetryDomainCategorizationReporting.html"]
 
 ["browser_search_telemetry_domain_categorization_extraction.js"]
 support-files = ["searchTelemetryDomainExtraction.html"]
+
+["browser_search_telemetry_domain_categorization_no_sponsored_values.js"]
+support-files = ["searchTelemetryDomainCategorizationReportingWithoutAds.html"]
+
+["browser_search_telemetry_domain_categorization_ping_submission.js"]
+support-files = [
+  "searchTelemetryDomainCategorizationReporting.html",
+  "searchTelemetryDomainExtraction.html",
+]
 
 ["browser_search_telemetry_domain_categorization_region.js"]
 support-files = ["searchTelemetryDomainCategorizationReporting.html"]
@@ -103,18 +118,18 @@ support-files = [
   "searchTelemetryAd_searchbox_with_content.html^headers^",
 ]
 
-["browser_search_telemetry_engagement_non_ad.js"]
-support-files = [
-  "searchTelemetryAd_searchbox_with_content.html",
-  "searchTelemetryAd_searchbox_with_content.html^headers^",
-  "serp.css",
-]
-
 ["browser_search_telemetry_engagement_nonAdsLinkQueryParamNames.js"]
 support-files = [
   "searchTelemetryAd_searchbox_with_redirecting_links.html",
   "searchTelemetryAd_shopping.html",
   "searchTelemetry_redirect_with_js.html",
+  "serp.css",
+]
+
+["browser_search_telemetry_engagement_non_ad.js"]
+support-files = [
+  "searchTelemetryAd_searchbox_with_content.html",
+  "searchTelemetryAd_searchbox_with_content.html^headers^",
   "serp.css",
 ]
 
@@ -147,6 +162,9 @@ support-files = [
   "serp.css",
 ]
 
+["browser_search_telemetry_engagement_target_after_load.js"]
+support-files = ["searchTelemetryAd_components_text.html", "serp.css"]
+
 ["browser_search_telemetry_new_window.js"]
 support-files = ["searchTelemetry.html", "searchTelemetryAd.html"]
 
@@ -165,6 +183,9 @@ support-files = [
 
 ["browser_search_telemetry_shopping.js"]
 support-files = ["searchTelemetryAd_shopping.html"]
+
+["browser_search_telemetry_signed_in_to_account.js"]
+support-files = ["searchTelemetry.html"]
 
 ["browser_search_telemetry_sources.js"]
 support-files = ["searchTelemetry.html", "searchTelemetryAd.html"]
@@ -215,3 +236,7 @@ support-files = ["searchTelemetrySinglePageApp.html"]
 
 ["browser_search_telemetry_spa_single_tab.js"]
 support-files = ["searchTelemetrySinglePageApp.html"]
+
+["browser_search_telemetry_visibility_helper_horizontal.js"]
+
+["browser_search_telemetry_visibility_helper_vertical.js"]

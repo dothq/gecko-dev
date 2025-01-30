@@ -1,3 +1,6 @@
+/**
+ * @suppress
+ */
 public object FfiConverterDuration: FfiConverterRustBuffer<java.time.Duration> {
     override fun read(buf: ByteBuffer): java.time.Duration {
         // Type mismatch (should be u64) but we check for overflow/underflow below
@@ -14,7 +17,7 @@ public object FfiConverterDuration: FfiConverterRustBuffer<java.time.Duration> {
     }
 
     // 8 bytes for seconds, 4 bytes for nanoseconds
-    override fun allocationSize(value: java.time.Duration) = 12
+    override fun allocationSize(value: java.time.Duration) = 12UL
 
     override fun write(value: java.time.Duration, buf: ByteBuffer) {
         if (value.seconds < 0) {

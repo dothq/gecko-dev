@@ -24,11 +24,11 @@ SERP
   A search engine results page.
 
 Persisted Search
-  When a user has the following preference values:
+  When a user has the following preference values (only applies
+  when the search bar isn't present in any toolbar or overflow panel):
 
     - ``browser.urlbar.showSearchTerms.enabled``: ``true``
     - ``browser.urlbar.showSearchTerms.featureGate``: ``true``
-    - ``browser.search.widget.inNavBar``: ``false``
 
   and does the following:
 
@@ -128,14 +128,6 @@ browser.engagement.navigation.*
     - ``search_suggestion``
       For ``urlbar`` or ``searchbar``, indicates the user confirmed a search
       suggestion.
-
-navigation.search (OBSOLETE)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-  This is a legacy and disabled event telemetry that is currently under
-  discussion for removal or modernization. It can't be enabled through a pref.
-  it's more or less equivalent to browser.engagement.navigation, but can also
-  report the picked search engine.
 
 SearchSERPTelemetry.sys.mjs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

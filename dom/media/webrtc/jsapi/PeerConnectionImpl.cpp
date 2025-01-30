@@ -19,7 +19,6 @@
 #include "pk11pub.h"
 
 #include "nsNetCID.h"
-#include "nsIIDNService.h"
 #include "nsILoadContext.h"
 #include "nsEffectiveTLDService.h"
 #include "nsServiceManagerUtils.h"
@@ -54,6 +53,7 @@
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/media/MediaUtils.h"
 
 #ifdef XP_WIN
 // We need to undef the MS macro for Document::CreateEvent
@@ -397,8 +397,11 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
                                              mEffectiveTLDPlus1);
       }
 
-      mRtxIsAllowed = !HostnameInPref(
+      mRtxIsAllowed = !media::HostnameInPref(
           "media.peerconnection.video.use_rtx.blocklist", mHostname);
+      mDuplicateFingerprintQuirk = media::HostnameInPref(
+          "media.peerconnection.sdp.quirk.duplicate_fingerprint.allowlist",
+          mHostname);
     }
   }
 
@@ -600,31 +603,30 @@ RefPtr<DtlsIdentity> PeerConnectionImpl::Identity() const {
 
 class CompareCodecPriority {
  public:
-  void SetPreferredCodec(int32_t preferredCodec) {
-    // This pref really ought to be a string, preferably something like
-    // "H264" or "VP8" instead of a payload type.
-    // Bug 1101259.
-    std::ostringstream os;
-    os << preferredCodec;
-    mPreferredCodec = os.str();
+  void SetPreferredCodec(const nsCString& preferredCodec) {
+    mPreferredCodec = preferredCodec;
   }
 
   bool operator()(const UniquePtr<JsepCodecDescription>& lhs,
                   const UniquePtr<JsepCodecDescription>& rhs) const {
-    if (!mPreferredCodec.empty() && lhs->mDefaultPt == mPreferredCodec &&
-        rhs->mDefaultPt != mPreferredCodec) {
-      return true;
+    // Do we have a preferred codec?
+    if (!mPreferredCodec.IsEmpty()) {
+      const bool lhsMatches = mPreferredCodec.EqualsIgnoreCase(lhs->mName) ||
+                              mPreferredCodec.EqualsIgnoreCase(lhs->mDefaultPt);
+      const bool rhsMatches = mPreferredCodec.EqualsIgnoreCase(rhs->mName) ||
+                              mPreferredCodec.EqualsIgnoreCase(rhs->mDefaultPt);
+      // If the only the left side matches, prefer it
+      if (lhsMatches && !rhsMatches) {
+        return true;
+      }
     }
-
-    if (lhs->mStronglyPreferred && !rhs->mStronglyPreferred) {
-      return true;
-    }
-
-    return false;
+    // If only the left side is strongly preferred, prefer it
+    return (lhs->mStronglyPreferred && !rhs->mStronglyPreferred);
   }
 
  private:
-  std::string mPreferredCodec;
+  // The preferred codec name or PT number
+  nsCString mPreferredCodec;
 };
 
 class ConfigureCodec {
@@ -635,6 +637,7 @@ class ConfigureCodec {
         mH264Enabled(false),
         mVP9Enabled(true),
         mVP9Preferred(false),
+        mAV1Enabled(StaticPrefs::media_webrtc_codec_video_av1_enabled()),
         mH264Level(13),   // minimum suggested for WebRTC spec
         mH264MaxBr(0),    // Unlimited
         mH264MaxMbps(0),  // Unlimited
@@ -713,9 +716,13 @@ class ConfigureCodec {
             static_cast<JsepVideoCodecDescription&>(*codec);
 
         if (videoCodec.mName == "H264") {
-          // Override level
-          videoCodec.mProfileLevelId &= 0xFFFF00;
-          videoCodec.mProfileLevelId |= mH264Level;
+          // Override level but not for the pure Baseline codec
+          if (JsepVideoCodecDescription::GetSubprofile(
+                  videoCodec.mProfileLevelId) ==
+              JsepVideoCodecDescription::kH264ConstrainedBaseline) {
+            videoCodec.mProfileLevelId &= 0xFFFF00;
+            videoCodec.mProfileLevelId |= mH264Level;
+          }
 
           videoCodec.mConstraints.maxBr = mH264MaxBr;
 
@@ -728,10 +735,6 @@ class ConfigureCodec {
             // We're assuming packetization mode 0 is unsupported by
             // hardware.
             videoCodec.mEnabled = false;
-          }
-
-          if (mHardwareH264Enabled) {
-            videoCodec.mStronglyPreferred = true;
           }
         } else if (videoCodec.mName == "red") {
           videoCodec.mEnabled = mRedUlpfecEnabled;
@@ -749,6 +752,8 @@ class ConfigureCodec {
           }
           videoCodec.mConstraints.maxFs = mVP8MaxFs;
           videoCodec.mConstraints.maxFps = Some(mVP8MaxFr);
+        } else if (videoCodec.mName == "AV1") {
+          videoCodec.mEnabled = mAV1Enabled;
         }
 
         if (mUseTmmbr) {
@@ -774,6 +779,7 @@ class ConfigureCodec {
   bool mH264Enabled;
   bool mVP9Enabled;
   bool mVP9Preferred;
+  bool mAV1Enabled;
   int32_t mH264Level;
   int32_t mH264MaxBr;
   int32_t mH264MaxMbps;
@@ -808,15 +814,10 @@ nsresult PeerConnectionImpl::ConfigureJsepSessionCodecs() {
 
   // We use this to sort the list of codecs once everything is configured
   CompareCodecPriority comparator;
-
-  // Sort by priority
-  int32_t preferredCodec = 0;
-  branch->GetIntPref("media.navigator.video.preferred_codec", &preferredCodec);
-
-  if (preferredCodec) {
-    comparator.SetPreferredCodec(preferredCodec);
+  if (StaticPrefs::media_webrtc_codec_video_av1_experimental_preferred()) {
+    comparator.SetPreferredCodec(nsCString("av1"));
   }
-
+  // Sort by priority
   mJsepSession->SortCodecs(comparator);
   return NS_OK;
 }
@@ -2158,68 +2159,6 @@ void PeerConnectionImpl::DumpPacket_m(size_t level, dom::mozPacketDumpType type,
   mPCObserver->OnPacket(level, type, sending, arrayBuffer, jrv);
 }
 
-bool PeerConnectionImpl::HostnameInPref(const char* aPref,
-                                        const nsCString& aHostName) {
-  auto HostInDomain = [](const nsCString& aHost, const nsCString& aPattern) {
-    int32_t patternOffset = 0;
-    int32_t hostOffset = 0;
-
-    // Act on '*.' wildcard in the left-most position in a domain pattern.
-    if (StringBeginsWith(aPattern, nsCString("*."))) {
-      patternOffset = 2;
-
-      // Ignore the lowest level sub-domain for the hostname.
-      hostOffset = aHost.FindChar('.') + 1;
-
-      if (hostOffset <= 1) {
-        // Reject a match between a wildcard and a TLD or '.foo' form.
-        return false;
-      }
-    }
-
-    nsDependentCString hostRoot(aHost, hostOffset);
-    return hostRoot.EqualsIgnoreCase(aPattern.BeginReading() + patternOffset);
-  };
-
-  nsCString domainList;
-  nsresult nr = Preferences::GetCString(aPref, domainList);
-
-  if (NS_FAILED(nr)) {
-    return false;
-  }
-
-  domainList.StripWhitespace();
-
-  if (domainList.IsEmpty() || aHostName.IsEmpty()) {
-    return false;
-  }
-
-  // Get UTF8 to ASCII domain name normalization service
-  nsresult rv;
-  nsCOMPtr<nsIIDNService> idnService =
-      do_GetService("@mozilla.org/network/idn-service;1", &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return false;
-  }
-
-  // Test each domain name in the comma separated list
-  // after converting from UTF8 to ASCII. Each domain
-  // must match exactly or have a single leading '*.' wildcard.
-  for (const nsACString& each : domainList.Split(',')) {
-    nsCString domainPattern;
-    rv = idnService->ConvertUTF8toACE(each, domainPattern);
-    if (NS_SUCCEEDED(rv)) {
-      if (HostInDomain(aHostName, domainPattern)) {
-        return true;
-      }
-    } else {
-      NS_WARNING("Failed to convert UTF-8 host to ASCII");
-    }
-  }
-
-  return false;
-}
-
 nsresult PeerConnectionImpl::EnablePacketDump(unsigned long level,
                                               dom::mozPacketDumpType type,
                                               bool sending) {
@@ -2256,11 +2195,36 @@ void PeerConnectionImpl::GetDefaultVideoCodecs(
       JsepVideoCodecDescription::CreateDefaultH264_1(aUseRtx));
   aSupportedCodecs.emplace_back(
       JsepVideoCodecDescription::CreateDefaultH264_0(aUseRtx));
+
+  const bool disableBaseline = Preferences::GetBool(
+      "media.navigator.video.disable_h264_baseline", false);
+
+  // Only add Baseline if it hasn't been disabled.
+  if (!disableBaseline) {
+    aSupportedCodecs.emplace_back(
+        JsepVideoCodecDescription::CreateDefaultH264Baseline_1(aUseRtx));
+    aSupportedCodecs.emplace_back(
+        JsepVideoCodecDescription::CreateDefaultH264Baseline_0(aUseRtx));
+  }
+
+  if (WebrtcVideoConduit::HasAv1() &&
+      StaticPrefs::media_webrtc_codec_video_av1_enabled()) {
+    aSupportedCodecs.emplace_back(
+        JsepVideoCodecDescription::CreateDefaultAV1(aUseRtx));
+  }
+
   aSupportedCodecs.emplace_back(
       JsepVideoCodecDescription::CreateDefaultUlpFec());
   aSupportedCodecs.emplace_back(
       JsepApplicationCodecDescription::CreateDefault());
   aSupportedCodecs.emplace_back(JsepVideoCodecDescription::CreateDefaultRed());
+
+  CompareCodecPriority comparator;
+  if (StaticPrefs::media_webrtc_codec_video_av1_experimental_preferred()) {
+    comparator.SetPreferredCodec(nsCString("av1"));
+  }
+  std::stable_sort(aSupportedCodecs.begin(), aSupportedCodecs.end(),
+                   comparator);
 }
 
 void PeerConnectionImpl::GetDefaultAudioCodecs(
@@ -2332,8 +2296,9 @@ void PeerConnectionImpl::GetCapabilities(
 
   const bool redUlpfecEnabled =
       Preferences::GetBool("media.navigator.video.red_ulpfec_enabled", false);
+  bool haveAddedRtx = false;
 
-  // Use the codecs for kind to fill out the RTCRtpCodecCapability
+  // Use the codecs for kind to fill out the RTCRtpCodec
   for (const auto& codec : codecs) {
     // To avoid misleading information on codec capabilities skip those
     // not signaled for audio/video (webrtc-datachannel)
@@ -2344,37 +2309,28 @@ void PeerConnectionImpl::GetCapabilities(
       continue;
     }
 
-    dom::RTCRtpCodecCapability capability;
-    capability.mMimeType = aKind + NS_ConvertASCIItoUTF16("/" + codec->mName);
-    capability.mClockRate = codec->mClock;
-
-    if (codec->mChannels) {
-      capability.mChannels.Construct(codec->mChannels);
-    }
-
-    UniquePtr<SdpFmtpAttributeList::Parameters> params;
-    codec->ApplyConfigToFmtp(params);
-
-    if (params != nullptr) {
-      std::ostringstream paramsString;
-      params->Serialize(paramsString);
-      nsTString<char16_t> fmtp;
-      fmtp.AssignASCII(paramsString.str());
-      capability.mSdpFmtpLine.Construct(fmtp);
-    }
+    dom::RTCRtpCodec capability;
+    RTCRtpTransceiver::ToDomRtpCodec(*codec, &capability);
 
     if (!aResult.SetValue().mCodecs.AppendElement(capability, fallible)) {
       mozalloc_handle_oom(0);
     }
-  }
 
-  // We need to manually add rtx for video.
-  if (mediaType == JsepMediaType::kVideo) {
-    dom::RTCRtpCodecCapability capability;
-    capability.mMimeType = aKind + NS_ConvertASCIItoUTF16("/rtx");
-    capability.mClockRate = 90000;
-    if (!aResult.SetValue().mCodecs.AppendElement(capability, fallible)) {
-      mozalloc_handle_oom(0);
+    // We need to manually add rtx for video.
+    // Spec says: There will only be a single entry in codecs for
+    // retransmission via RTX, with sdpFmtpLine not present.
+    if (mediaType == JsepMediaType::kVideo && !haveAddedRtx) {
+      const JsepVideoCodecDescription& videoCodec =
+          static_cast<JsepVideoCodecDescription&>(*codec);
+      if (videoCodec.mRtxEnabled) {
+        dom::RTCRtpCodec rtx;
+        RTCRtpTransceiver::ToDomRtpCodecRtx(videoCodec, &rtx);
+        rtx.mSdpFmtpLine.Reset();
+        if (!aResult.SetValue().mCodecs.AppendElement(rtx, fallible)) {
+          mozalloc_handle_oom(0);
+        }
+        haveAddedRtx = true;
+      }
     }
   }
 
@@ -3491,6 +3447,10 @@ bool PeerConnectionImpl::UpdateIceConnectionState() {
                static_cast<int>(mIceConnectionState),
                static_cast<int>(newState), this);
     mIceConnectionState = newState;
+    // Start call telemtry logging on connected.
+    if (mIceConnectionState == RTCIceConnectionState::Connected) {
+      StartCallTelem();
+    }
     if (mIceConnectionState != RTCIceConnectionState::Closed) {
       return true;
     }
@@ -4157,9 +4117,9 @@ bool PeerConnectionImpl::ShouldForceProxy() const {
   if (mWindow && mWindow->GetExtantDoc() &&
       mWindow->GetExtantDoc()->GetPrincipal() &&
       mWindow->GetExtantDoc()
-              ->GetPrincipal()
-              ->OriginAttributesRef()
-              .mPrivateBrowsingId > 0) {
+          ->GetPrincipal()
+          ->OriginAttributesRef()
+          .IsPrivateBrowsing()) {
     isPBM = true;
   }
 
@@ -4455,7 +4415,7 @@ bool PeerConnectionImpl::GetPrefObfuscateHostAddresses() const {
       "media.peerconnection.ice.obfuscate_host_addresses", false);
   obfuscate_host_addresses &=
       !MediaManager::Get()->IsActivelyCapturingOrHasAPermission(winId);
-  obfuscate_host_addresses &= !PeerConnectionImpl::HostnameInPref(
+  obfuscate_host_addresses &= !media::HostnameInPref(
       "media.peerconnection.ice.obfuscate_host_addresses.blocklist", mHostname);
   obfuscate_host_addresses &= XRE_IsContentProcess();
 
@@ -4900,8 +4860,9 @@ std::unique_ptr<NrSocketProxyConfig> PeerConnectionImpl::GetProxyConfig()
 
   TabId id = browserChild->GetTabId();
   nsCOMPtr<nsILoadInfo> loadInfo =
-      new net::LoadInfo(doc->NodePrincipal(), doc->NodePrincipal(), doc, 0,
-                        nsIContentPolicy::TYPE_INVALID);
+      new net::LoadInfo(doc->NodePrincipal(), doc->NodePrincipal(), doc,
+                        nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+                        nsIContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA);
 
   net::LoadInfoArgs loadInfoArgs;
   MOZ_ALWAYS_SUCCEEDS(
@@ -4910,6 +4871,6 @@ std::unique_ptr<NrSocketProxyConfig> PeerConnectionImpl::GetProxyConfig()
       net::WebrtcProxyConfig(id, alpn, loadInfoArgs, mForceProxy)));
 }
 
-std::map<uint64_t, PeerConnectionAutoTimer>
+MOZ_RUNINIT std::map<uint64_t, PeerConnectionAutoTimer>
     PeerConnectionImpl::sCallDurationTimers;
 }  // namespace mozilla

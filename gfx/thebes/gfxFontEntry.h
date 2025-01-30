@@ -16,6 +16,7 @@
 #include "gfxFontVariations.h"
 #include "gfxRect.h"
 #include "gfxTypes.h"
+#include "gfxFontFeatures.h"
 #include "harfbuzz/hb.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Assertions.h"
@@ -44,7 +45,6 @@ class gfxSVGGlyphs;
 class gfxUserFontData;
 class nsAtom;
 struct FontListSizes;
-struct gfxFontFeature;
 struct gfxFontStyle;
 enum class eFontPresentation : uint8_t;
 
@@ -269,6 +269,18 @@ class gfxFontEntry {
     if (flag == LazyFlag::Uninitialized) {
       flag = CheckForGraphiteTables() ? LazyFlag::Yes : LazyFlag::No;
       mHasGraphiteTables = flag;
+    }
+    return flag == LazyFlag::Yes;
+  }
+
+  inline bool AlwaysNeedsMaskForShadow() {
+    LazyFlag flag = mNeedsMaskForShadow;
+    if (flag == LazyFlag::Uninitialized) {
+      flag =
+          TryGetColorGlyphs() || TryGetSVGData(nullptr) || HasColorBitmapTable()
+              ? LazyFlag::Yes
+              : LazyFlag::No;
+      mNeedsMaskForShadow = flag;
     }
     return flag == LazyFlag::Yes;
   }
@@ -538,6 +550,9 @@ class gfxFontEntry {
 
   mozilla::gfx::Rect GetFontExtents(float aFUnitScaleFactor) const {
     // Flip the y-axis here to match the orientation of Gecko's coordinates.
+    // We don't need to take a lock here because the min/max fields are inert
+    // after initialization, and we make sure to initialize them at gfxFont-
+    // creation time.
     return mozilla::gfx::Rect(float(mXMin) * aFUnitScaleFactor,
                               float(-mYMax) * aFUnitScaleFactor,
                               float(mXMax - mXMin) * aFUnitScaleFactor,
@@ -643,6 +658,8 @@ class gfxFontEntry {
   };
   RangeFlags mRangeFlags = RangeFlags::eNoFlags;
 
+  inline RangeFlags AutoRangeFlags() const;
+
   bool mFixedPitch : 1;
   bool mIsBadUnderlineFont : 1;
   bool mIsUserFontContainer : 1;  // userfont entry
@@ -667,6 +684,7 @@ class gfxFontEntry {
   std::atomic<LazyFlag> mHasGraphiteTables;
   std::atomic<LazyFlag> mHasGraphiteSpaceContextuals;
   std::atomic<LazyFlag> mHasColorBitmapTable;
+  std::atomic<LazyFlag> mNeedsMaskForShadow;
 
   enum class SpaceFeatures : uint8_t {
     Uninitialized = 0xff,
@@ -880,12 +898,16 @@ class gfxFontEntry {
   };
 
   using FontTableCache = nsTHashtable<FontTableHashEntry>;
-  mozilla::Atomic<FontTableCache*> mFontTableCache;
-  FontTableCache* GetFontTableCache() const { return mFontTableCache; }
+  mozilla::UniquePtr<FontTableCache> mFontTableCache MOZ_GUARDED_BY(mLock);
 };
 
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(gfxFontEntry::RangeFlags)
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(gfxFontEntry::SpaceFeatures)
+
+inline gfxFontEntry::RangeFlags gfxFontEntry::AutoRangeFlags() const {
+  return mRangeFlags & (RangeFlags::eAutoWeight | RangeFlags::eAutoStretch |
+                        RangeFlags::eAutoSlantStyle);
+}
 
 inline bool gfxFontEntry::SupportsItalic() {
   return SlantStyle().Max().IsItalic() ||
@@ -1060,7 +1082,7 @@ class gfxFontFamily {
   // This is a no-op in cases where the family is explicitly populated by other
   // means, rather than being asked to find its faces via system API.
   virtual void FindStyleVariationsLocked(FontInfoData* aFontInfoData = nullptr)
-      MOZ_REQUIRES(mLock){};
+      MOZ_REQUIRES(mLock) {};
   void FindStyleVariations(FontInfoData* aFontInfoData = nullptr) {
     if (mHasStyles) {
       return;

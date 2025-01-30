@@ -21,8 +21,8 @@ const emptyTheme = {
 };
 
 let defaultTheme = emptyTheme;
-// Map[windowId -> Theme instance]
-let windowOverrides = new Map();
+// Map[BrowserWindow -> Theme instance]
+let windowOverrides = new WeakMap();
 
 /**
  * Class representing either a global theme affecting all windows or an override on a specific window.
@@ -38,7 +38,7 @@ class Theme {
    * @param {object} options.details
    * @param {object} options.darkDetails
    * @param {object} options.experiment
-   * @param {object} options.startupData
+   * @param {object} options.startupData startupData if this is a static theme.
    */
   constructor({
     extension,
@@ -53,16 +53,29 @@ class Theme {
     this.darkDetails = darkDetails;
     this.windowId = windowId;
 
-    if (startupData && startupData.lwtData) {
-      Object.assign(this, startupData);
+    if (startupData?.lwtData) {
+      // Parsed theme from a previous load() already available in startupData
+      // of parsed theme. We assume that reparsing the theme will yield the same
+      // result, and therefore reuse the value of startupData. This is a minor
+      // optimization; the more important use of startupData is before startup,
+      // by Extension.sys.mjs for LightweightThemeManager.fallbackThemeData.
+      //
+      // Note: the assumption "yield the same result" is not obviously true: the
+      // startupData persists across application updates, so it is possible for
+      // a browser update to occur that interprets the static theme differently.
+      // In this case we would still be using the old interpretation instead of
+      // the new one, until the user disables and re-enables/installs the theme.
+      this.lwtData = startupData.lwtData;
+      this.lwtStyles = startupData.lwtStyles;
+      this.lwtDarkStyles = startupData.lwtDarkStyles;
+      this.experiment = startupData.experiment;
     } else {
+      // lwtData will be populated by load().
+      this.lwtData = null;
       // TODO(ntim): clean this in bug 1550090
       this.lwtStyles = {};
-      this.lwtDarkStyles = null;
-      if (darkDetails) {
-        this.lwtDarkStyles = {};
-      }
-
+      this.lwtDarkStyles = darkDetails ? {} : null;
+      this.experiment = null;
       if (experiment) {
         if (extension.canUseThemeExperiment()) {
           this.lwtStyles.experimental = {
@@ -97,6 +110,7 @@ class Theme {
    * This method will override any currently applied theme.
    */
   load() {
+    // this.lwtData is usually null, unless populated from startupData.
     if (!this.lwtData) {
       this.loadDetails(this.details, this.lwtStyles);
       if (this.darkDetails) {
@@ -112,22 +126,27 @@ class Theme {
         this.lwtData.experiment = this.experiment;
       }
 
-      this.extension.startupData = {
-        lwtData: this.lwtData,
-        lwtStyles: this.lwtStyles,
-        lwtDarkStyles: this.lwtDarkStyles,
-        experiment: this.experiment,
-      };
-      this.extension.saveStartupData();
+      if (this.extension.type === "theme") {
+        // Store the parsed theme in startupData, so it is available early at
+        // browser startup, to use as LightweightThemeManager.fallbackThemeData,
+        // which is assigned from Extension.sys.mjs to avoid having to wait for
+        // this ext-theme.js file to be loaded.
+        this.extension.startupData = {
+          lwtData: this.lwtData,
+          lwtStyles: this.lwtStyles,
+          lwtDarkStyles: this.lwtDarkStyles,
+          experiment: this.experiment,
+        };
+        this.extension.saveStartupData();
+      }
     }
 
     if (this.windowId) {
-      this.lwtData.window = windowTracker.getWindow(
-        this.windowId
-      ).docShell.outerWindowID;
-      windowOverrides.set(this.windowId, this);
+      let browserWindow = windowTracker.getWindow(this.windowId);
+      this.lwtData.window = browserWindow.docShell.outerWindowID;
+      windowOverrides.set(browserWindow, this);
     } else {
-      windowOverrides.clear();
+      windowOverrides = new WeakMap();
       defaultTheme = this;
       LightweightThemeManager.fallbackThemeData = this.lwtData;
     }
@@ -389,20 +408,27 @@ class Theme {
     styles.version = extension.version;
   }
 
-  static unload(windowId) {
+  static unload(browserWindow) {
     let lwtData = {
       theme: null,
     };
 
-    if (windowId) {
-      lwtData.window = windowTracker.getWindow(windowId).docShell.outerWindowID;
-      windowOverrides.delete(windowId);
+    if (browserWindow) {
+      lwtData.window = browserWindow.docShell?.outerWindowID;
+      windowOverrides.delete(browserWindow);
+
+      onUpdatedEmitter.emit(
+        "theme-updated",
+        {},
+        windowTracker.getId(browserWindow)
+      );
     } else {
-      windowOverrides.clear();
+      windowOverrides = new WeakMap();
       defaultTheme = emptyTheme;
       LightweightThemeManager.fallbackThemeData = null;
+
+      onUpdatedEmitter.emit("theme-updated", {});
     }
-    onUpdatedEmitter.emit("theme-updated", {}, windowId);
 
     Services.obs.notifyObservers(lwtData, "lightweight-theme-styling-update");
   }
@@ -439,6 +465,8 @@ this.theme = class extends ExtensionAPIPersistent {
     let { extension } = this;
     let { manifest } = extension;
 
+    // Note: only static themes are processed here; extensions with the "theme"
+    // permission do not enter this code path.
     defaultTheme = new Theme({
       extension,
       details: manifest.theme,
@@ -446,6 +474,15 @@ this.theme = class extends ExtensionAPIPersistent {
       experiment: manifest.theme_experiment,
       startupData: extension.startupData,
     });
+    if (extension.startupData.lwtData?._processedColors) {
+      // We should ideally not be modifying startupData, but we did so before,
+      // before bug 1830136 was fixed. startupData persists across browser
+      // updates and is only erased when the theme is updated or uninstalled.
+      // To prevent this stale _processedColors from bloating the database
+      // unnecessarily, we delete it here.
+      delete extension.startupData.lwtData._processedColors;
+      extension.saveStartupData();
+    }
   }
 
   onShutdown(isAppShutdown) {
@@ -454,9 +491,12 @@ this.theme = class extends ExtensionAPIPersistent {
     }
 
     let { extension } = this;
-    for (let [windowId, theme] of windowOverrides) {
+    for (let browserWindow of ChromeUtils.nondeterministicGetWeakMapKeys(
+      windowOverrides
+    )) {
+      let theme = windowOverrides.get(browserWindow);
       if (theme.extension === extension) {
-        Theme.unload(windowId);
+        Theme.unload(browserWindow);
       }
     }
 
@@ -475,14 +515,12 @@ this.theme = class extends ExtensionAPIPersistent {
           if (!windowId) {
             windowId = windowTracker.getId(windowTracker.topWindow);
           }
-          // Force access validation for incognito mode by getting the window.
-          if (!windowTracker.getWindow(windowId, context)) {
-            return Promise.reject(`Invalid window ID: ${windowId}`);
+
+          const browserWindow = windowTracker.getWindow(windowId, context);
+          if (windowOverrides.has(browserWindow)) {
+            return Promise.resolve(windowOverrides.get(browserWindow).details);
           }
 
-          if (windowOverrides.has(windowId)) {
-            return Promise.resolve(windowOverrides.get(windowId).details);
-          }
           return Promise.resolve(defaultTheme.details);
         },
         update: (windowId, details) => {
@@ -503,19 +541,16 @@ this.theme = class extends ExtensionAPIPersistent {
         reset: windowId => {
           if (windowId) {
             const browserWindow = windowTracker.getWindow(windowId, context);
-            if (!browserWindow) {
-              return Promise.reject(`Invalid window ID: ${windowId}`);
+            const theme = windowOverrides.get(browserWindow) || defaultTheme;
+            if (theme.extension === extension) {
+              Theme.unload(browserWindow);
             }
-
-            let theme = windowOverrides.get(windowId) || defaultTheme;
-            if (theme.extension !== extension) {
-              return;
-            }
-          } else if (defaultTheme.extension !== extension) {
             return;
           }
 
-          Theme.unload(windowId);
+          if (defaultTheme.extension === extension) {
+            Theme.unload();
+          }
         },
         onUpdated: new EventManager({
           context,

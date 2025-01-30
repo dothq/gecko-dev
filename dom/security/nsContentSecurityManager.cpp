@@ -27,6 +27,7 @@
 #include "nsNetUtil.h"
 #include "nsReadableUtils.h"
 #include "nsSandboxFlags.h"
+#include "nsScriptSecurityManager.h"
 #include "nsIXPConnect.h"
 
 #include "mozilla/BasePrincipal.h"
@@ -39,6 +40,7 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/extensions/WebExtensionPolicy.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/Components.h"
 #include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/Logging.h"
@@ -46,8 +48,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_security.h"
-#include "mozilla/Telemetry.h"
-#include "mozilla/TelemetryComms.h"
 #include "xpcpublic.h"
 #include "nsMimeTypes.h"
 
@@ -56,7 +56,6 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using namespace mozilla::Telemetry;
 
 NS_IMPL_ISUPPORTS(nsContentSecurityManager, nsIContentSecurityManager,
                   nsIChannelEventSink)
@@ -70,7 +69,6 @@ Atomic<bool, mozilla::Relaxed> sJSHacksChecked(false);
 Atomic<bool, mozilla::Relaxed> sJSHacksPresent(false);
 Atomic<bool, mozilla::Relaxed> sCSSHacksChecked(false);
 Atomic<bool, mozilla::Relaxed> sCSSHacksPresent(false);
-Atomic<bool, mozilla::Relaxed> sTelemetryEventEnabled(false);
 
 /* static */
 bool nsContentSecurityManager::AllowTopLevelNavigationToDataURI(
@@ -114,7 +112,7 @@ bool nsContentSecurityManager::AllowTopLevelNavigationToDataURI(
 
   // Allow data: images as long as they are not SVGs
   if (StringBeginsWith(contentType, "image/"_ns) &&
-      !contentType.EqualsLiteral("image/svg+xml")) {
+      !contentType.EqualsLiteral(IMAGE_SVG_XML)) {
     return true;
   }
   // Allow all data: PDFs. or JSON documents
@@ -489,6 +487,7 @@ static nsresult DoContentSecurityChecks(nsIChannel* aChannel,
     case ExtContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA:
     case ExtContentPolicy::TYPE_WEB_TRANSPORT:
     case ExtContentPolicy::TYPE_WEB_IDENTITY:
+    case ExtContentPolicy::TYPE_JSON:
       break;
 
     case ExtContentPolicy::TYPE_INVALID:
@@ -730,8 +729,7 @@ static void DebugDoContentSecurityCheck(nsIChannel* aChannel,
             ("  allowDeprecatedSystemRequests: %s\n",
              aLoadInfo->GetAllowDeprecatedSystemRequests() ? "true" : "false"));
     MOZ_LOG(sCSMLog, LogLevel::Verbose,
-            ("  wasSchemeless: %s\n",
-             aLoadInfo->GetWasSchemelessInput() ? "true" : "false"));
+            ("  schemelessInput: %d\n", aLoadInfo->GetSchemelessInput()));
 
     // Log CSPrequestPrincipal
     nsCOMPtr<nsIContentSecurityPolicy> csp = aLoadInfo->GetCsp();
@@ -810,17 +808,13 @@ void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
   nsAutoCString uriString;
   if (aFinalURI) {
     aFinalURI->GetAsciiSpec(uriString);
-  } else {
-    uriString.AssignLiteral("");
   }
   FilenameTypeAndDetails fileNameTypeAndDetails =
-      nsContentSecurityUtils::FilenameToFilenameType(
-          NS_ConvertUTF8toUTF16(uriString), true);
+      nsContentSecurityUtils::FilenameToFilenameType(uriString, true);
 
   nsCString loggedFileDetails = "unknown"_ns;
   if (fileNameTypeAndDetails.second.isSome()) {
-    loggedFileDetails.Assign(
-        NS_ConvertUTF16toUTF8(fileNameTypeAndDetails.second.value()));
+    loggedFileDetails.Assign(fileNameTypeAndDetails.second.value());
   }
   // sanitize remoteType because it may contain sensitive
   // info, like URLs. e.g. `webIsolated=https://example.com`
@@ -841,21 +835,14 @@ void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
   MOZ_LOG(sCSMLog, LogLevel::Debug,
           ("- redirects: %s\n\n", loggedRedirects.get()));
 
-  // Send Telemetry
-  auto extra = Some<nsTArray<EventExtraEntry>>(
-      {EventExtraEntry{"contenttype"_ns, loggedContentType},
-       EventExtraEntry{"remotetype"_ns, loggedRemoteType},
-       EventExtraEntry{"filedetails"_ns, loggedFileDetails},
-       EventExtraEntry{"redirects"_ns, loggedRedirects}});
-
-  if (!sTelemetryEventEnabled.exchange(true)) {
-    Telemetry::SetEventRecordingEnabled("security"_ns, true);
-  }
-
-  Telemetry::EventID eventType =
-      Telemetry::EventID::Security_Unexpectedload_Systemprincipal;
-  Telemetry::RecordEvent(eventType, mozilla::Some(fileNameTypeAndDetails.first),
-                         extra);
+  glean::security::UnexpectedLoadExtra extra = {
+      .contenttype = Some(loggedContentType),
+      .filedetails = Some(loggedFileDetails),
+      .redirects = Some(loggedRedirects),
+      .remotetype = Some(loggedRemoteType),
+      .value = Some(fileNameTypeAndDetails.first),
+  };
+  glean::security::unexpected_load.Record(Some(extra));
 }
 
 /* static */
@@ -1131,7 +1118,7 @@ nsresult nsContentSecurityManager::CheckChannelHasProtocolSecurityFlag(
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint32_t securityFlagsSet = 0;
-  if (flags & nsIProtocolHandler::WEBEXT_URI_WEB_ACCESSIBLE) {
+  if (flags & nsIProtocolHandler::URI_IS_WEBEXTENSION_RESOURCE) {
     securityFlagsSet += 1;
   }
   if (flags & nsIProtocolHandler::URI_LOADABLE_BY_ANYONE) {
@@ -1431,6 +1418,9 @@ nsresult nsContentSecurityManager::doContentSecurityCheck(
   rv = CheckAllowLoadByTriggeringRemoteType(aChannel);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  rv = CheckForIncoherentResultPrincipal(aChannel);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   // if dealing with a redirected channel then we have already installed
   // streamlistener and redirect proxies and so we are done.
   if (loadInfo->GetInitialSecurityCheckDone()) {
@@ -1711,5 +1701,68 @@ nsContentSecurityManager::PerformSecurityCheck(
   NS_ENSURE_SUCCESS(rv, rv);
 
   inAndOutListener.forget(outStreamListener);
+  return NS_OK;
+}
+
+nsresult nsContentSecurityManager::CheckForIncoherentResultPrincipal(
+    nsIChannel* aChannel) {
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+  ExtContentPolicyType contentPolicyType =
+      loadInfo->GetExternalContentPolicyType();
+  if (contentPolicyType != ExtContentPolicyType::TYPE_DOCUMENT &&
+      contentPolicyType != ExtContentPolicyType::TYPE_SUBDOCUMENT &&
+      contentPolicyType != ExtContentPolicyType::TYPE_OBJECT) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIPrincipal> resultOrPrecursor;
+  nsresult rv = nsScriptSecurityManager::GetScriptSecurityManager()
+                    ->GetChannelResultPrincipalIfNotSandboxed(
+                        aChannel, getter_AddRefs(resultOrPrecursor));
+  NS_ENSURE_SUCCESS(rv, rv);
+  NS_ENSURE_STATE(resultOrPrecursor);
+
+  if (nsCOMPtr<nsIPrincipal> precursor =
+          resultOrPrecursor->GetPrecursorPrincipal()) {
+    resultOrPrecursor = precursor;
+  }
+
+  if (!resultOrPrecursor->GetIsContentPrincipal()) {
+    return NS_OK;
+  }
+
+  nsAutoCString resultSiteOriginNoSuffix;
+  rv = resultOrPrecursor->GetSiteOriginNoSuffix(resultSiteOriginNoSuffix);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIURI> resultSiteOriginURI;
+  NS_NewURI(getter_AddRefs(resultSiteOriginURI), resultSiteOriginNoSuffix);
+  NS_ENSURE_STATE(resultSiteOriginURI);
+
+  nsCOMPtr<nsIURI> channelURI;
+  aChannel->GetURI(getter_AddRefs(channelURI));
+  NS_ENSURE_STATE(channelURI);
+
+  nsCOMPtr<nsIPrincipal> channelUriPrincipal =
+      BasePrincipal::CreateContentPrincipal(channelURI, {});
+  NS_ENSURE_STATE(channelUriPrincipal);
+
+  nsAutoCString channelUriSiteOrigin;
+  rv = channelUriPrincipal->GetSiteOriginNoSuffix(channelUriSiteOrigin);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIURI> channelSiteOriginURI;
+  NS_NewURI(getter_AddRefs(channelSiteOriginURI), channelUriSiteOrigin);
+  NS_ENSURE_STATE(channelSiteOriginURI);
+
+  if (nsScriptSecurityManager::IsHttpOrHttpsAndCrossOrigin(
+          resultSiteOriginURI, channelSiteOriginURI) ||
+      (!net::SchemeIsHTTP(resultSiteOriginURI) &&
+       !net::SchemeIsHTTPS(resultSiteOriginURI) &&
+       (net::SchemeIsHTTP(channelSiteOriginURI) ||
+        net::SchemeIsHTTPS(channelSiteOriginURI)))) {
+    return NS_ERROR_CONTENT_BLOCKED;
+  }
+
   return NS_OK;
 }

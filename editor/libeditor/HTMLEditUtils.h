@@ -15,6 +15,7 @@
 #include "EditorBase.h"
 #include "EditorDOMPoint.h"
 #include "EditorForwards.h"
+#include "EditorLineBreak.h"
 #include "EditorUtils.h"
 #include "HTMLEditHelpers.h"
 
@@ -157,10 +158,9 @@ class HTMLEditUtils final {
    * Returns true if aContent is an element and it should be treated as a block.
    *
    * @param aBlockInlineCheck
-   *  - If UseHTMLDefaultStyle or `editor.block_inline_check.use_computed_style`
-   * pref is false, this returns true only for HTML elements which are defined
-   * as a block by the default style.  I.e., non-HTML elements are always
-   * treated as inline.
+   *  - If UseHTMLDefaultStyle, this returns true only for HTML elements which
+   * are defined as a block by the default style.  I.e., non-HTML elements are
+   * always treated as inline.
    *  - If UseComputedDisplayOutsideStyle, this returns true for element nodes
    * whose display-outside is not inline nor ruby.  This is useful to get
    * inclusive ancestor block element.
@@ -479,6 +479,16 @@ class HTMLEditUtils final {
   static bool IsSingleLineContainer(const nsINode& aNode);
 
   /**
+   * Return true if aText has only a linefeed and it's preformatted.
+   */
+  [[nodiscard]] static bool TextHasOnlyOnePreformattedLinefeed(
+      const Text& aText) {
+    return aText.TextDataLength() == 1u &&
+           aText.TextFragment().CharAt(0u) == kNewLine &&
+           EditorUtils::IsNewLinePreformatted(aText);
+  }
+
+  /**
    * IsVisibleTextNode() returns true if aText has visible text.  If it has
    * only white-spaces and they are collapsed, returns false.
    */
@@ -518,6 +528,43 @@ class HTMLEditUtils final {
   }
   static bool IsInvisibleBRElement(const dom::HTMLBRElement& aBRElement) {
     return !HTMLEditUtils::IsVisibleBRElement(aBRElement);
+  }
+
+  enum class IgnoreInvisibleLineBreak { No, Yes };
+
+  /**
+   * Return true if aPoint is immediately before current block boundary.  If
+   * aIgnoreInvisibleLineBreak is "Yes", this returns true if aPoint is before
+   * invisible line break before a block boundary.
+   */
+  template <typename PT, typename CT>
+  [[nodiscard]] static bool PointIsImmediatelyBeforeCurrentBlockBoundary(
+      const EditorDOMPointBase<PT, CT>& aPoint,
+      IgnoreInvisibleLineBreak aIgnoreInvisibleLineBreak,
+      const Element& aEditingHost);
+
+  /**
+   * Return true if aRange crosses the inclusive ancestor block element at
+   * start boundary, in other words, if aRange ends outside of the inclusive
+   * ancestor block of the start boundary.
+   */
+  template <typename EditorDOMPointType>
+  [[nodiscard]] static bool RangeIsAcrossStartBlockBoundary(
+      const EditorDOMRangeBase<EditorDOMPointType>& aRange) {
+    MOZ_ASSERT(aRange.IsPositionedAndValid());
+    if (MOZ_UNLIKELY(!aRange.StartRef().IsInContentNode())) {
+      return false;
+    }
+    const Element* const startBlockElement =
+        HTMLEditUtils::GetInclusiveAncestorElement(
+            *aRange.StartRef().template ContainerAs<nsIContent>(),
+            ClosestBlockElement,
+            BlockInlineCheck::UseComputedDisplayOutsideStyle);
+    if (MOZ_UNLIKELY(!startBlockElement)) {
+      return false;
+    }
+    return EditorRawDOMPoint::After(*startBlockElement)
+        .EqualsOrIsBefore(aRange.EndRef());
   }
 
   /**
@@ -588,6 +635,15 @@ class HTMLEditUtils final {
   }
 
   /**
+   * Return a point to insert a padding line break if aPoint is following a
+   * collapsible ASCII white-space or a block boundary and the line containing
+   * aPoint requires a following padding line break which there is not.
+   */
+  template <typename PT, typename CT>
+  static EditorDOMPoint LineRequiresPaddingLineBreakToBeVisible(
+      const EditorDOMPointBase<PT, CT>& aPoint, const Element& aEditingHost);
+
+  /**
    * ShouldInsertLinefeedCharacter() returns true if the caller should insert
    * a linefeed character instead of <br> element.
    */
@@ -608,6 +664,7 @@ class HTMLEditUtils final {
    */
   enum class EmptyCheckOption {
     TreatSingleBRElementAsVisible,
+    TreatBlockAsVisible,
     TreatListItemAsVisible,
     TreatTableCellAsVisible,
     TreatNonEditableContentAsInvisible,
@@ -1853,14 +1910,15 @@ class HTMLEditUtils final {
             continue;
           }
           return lastEmptyContent != &aEmptyContent
-                     ? lastEmptyContent->AsElement()
+                     ? Element::FromNode(lastEmptyContent)
                      : nullptr;
         }
       }
       lastEmptyContent = element;
     }
-    return lastEmptyContent != &aEmptyContent ? lastEmptyContent->AsElement()
-                                              : nullptr;
+    return lastEmptyContent != &aEmptyContent
+               ? Element::FromNode(lastEmptyContent)
+               : nullptr;
   }
 
   /**
@@ -1959,13 +2017,15 @@ class HTMLEditUtils final {
   }
 
   /**
-   * Get the first <br> element in aElement.  This scans only leaf nodes so
+   * Get the first line break in aElement.  This scans only leaf nodes so
    * if a <br> element has children illegally, it'll be ignored.
    *
-   * @param aElement    The element which may have a <br> element.
-   * @return            First <br> element node in aElement if there is.
+   * @param aElement    The element which may have a <br> element or a
+   *                    preformatted linefeed.
    */
-  static dom::HTMLBRElement* GetFirstBRElement(const dom::Element& aElement) {
+  template <typename EditorLineBreakType>
+  static Maybe<EditorLineBreakType> GetFirstLineBreak(
+      const dom::Element& aElement) {
     for (nsIContent* content = HTMLEditUtils::GetFirstLeafContent(
              aElement, {LeafNodeType::OnlyLeafNode});
          content; content = HTMLEditUtils::GetNextContent(
@@ -1974,22 +2034,41 @@ class HTMLEditUtils final {
                        WalkTreeOption::IgnoreWhiteSpaceOnlyText},
                       BlockInlineCheck::Unused, &aElement)) {
       if (auto* brElement = dom::HTMLBRElement::FromNode(*content)) {
-        return brElement;
+        return Some(EditorLineBreakType(*brElement));
+      }
+      if (auto* textNode = Text::FromNode(*content)) {
+        if (EditorUtils::IsNewLinePreformatted(*textNode)) {
+          uint32_t offset = textNode->TextFragment().FindChar(kNewLine);
+          if (offset != nsTextFragment::kNotFound) {
+            return Some(EditorLineBreakType(*textNode, offset));
+          }
+        }
       }
     }
-    return nullptr;
+    return Nothing();
   }
 
+  enum class ScanLineBreak {
+    AtEndOfBlock,
+    BeforeBlock,
+  };
   /**
    * Return last <br> element or last text node ending with a preserved line
    * break of/before aBlockElement.
    */
-  enum ScanLineBreak {
-    AtEndOfBlock,
-    BeforeBlock,
-  };
-  static nsIContent* GetUnnecessaryLineBreakContent(
+  template <typename EditorLineBreakType>
+  static Maybe<EditorLineBreakType> GetUnnecessaryLineBreak(
       const Element& aBlockElement, ScanLineBreak aScanLineBreak);
+
+  /**
+   * Return following <br> element from aPoint if and only if it's immediately
+   * before a block boundary but it's not necessary to make the preceding
+   * empty line of the block boundary visible anymore.
+   */
+  template <typename EditorLineBreakType, typename EditorDOMPointType>
+  [[nodiscard]] static Maybe<EditorLineBreakType>
+  GetFollowingUnnecessaryLineBreak(const EditorDOMPointType& aPoint,
+                                   const Element& aEditingHost);
 
   /**
    * IsInTableCellSelectionMode() returns true when Gecko's editor thinks that

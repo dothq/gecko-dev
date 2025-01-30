@@ -580,7 +580,7 @@ export var History = Object.freeze({
     // Either it has no dots, or has multiple dots, or it's a single dot char.
     if (
       hasHost &&
-      (!/^(\.?([.a-z0-9-]+\.[a-z0-9-]+)?|[a-z0-9-]+)$/.test(filter.host) ||
+      (!/^(\.?([.a-z0-9-]+\.[a-z0-9-]+)?|[a-z0-9-]+)\.?$/.test(filter.host) ||
         filter.host.includes(".."))
     ) {
       throw new TypeError(
@@ -1269,8 +1269,8 @@ var removeVisitsByFilter = async function (db, filter, onResult = null) {
     `SELECT v.id, place_id, visit_date / 1000 AS date, visit_type FROM moz_historyvisits v
              ${optionalJoin}
              WHERE ${conditions.join(" AND ")}${
-      args.limit ? " LIMIT :limit" : ""
-    }`,
+               args.limit ? " LIMIT :limit" : ""
+             }`,
     args,
     row => {
       let id = row.getResultByName("id");

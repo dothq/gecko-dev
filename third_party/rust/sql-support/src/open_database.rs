@@ -46,6 +46,8 @@ pub enum Error {
     SqlError(rusqlite::Error),
     #[error("Failed to recover a corrupt database due to an error deleting the file: {0}")]
     RecoveryError(std::io::Error),
+    #[error("In shutdown mode")]
+    Shutdown,
 }
 
 impl From<rusqlite::Error> for Error {
@@ -241,93 +243,32 @@ fn set_schema_version(conn: &Connection, version: u32) -> Result<()> {
 // our other crates.
 pub mod test_utils {
     use super::*;
-    use std::path::PathBuf;
+    use std::{
+        cell::RefCell,
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+    };
     use tempfile::TempDir;
 
-    // Database file that we can programatically run upgrades on
-    //
-    // We purposefully don't keep a connection to the database around to force upgrades to always
-    // run against a newly opened DB, like they would in the real world.  See #4106 for
-    // details.
-    pub struct MigratedDatabaseFile<CI: ConnectionInitializer> {
-        // Keep around a TempDir to ensure the database file stays around until this struct is
-        // dropped
-        _tempdir: TempDir,
-        pub connection_initializer: CI,
-        pub path: PathBuf,
-    }
-
-    impl<CI: ConnectionInitializer> MigratedDatabaseFile<CI> {
-        pub fn new(connection_initializer: CI, init_sql: &str) -> Self {
-            Self::new_with_flags(connection_initializer, init_sql, OpenFlags::default())
-        }
-
-        pub fn new_with_flags(
-            connection_initializer: CI,
-            init_sql: &str,
-            open_flags: OpenFlags,
-        ) -> Self {
-            let tempdir = tempfile::tempdir().unwrap();
-            let path = tempdir.path().join(Path::new("db.sql"));
-            let conn = Connection::open_with_flags(&path, open_flags).unwrap();
-            conn.execute_batch(init_sql).unwrap();
-            Self {
-                _tempdir: tempdir,
-                connection_initializer,
-                path,
-            }
-        }
-
-        pub fn upgrade_to(&self, version: u32) {
-            let mut conn = self.open();
-            let tx = conn.transaction().unwrap();
-            let mut current_version = get_schema_version(&tx).unwrap();
-            while current_version < version {
-                self.connection_initializer
-                    .upgrade_from(&tx, current_version)
-                    .unwrap();
-                current_version += 1;
-            }
-            set_schema_version(&tx, current_version).unwrap();
-            self.connection_initializer.finish(&tx).unwrap();
-            tx.commit().unwrap();
-        }
-
-        pub fn run_all_upgrades(&self) {
-            let current_version = get_schema_version(&self.open()).unwrap();
-            for version in current_version..CI::END_VERSION {
-                self.upgrade_to(version + 1);
-            }
-        }
-
-        pub fn open(&self) -> Connection {
-            Connection::open(&self.path).unwrap()
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::test_utils::MigratedDatabaseFile;
-    use super::*;
-    use std::cell::RefCell;
-    use std::io::Write;
-
-    struct TestConnectionInitializer {
+    pub struct TestConnectionInitializer {
         pub calls: RefCell<Vec<&'static str>>,
         pub buggy_v3_upgrade: bool,
     }
 
+    impl Default for TestConnectionInitializer {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl TestConnectionInitializer {
         pub fn new() -> Self {
-            let _ = env_logger::try_init();
             Self {
                 calls: RefCell::new(Vec::new()),
                 buggy_v3_upgrade: false,
             }
         }
         pub fn new_with_buggy_logic() -> Self {
-            let _ = env_logger::try_init();
             Self {
                 calls: RefCell::new(Vec::new()),
                 buggy_v3_upgrade: true,
@@ -420,6 +361,129 @@ mod test {
             Ok(())
         }
     }
+
+    // Database file that we can programmatically run upgrades on
+    //
+    // We purposefully don't keep a connection to the database around to force upgrades to always
+    // run against a newly opened DB, like they would in the real world.  See #4106 for
+    // details.
+    pub struct MigratedDatabaseFile<CI: ConnectionInitializer> {
+        // Keep around a TempDir to ensure the database file stays around until this struct is
+        // dropped
+        _tempdir: TempDir,
+        pub connection_initializer: CI,
+        pub path: PathBuf,
+    }
+
+    impl<CI: ConnectionInitializer> MigratedDatabaseFile<CI> {
+        pub fn new(connection_initializer: CI, init_sql: &str) -> Self {
+            Self::new_with_flags(connection_initializer, init_sql, OpenFlags::default())
+        }
+
+        pub fn new_with_flags(
+            connection_initializer: CI,
+            init_sql: &str,
+            open_flags: OpenFlags,
+        ) -> Self {
+            let tempdir = tempfile::tempdir().unwrap();
+            let path = tempdir.path().join(Path::new("db.sql"));
+            let conn = Connection::open_with_flags(&path, open_flags).unwrap();
+            conn.execute_batch(init_sql).unwrap();
+            Self {
+                _tempdir: tempdir,
+                connection_initializer,
+                path,
+            }
+        }
+
+        /// Attempt to run all upgrades up to a specific version.
+        ///
+        /// This will result in a panic if an upgrade fails to run.
+        pub fn upgrade_to(&self, version: u32) {
+            let mut conn = self.open();
+            let tx = conn.transaction().unwrap();
+            let mut current_version = get_schema_version(&tx).unwrap();
+            while current_version < version {
+                self.connection_initializer
+                    .upgrade_from(&tx, current_version)
+                    .unwrap();
+                current_version += 1;
+            }
+            set_schema_version(&tx, current_version).unwrap();
+            self.connection_initializer.finish(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+
+        /// Attempt to run all upgrades
+        ///
+        /// This will result in a panic if an upgrade fails to run.
+        pub fn run_all_upgrades(&self) {
+            let current_version = get_schema_version(&self.open()).unwrap();
+            for version in current_version..CI::END_VERSION {
+                self.upgrade_to(version + 1);
+            }
+        }
+
+        pub fn assert_schema_matches_new_database(&self) {
+            let db = self.open();
+            let new_db = open_memory_database(&self.connection_initializer).unwrap();
+
+            compare_sql_maps("table", get_sql(&db, "table"), get_sql(&new_db, "table"));
+            compare_sql_maps("index", get_sql(&db, "index"), get_sql(&new_db, "index"));
+            compare_sql_maps(
+                "trigger",
+                get_sql(&db, "trigger"),
+                get_sql(&new_db, "trigger"),
+            );
+        }
+
+        pub fn open(&self) -> Connection {
+            Connection::open(&self.path).unwrap()
+        }
+    }
+
+    fn get_sql(conn: &Connection, type_: &str) -> HashMap<String, String> {
+        conn.query_rows_and_then(
+            "SELECT name, sql FROM sqlite_master WHERE type=?",
+            (type_,),
+            |row| -> rusqlite::Result<(String, String)> { Ok((row.get(0)?, row.get(1)?)) },
+        )
+        .unwrap()
+        .into_iter()
+        .collect()
+    }
+
+    fn compare_sql_maps(
+        type_: &str,
+        old_items: HashMap<String, String>,
+        new_items: HashMap<String, String>,
+    ) {
+        let old_db_keys: HashSet<&String> = old_items.keys().collect();
+        let new_db_keys: HashSet<&String> = new_items.keys().collect();
+
+        let old_db_extra_keys = Vec::from_iter(old_db_keys.difference(&new_db_keys));
+        if !old_db_extra_keys.is_empty() {
+            panic!("Extra keys not present in new database for {type_}: {old_db_extra_keys:?}");
+        }
+        let new_db_extra_keys = Vec::from_iter(new_db_keys.difference(&old_db_keys));
+        if !new_db_extra_keys.is_empty() {
+            panic!("Extra keys only present in new database for {type_}: {new_db_extra_keys:?}");
+        }
+        for key in old_db_keys {
+            assert_eq!(
+                old_items.get(key).unwrap(),
+                new_items.get(key).unwrap(),
+                "sql differs for {type_} {key}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::test_utils::{MigratedDatabaseFile, TestConnectionInitializer};
+    use super::*;
+    use std::io::Write;
 
     // A special schema used to test the upgrade that forces the database to be
     // replaced.

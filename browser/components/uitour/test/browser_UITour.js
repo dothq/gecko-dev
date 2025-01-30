@@ -10,9 +10,12 @@ ChromeUtils.defineESModuleGetters(this, {
   ProfileAge: "resource://gre/modules/ProfileAge.sys.mjs",
   TelemetryArchiveTesting:
     "resource://testing-common/TelemetryArchiveTesting.sys.mjs",
-  TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
   UpdateUtils: "resource://gre/modules/UpdateUtils.sys.mjs",
+  CustomizableUITestUtils:
+    "resource://testing-common/CustomizableUITestUtils.sys.mjs",
 });
+
+let gCUITestUtils = new CustomizableUITestUtils(window);
 
 function test() {
   UITourTest();
@@ -323,7 +326,7 @@ var tests = [
         () => {
           highlight.addEventListener(
             "animationstart",
-            function (aEvent) {
+            function () {
               ok(
                 true,
                 "Animation occurred again even though the effect was the same"
@@ -476,9 +479,7 @@ var tests = [
     is(buttons.hasChildNodes(), false, "Popup should have no buttons");
 
     // Place the search bar in the navigation toolbar temporarily.
-    await SpecialPowers.pushPrefEnv({
-      set: [["browser.search.widget.inNavBar", true]],
-    });
+    await gCUITestUtils.addSearchBar();
 
     await showInfoPromise("search", "search title", "search text");
 
@@ -494,7 +495,7 @@ var tests = [
       "Popup should have correct description text"
     );
 
-    await SpecialPowers.popPrefEnv();
+    gCUITestUtils.removeSearchBar();
   }),
   function test_getConfigurationVersion(done) {
     function callback(result) {
@@ -678,24 +679,6 @@ var tests = [
     let submissionUrl = engine
       .getSubmission("dummy")
       .uri.spec.replace("dummy", "");
-
-    TelemetryTestUtils.assertEvents(
-      [
-        {
-          object: "change_default",
-          value: "uitour",
-          extra: {
-            prev_id: defaultEngine.telemetryId,
-            new_id: engine.telemetryId,
-            new_name: engine.name,
-            new_load_path: engine.wrappedJSObject._loadPath,
-            // Telemetry has a limit of 80 characters.
-            new_sub_url: submissionUrl.slice(0, 80),
-          },
-        },
-      ],
-      { category: "search", method: "engine" }
-    );
 
     let snapshot = await Glean.searchEngineDefault.changed.testGetValue();
     delete snapshot[0].timestamp;

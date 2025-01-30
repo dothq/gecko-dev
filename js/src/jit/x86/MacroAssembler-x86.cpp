@@ -21,6 +21,7 @@
 #include "vm/JitActivation.h"  // js::jit::JitActivation
 #include "vm/JSContext.h"
 #include "vm/StringType.h"
+#include "wasm/WasmStubs.h"
 
 #include "jit/MacroAssembler-inl.h"
 #include "vm/JSScript-inl.h"
@@ -509,8 +510,9 @@ void MacroAssemblerX86::finish() {
   }
 }
 
-void MacroAssemblerX86::handleFailureWithHandlerTail(Label* profilerExitTail,
-                                                     Label* bailoutTail) {
+void MacroAssemblerX86::handleFailureWithHandlerTail(
+    Label* profilerExitTail, Label* bailoutTail,
+    uint32_t* returnValueCheckOffset) {
   // Reserve space for exception information.
   subl(Imm32(sizeof(ResumeFromException)), esp);
   movl(esp, eax);
@@ -522,13 +524,15 @@ void MacroAssemblerX86::handleFailureWithHandlerTail(Label* profilerExitTail,
   asMasm().callWithABI<Fn, HandleException>(
       ABIType::General, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
+  *returnValueCheckOffset = asMasm().currentOffset();
+
   Label entryFrame;
   Label catch_;
   Label finally;
   Label returnBaseline;
   Label returnIon;
   Label bailout;
-  Label wasm;
+  Label wasmInterpEntry;
   Label wasmCatch;
 
   loadPtr(Address(esp, ResumeFromException::offsetOfKind()), eax);
@@ -545,8 +549,9 @@ void MacroAssemblerX86::handleFailureWithHandlerTail(Label* profilerExitTail,
                     Imm32(ExceptionResumeKind::ForcedReturnIon), &returnIon);
   asMasm().branch32(Assembler::Equal, eax, Imm32(ExceptionResumeKind::Bailout),
                     &bailout);
-  asMasm().branch32(Assembler::Equal, eax, Imm32(ExceptionResumeKind::Wasm),
-                    &wasm);
+  asMasm().branch32(Assembler::Equal, eax,
+                    Imm32(ExceptionResumeKind::WasmInterpEntry),
+                    &wasmInterpEntry);
   asMasm().branch32(Assembler::Equal, eax,
                     Imm32(ExceptionResumeKind::WasmCatch), &wasmCatch);
 
@@ -632,21 +637,17 @@ void MacroAssemblerX86::handleFailureWithHandlerTail(Label* profilerExitTail,
   move32(Imm32(1), ReturnReg);
   jump(bailoutTail);
 
-  // If we are throwing and the innermost frame was a wasm frame, reset SP and
-  // FP; SP is pointing to the unwound return address to the wasm entry, so
-  // we can just ret().
-  bind(&wasm);
+  // Reset SP and FP; SP is pointing to the unwound return address to the wasm
+  // interpreter entry, so we can just ret().
+  bind(&wasmInterpEntry);
   loadPtr(Address(esp, ResumeFromException::offsetOfFramePointer()), ebp);
   loadPtr(Address(esp, ResumeFromException::offsetOfStackPointer()), esp);
-  movePtr(ImmPtr((const void*)wasm::FailInstanceReg), InstanceReg);
+  movePtr(ImmPtr((const void*)wasm::InterpFailInstanceReg), InstanceReg);
   masm.ret();
 
   // Found a wasm catch handler, restore state and jump to it.
   bind(&wasmCatch);
-  loadPtr(Address(esp, ResumeFromException::offsetOfTarget()), eax);
-  loadPtr(Address(esp, ResumeFromException::offsetOfFramePointer()), ebp);
-  loadPtr(Address(esp, ResumeFromException::offsetOfStackPointer()), esp);
-  jmp(Operand(eax));
+  wasm::GenerateJumpToCatchHandler(asMasm(), esp, eax, ebx);
 }
 
 void MacroAssemblerX86::profilerEnterFrame(Register framePtr,
@@ -888,6 +889,21 @@ void MacroAssembler::moveValue(const Value& src, const ValueOperand& dest) {
 }
 
 // ===============================================================
+// Arithmetic functions
+
+void MacroAssembler::flexibleQuotientPtr(
+    Register rhs, Register srcDest, bool isUnsigned,
+    const LiveRegisterSet& volatileLiveRegs) {
+  flexibleQuotient32(rhs, srcDest, isUnsigned, volatileLiveRegs);
+}
+
+void MacroAssembler::flexibleRemainderPtr(
+    Register rhs, Register srcDest, bool isUnsigned,
+    const LiveRegisterSet& volatileLiveRegs) {
+  flexibleRemainder32(rhs, srcDest, isUnsigned, volatileLiveRegs);
+}
+
+// ===============================================================
 // Branch functions
 
 void MacroAssembler::loadStoreBuffer(Register ptr, Register buffer) {
@@ -1113,6 +1129,7 @@ void MacroAssembler::wasmLoad(const wasm::MemoryAccessDesc& access,
     case Scalar::Uint8Clamped:
     case Scalar::BigInt64:
     case Scalar::BigUint64:
+    case Scalar::Float16:
     case Scalar::MaxTypedArrayViewType:
       MOZ_CRASH("unexpected type");
   }
@@ -1197,6 +1214,7 @@ void MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access,
 
       break;
     }
+    case Scalar::Float16:
     case Scalar::Float32:
     case Scalar::Float64:
       MOZ_CRASH("non-int64 loads should use load()");
@@ -1258,6 +1276,7 @@ void MacroAssembler::wasmStore(const wasm::MemoryAccessDesc& access,
       break;
     case Scalar::Int64:
       MOZ_CRASH("Should be handled in storeI64.");
+    case Scalar::Float16:
     case Scalar::MaxTypedArrayViewType:
     case Scalar::BigInt64:
     case Scalar::BigUint64:
@@ -1875,8 +1894,7 @@ void MacroAssembler::wasmBoundsCheck64(Condition cond, Register64 index,
   bind(&notOk);
 }
 
-#ifdef ENABLE_WASM_TAIL_CALLS
-void MacroAssembler::wasmMarkSlowCall() {
+void MacroAssembler::wasmMarkCallAsSlow() {
   static_assert(esi == InstanceReg);
   or32(esi, esi);
 }
@@ -1889,6 +1907,5 @@ void MacroAssembler::wasmCheckSlowCallsite(Register ra, Label* notSlow,
   cmp16(Address(ra, 0), Imm32(SlowCallMarker));
   j(Assembler::NotEqual, notSlow);
 }
-#endif  // ENABLE_WASM_TAIL_CALLS
 
 //}}} check_macroassembler_style

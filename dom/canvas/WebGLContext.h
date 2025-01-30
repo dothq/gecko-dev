@@ -10,6 +10,7 @@
 #include <memory>
 #include <stdarg.h>
 
+#include "Colorspaces.h"
 #include "GLContextTypes.h"
 #include "GLDefs.h"
 #include "GLScreenBuffer.h"
@@ -96,12 +97,14 @@ namespace gl {
 class GLScreenBuffer;
 class MozFramebuffer;
 class SharedSurface;
+class Sampler;
 class Texture;
 }  // namespace gl
 
 namespace layers {
 class CompositableHost;
 class RemoteTextureOwnerClient;
+class SharedSurfacesHolder;
 class SurfaceDescriptor;
 }  // namespace layers
 
@@ -205,11 +208,14 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   friend class WebGLExtensionCompressedTextureRGTC;
   friend class WebGLExtensionCompressedTextureS3TC;
   friend class WebGLExtensionCompressedTextureS3TC_SRGB;
+  friend class WebGLExtensionDepthClamp;
   friend class WebGLExtensionDepthTexture;
   friend class WebGLExtensionDisjointTimerQuery;
   friend class WebGLExtensionDrawBuffers;
+  friend class WebGLExtensionFragDepth;
   friend class WebGLExtensionLoseContext;
   friend class WebGLExtensionMOZDebug;
+  friend class WebGLExtensionShaderTextureLod;
   friend class WebGLExtensionVertexArray;
   friend class WebGLMemoryTracker;
   friend class webgl::AvailabilityRunnable;
@@ -299,10 +305,26 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   const uint32_t mMaxAcceptableFBStatusInvals =
       StaticPrefs::webgl_perf_max_acceptable_fb_status_invals();
   bool mWarnOnce_DepthTexCompareFilterable = true;
+  mutable bool mRemapImplReadType_HalfFloatOes = false;
+
+  mutable std::optional<bool> mIsSupportedCache_DrawBuffers;
+  mutable std::optional<bool> mIsSupportedCache_FragDepth;
+  mutable std::optional<bool> mIsSupportedCache_ShaderTextureLod;
+
+  // -
 
   uint64_t mNextFenceId = 1;
   uint64_t mCompletedFenceId = 0;
 
+  mutable std::list<WeakPtr<WebGLSync>> mPendingSyncs;
+  mutable RefPtr<nsIRunnable> mPollPendingSyncs_Pending;
+  static constexpr uint32_t kPollPendingSyncs_DelayMs =
+      4;  // Four times a frame.
+ public:
+  void EnsurePollPendingSyncs_Pending() const;
+  void PollPendingSyncs() const;
+
+ protected:
   std::unique_ptr<gl::Texture> mIncompleteTexOverride;
 
  public:
@@ -466,6 +488,8 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
 
   void DummyReadFramebufferOperation();
 
+  layers::SharedSurfacesHolder* GetSharedSurfacesHolder() const;
+
   dom::ContentParentId GetContentId() const;
 
   WebGLTexture* GetActiveTex(const GLenum texTarget) const;
@@ -526,6 +550,18 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   gl::SwapChain* GetSwapChain(WebGLFramebuffer*, const bool webvr);
   Maybe<layers::SurfaceDescriptor> GetFrontBuffer(WebGLFramebuffer*,
                                                   const bool webvr);
+
+  std::optional<dom::PredefinedColorSpace> mDrawingBufferColorSpace;
+  std::optional<dom::PredefinedColorSpace> mUnpackColorSpace;
+  std::optional<color::ColorProfileDesc> mDisplayProfile;
+
+  void SetDrawingBufferColorSpace(const dom::PredefinedColorSpace val) {
+    mDrawingBufferColorSpace = val;
+  }
+
+  void SetUnpackColorSpace(const dom::PredefinedColorSpace val) {
+    mUnpackColorSpace = val;
+  }
 
   void ClearVRSwapChain();
 
@@ -756,8 +792,6 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   virtual Maybe<double> GetParameter(GLenum pname);
   Maybe<std::string> GetString(GLenum pname) const;
 
-  bool IsEnabled(GLenum cap);
-
  private:
   static StaticMutex sLruMutex;
   static std::list<WebGLContext*> sLru MOZ_GUARDED_BY(sLruMutex);
@@ -780,8 +814,7 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   };
   ScissorRect mScissorRect = {};
 
-  bool ValidateCapabilityEnum(GLenum cap);
-  bool* GetStateTrackingSlot(GLenum cap, GLuint i);
+  bool* GetStateTrackingSlot(GLenum cap);
 
   // Allocation debugging variables
   mutable uint64_t mDataAllocGLCallCount = 0;
@@ -1150,6 +1183,10 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   nsTArray<RefPtr<WebGLTexture>> mBound2DArrayTextures;
   nsTArray<RefPtr<WebGLSampler>> mBoundSamplers;
 
+  mutable std::unique_ptr<gl::Sampler> mSamplerLinear;
+
+  GLuint SamplerLinear() const;
+
   void ResolveTexturesForDraw() const;
 
   RefPtr<WebGLProgram> mCurrentProgram;
@@ -1210,6 +1247,8 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   std::bitset<webgl::kMaxDrawBuffers> mColorWriteMaskNonzero = -1;
   std::bitset<webgl::kMaxDrawBuffers> mBlendEnabled = 0;
 
+  std::unordered_set<GLenum> mIsEnabledMapKeys;
+
   GLint mViewportX = 0;
   GLint mViewportY = 0;
   GLsizei mViewportWidth = 0;
@@ -1259,6 +1298,10 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   mutable bool mDefaultFB_IsInvalid = false;
   mutable UniquePtr<gl::MozFramebuffer> mResolvedDefaultFB;
 
+  mutable std::unordered_map<std::tuple<gfx::ColorSpace2, gfx::ColorSpace2>,
+                             std::shared_ptr<gl::Texture>>
+      mLutTexByColorMapping;
+
   gl::SwapChain mSwapChain;
   gl::SwapChain mWebVRSwapChain;
 
@@ -1297,6 +1340,15 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
       WebGLFramebuffer* const srcAsWebglFb = nullptr,
       const gl::MozFramebuffer* const srcAsMozFb = nullptr,
       bool srcIsBGRA = false) const;
+
+  struct GetDefaultFBForReadDesc {
+    bool endOfFrame = false;
+  };
+  const gl::MozFramebuffer* GetDefaultFBForRead(const GetDefaultFBForReadDesc&);
+  const gl::MozFramebuffer* GetDefaultFBForRead() {
+    return GetDefaultFBForRead({});
+  }
+
   bool BindDefaultFBForRead();
 
   // --

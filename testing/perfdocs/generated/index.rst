@@ -10,11 +10,12 @@ Performance Testing
   DAMP
   IndexedDB
   awsy
-  fxrecord
   mach-try-perf
   mozperftest
   perf-sheriffing
+  perfcompare
   performance-infrastructure
+  perftest-in-a-nutshell
   raptor
   talos
 
@@ -27,11 +28,12 @@ For more detailed information about each test suite and project, see their docum
   * :doc:`DAMP`
   * :doc:`IndexedDB`
   * :doc:`awsy`
-  * :doc:`fxrecord`
   * :doc:`mach-try-perf`
   * :doc:`mozperftest`
   * :doc:`perf-sheriffing`
+  * :doc:`perfcompare`
   * :doc:`performance-infrastructure`
+  * :doc:`perftest-in-a-nutshell`
   * :doc:`raptor`
   * :doc:`talos`
 
@@ -42,7 +44,8 @@ Here are the active PerfTest components/modules and their respective owners:
         - Owner: Beatrice A.
         - Description: A public dashboard comparing Firefox and Chrome performance metrics
     * AWSY (Are We Slim Yet)
-        - Owner: Alexandru I.
+        - Owner: Alexandru F.
+        - Co-owner: Andrej
         - Description: Project that tracks memory usage across builds
     * Raptor
         - Owner: Sparky
@@ -52,10 +55,6 @@ Here are the active PerfTest components/modules and their respective owners:
         - Owner: Sparky
         - Co-owner: Jmaher
         - Description: Provides tooling to build, and obtain profiles that are preconditioned in some way.
-    * fxrecord
-        - Owner: Sparky
-        - Co-owners: Kash, Andrej
-        - Description: Tool for measuring startup performance for Firefox Desktop
     * Infrastructure
         - Owner: Sparky
         - Co-owners: Kash, Andrej
@@ -66,11 +65,11 @@ Here are the active PerfTest components/modules and their respective owners:
         - Description: Testing framework used to run performance tests
     * Mozperftest Tools
         - Owner: Sparky
-        - Co-owner: Alexandru I.
+        - Co-owner: Kash, Andrej
         - Description: Various tools used by performance testing team
     * Mozproxy
-        - Owner:  Sparky
-        - Co-owner: Kash
+        - Owner: Kash
+        - Co-owner: Sparky
         - Description: An http proxy used to run tests against third-party websites in a reliable and reproducible way
     * PerfCompare
         - Owner: Carla S.
@@ -78,19 +77,19 @@ Here are the active PerfTest components/modules and their respective owners:
         - Description: Performance comparison tool used to compare performance of different commits within a repository
     * PerfDocs
         - Owner: Sparky
-        - Co-owner: Alexandru I.
+        - Co-owner: Kash, Andrej
         - Description: Automatically generated performance test engineering documentation
     * PerfHerder
-        - Owner: Beatrice A
+        - Owner: Beatrice A.
         - Co-owner: Andra A.
         - Description: The framework used by the performance sheriffs to find performance regressions and for storing, and visualizing our performance data.
     * Performance Sheriffing
-        - Owner: Alexandru I.
-        - Co-owner: Andra A.
+        - Owner: Andra A.
+        - Co-owner: Beatrice A.
         - Description: Performance sheriffs are responsible for finding commits that cause performance regressions and getting fixes from devs or backing out the changes
     * Talos
         - Owner: Sparky
-        - Co-owner: Andrej
+        - Co-owner: Kash, Andrej
         - Description: Testing framework used to run Firefox-specific performance tests
     * WebPageTest
         - Owner: Andrej

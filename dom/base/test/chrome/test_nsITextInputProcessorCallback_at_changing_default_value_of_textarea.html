@@ -10,9 +10,15 @@
 
 SimpleTest.waitForExplicitFinish();
 SimpleTest.waitForFocus(async () => {
+  await SpecialPowers.pushPrefEnv({
+    set: [["test.ime_content_observer.assert_invalid_cache", true]],
+  });
+
   const textarea = document.createElement("textarea");
   document.body.appendChild(textarea);
   textarea.focus();
+  // Wait for initializing the <textarea>, its anonymous content and its frame.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
   function stringifyTextChangeNotification(aNotification) {
     if (!aNotification) {

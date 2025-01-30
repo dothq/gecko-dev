@@ -8,6 +8,7 @@
 #include "mozilla/dom/RadioGroupContainer.h"
 #include "mozilla/dom/TreeOrderedArrayInlines.h"
 #include "mozilla/Assertions.h"
+#include "nsIFrame.h"
 #include "nsIRadioVisitor.h"
 #include "nsRadioVisitor.h"
 
@@ -64,7 +65,7 @@ void RadioGroupContainer::Traverse(RadioGroupContainer* tmp,
 
 size_t RadioGroupContainer::SizeOfIncludingThis(
     MallocSizeOf aMallocSizeOf) const {
-  return mRadioGroups.SizeOfIncludingThis(aMallocSizeOf);
+  return aMallocSizeOf(this) + mRadioGroups.SizeOfExcludingThis(aMallocSizeOf);
 }
 
 nsresult RadioGroupContainer::WalkRadioGroup(const nsAString& aName,
@@ -78,6 +79,16 @@ nsresult RadioGroupContainer::WalkRadioGroup(const nsAString& aName,
   }
 
   return NS_OK;
+}
+
+void RadioGroupContainer::WalkRadioGroup(const nsAString& aName,
+                                         const VisitCallback& aCallback) {
+  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
+  for (HTMLInputElement* button : radioGroup->mRadioButtons.AsList()) {
+    if (!aCallback(button)) {
+      return;
+    }
+  }
 }
 
 void RadioGroupContainer::SetCurrentRadioButton(const nsAString& aName,
@@ -125,7 +136,9 @@ nsresult RadioGroupContainer::GetNextRadioButton(
       index = 0;
     }
     radio = radioGroup->mRadioButtons->ElementAt(index);
-  } while (radio->Disabled() && radio != currentRadio);
+  } while ((radio->Disabled() || !radio->GetPrimaryFrame() ||
+            !radio->GetPrimaryFrame()->IsVisibleConsideringAncestors()) &&
+           radio != currentRadio);
 
   radio.forget(aRadioOut);
   return NS_OK;
@@ -135,7 +148,8 @@ HTMLInputElement* RadioGroupContainer::GetFirstRadioButton(
     const nsAString& aName) {
   nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
   for (HTMLInputElement* radio : radioGroup->mRadioButtons.AsList()) {
-    if (!radio->Disabled()) {
+    if (!radio->Disabled() && radio->GetPrimaryFrame() &&
+        radio->GetPrimaryFrame()->IsVisibleConsideringAncestors()) {
       return radio;
     }
   }

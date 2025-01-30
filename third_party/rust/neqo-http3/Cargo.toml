@@ -11,16 +11,54 @@
 
 [package]
 edition = "2021"
-rust-version = "1.74.0"
+rust-version = "1.76.0"
 name = "neqo-http3"
-version = "0.7.2"
+version = "0.11.0"
 authors = ["The Neqo Authors <necko@mozilla.com>"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Neqo, the Mozilla implementation of QUIC in Rust."
 homepage = "https://github.com/mozilla/neqo/"
+readme = "../README.md"
+keywords = [
+    "quic",
+    "http3",
+    "neqo",
+    "mozilla",
+    "ietf",
+    "firefox",
+]
+categories = [
+    "network-programming",
+    "web-programming",
+]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mozilla/neqo/"
 
 [lib]
+name = "neqo_http3"
+path = "src/lib.rs"
 bench = false
+
+[[test]]
+name = "httpconn"
+path = "tests/httpconn.rs"
+
+[[test]]
+name = "priority"
+path = "tests/priority.rs"
+
+[[test]]
+name = "send_message"
+path = "tests/send_message.rs"
+
+[[test]]
+name = "webtransport"
+path = "tests/webtransport.rs"
 
 [dependencies.enumset]
 version = "1.1"
@@ -43,29 +81,37 @@ path = "./../neqo-qpack"
 path = "./../neqo-transport"
 
 [dependencies.qlog]
-version = "0.12"
+version = "0.13"
 default-features = false
 
 [dependencies.sfv]
 version = "0.9"
 default-features = false
 
-[dependencies.smallvec]
-version = "1.11"
-default-features = false
-
 [dependencies.url]
-version = "2.5"
+version = "2.5.3"
+features = ["std"]
 default-features = false
 
 [dev-dependencies.test-fixture]
 path = "../test-fixture"
 
 [features]
-fuzzing = [
-    "neqo-transport/fuzzing",
-    "neqo-crypto/fuzzing",
+disable-encryption = [
+    "neqo-transport/disable-encryption",
+    "neqo-crypto/disable-encryption",
 ]
+
+[lints.clippy]
+multiple_crate_versions = "allow"
+
+[lints.clippy.cargo]
+level = "warn"
+priority = -1
+
+[lints.clippy.nursery]
+level = "warn"
+priority = -1
 
 [lints.clippy.pedantic]
 level = "warn"

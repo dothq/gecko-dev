@@ -4,8 +4,6 @@
 
 "use strict";
 
-/* eslint-env node */
-
 // The `*testPaths` defined below for test paths are the main path formats we
 // prefer to support for tests as they are commonly used across the tree.
 
@@ -47,15 +45,14 @@ const xpcshellTestPaths = [
 // of the file.
 
 const extraXpcshellTestPaths = [
+  "devtools/client/shared/remote-debugging/adb/xpcshell/",
   "devtools/platform/tests/xpcshell/",
   "dom/file/tests/",
   "dom/ipc/tests/",
-  "intl/benchmarks/",
   "intl/l10n/test/",
   "ipc/testshell/tests/",
   "memory/replace/dmd/test/",
   "netwerk/test/httpserver/test/",
-  "testing/modules/tests/xpcshell/",
   "toolkit/components/backgroundhangmonitor/tests/",
   "toolkit/components/downloads/test/data/",
   "toolkit/components/mozintl/test/",
@@ -70,7 +67,6 @@ const extraXpcshellTestPaths = [
   "toolkit/components/thumbnails/test/",
   "toolkit/modules/tests/modules/",
   "toolkit/mozapps/update/tests/data/",
-  "toolkit/profile/xpcshell/",
   "toolkit/xre/test/",
   "widget/headless/tests/",
 ];
@@ -109,20 +105,19 @@ const extraBrowserTestPaths = [
   "browser/base/content/test/popupNotifications/",
   "browser/base/content/test/popups/",
   "browser/base/content/test/privateBrowsing/",
+  "browser/base/content/test/profiles/",
   "browser/base/content/test/protectionsUI/",
   "browser/base/content/test/referrer/",
   "browser/base/content/test/sanitize/",
+  "browser/base/content/test/scroll-to-text-fragment/",
   "browser/base/content/test/sidebar/",
   "browser/base/content/test/siteIdentity/",
   "browser/base/content/test/startup/",
   "browser/base/content/test/static/",
-  "browser/base/content/test/statuspanel/",
   "browser/base/content/test/sync/",
-  "browser/base/content/test/tabMediaIndicator/",
   "browser/base/content/test/tabPrompts/",
   "browser/base/content/test/tabcrashed/",
   "browser/base/content/test/tabdialogs/",
-  "browser/base/content/test/tabs/",
   "browser/base/content/test/touch/",
   "browser/base/content/test/utilityOverlay/",
   "browser/base/content/test/webextensions/",
@@ -217,7 +212,7 @@ const extraBrowserTestPaths = [
   "toolkit/components/pdfjs/test/",
   "toolkit/components/pictureinpicture/tests/",
   "toolkit/components/printing/tests/",
-  "toolkit/components/reader/test/",
+  "toolkit/components/reader/tests/",
   "toolkit/components/thumbnails/test/",
   "toolkit/components/tooltiptext/tests/",
   "toolkit/components/windowcreator/test/",
@@ -271,7 +266,6 @@ const extraChromeTestPaths = [
   "toolkit/components/windowwatcher/test/",
   "toolkit/components/workerloader/tests/",
   "toolkit/content/tests/widgets/",
-  "toolkit/profile/test/",
   "widget/tests/",
   "xpfe/appshell/test/",
 ];

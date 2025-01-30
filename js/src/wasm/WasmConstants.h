@@ -94,6 +94,9 @@ enum class TypeCode {
   // A null reference in the func hierarchy.
   NullFuncRef = 0x73,  // SLEB128(-0x0D)
 
+  // A null reference in the exn hierarchy.
+  NullExnRef = 0x74,  // SLEB128(-0x0C)
+
   // A reference to any struct value.
   StructRef = 0x6b,  // SLEB128(-0x15)
 
@@ -225,11 +228,12 @@ enum class LimitsFlags {
 };
 
 enum class LimitsMask {
-  Table = uint8_t(LimitsFlags::HasMaximum),
 #ifdef ENABLE_WASM_MEMORY64
+  Table = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsI64),
   Memory = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsShared) |
            uint8_t(LimitsFlags::IsI64),
 #else
+  Table = uint8_t(LimitsFlags::HasMaximum),
   Memory = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsShared),
 #endif
 };
@@ -875,8 +879,8 @@ enum class MiscOp {
 
 // Opcodes from threads proposal as of June 30, 2017
 enum class ThreadOp {
-  // Wait and wake
-  Wake = 0x00,
+  // Wait and notify
+  Notify = 0x00,
   I32Wait = 0x01,
   I64Wait = 0x02,
   Fence = 0x03,
@@ -959,16 +963,29 @@ enum class ThreadOp {
 };
 
 enum class BuiltinModuleFuncId {
+  None = 0,
+
 // ------------------------------------------------------------------------
 // These are part/suffix of the MozOp::CallBuiltinModuleFunc operators that are
 // emitted internally when compiling intrinsic modules and are rejected by wasm
 // validation.
 // See wasm/WasmBuiltinModule.yaml for the list.
-#define VISIT_BUILTIN_FUNC(op, export, sa_name, abitype, entry, has_memory, \
-                           idx)                                             \
-  op = idx,  // NOLINT
+#define VISIT_BUILTIN_FUNC(op, export, sa_name, abitype, entry, uses_memory, \
+                           inline_op, idx)                                   \
+  op = idx + 1,  // NOLINT
   FOR_EACH_BUILTIN_MODULE_FUNC(VISIT_BUILTIN_FUNC)
 #undef VISIT_BUILTIN_FUNC
+
+  // Op limit.
+  Limit
+};
+
+enum class BuiltinInlineOp {
+  None = 0,
+
+  StringCast,
+  StringTest,
+  StringLength,
 
   // Op limit.
   Limit
@@ -978,21 +995,23 @@ enum class BuiltinModuleId {
   SelfTest = 0,
   IntGemm,
   JSString,
+
+  // Not technically a builtin module, but it uses most of the same machinery.
+  JSStringConstants,
 };
 
-struct BuiltinModuleIds {
-  BuiltinModuleIds() = default;
-
-  bool selfTest = false;
-  bool intGemm = false;
-  bool jsString = false;
-
-  bool hasNone() const { return !selfTest && !intGemm && !jsString; }
-
-  WASM_CHECK_CACHEABLE_POD(selfTest, intGemm, jsString)
+enum class StackSwitchKind {
+  SwitchToSuspendable,
+  SwitchToMain,
+  ContinueOnSuspendable,
 };
 
-WASM_DECLARE_CACHEABLE_POD(BuiltinModuleIds)
+enum class UpdateSuspenderStateAction {
+  Enter,
+  Suspend,
+  Resume,
+  Leave,
+};
 
 enum class MozOp {
   // ------------------------------------------------------------------------
@@ -1041,6 +1060,8 @@ enum class MozOp {
   // particular operation id. See BuiltinModuleFuncId above.
   CallBuiltinModuleFunc,
 
+  StackSwitch,
+
   Limit
 };
 
@@ -1088,10 +1109,16 @@ struct OpBytes {
         return true;
     }
   }
+
+#ifdef DEBUG
+  // Defined in WasmOpIter.cpp
+  const char* toString() const;
+#endif
 };
 
 static const char NameSectionName[] = "name";
 static const char SourceMappingURLSectionName[] = "sourceMappingURL";
+static const char BranchHintingSectionName[] = "metadata.code.branch_hint";
 
 enum class NameType { Module = 0, Function = 1, Local = 2 };
 
@@ -1117,21 +1144,22 @@ static const unsigned MaxTags = 1000000;
 static const unsigned MaxFuncs = 1000000;
 static const unsigned MaxTables = 100000;
 static const unsigned MaxMemories = 100000;
-static const unsigned MaxImports = 100000;
-static const unsigned MaxExports = 100000;
+static const unsigned MaxImports = 1000000;
+static const unsigned MaxExports = 1000000;
 static const unsigned MaxGlobals = 1000000;
 static const unsigned MaxDataSegments = 100000;
 static const unsigned MaxDataSegmentLengthPages = 16384;
 static const unsigned MaxElemSegments = 10000000;
 static const unsigned MaxElemSegmentLength = 10000000;
-static const unsigned MaxTableLimitField = UINT32_MAX;
-static const unsigned MaxTableLength = 10000000;
+static const uint64_t MaxTable32ElemsValidation = UINT32_MAX;
+static const uint64_t MaxTable64ElemsValidation = UINT64_MAX;
+static const unsigned MaxTableElemsRuntime = 10000000;
 static const unsigned MaxLocals = 50000;
 static const unsigned MaxParams = 1000;
 static const unsigned MaxResults = 1000;
 static const unsigned MaxStructFields = 10000;
-static const uint64_t MaxMemory32LimitField = uint64_t(1) << 16;
-static const uint64_t MaxMemory64LimitField = uint64_t(1) << 48;
+static const uint64_t MaxMemory32PagesValidation = uint64_t(1) << 16;
+static const uint64_t MaxMemory64PagesValidation = uint64_t(1) << 48;
 static const unsigned MaxStringBytes = 100000;
 static const unsigned MaxModuleBytes = 1024 * 1024 * 1024;
 static const unsigned MaxFunctionBytes = 7654321;
@@ -1151,6 +1179,7 @@ static_assert(uint64_t(MaxArrayPayloadBytes) <
 static const unsigned MaxTryTableCatches = 10000;
 static const unsigned MaxBrTableElems = 1000000;
 static const unsigned MaxCodeSectionBytes = MaxModuleBytes;
+static const unsigned MaxBranchHintValue = 2;
 
 // 512KiB should be enough, considering how Rabaldr uses the stack and
 // what the standard limits are:
@@ -1163,14 +1192,55 @@ static const unsigned MaxCodeSectionBytes = MaxModuleBytes;
 
 static const unsigned MaxFrameSize = 512 * 1024;
 
+// Limit for the amount of stacks present in the runtime.
+static const size_t SuspendableStacksMaxCount = 100;
+
+// Max size of an allocated stack.
+static const size_t SuspendableStackSize = 0x100000;
+
+// Size of additional space at the top of a suspendable stack.
+// The space is allocated to C++ handlers such as error/trap handlers,
+// or stack snapshots utilities.
+static const size_t SuspendableRedZoneSize = 0x6000;
+
+// Total size of a suspendable stack to be reserved.
+static constexpr size_t SuspendableStackPlusRedZoneSize =
+    SuspendableStackSize + SuspendableRedZoneSize;
+
 // Asserted by Decoder::readVarU32.
 
 static const unsigned MaxVarU32DecodedBytes = 5;
 
-// The CompileMode controls how compilation of a module is performed (notably,
-// how many times we compile it).
+// The CompileMode controls how compilation of a module is performed.
+enum class CompileMode {
+  // Compile the module just once using a given tier.
+  Once,
+  // Compile the module first with baseline, then eagerly launch an ion
+  // background compile to compile the module again.
+  EagerTiering,
+  // Compile the module first with baseline, then lazily compile functions with
+  // ion when they trigger a hotness threshold.
+  LazyTiering,
+};
 
-enum class CompileMode { Once, Tier1, Tier2 };
+// CompileState tracks where in the compilation process we are for a module.
+enum class CompileState {
+  // We're compiling the module using the 'once' mode.
+  Once,
+  // We're compiling the module using the eager tiering mode. We're
+  // currently compiling the first tier. The second tier task will be launched
+  // once we're done compiling the first tier.
+  EagerTier1,
+  // We're compiling the module using the eager tiering mode. We're now
+  // compiling the second tier.
+  EagerTier2,
+  // We're compiling the module eagerly using the lazy tiering mode. We're
+  // compiling the first tier.
+  LazyTier1,
+  // We're compiling the module eagerly using the lazy tiering strategy. We're
+  // compiling the second tier.
+  LazyTier2,
+};
 
 // Typed enum for whether debugging is enabled.
 

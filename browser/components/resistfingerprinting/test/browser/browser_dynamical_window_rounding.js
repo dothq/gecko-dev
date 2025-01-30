@@ -53,7 +53,7 @@ function checkForDefaultSetting(
   aRealHeight
 ) {
   // We can get the rounded size by subtracting twice the margin.
-  let targetWidth = aRealWidth - 2 * RFPHelper.steppedRange(aRealWidth);
+  let targetWidth = aRealWidth - 2 * RFPHelper.steppedRange(aRealWidth, true);
   let targetHeight = aRealHeight - 2 * RFPHelper.steppedRange(aRealHeight);
 
   // This platform-specific code is explained in the large comment below.
@@ -160,7 +160,7 @@ async function test_dynamical_window_rounding(aWindow, aCheckFunc) {
            *    check() functions use ok() while on Linux, we do not all ok() and instead
            *    rely on waitForCondition to fail).
            *
-           * The logging statements in this test, and RFPHelper.jsm, help narrow down and
+           * The logging statements in this test, and RFPHelper.sys.mjs, help narrow down and
            * illustrate the issue.
            */
           info(caseString + "We hit the weird resize bug. Resize it again.");

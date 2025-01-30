@@ -8,11 +8,10 @@ eslint:
     extensions: ['mjs', 'js', 'jsm', 'json', 'jsx', 'html', 'sjs', 'xhtml']
     support-files:
         - '**/.eslintrc.js'
-        - '.eslintrc-test-paths.js'
-        - '.eslintignore'
+        - '.eslintrc*.js'
         - 'tools/lint/eslint/**'
+        - '.prettier*'
         # Files that can influence global variables
-        - 'browser/base/content/nsContextMenu.js'
         - 'browser/base/content/utilityOverlay.js'
         - 'browser/components/customizableui/content/panelUI.js'
         - 'browser/components/downloads/content/downloads.js'

@@ -8,15 +8,9 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
+  SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
 });
-
-XPCOMUtils.defineLazyPreferenceGetter(
-  lazy,
-  "serpEventsEnabled",
-  "browser.search.serpEventTelemetry.enabled",
-  true
-);
 
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
@@ -25,8 +19,23 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "serpEventTelemetryCategorizationRegionEnabled",
+  "browser.search.serpEventTelemetryCategorization.regionEnabled",
+  false
+);
+
+ChromeUtils.defineLazyGetter(lazy, "logConsole", () => {
+  return console.createInstance({
+    prefix: "SearchTelemetry",
+    maxLogLevel: lazy.SearchUtils.loggingEnabled ? "Debug" : "Warn",
+  });
+});
+
 export const CATEGORIZATION_SETTINGS = {
   MAX_DOMAINS_TO_CATEGORIZE: 10,
+  HAS_MATCHING_REGION: "SearchTelemetry:HasMatchingRegion",
 };
 
 // Duplicated from SearchSERPTelemetry to avoid loading the module on content
@@ -52,6 +61,8 @@ const EVENT_TYPE_TO_ACTION = {
 const CONDITIONS = {
   keydownEnter: event => event.key == "Enter",
 };
+
+export const VISIBILITY_THRESHOLD = 0.5;
 
 /**
  * SearchProviders looks after keeping track of the search provider information
@@ -551,7 +562,16 @@ class SearchAdImpression {
   #categorizeAnchors(anchors, origin) {
     for (let anchor of anchors) {
       if (this.#shouldInspectAnchor(anchor, origin)) {
-        let result = this.#findDataForAnchor(anchor);
+        let result;
+        try {
+          // We use a schema to ensure the values for each search provider
+          // aligns to what is expected, but tests don't enforce the schema
+          // and thus, can technically input faulty values.
+          result = this.#findDataForAnchor(anchor);
+        } catch (ex) {
+          lazy.logConsole.error("Could not find data for anchor:", ex);
+          continue;
+        }
         if (result) {
           this.#recordElementData(result.element, {
             type: result.type,
@@ -560,7 +580,7 @@ class SearchAdImpression {
             childElements: result.childElements,
           });
         }
-        if (result.relatedElements?.length) {
+        if (result?.relatedElements?.length) {
           // Bug 1880413: Deprecate related elements.
           // Bottom-up approach with related elements are only used for
           // non-link elements related to ads, like carousel arrows.
@@ -740,10 +760,13 @@ class SearchAdImpression {
    *
    * @param {HTMLAnchorElement} anchor
    *  The anchor to be inspected.
-   * @returns {object}
+   * @returns {object | null}
    *  An object containing the element representing the root DOM element for
    *  the component, the type of component, how many ads were counted,
    *  and whether or not the count was of all the children.
+   * @throws {Error}
+   *  Will throw an error if certain properties of a component are missing.
+   *  Required properties are listed in search-telemetry-v2-schema.json.
    */
   #findDataForAnchor(anchor) {
     for (let component of this.#providerInfo.components) {
@@ -786,6 +809,12 @@ class SearchAdImpression {
         continue;
       }
 
+      // If a parent was found, we may want to ignore reporting the element
+      // to telemetry.
+      if (component.included.parent.skipCount) {
+        return null;
+      }
+
       // If we've already inspected the parent, add the child element to the
       // list of anchors. Don't increment the ads loaded count, as we only care
       // about grouping the anchor with the correct parent.
@@ -810,6 +839,9 @@ class SearchAdImpression {
           // If counting by child, get all of them at once.
           if (child.countChildren) {
             let proxyChildElements = parent.querySelectorAll(child.selector);
+            if (child.skipCount) {
+              return null;
+            }
             if (proxyChildElements.length) {
               return {
                 element: parent,
@@ -821,6 +853,9 @@ class SearchAdImpression {
               };
             }
           } else if (parent.querySelector(child.selector)) {
+            if (child.skipCount) {
+              return null;
+            }
             return {
               element: parent,
               type: child.type ?? component.type,
@@ -851,8 +886,11 @@ class SearchAdImpression {
    *
    * An ad is considered visible if the parent element containing the
    * component has non-zero dimensions, and all child element in the
-   * component have non-zero dimensions and fits within the window
-   * at the time when the impression was takent.
+   * component have non-zero dimensions and mostly (50% height) fits within
+   * the window at the time when the impression was taken. If the element is to
+   * the left of the visible area, we also consider it viewed as it's possible
+   * the user interacted with a carousel which typically scrolls new content
+   * leftward.
    *
    * For some components, like text ads, we don't send every child
    * element for visibility, just the first text ad. For other components
@@ -883,9 +921,15 @@ class SearchAdImpression {
     let elementRect =
       element.ownerGlobal.windowUtils.getBoundsWithoutFlushing(element);
 
-    // If the element lacks a dimension, assume all ads that
-    // were contained within it are hidden.
-    if (elementRect.width == 0 || elementRect.height == 0) {
+    // If the parent element is not visible, assume all ads within are
+    // also not visible.
+    if (
+      !element.checkVisibility({
+        visibilityProperty: true,
+        opacityProperty: true,
+      })
+    ) {
+      Glean.serp.adsBlockedCount.hidden_parent.add();
       return {
         adsVisible: 0,
         adsHidden: adsLoaded,
@@ -898,23 +942,25 @@ class SearchAdImpression {
       elementRect.bottom < 0 &&
       innerWindowHeight + scrollY + elementRect.bottom < 0
     ) {
+      Glean.serp.adsBlockedCount.beyond_viewport.add();
       return {
         adsVisible: 0,
         adsHidden: adsLoaded,
       };
     }
 
-    // Since the parent element has dimensions but no child elements we want
-    // to inspect, check the parent itself is within the viewable area.
-    if (!childElements || !childElements.length) {
-      if (innerWindowHeight < elementRect.y + elementRect.height) {
-        return {
-          adsVisible: 0,
-          adsHidden: 0,
-        };
-      }
+    // If the element has no child elements, check if the element
+    // was ever viewed by the user at this moment.
+    if (!childElements?.length) {
+      // Most ads don't require horizontal scrolling to view it. Thus, we only
+      // check if it could've appeared with some vertical scrolling.
+      let visible = VisibilityHelper.elementWasVisibleVertically(
+        elementRect,
+        innerWindowHeight,
+        VISIBILITY_THRESHOLD
+      );
       return {
-        adsVisible: 1,
+        adsVisible: visible ? 1 : 0,
         adsHidden: 0,
       };
     }
@@ -922,26 +968,43 @@ class SearchAdImpression {
     let adsVisible = 0;
     let adsHidden = 0;
     for (let child of childElements) {
-      let itemRect =
-        child.ownerGlobal.windowUtils.getBoundsWithoutFlushing(child);
-
-      // If the child element we're inspecting has no dimension, it is hidden.
-      if (itemRect.height == 0 || itemRect.width == 0) {
+      if (
+        !child.checkVisibility({
+          visibilityProperty: true,
+          opacityProperty: true,
+        })
+      ) {
         adsHidden += 1;
+        Glean.serp.adsBlockedCount.hidden_child.add();
         continue;
       }
 
-      // If the child element is to the left of the containing element, or to
-      // the right of the containing element, skip it.
+      let itemRect =
+        child.ownerGlobal.windowUtils.getBoundsWithoutFlushing(child);
+      // If the child element is to the right of the containing element and
+      // can't be viewed, skip it. We do this check because some elements like
+      // carousels can hide additional content horizontally. We don't apply the
+      // same logic if the element is to the left because we assume carousels
+      // scroll elements to the left when the user wants to see more contents.
+      // Thus, the elements to the left must've been visible.
       if (
-        itemRect.x < elementRect.x ||
-        itemRect.x + itemRect.width > elementRect.x + elementRect.width
+        !VisibilityHelper.childElementWasVisibleHorizontally(
+          elementRect,
+          itemRect,
+          VISIBILITY_THRESHOLD
+        )
       ) {
         continue;
       }
 
-      // If the child element is too far down, skip it.
-      if (innerWindowHeight < itemRect.y + itemRect.height) {
+      // If the height of child element is not visible, skip it.
+      if (
+        !VisibilityHelper.elementWasVisibleVertically(
+          itemRect,
+          innerWindowHeight,
+          VISIBILITY_THRESHOLD
+        )
+      ) {
         continue;
       }
       ++adsVisible;
@@ -999,6 +1062,45 @@ class SearchAdImpression {
   }
 }
 
+export class VisibilityHelper {
+  /**
+   * Whether the element was vertically visible. It assumes elements above the
+   * viewable area were visible at some point in time.
+   *
+   * @param {DOMRect} rect
+   *   The bounds of the element.
+   * @param {number} innerWindowHeight
+   *   The height of the window.
+   * @param {number} threshold
+   *   What percentage of the element should vertically be visible.
+   * @returns {boolean}
+   *   Whether the element was visible.
+   */
+  static elementWasVisibleVertically(rect, innerWindowHeight, threshold) {
+    return rect.top + rect.height * threshold <= innerWindowHeight;
+  }
+
+  /**
+   * Whether the child element was horizontally visible. It assumes elements to
+   * the left were visible at some point in time.
+   *
+   * @param {DOMRect} parentRect
+   *   The bounds of the element that contains the child.
+   * @param {DOMRect} childRect
+   *   The bounds of the child element.
+   * @param {number} threshold
+   *   What percentage of the child element should horizontally be visible.
+   * @returns {boolean}
+   *   Whether the child element was visible.
+   */
+  static childElementWasVisibleHorizontally(parentRect, childRect, threshold) {
+    return (
+      childRect.left + childRect.width * threshold <=
+      parentRect.left + parentRect.width
+    );
+  }
+}
+
 /**
  * An object indicating which elements to examine for domains to extract and
  * which heuristic technique to use to extract that element's domain.
@@ -1049,7 +1151,7 @@ class DomainExtractor {
       }
 
       let elements = document.querySelectorAll(extractorInfo.selectors);
-      if (!elements) {
+      if (!elements.length) {
         continue;
       }
 
@@ -1077,7 +1179,11 @@ class DomainExtractor {
           break;
         }
         case "textContent": {
-          this.#fromElementsRetrieveTextContent(elements, extractedDomains);
+          this.#fromElementsRetrieveTextContent(
+            elements,
+            extractedDomains,
+            providerName
+          );
           break;
         }
       }
@@ -1197,8 +1303,26 @@ class DomainExtractor {
    *  A list of elements from the page whose text content we want to inspect.
    * @param {Set<string>} extractedDomains
    *  The result set of domains extracted from the page.
+   * @param {string} providerName
+   *  The name of the search provider.
    */
-  #fromElementsRetrieveTextContent(elements, extractedDomains) {
+  #fromElementsRetrieveTextContent(elements, extractedDomains, providerName) {
+    // Not an exhaustive regex, but it fits our purpose for this method.
+    const LOOSE_URL_REGEX =
+      /^(?:https?:\/\/)?(?:www\.)?(?:[\w\-]+\.)+(?:[\w\-]{2,})/i;
+
+    // Known but acceptable limitations to this function, where the return
+    // value won't be correctly fixed up:
+    //   1) A url is embedded within other text. Ex: "xkcd.com is cool."
+    //   2) The url contains legal but unusual characters. Ex: $ ! * '
+    function fixup(textContent) {
+      return textContent
+        .toLowerCase()
+        .replaceAll(" ", "")
+        .replace(/\.$/, "")
+        .concat(".com");
+    }
+
     for (let element of elements) {
       if (this.#exceedsThreshold(extractedDomains.size)) {
         return;
@@ -1209,18 +1333,24 @@ class DomainExtractor {
       }
 
       let domain;
-      try {
-        domain = new URL(textContent).hostname;
-      } catch (e) {
-        domain = textContent.toLowerCase().replaceAll(" ", "");
-        // If the attempt to turn the text content into a URL object only fails
-        // because we're missing a protocol, ".com" may already be present.
-        if (!domain.endsWith(".com")) {
-          domain = domain.concat(".com");
+      if (LOOSE_URL_REGEX.test(textContent)) {
+        // Creating a new URL object will throw if the protocol is missing.
+        if (!/^https?:\/\//.test(textContent)) {
+          textContent = "https://" + textContent;
         }
+
+        try {
+          domain = new URL(textContent).hostname;
+        } catch (e) {
+          domain = fixup(textContent);
+        }
+      } else {
+        domain = fixup(textContent);
       }
-      if (!extractedDomains.has(domain)) {
-        extractedDomains.add(domain);
+
+      let processedDomain = this.#processDomain(domain, providerName);
+      if (processedDomain && !extractedDomains.has(processedDomain)) {
+        extractedDomains.add(processedDomain);
       }
     }
   }
@@ -1306,6 +1436,7 @@ export class SearchSERPTelemetryChild extends JSWindowActorChild {
    * @type {number | null}
    */
   #adTimeout;
+
   /**
    * Determines if there is a provider that matches the supplied URL and returns
    * the information associated with that provider.
@@ -1368,7 +1499,6 @@ export class SearchSERPTelemetryChild extends JSWindowActorChild {
     }
 
     if (
-      lazy.serpEventsEnabled &&
       providerInfo.components?.length &&
       (eventType == "load" || eventType == "pageshow")
     ) {
@@ -1416,6 +1546,7 @@ export class SearchSERPTelemetryChild extends JSWindowActorChild {
 
     if (
       lazy.serpEventTelemetryCategorization &&
+      lazy.serpEventTelemetryCategorizationRegionEnabled &&
       providerInfo.domainExtraction &&
       (eventType == "load" || eventType == "pageshow")
     ) {
@@ -1425,6 +1556,7 @@ export class SearchSERPTelemetryChild extends JSWindowActorChild {
         providerInfo.domainExtraction.nonAds,
         providerInfo.telemetryId
       );
+
       let adDomains = domainExtractor.extractDomainsFromDocument(
         doc,
         providerInfo.domainExtraction.ads,
@@ -1496,17 +1628,13 @@ export class SearchSERPTelemetryChild extends JSWindowActorChild {
         // so that we remain consistent with the *.in-content:sap* count for the
         // SEARCH_COUNTS histogram.
         if (event.persisted) {
+          this.#checkForPageImpressionComponents();
           this.#check(event.type);
-          if (lazy.serpEventsEnabled) {
-            this.#checkForPageImpressionComponents();
-          }
         }
         break;
       }
       case "DOMContentLoaded": {
-        if (lazy.serpEventsEnabled) {
-          this.#checkForPageImpressionComponents();
-        }
+        this.#checkForPageImpressionComponents();
         this.#check(event.type);
         break;
       }

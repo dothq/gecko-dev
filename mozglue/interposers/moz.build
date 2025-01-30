@@ -17,9 +17,20 @@ if CONFIG["MOZ_CRASHREPORTER"]:
         "pthread_create_interposer.cpp",
     ]
 
+if CONFIG["MOZ_SANDBOX"]:
+    EXPORTS.mozilla += [
+        "pthread_atfork.h",
+    ]
+
+    UNIFIED_SOURCES += [
+        "pthread_atfork_interposer.cpp",
+    ]
+
 if CONFIG["MOZ_LINKER"]:
     LOCAL_INCLUDES += [
         "/mozglue/linker",
     ]
+
+OS_LIBS += CONFIG["DL_LIBS"]
 
 FINAL_LIBRARY = "mozglue"

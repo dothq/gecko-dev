@@ -13,12 +13,12 @@ pub fn map_texture_usage(
     mtl_usage.set(
         metal::MTLTextureUsage::ShaderRead,
         usage.intersects(
-            Tu::RESOURCE | Tu::DEPTH_STENCIL_READ | Tu::STORAGE_READ | Tu::STORAGE_READ_WRITE,
+            Tu::RESOURCE | Tu::DEPTH_STENCIL_READ | Tu::STORAGE_READ_ONLY | Tu::STORAGE_READ_WRITE,
         ),
     );
     mtl_usage.set(
         metal::MTLTextureUsage::ShaderWrite,
-        usage.intersects(Tu::STORAGE_READ_WRITE),
+        usage.intersects(Tu::STORAGE_WRITE_ONLY | Tu::STORAGE_READ_WRITE),
     );
     // needed for combined depth/stencil formats since we might
     // create a stencil-only view from them
@@ -222,6 +222,7 @@ pub fn map_vertex_format(format: wgt::VertexFormat) -> metal::MTLVertexFormat {
         Vf::Uint32x4 => UInt4,
         Vf::Sint32x4 => Int4,
         Vf::Float32x4 => Float4,
+        Vf::Unorm10_10_10_2 => UInt1010102Normalized,
         Vf::Float64 | Vf::Float64x2 | Vf::Float64x3 | Vf::Float64x4 => unimplemented!(),
     }
 }

@@ -5,9 +5,11 @@
 # Force pref value to true to get download tests to pass on Thunderbird.
 prefs = ["browser.download.useDownloadDir=true"]
 
-["test_QuarantinedDomains.js"]
+["test_ChannelWrapper.js"]
 
-["test_QuarantinedDomains_telemetry.js"]
+["test_ExtensionTaskScheduler.js"]
+
+["test_QuarantinedDomains.js"]
 
 ["test_change_backgroundServiceWorker_enabled_pref_false.js"]
 # This is a mirror:once pref and needs to be set before startup.
@@ -94,7 +96,8 @@ skip-if = ["appname == 'thunderbird'"]
 skip-if = [
   "appname == 'thunderbird'",
   "os == 'android'", # CP service is disabled on Android
-  "os == 'mac' && debug", # macosx1014/debug due to 1564534
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && debug", # Bug 1564534
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64' && debug", # Bug 1564534
 ]
 run-sequentially = "node server exceptions dont replay well"
 
@@ -103,7 +106,8 @@ run-sequentially = "node server exceptions dont replay well"
 skip-if = [
   "appname == 'thunderbird'",
   "os == 'android'", # CP service is disabled on Android,
-  "os == 'mac' && debug", # macosx1014/debug due to 1564534
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && debug", # Bug 1564534
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64' && debug", # Bug 1564534
 ]
 run-sequentially = "node server exceptions dont replay well"
 
@@ -121,14 +125,14 @@ skip-if = [
 ["test_ext_contentscript_context.js"]
 skip-if = [
   "tsan", # Bug 1683730
-  "apple_silicon", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
   "sessionHistoryInParent", # Bug 1762638
 ]
 
 ["test_ext_contentscript_context_isolation.js"]
 skip-if = [
   "tsan", # Bug 1683730
-  "apple_silicon", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
   "sessionHistoryInParent", # Bug 1762638
 ]
 
@@ -140,7 +144,8 @@ run-sequentially = "very high failure rate in parallel"
 ["test_ext_contentscript_css.js"]
 skip-if = [
   "os == 'linux' && fission", # Bug 1762638
-  "os == 'mac' && debug", # Bug 1762638
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && debug", # Bug 1762638
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64' && debug", # Bug 1762638
 ]
 
 ["test_ext_contentscript_dynamic_registration.js"]
@@ -155,12 +160,18 @@ skip-if = [
 
 ["test_ext_contentscript_module_import.js"]
 
+["test_ext_contentscript_preloading.js"]
+
 ["test_ext_contentscript_restrictSchemes.js"]
+
+["test_ext_contentscript_slow_frame.js"]
 
 ["test_ext_contentscript_teardown.js"]
 skip-if = ["tsan"] # Bug 1683730
 
 ["test_ext_contentscript_unregister_during_loadContentScript.js"]
+
+["test_ext_contentscript_world.js"]
 
 ["test_ext_contentscript_xml_prettyprint.js"]
 
@@ -177,9 +188,10 @@ skip-if = [
 ]
 
 ["test_ext_cookieBehaviors.js"]
+requesttimeoutfactor = 3 # deleteDatabase may take several minutes in slow environments, Android (bug 1896262)
 skip-if = [
   "appname == 'thunderbird'",
-  "apple_silicon", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
   "tsan", # Bug 1683730
 ]
 
@@ -197,6 +209,8 @@ skip-if = [
 
 ["test_ext_cookies_samesite.js"]
 
+["test_ext_cookies_sort.js"]
+
 ["test_ext_cors_mozextension.js"]
 
 ["test_ext_csp_frame_ancestors.js"]
@@ -205,14 +219,20 @@ skip-if = [
 
 ["test_ext_debugging_utils.js"]
 
+["test_ext_dnr_across_redirects.js"]
+
 ["test_ext_dnr_allowAllRequests.js"]
 
 ["test_ext_dnr_api.js"]
+
+["test_ext_dnr_domainType.js"]
 
 ["test_ext_dnr_download.js"]
 skip-if = ["os == 'android'"] # Android: downloads.download goes through the embedder app instead of Gecko, and cannot be intercepted.
 
 ["test_ext_dnr_dynamic_rules.js"]
+
+["test_ext_dnr_file_access.js"]
 
 ["test_ext_dnr_modifyHeaders.js"]
 
@@ -229,12 +249,17 @@ skip-if = ["os == 'android'"] # Android: downloads.download goes through the emb
 ["test_ext_dnr_startup_cache.js"]
 
 ["test_ext_dnr_static_rules.js"]
+requesttimeoutfactor = 4 # Prevent TV job failures on Android builds.
+
+["test_ext_dnr_static_rules_limits.js"]
 
 ["test_ext_dnr_system_restrictions.js"]
 
 ["test_ext_dnr_tabIds.js"]
 
 ["test_ext_dnr_testMatchOutcome.js"]
+
+["test_ext_dnr_update_static_rules.js"]
 
 ["test_ext_dnr_urlFilter.js"]
 
@@ -352,8 +377,7 @@ skip-if = ["appname == 'thunderbird'"]
 
 ["test_ext_notifications_unsupported.js"]
 
-["test_ext_onmessage_removelistener.js"]
-skip-if = ["true"] # This test no longer tests what it is meant to test.
+["test_ext_optional_host_permissions.js"]
 
 ["test_ext_permission_xhr.js"]
 
@@ -374,6 +398,8 @@ skip-if = [
   "appname == 'thunderbird'",
   "os == 'android'", # Bug 1350559
 ]
+
+["test_ext_permissions_optional_only.js"]
 
 ["test_ext_permissions_uninstall.js"]
 skip-if = [
@@ -432,6 +458,8 @@ skip-if = ["os == 'android' && debug"]
 
 ["test_ext_runtime_getBrowserInfo.js"]
 
+["test_ext_runtime_getContexts.js"]
+
 ["test_ext_runtime_getPlatformInfo.js"]
 
 ["test_ext_runtime_id.js"]
@@ -440,6 +468,8 @@ skip-if = ["ccov && os == 'linux'"] # bug 1607581
 ["test_ext_runtime_messaging_self.js"]
 
 ["test_ext_runtime_onInstalled_and_onStartup.js"]
+
+["test_ext_runtime_onPerformanceWarning.js"]
 
 ["test_ext_runtime_ports.js"]
 
@@ -471,7 +501,8 @@ run-sequentially = "very high failure rate in parallel"
 ["test_ext_scripting_contentScripts_css.js"]
 skip-if = [
   "os == 'linux' && debug && fission", # Bug 1762638
-  "os == 'mac' && debug && fission",  # Bug 1762638
+  "os == 'mac' && os_version == '10.15' && processor == 'x86_64' && debug", # Bug 1762638
+  "os == 'mac' && os_version == '11.20' && arch == 'aarch64' && debug", # Bug 1762638
 ]
 run-sequentially = "very high failure rate in parallel"
 
@@ -480,6 +511,7 @@ run-sequentially = "very high failure rate in parallel"
 ["test_ext_scripting_mv2.js"]
 
 ["test_ext_scripting_persistAcrossSessions.js"]
+requesttimeoutfactor = 2 # Needed for Android + TV (chaos mode) - bug 1899777
 
 ["test_ext_scripting_startupCache.js"]
 
@@ -533,7 +565,7 @@ skip-if = ["os == 'android'"] # Bug 1564871
 ["test_ext_storage_sanitizer.js"]
 skip-if = [
   "appname == 'thunderbird'",
-  "os == 'android'", # Sanitizer.jsm is not in toolkit.
+  "os == 'android'", # Sanitizer.sys.mjs is not in toolkit.
 ]
 
 ["test_ext_storage_session.js"]
@@ -565,6 +597,11 @@ skip-if = ["os == 'android'"] # Bug 1258975 on android.
 ["test_ext_theme_experiments.js"]
 skip-if = ["os == 'android'"] # Themes aren't supported on android.
 
+["test_ext_theme_startupData.js"]
+skip-if = [
+  "os == 'android'", # Themes aren't supported on android.
+]
+
 ["test_ext_trustworthy_origin.js"]
 
 ["test_ext_unlimitedStorage.js"]
@@ -578,6 +615,18 @@ run-sequentially = "very high failure rate in parallel"
 ["test_ext_userScripts_exports.js"]
 run-sequentially = "very high failure rate in parallel"
 
+["test_ext_userScripts_mv3_availability.js"]
+
+["test_ext_userScripts_mv3_csp.js"]
+
+["test_ext_userScripts_mv3_injection.js"]
+
+["test_ext_userScripts_mv3_messaging.js"]
+
+["test_ext_userScripts_mv3_persistence.js"]
+
+["test_ext_userScripts_mv3_worlds.js"]
+
 ["test_ext_userScripts_register.js"]
 skip-if = [
   "os == 'linux' && !fission", # Bug 1763197
@@ -587,7 +636,10 @@ skip-if = [
 ["test_ext_wasm.js"]
 
 ["test_ext_webRequest_auth.js"]
-skip-if = ["os == 'android' && debug"]
+skip-if = [
+   "os == 'android' && debug",
+]
+requesttimeoutfactor = 4 # Prevents TV job failures on Android builds.
 
 ["test_ext_webRequest_cached.js"]
 skip-if = ["os == 'android'"] # Bug 1573511
@@ -616,7 +668,9 @@ skip-if = ["os == 'android' && debug"]
 skip-if = ["tsan"] # Bug 1683730
 
 ["test_ext_webRequest_permission.js"]
-skip-if = ["os == 'android' && debug"]
+skip-if = [
+  "os == 'android' && debug",
+]
 
 ["test_ext_webRequest_redirectProperty.js"]
 skip-if = ["os == 'android' && processor == 'x86_64'"] # Bug 1683253
@@ -637,6 +691,10 @@ skip-if = ["os == 'android'"] # bug 1683159
 skip-if = ["os == 'android'"] # bug 1848398 - style cache miss on Android.
 
 ["test_ext_webRequest_suspend.js"]
+
+["test_ext_webRequest_type_json.js"]
+prefs = ["javascript.options.experimental.import_attributes=true"]
+skip-if = ["release_or_beta"] # Bug 1777526 - enable JSON modules (import attributes) on non-Nightly
 
 ["test_ext_webRequest_userContextId.js"]
 
@@ -671,9 +729,6 @@ skip-if = ["appname == 'thunderbird'"]
 ["test_proxy_userContextId.js"]
 
 ["test_resistfingerprinting_exempt.js"]
-
-["test_site_permissions.js"]
-skip-if = ["os == 'android'"] # Site permissions aren't supported on android.
 
 ["test_webRequest_ancestors.js"]
 

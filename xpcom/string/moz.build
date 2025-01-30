@@ -13,12 +13,12 @@ EXPORTS += [
     "nsCharTraits.h",
     "nsDependentString.h",
     "nsDependentSubstring.h",
+    "nsFmtString.h",
     "nsLiteralString.h",
     "nsPrintfCString.h",
     "nsPromiseFlatString.h",
     "nsReadableUtils.h",
     "nsString.h",
-    "nsStringBuffer.h",
     "nsStringFlags.h",
     "nsStringFwd.h",
     "nsStringIterator.h",
@@ -42,7 +42,6 @@ EXPORTS.mozilla += [
 UNIFIED_SOURCES += [
     "nsASCIIMask.cpp",
     "nsReadableUtils.cpp",
-    "nsStringBuffer.cpp",
     "nsTDependentString.cpp",
     "nsTDependentSubstring.cpp",
     "nsTextFormatter.cpp",
@@ -55,8 +54,5 @@ UNIFIED_SOURCES += [
     "nsTSubstringTuple.cpp",
     "RustStringAPI.cpp",
 ]
-
-if CONFIG["MOZ_DEBUG"]:
-    UNIFIED_SOURCES += ["nsStringStats.cpp"]
 
 FINAL_LIBRARY = "xul"

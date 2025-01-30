@@ -26,9 +26,6 @@ class TestNoWindowUpdateRestart(MarionetteTestCase):
         # Every part of this test ought to run in the chrome context.
         self.marionette.set_context(self.marionette.CONTEXT_CHROME)
         self.setUpBrowser()
-        self.origDisabledForTesting = self.marionette.get_pref(
-            "app.update.disabledForTesting"
-        )
         self.resetUpdate()
 
     def setUpBrowser(self):
@@ -82,31 +79,24 @@ class TestNoWindowUpdateRestart(MarionetteTestCase):
         self.tearDownBrowser()
         self.resetUpdate()
 
-        # Reset context to the default.
-        self.marionette.set_context(self.marionette.CONTEXT_CONTENT)
+        # Reset all modified preferences and restart Firefox
+        self.marionette.restart(in_app=False, clean=True)
 
         super(TestNoWindowUpdateRestart, self).tearDown()
 
     def tearDownBrowser(self):
         self.marionette.execute_async_script(
             """
-            let [origAppUpdateAuto, origDisabledForTesting, resolve] = arguments;
-            (async () => {
-                Services.prefs.setBoolPref("app.update.disabledForTesting", origDisabledForTesting);
-                Services.prefs.clearUserPref("app.update.download.attempts");
-                Services.prefs.clearUserPref("app.update.download.maxAttempts");
-                Services.prefs.clearUserPref("app.update.staging.enabled");
-                Services.prefs.clearUserPref("app.update.noWindowAutoRestart.enabled");
-                Services.prefs.clearUserPref("app.update.noWindowAutoRestart.delayMs");
-                Services.prefs.clearUserPref("testing.no_window_update_restart.silent_restart_env");
+            const [origAppUpdateAuto, resolve] = arguments;
 
-                let { UpdateUtils } = ChromeUtils.importESModule(
+            (async () => {
+                const { UpdateUtils } = ChromeUtils.importESModule(
                     "resource://gre/modules/UpdateUtils.sys.mjs"
                 );
                 await UpdateUtils.setAppUpdateAutoEnabled(origAppUpdateAuto);
             })().then(resolve);
         """,
-            script_args=(self.origAppUpdateAuto, self.origDisabledForTesting),
+            script_args=(self.origAppUpdateAuto,),
         )
 
     def test_update_on_last_window_close(self):
@@ -137,75 +127,106 @@ class TestNoWindowUpdateRestart(MarionetteTestCase):
         )
         self.assertTrue(quit_flags_correct)
 
-        # Normally, the update status file would have been removed at this point by Post Update
-        # Processing. But restarting resets app.update.disabledForTesting, which causes that to be
-        # skipped, allowing us to look at the update status file directly.
-        update_status_path = self.marionette.execute_script(
+        update_status = self.marionette.execute_async_script(
             """
-            let statusFile = FileUtils.getDir("UpdRootD", ["updates", "0"]);
-            statusFile.append("update.status");
-            return statusFile.path;
-        """
+            let [updateURLString, resolve] = arguments;
+            (async () => {
+                // Because post update processing happens during early startup and
+                // `app.update.disabledForTesting` is also set in early startup, it isn't
+                // especially well defined whether or not post update processing will have run at
+                // this point. Resolve this by forcing post update processing to run. This is as
+                // simple as turning off `app.update.disabledForTesting` and calling into
+                // UpdateManager, since the relevant methods ensure that initialization has run
+                // as long as update isn't disabled.
+
+                // Set the update URL to a local one first to ensure we don't hit the update server
+                // when we turn off `app.update.disabledForTesting`.
+                const mockAppInfo = Object.create(Services.appinfo, {
+                    updateURL: {
+                        configurable: true,
+                        enumerable: true,
+                        writable: false,
+                        value: updateURLString,
+                    },
+                });
+                Services.appinfo = mockAppInfo;
+
+                Services.prefs.setBoolPref("app.update.disabledForTesting", false);
+
+                const UM =
+                    Cc["@mozilla.org/updates/update-manager;1"].getService(Ci.nsIUpdateManager);
+                const history = await UM.getHistory();
+                if (!history.length) {
+                    return null;
+                }
+                return history[0].state;
+            })().then(resolve);
+        """,
+            script_args=(self.marionette.absolute_url("update.xml"),),
         )
-        with open(update_status_path, "r") as f:
-            # If Firefox was built with "--enable-unverified-updates" (or presumably if we tested
-            # with an actual, signed update), the update should succeed. Otherwise, it will fail
-            # with CERT_VERIFY_ERROR (error code 19). Unfortunately, there is no good way to tell
-            # which of those situations we are in. Luckily, it doesn't matter, because we aren't
-            # trying to test whether the update applied successfully, just whether the
-            # "No Window Update Restart" feature works.
-            self.assertIn(f.read().strip(), ["succeeded", "failed: 19"])
+
+        # If Firefox was built with "--enable-unverified-updates" (or presumably if we tested
+        # with an actual, signed update), the update should succeed. Otherwise, it will fail
+        # with CERT_VERIFY_ERROR (error code 19). Unfortunately, there is no good way to tell
+        # which of those situations we are in. Luckily, it doesn't matter, because we aren't
+        # trying to test whether the update applied successfully, just whether the
+        # "No Window Update Restart" feature attempted to apply an update.
+        # So both success and failure are fine. Any in-progress state is not.
+        self.assertIn(update_status, ["succeeded", "failed"])
 
     def resetUpdate(self):
-        self.marionette.execute_script(
+        self.marionette.execute_async_script(
             """
-            let UM = Cc["@mozilla.org/updates/update-manager;1"].getService(Ci.nsIUpdateManager);
-            UM.QueryInterface(Ci.nsIObserver).observe(null, "um-reload-update-data", "skip-files");
+            let [resolve] = arguments;
 
-            let { UpdateListener } = ChromeUtils.importESModule(
-                "resource://gre/modules/UpdateListener.sys.mjs"
-            );
-            UpdateListener.reset();
+            (async () => {
+                let UM = Cc["@mozilla.org/updates/update-manager;1"].getService(Ci.nsIUpdateManager);
+                await UM.internal.reload(true);
 
-            let { AppMenuNotifications } = ChromeUtils.importESModule(
-                "resource://gre/modules/AppMenuNotifications.sys.mjs"
-            );
-            AppMenuNotifications.removeNotification(/.*/);
+                let { UpdateListener } = ChromeUtils.importESModule(
+                    "resource://gre/modules/UpdateListener.sys.mjs"
+                );
+                UpdateListener.reset();
 
-            // Remove old update files so that they don't interfere with tests.
-            let rootUpdateDir = Services.dirsvc.get("UpdRootD", Ci.nsIFile);
-            let updateDir = rootUpdateDir.clone();
-            updateDir.append("updates");
-            let patchDir = updateDir.clone();
-            patchDir.append("0");
+                let { AppMenuNotifications } = ChromeUtils.importESModule(
+                    "resource://gre/modules/AppMenuNotifications.sys.mjs"
+                );
+                AppMenuNotifications.removeNotification(/.*/);
 
-            let filesToRemove = [];
-            let addFileToRemove = (dir, filename) => {
-                let file = dir.clone();
-                file.append(filename);
-                filesToRemove.push(file);
-            };
+                // Remove old update files so that they don't interfere with tests.
+                let rootUpdateDir = Services.dirsvc.get("UpdRootD", Ci.nsIFile);
+                let updateDir = rootUpdateDir.clone();
+                updateDir.append("updates");
+                let patchDir = updateDir.clone();
+                patchDir.append("0");
 
-            addFileToRemove(rootUpdateDir, "active-update.xml");
-            addFileToRemove(rootUpdateDir, "updates.xml");
-            addFileToRemove(patchDir, "bt.result");
-            addFileToRemove(patchDir, "update.status");
-            addFileToRemove(patchDir, "update.version");
-            addFileToRemove(patchDir, "update.mar");
-            addFileToRemove(patchDir, "updater.ini");
-            addFileToRemove(updateDir, "backup-update.log");
-            addFileToRemove(updateDir, "last-update.log");
-            addFileToRemove(patchDir, "update.log");
+                let filesToRemove = [];
+                let addFileToRemove = (dir, filename) => {
+                    let file = dir.clone();
+                    file.append(filename);
+                    filesToRemove.push(file);
+                };
 
-            for (const file of filesToRemove) {
-                try {
-                    if (file.exists()) {
-                        file.remove(false);
+                addFileToRemove(rootUpdateDir, "active-update.xml");
+                addFileToRemove(rootUpdateDir, "updates.xml");
+                addFileToRemove(patchDir, "update.status");
+                addFileToRemove(patchDir, "update.version");
+                addFileToRemove(patchDir, "update.mar");
+                addFileToRemove(patchDir, "updater.ini");
+                addFileToRemove(updateDir, "backup-update.log");
+                addFileToRemove(updateDir, "last-update.log");
+                addFileToRemove(patchDir, "update.log");
+
+                for (const file of filesToRemove) {
+                    try {
+                        if (file.exists()) {
+                            file.remove(false);
+                        }
+                    } catch (e) {
+                        console.warn("Unable to remove file. Path: '" + file.path + "', Exception: " + e);
                     }
-                } catch (e) {
-                    console.warn("Unable to remove file. Path: '" + file.path + "', Exception: " + e);
                 }
-            }
+            })().then(resolve);
         """
         )
 
@@ -239,7 +260,7 @@ class TestNoWindowUpdateRestart(MarionetteTestCase):
 
                 let aus = Cc["@mozilla.org/updates/update-service;1"]
                     .getService(Ci.nsIApplicationUpdateService);
-                aus.checkForBackgroundUpdates();
+                await aus.checkForBackgroundUpdates();
 
                 await updateDownloadedPromise;
 

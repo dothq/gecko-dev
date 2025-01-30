@@ -10,25 +10,33 @@
  * of nsILoginManager and nsILoginManagerStorage.
  */
 
-import { Logic } from "resource://gre/modules/LoginManager.shared.mjs";
+import { Logic } from "resource://gre/modules/LoginManager.shared.sys.mjs";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   OSKeyStore: "resource://gre/modules/OSKeyStore.sys.mjs",
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
 });
+
+XPCOMUtils.defineLazyServiceGetter(
+  lazy,
+  "Crypto",
+  "@mozilla.org/login-manager/crypto/SDR;1",
+  "nsILoginManagerCrypto"
+);
 
 export class ParentAutocompleteOption {
   image;
-  title;
-  subtitle;
+  label;
+  secondary;
   fillMessageName;
   fillMessageData;
 
-  constructor(image, title, subtitle, fillMessageName, fillMessageData) {
+  constructor(image, label, secondary, fillMessageName, fillMessageData) {
     this.image = image;
-    this.title = title;
-    this.subtitle = subtitle;
+    this.label = label;
+    this.secondary = secondary;
     this.fillMessageName = fillMessageName;
     this.fillMessageData = fillMessageData;
   }
@@ -366,7 +374,7 @@ class ImportRowProcessor {
     return this.summary;
   }
 }
-
+const OS_AUTH_FOR_PASSWORDS_PREF = "signon.management.page.os-auth.optout";
 /**
  * Contains functions shared by different Login Manager components.
  */
@@ -394,13 +402,12 @@ export const LoginHelper = {
   testOnlyUserHasInteractedWithDocument: null,
   userInputRequiredToCapture: null,
   captureInputChanges: null,
+  OS_AUTH_FOR_PASSWORDS_PREF,
 
   init() {
     // Watch for pref changes to update cached pref values.
     Services.prefs.addObserver("signon.", () => this.updateSignonPrefs());
     this.updateSignonPrefs();
-    Services.telemetry.setEventRecordingEnabled("pwmgr", true);
-    Services.telemetry.setEventRecordingEnabled("form_autocomplete", true);
 
     // Watch for FXA Logout to reset signon.firefoxRelay to 'available'
     // Using hard-coded value for FxAccountsCommon.ONLOGOUT_NOTIFICATION because
@@ -432,9 +439,6 @@ export const LoginHelper = {
     );
     this.generationAvailable = Services.prefs.getBoolPref(
       "signon.generation.available"
-    );
-    this.generationConfidenceThreshold = parseFloat(
-      Services.prefs.getStringPref("signon.generation.confidenceThreshold")
     );
     this.generationEnabled = Services.prefs.getBoolPref(
       "signon.generation.enabled"
@@ -666,40 +670,11 @@ export const LoginHelper = {
    * Strip out things like the userPass portion and handle javascript:.
    */
   getLoginOrigin(uriString, allowJS = false) {
-    try {
-      const mozProxyRegex = /^moz-proxy:\/\//i;
-      const isMozProxy = !!uriString.match(mozProxyRegex);
-      if (isMozProxy) {
-        // Special handling because uri.displayHostPort throws on moz-proxy://
-        return (
-          "moz-proxy://" +
-          Services.io.newURI(uriString.replace(mozProxyRegex, "https://"))
-            .displayHostPort
-        );
-      }
-
-      const uri = Services.io.newURI(uriString);
-      if (allowJS && uri.scheme == "javascript") {
-        return "javascript:";
-      }
-
-      // Build this manually instead of using prePath to avoid including the userPass portion.
-      return uri.scheme + "://" + uri.displayHostPort;
-    } catch {
-      return null;
-    }
+    return Logic.getLoginOrigin(uriString, allowJS);
   },
 
   getFormActionOrigin(form) {
-    let uriString = form.action;
-
-    // A blank or missing action submits to where it came from.
-    if (uriString == "") {
-      // ala bug 297761
-      uriString = form.baseURI;
-    }
-
-    return this.getLoginOrigin(uriString, true);
+    return Logic.getFormActionOrigin(form);
   },
 
   /**
@@ -1264,7 +1239,8 @@ export const LoginHelper = {
 
     const paramsPart = params.toString() ? `?${params}` : "";
 
-    const browser = window.gBrowser ?? window.opener?.gBrowser;
+    let browserWindow = lazy.BrowserWindowTracker.getTopWindow();
+    const browser = browserWindow.gBrowser ?? browserWindow.opener?.gBrowser;
 
     const tab = browser.addTrustedTab(`about:logins${paramsPart}`, {
       inBackground: false,
@@ -1286,29 +1262,7 @@ export const LoginHelper = {
    *                    be treated as a password input
    */
   isPasswordFieldType(element, { ignoreConnect = false } = {}) {
-    if (!HTMLInputElement.isInstance(element)) {
-      return false;
-    }
-
-    if (!element.isConnected && !ignoreConnect) {
-      // If the element isn't connected then it isn't visible to the user so
-      // shouldn't be considered. It must have been connected in the past.
-      return false;
-    }
-
-    if (!element.hasBeenTypePassword) {
-      return false;
-    }
-
-    // Ensure the element is of a type that could have autocomplete.
-    // These include the types with user-editable values. If not, even if it used to be
-    // a type=password, we can't treat it as a password input now
-    let acInfo = element.getAutocompleteInfo();
-    if (!acInfo) {
-      return false;
-    }
-
-    return true;
+    return Logic.isPasswordFieldType(element, { ignoreConnect });
   },
 
   /**
@@ -1324,41 +1278,7 @@ export const LoginHelper = {
    *                    of the username types.
    */
   isUsernameFieldType(element, { ignoreConnect = false } = {}) {
-    if (!HTMLInputElement.isInstance(element)) {
-      return false;
-    }
-
-    if (!element.isConnected && !ignoreConnect) {
-      // If the element isn't connected then it isn't visible to the user so
-      // shouldn't be considered. It must have been connected in the past.
-      return false;
-    }
-
-    if (element.hasBeenTypePassword) {
-      return false;
-    }
-
-    if (!Logic.inputTypeIsCompatibleWithUsername(element)) {
-      return false;
-    }
-
-    let acFieldName = element.getAutocompleteInfo().fieldName;
-    if (
-      !(
-        acFieldName == "username" ||
-        acFieldName == "webauthn" ||
-        // Bug 1540154: Some sites use tel/email on their username fields.
-        acFieldName == "email" ||
-        acFieldName == "tel" ||
-        acFieldName == "tel-national" ||
-        acFieldName == "off" ||
-        acFieldName == "on" ||
-        acFieldName == ""
-      )
-    ) {
-      return false;
-    }
-    return true;
+    return Logic.isUsernameFieldType(element, { ignoreConnect });
   },
 
   /**
@@ -1419,7 +1339,7 @@ export const LoginHelper = {
    * @returns {boolean} True if any of the rules matches
    */
   isInferredNonUsernameField(element) {
-    const expr = /search|code/i;
+    const expr = /\b(search|code|add)\b/i;
 
     if (
       Logic.elementAttrsMatchRegex(element, expr) ||
@@ -1583,6 +1503,96 @@ export const LoginHelper = {
   },
 
   /**
+   * Get the decrypted value for a string pref.
+   *
+   * @param {string} prefName -> The pref whose value is needed.
+   * @param {string} safeDefaultValue -> Value to be returned incase the pref is not yet set.
+   * @returns {string}
+   */
+  getSecurePref(prefName, safeDefaultValue) {
+    if (Services.prefs.getBoolPref("security.nocertdb", false)) {
+      return false;
+    }
+    try {
+      const encryptedValue = Services.prefs.getStringPref(prefName, "");
+      return encryptedValue === ""
+        ? safeDefaultValue
+        : lazy.Crypto.decrypt(encryptedValue);
+    } catch {
+      return safeDefaultValue;
+    }
+  },
+
+  /**
+   * Set the pref to the encrypted form of the value.
+   *
+   * @param {string} prefName -> The pref whose value is to be set.
+   * @param {string} value -> The value to be set in its encrypted form.
+   */
+  setSecurePref(prefName, value) {
+    if (Services.prefs.getBoolPref("security.nocertdb", false)) {
+      return;
+    }
+    if (value) {
+      const encryptedValue = lazy.Crypto.encrypt(value);
+      Services.prefs.setStringPref(prefName, encryptedValue);
+    } else {
+      Services.prefs.clearUserPref(prefName);
+    }
+  },
+
+  /**
+   * Get whether the OSAuth is enabled or not.
+   *
+   * @param {string} prefName -> The name of the pref (creditcards or addresses)
+   * @returns {boolean}
+   */
+  getOSAuthEnabled(prefName) {
+    return (
+      lazy.OSKeyStore.canReauth() &&
+      this.getSecurePref(prefName, "") !== "opt out"
+    );
+  },
+
+  /**
+   * Set whether the OSAuth is enabled or not.
+   *
+   * @param {string} prefName -> The pref to encrypt.
+   * @param {boolean} enable -> Whether the pref is to be enabled.
+   */
+  setOSAuthEnabled(prefName, enable) {
+    this.setSecurePref(prefName, enable ? null : "opt out");
+  },
+
+  async verifyUserOSAuth(
+    prefName,
+    promptMessage,
+    captionDialog = "",
+    parentWindow = null,
+    generateKeyIfNotAvailable = true
+  ) {
+    if (!this.getOSAuthEnabled(prefName)) {
+      promptMessage = false;
+    }
+    try {
+      return (
+        await lazy.OSKeyStore.ensureLoggedIn(
+          promptMessage,
+          captionDialog,
+          parentWindow,
+          generateKeyIfNotAvailable
+        )
+      ).authenticated;
+    } catch (ex) {
+      // Since Win throws an exception whereas Mac resolves to false upon cancelling.
+      if (ex.result !== Cr.NS_ERROR_FAILURE) {
+        throw ex;
+      }
+    }
+    return false;
+  },
+
+  /**
    * Shows the Primary Password prompt if enabled, or the
    * OS auth dialog otherwise.
    * @param {Element} browser
@@ -1612,8 +1622,8 @@ export const LoginHelper = {
     if (expirationTime && Date.now() < expirationTime) {
       isAuthorized = true;
       telemetryEvent = {
-        object: token.hasPassword ? "master_password" : "os_auth",
-        method: "reauthenticate",
+        name:
+          "reauthenticate" + (token.hasPassword ? "MasterPassword" : "OsAuth"),
         value: "success_no_prompt",
       };
       return {
@@ -1626,8 +1636,7 @@ export const LoginHelper = {
     if (!token.hasPassword && !OSReauthEnabled) {
       isAuthorized = true;
       telemetryEvent = {
-        object: "os_auth",
-        method: "reauthenticate",
+        name: "reauthenticateOsAuth",
         value: "success_disabled",
       };
       return {
@@ -1637,18 +1646,20 @@ export const LoginHelper = {
     }
     // Use the OS auth dialog if there is no primary password
     if (!token.hasPassword && OSReauthEnabled) {
-      let result = await lazy.OSKeyStore.ensureLoggedIn(
+      let isAuthorized = await this.verifyUserOSAuth(
+        OS_AUTH_FOR_PASSWORDS_PREF,
         messageText,
         captionText,
         browser.ownerGlobal,
         false
       );
-      isAuthorized = result.authenticated;
+      let value = lazy.OSKeyStore.canReauth()
+        ? "success"
+        : "success_unsupported_platform";
+
       telemetryEvent = {
-        object: "os_auth",
-        method: "reauthenticate",
-        value: result.auth_details,
-        extra: result.auth_details_extra,
+        name: "reauthenticateOsAuth",
+        value: isAuthorized ? value : "fail",
       };
       return {
         isAuthorized,
@@ -1679,8 +1690,7 @@ export const LoginHelper = {
     }
     isAuthorized = token.isLoggedIn();
     telemetryEvent = {
-      object: "master_password",
-      method: "reauthenticate",
+      name: "reauthenticateMasterPassword",
       value: isAuthorized ? "success" : "fail",
     };
     return {

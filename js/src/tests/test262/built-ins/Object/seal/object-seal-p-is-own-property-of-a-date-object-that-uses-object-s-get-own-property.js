@@ -9,14 +9,16 @@ description: >
 includes: [propertyHelper.js]
 ---*/
 
-var obj = new Date();
+var obj = new Date(0);
 
 obj.foo = 10;
 
 assert(Object.isExtensible(obj));
 Object.seal(obj);
 
-verifyNotConfigurable(obj, "foo");
-assert.sameValue(obj.foo, 10);
+verifyProperty(obj, "foo", {
+  value: 10,
+  configurable: false,
+});
 
 reportCompare(0, 0);

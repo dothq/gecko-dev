@@ -344,7 +344,7 @@ public final class GeckoLoader {
 
   private static boolean attemptLoad(final String path) {
     try {
-      System.load(path);
+      System.loadLibrary(path);
       return true;
     } catch (final Throwable e) {
       Log.wtf(LOGTAG, "Couldn't load " + path + ": " + e);
@@ -414,13 +414,7 @@ public final class GeckoLoader {
 
   // These methods are implemented in mozglue/android/APKOpen.cpp
   public static native void nativeRun(
-      String[] args,
-      int prefsFd,
-      int prefMapFd,
-      int ipcFd,
-      int crashFd,
-      boolean xpcshell,
-      String outFilePath);
+      String[] args, int[] fds, boolean xpcshell, String outFilePath);
 
   private static native void loadGeckoLibsNative();
 

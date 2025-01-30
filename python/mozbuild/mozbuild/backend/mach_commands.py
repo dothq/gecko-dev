@@ -13,6 +13,7 @@ from mach.decorators import Command, CommandArgument
 from mozfile import which
 
 from mozbuild import build_commands
+from mozbuild.util import cpu_count
 
 
 @Command(
@@ -32,12 +33,14 @@ from mozbuild import build_commands
 def run(command_context, ide, no_interactive, args):
     interactive = not no_interactive
 
+    backend = None
     if ide == "eclipse":
         backend = "CppEclipse"
     elif ide == "visualstudio":
         backend = "VisualStudio"
     elif ide == "vscode":
-        backend = "Clangd"
+        if not command_context.config_environment.is_artifact_build:
+            backend = "Clangd"
 
     if ide == "eclipse" and not which("eclipse"):
         command_context.log(
@@ -89,15 +92,16 @@ def run(command_context, ide, no_interactive, args):
         if res != 0:
             return 1
 
-    # Generate or refresh the IDE backend.
-    python = command_context.virtualenv_manager.python_path
-    config_status = os.path.join(command_context.topobjdir, "config.status")
-    args = [python, config_status, "--backend=%s" % backend]
-    res = command_context._run_command_in_objdir(
-        args=args, pass_thru=True, ensure_exit_code=False
-    )
-    if res != 0:
-        return 1
+    if backend:
+        # Generate or refresh the IDE backend.
+        python = command_context.virtualenv_manager.python_path
+        config_status = os.path.join(command_context.topobjdir, "config.status")
+        args = [python, config_status, "--backend=%s" % backend]
+        res = command_context._run_command_in_objdir(
+            args=args, pass_thru=True, ensure_exit_code=False
+        )
+        if res != 0:
+            return 1
 
     if ide == "eclipse":
         eclipse_workspace_dir = get_eclipse_workspace_path(command_context)
@@ -300,8 +304,6 @@ def setup_clangd_rust_in_vscode(command_context):
         if rc != 0:
             return rc
 
-    import multiprocessing
-
     from mozbuild.code_analysis.utils import ClangTidyConfig
 
     clang_tidy_cfg = ClangTidyConfig(command_context.topsrcdir)
@@ -316,7 +318,7 @@ def setup_clangd_rust_in_vscode(command_context):
         "cargo",
         "check",
         "-j",
-        str(multiprocessing.cpu_count() // 2),
+        str(cpu_count() // 2),
         "--all-crates",
         "--message-format-json",
     ]
@@ -344,7 +346,7 @@ def setup_clangd_rust_in_vscode(command_context):
         "clangd.path": clangd_path,
         "clangd.arguments": [
             "-j",
-            str(multiprocessing.cpu_count() // 2),
+            str(cpu_count() // 2),
             "--limit-results",
             "0",
             "--completion-style",

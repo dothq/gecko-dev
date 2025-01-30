@@ -11,6 +11,7 @@
 
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
+/** @type {Lazy} */
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -18,6 +19,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ExtensionCommon: "resource://gre/modules/ExtensionCommon.sys.mjs",
   ExtensionContent: "resource://gre/modules/ExtensionContent.sys.mjs",
   ExtensionPageChild: "resource://gre/modules/ExtensionPageChild.sys.mjs",
+  ExtensionUserScriptsContent:
+    "resource://gre/modules/ExtensionUserScriptsContent.sys.mjs",
   ExtensionWorkerChild: "resource://gre/modules/ExtensionWorkerChild.sys.mjs",
   Schemas: "resource://gre/modules/Schemas.sys.mjs",
 });
@@ -49,7 +52,7 @@ ChromeUtils.defineLazyGetter(lazy, "isContentScriptProcess", () => {
 });
 
 var extensions = new DefaultWeakMap(policy => {
-  return new lazy.ExtensionChild.BrowserExtensionContent(policy);
+  return new lazy.ExtensionChild(policy);
 });
 
 var pendingExtensions = new Map();
@@ -70,6 +73,7 @@ ExtensionManager = {
       this
     );
     Services.cpmm.addMessageListener("Extension:UpdateContentScripts", this);
+    Services.cpmm.addMessageListener("Extension:UpdateUserScriptWorlds", this);
     Services.cpmm.addMessageListener("Extension:UpdatePermissions", this);
     Services.cpmm.addMessageListener("Extension:UpdateIgnoreQuarantine", this);
 
@@ -320,6 +324,19 @@ ExtensionManager = {
           break;
         }
 
+        case "Extension:UpdateUserScriptWorlds": {
+          let policy = WebExtensionPolicy.getByID(data.id);
+
+          if (policy) {
+            lazy.ExtensionUserScriptsContent.updateWorldConfig(
+              extensions.get(policy),
+              data.reset,
+              data.update
+            );
+          }
+          break;
+        }
+
         case "Extension:UpdatePermissions": {
           let policy = WebExtensionPolicy.getByID(data.id);
           if (!policy) {
@@ -342,7 +359,7 @@ ExtensionManager = {
                   perms.delete(perm);
                 }
               }
-              policy.permissions = perms;
+              policy.permissions = Array.from(perms);
             }
           }
 

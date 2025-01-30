@@ -199,10 +199,6 @@ pub fn get_unoptimized_shader_source(shader_name: &str, base_path: Option<&PathB
     }
 }
 
-pub trait FileWatcherHandler: Send {
-    fn file_changed(&self, path: PathBuf);
-}
-
 impl VertexAttributeKind {
     fn size_in_bytes(&self) -> u32 {
         match *self {
@@ -938,7 +934,7 @@ impl VertexUsageHint {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct UniformLocation(gl::GLint);
+pub struct UniformLocation(#[allow(dead_code)] gl::GLint);
 
 impl UniformLocation {
     pub const INVALID: Self = UniformLocation(-1);
@@ -1412,7 +1408,8 @@ fn parse_mali_version(version_string: &str) -> Option<(u32, u32, u32)> {
     let (r_str, version_string) = version_string.split_once("p")?;
     let r = r_str.parse().ok()?;
 
-    let (p_str, _) = version_string.split_once("-")?;
+    // Not all devices have the trailing string following the "p" number.
+    let (p_str, _) = version_string.split_once("-").unwrap_or((version_string, ""));
     let p = p_str.parse().ok()?;
 
     Some((v, r, p))
@@ -1481,13 +1478,19 @@ impl Device {
             extensions.push(gl.get_string_i(gl::EXTENSIONS, i));
         }
 
+        let is_xclipse = renderer_name.starts_with("ANGLE (Samsung Xclipse");
+
         // On debug builds, assert that each GL call is error-free. We don't do
         // this on release builds because the synchronous call can stall the
         // pipeline.
         // We block this on Mali Valhall GPUs as the extension's functions always return
         // GL_OUT_OF_MEMORY, causing us to panic in debug builds.
+        // Blocked on Xclipse GPUs as glGetDebugMessageLog returns an incorrect count,
+        // leading to an out-of-bounds index in gleam.
         let supports_khr_debug =
-            supports_extension(&extensions, "GL_KHR_debug") && !is_mali_valhall(&renderer_name);
+            supports_extension(&extensions, "GL_KHR_debug")
+            && !is_mali_valhall(&renderer_name)
+            && !is_xclipse;
         if panic_on_gl_error || cfg!(debug_assertions) {
             gl = gl::ErrorReactingGl::wrap(gl, move |gl, name, code| {
                 if supports_khr_debug {

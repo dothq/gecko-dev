@@ -58,12 +58,9 @@
 #include "vm/NativeObject-inl.h"
 #include "vm/Realm-inl.h"  // js::AutoRealm
 
-using JS::ToInt32;
-
-using js::wasm::IndexType;
+using js::wasm::AddressType;
 using js::wasm::Pages;
 using mozilla::Atomic;
-using mozilla::CheckedInt;
 using mozilla::DebugOnly;
 using mozilla::Maybe;
 using mozilla::Nothing;
@@ -172,7 +169,7 @@ uint64_t js::WasmReservedBytes() { return wasmReservedBytes; }
   return true;
 }
 
-void* js::MapBufferMemory(wasm::IndexType t, size_t mappedSize,
+void* js::MapBufferMemory(wasm::AddressType t, size_t mappedSize,
                           size_t initialCommittedSize) {
   MOZ_ASSERT(mappedSize % gc::SystemPageSize() == 0);
   MOZ_ASSERT(initialCommittedSize % gc::SystemPageSize() == 0);
@@ -207,6 +204,7 @@ void* js::MapBufferMemory(wasm::IndexType t, size_t mappedSize,
   void* data = nullptr;
   if (int err = posix_memalign(&data, gc::SystemPageSize(), mappedSize)) {
     MOZ_ASSERT(err == ENOMEM);
+    (void)err;
     return nullptr;
   }
   MOZ_ASSERT(data);
@@ -290,7 +288,7 @@ bool js::ExtendBufferMapping(void* dataPointer, size_t mappedSize,
 #endif
 }
 
-void js::UnmapBufferMemory(wasm::IndexType t, void* base, size_t mappedSize) {
+void js::UnmapBufferMemory(wasm::AddressType t, void* base, size_t mappedSize) {
   MOZ_ASSERT(mappedSize % gc::SystemPageSize() == 0);
 
 #ifdef XP_WIN
@@ -349,9 +347,7 @@ static const JSPropertySpec arraybuffer_properties[] = {
 
 static const JSFunctionSpec arraybuffer_proto_functions[] = {
     JS_SELF_HOSTED_FN("slice", "ArrayBufferSlice", 2, 0),
-#ifdef NIGHTLY_BUILD
     JS_FN("resize", ArrayBufferObject::resize, 1, 0),
-#endif
     JS_FN("transfer", ArrayBufferObject::transfer, 0, 0),
     JS_FN("transferToFixedLength", ArrayBufferObject::transferToFixedLength, 0,
           0),
@@ -360,10 +356,8 @@ static const JSFunctionSpec arraybuffer_proto_functions[] = {
 
 static const JSPropertySpec arraybuffer_proto_properties[] = {
     JS_PSG("byteLength", ArrayBufferObject::byteLengthGetter, 0),
-#ifdef NIGHTLY_BUILD
     JS_PSG("maxByteLength", ArrayBufferObject::maxByteLengthGetter, 0),
     JS_PSG("resizable", ArrayBufferObject::resizableGetter, 0),
-#endif
     JS_PSG("detached", ArrayBufferObject::detachedGetter, 0),
     JS_STRING_SYM_PS(toStringTag, "ArrayBuffer", JSPROP_READONLY),
     JS_PS_END,
@@ -427,11 +421,9 @@ static bool IsArrayBuffer(HandleValue v) {
   return v.isObject() && v.toObject().is<ArrayBufferObject>();
 }
 
-#ifdef NIGHTLY_BUILD
 static bool IsResizableArrayBuffer(HandleValue v) {
   return v.isObject() && v.toObject().is<ResizableArrayBufferObject>();
 }
-#endif
 
 MOZ_ALWAYS_INLINE bool ArrayBufferObject::byteLengthGetterImpl(
     JSContext* cx, const CallArgs& args) {
@@ -523,7 +515,6 @@ static ArrayBufferObject* ArrayBufferCopyAndDetach(
                                           arrayBuffer);
 }
 
-#ifdef NIGHTLY_BUILD
 /**
  * get ArrayBuffer.prototype.maxByteLength
  *
@@ -582,7 +573,6 @@ bool ArrayBufferObject::resizableGetter(JSContext* cx, unsigned argc,
   CallArgs args = CallArgsFromVp(argc, vp);
   return CallNonGenericMethod<IsArrayBuffer, resizableGetterImpl>(cx, args);
 }
-#endif
 
 /**
  * get ArrayBuffer.prototype.detached
@@ -676,7 +666,6 @@ bool ArrayBufferObject::transferToFixedLength(JSContext* cx, unsigned argc,
                                                                         args);
 }
 
-#ifdef NIGHTLY_BUILD
 /**
  * ArrayBuffer.prototype.resize ( newLength )
  *
@@ -731,7 +720,6 @@ bool ArrayBufferObject::resize(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   return CallNonGenericMethod<IsResizableArrayBuffer, resizeImpl>(cx, args);
 }
-#endif
 
 /*
  * ArrayBuffer.isView(obj); ES6 (Dec 2013 draft) 24.1.3.1
@@ -762,7 +750,6 @@ bool ArrayBufferObject::class_constructor(JSContext* cx, unsigned argc,
 
   // Step 3.
   mozilla::Maybe<uint64_t> maxByteLength;
-#ifdef NIGHTLY_BUILD
   if (JS::Prefs::experimental_arraybuffer_resizable()) {
     // Inline call to GetArrayBufferMaxByteLengthOption.
     if (args.get(1).isObject()) {
@@ -789,7 +776,6 @@ bool ArrayBufferObject::class_constructor(JSContext* cx, unsigned argc,
       }
     }
   }
-#endif
 
   // Step 4 (Inlined 25.1.3.1 AllocateArrayBuffer).
   // 25.1.3.1, step 4 (Inlined 10.1.13 OrdinaryCreateFromConstructor, step 2).
@@ -842,6 +828,8 @@ static ArrayBufferContents AllocateUninitializedArrayBufferContents(
     p = static_cast<uint8_t*>(cx->runtime()->onOutOfMemoryCanGC(
         js::AllocFunction::Malloc, js::ArrayBufferContentsArena, nbytes));
     if (!p) {
+      MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode,
+                            "OOM in AllocateUninitializedArrayBufferContents");
       ReportOutOfMemory(cx);
     }
   }
@@ -913,6 +901,7 @@ void ArrayBufferObject::detach(JSContext* cx,
   auto& innerViews = ObjectRealm::get(buffer).innerViews.get();
   if (InnerViewTable::ViewVector* views =
           innerViews.maybeViewsUnbarriered(buffer)) {
+    AutoTouchingGrayThings tgt;
     for (size_t i = 0; i < views->length(); i++) {
       JSObject* view = (*views)[i];
       view->as<ArrayBufferViewObject>().notifyBufferDetached();
@@ -962,6 +951,7 @@ void ResizableArrayBufferObject::resize(size_t newByteLength) {
   auto& innerViews = ObjectRealm::get(this).innerViews.get();
   if (InnerViewTable::ViewVector* views =
           innerViews.maybeViewsUnbarriered(this)) {
+    AutoTouchingGrayThings tgt;
     for (auto& view : *views) {
       view->notifyBufferResized();
     }
@@ -1175,7 +1165,7 @@ void WasmArrayRawBuffer::discard(size_t byteOffset, size_t byteLen) {
 
 /* static */
 WasmArrayRawBuffer* WasmArrayRawBuffer::AllocateWasm(
-    IndexType indexType, Pages initialPages, Pages clampedMaxPages,
+    AddressType addressType, Pages initialPages, Pages clampedMaxPages,
     const Maybe<Pages>& sourceMaxPages, const Maybe<size_t>& mapped) {
   // Prior code has asserted that initial pages is within our implementation
   // limits (wasm::MaxMemoryPages) and we can assume it is a valid size_t.
@@ -1201,7 +1191,7 @@ WasmArrayRawBuffer* WasmArrayRawBuffer::AllocateWasm(
   uint64_t mappedSizeWithHeader = mappedSize + gc::SystemPageSize();
   uint64_t numBytesWithHeader = numBytes + gc::SystemPageSize();
 
-  void* data = MapBufferMemory(indexType, (size_t)mappedSizeWithHeader,
+  void* data = MapBufferMemory(addressType, (size_t)mappedSizeWithHeader,
                                (size_t)numBytesWithHeader);
   if (!data) {
     return nullptr;
@@ -1211,7 +1201,7 @@ WasmArrayRawBuffer* WasmArrayRawBuffer::AllocateWasm(
   uint8_t* header = base - sizeof(WasmArrayRawBuffer);
 
   auto rawBuf = new (header) WasmArrayRawBuffer(
-      indexType, base, clampedMaxPages, sourceMaxPages, mappedSize, numBytes);
+      addressType, base, clampedMaxPages, sourceMaxPages, mappedSize, numBytes);
   return rawBuf;
 }
 
@@ -1226,7 +1216,7 @@ void WasmArrayRawBuffer::Release(void* mem) {
   static_assert(std::is_trivially_destructible_v<WasmArrayRawBuffer>,
                 "no need to call the destructor");
 
-  UnmapBufferMemory(header->indexType(), header->basePointer(),
+  UnmapBufferMemory(header->addressType(), header->basePointer(),
                     mappedSizeWithHeader);
 }
 
@@ -1238,11 +1228,11 @@ WasmArrayRawBuffer* ArrayBufferObject::BufferContents::wasmBuffer() const {
 template <typename ObjT, typename RawbufT>
 static ArrayBufferObjectMaybeShared* CreateSpecificWasmBuffer(
     JSContext* cx, const wasm::MemoryDesc& memory) {
-  bool useHugeMemory = wasm::IsHugeMemoryEnabled(memory.indexType());
+  bool useHugeMemory = wasm::IsHugeMemoryEnabled(memory.addressType());
   Pages initialPages = memory.initialPages();
   Maybe<Pages> sourceMaxPages = memory.maximumPages();
   Pages clampedMaxPages = wasm::ClampedMaxPages(
-      memory.indexType(), initialPages, sourceMaxPages, useHugeMemory);
+      memory.addressType(), initialPages, sourceMaxPages, useHugeMemory);
 
   Maybe<size_t> mappedSize;
 #ifdef WASM_SUPPORTS_HUGE_MEMORY
@@ -1254,7 +1244,7 @@ static ArrayBufferObjectMaybeShared* CreateSpecificWasmBuffer(
 #endif
 
   RawbufT* buffer =
-      RawbufT::AllocateWasm(memory.limits.indexType, initialPages,
+      RawbufT::AllocateWasm(memory.limits.addressType, initialPages,
                             clampedMaxPages, sourceMaxPages, mappedSize);
   if (!buffer) {
     if (useHugeMemory) {
@@ -1278,7 +1268,7 @@ static ArrayBufferObjectMaybeShared* CreateSpecificWasmBuffer(
 
     uint64_t cur = clampedMaxPages.value() / 2;
     for (; Pages(cur) > initialPages; cur /= 2) {
-      buffer = RawbufT::AllocateWasm(memory.limits.indexType, initialPages,
+      buffer = RawbufT::AllocateWasm(memory.limits.addressType, initialPages,
                                      Pages(cur), sourceMaxPages, mappedSize);
       if (buffer) {
         break;
@@ -1348,7 +1338,7 @@ static ArrayBufferObjectMaybeShared* CreateSpecificWasmBuffer(
 ArrayBufferObjectMaybeShared* js::CreateWasmBuffer(
     JSContext* cx, const wasm::MemoryDesc& memory) {
   MOZ_RELEASE_ASSERT(memory.initialPages() <=
-                     wasm::MaxMemoryPages(memory.indexType()));
+                     wasm::MaxMemoryPages(memory.addressType()));
   MOZ_RELEASE_ASSERT(cx->wasm().haveSignalHandlers);
 
   if (memory.isShared()) {
@@ -1517,12 +1507,12 @@ size_t ArrayBufferObject::wasmMappedSize() const {
   return byteLength();
 }
 
-IndexType ArrayBufferObject::wasmIndexType() const {
+AddressType ArrayBufferObject::wasmAddressType() const {
   if (isWasm()) {
-    return contents().wasmBuffer()->indexType();
+    return contents().wasmBuffer()->addressType();
   }
   MOZ_ASSERT(isPreparedForAsmJS());
-  return wasm::IndexType::I32;
+  return wasm::AddressType::I32;
 }
 
 Pages ArrayBufferObject::wasmPages() const {
@@ -1556,12 +1546,12 @@ size_t js::WasmArrayBufferMappedSize(const ArrayBufferObjectMaybeShared* buf) {
   return buf->as<SharedArrayBufferObject>().wasmMappedSize();
 }
 
-IndexType js::WasmArrayBufferIndexType(
+AddressType js::WasmArrayBufferAddressType(
     const ArrayBufferObjectMaybeShared* buf) {
   if (buf->is<ArrayBufferObject>()) {
-    return buf->as<ArrayBufferObject>().wasmIndexType();
+    return buf->as<ArrayBufferObject>().wasmAddressType();
   }
-  return buf->as<SharedArrayBufferObject>().wasmIndexType();
+  return buf->as<SharedArrayBufferObject>().wasmAddressType();
 }
 Pages js::WasmArrayBufferPages(const ArrayBufferObjectMaybeShared* buf) {
   if (buf->is<ArrayBufferObject>()) {
@@ -1597,7 +1587,7 @@ static void CheckStealPreconditions(Handle<ArrayBufferObject*> buffer,
 
 /* static */
 ArrayBufferObject* ArrayBufferObject::wasmGrowToPagesInPlace(
-    wasm::IndexType t, Pages newPages, Handle<ArrayBufferObject*> oldBuf,
+    wasm::AddressType t, Pages newPages, Handle<ArrayBufferObject*> oldBuf,
     JSContext* cx) {
   if (oldBuf->isLengthPinned()) {
     return nullptr;
@@ -1657,7 +1647,7 @@ ArrayBufferObject* ArrayBufferObject::wasmGrowToPagesInPlace(
 
 /* static */
 ArrayBufferObject* ArrayBufferObject::wasmMovingGrowToPages(
-    IndexType t, Pages newPages, Handle<ArrayBufferObject*> oldBuf,
+    AddressType t, Pages newPages, Handle<ArrayBufferObject*> oldBuf,
     JSContext* cx) {
   // On failure, do not throw and ensure that the original buffer is
   // unmodified and valid.
@@ -1672,7 +1662,7 @@ ArrayBufferObject* ArrayBufferObject::wasmMovingGrowToPages(
     return nullptr;
   }
   MOZ_ASSERT(newPages <= wasm::MaxMemoryPages(t) &&
-             newPages.byteLength() < ArrayBufferObject::ByteLengthLimit);
+             newPages.byteLength() <= ArrayBufferObject::ByteLengthLimit);
 
   // We have checked against the clamped maximum and so we know we can convert
   // to byte lengths now.
@@ -1691,8 +1681,9 @@ ArrayBufferObject* ArrayBufferObject::wasmMovingGrowToPages(
 
   Pages clampedMaxPages =
       wasm::ClampedMaxPages(t, newPages, Nothing(), /* hugeMemory */ false);
-  WasmArrayRawBuffer* newRawBuf = WasmArrayRawBuffer::AllocateWasm(
-      oldBuf->wasmIndexType(), newPages, clampedMaxPages, Nothing(), Nothing());
+  WasmArrayRawBuffer* newRawBuf =
+      WasmArrayRawBuffer::AllocateWasm(oldBuf->wasmAddressType(), newPages,
+                                       clampedMaxPages, Nothing(), Nothing());
   if (!newRawBuf) {
     return nullptr;
   }
@@ -1752,6 +1743,7 @@ static ArrayBufferType* NewArrayBufferObject(JSContext* cx, HandleObject proto_,
   if (!proto) {
     proto = GlobalObject::getOrCreatePrototype(cx, JSProto_ArrayBuffer);
     if (!proto) {
+      MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode, "creating ArrayBuffer proto");
       return nullptr;
     }
   }
@@ -1769,6 +1761,7 @@ static ArrayBufferType* NewArrayBufferObject(JSContext* cx, HandleObject proto_,
       SharedShape::getInitialShape(cx, clasp, cx->realm(), AsTaggedProto(proto),
                                    nfixed, ObjectFlags()));
   if (!shape) {
+    MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode, "get ArrayBuffer initial shape");
     return nullptr;
   }
 
@@ -1777,7 +1770,12 @@ static ArrayBufferType* NewArrayBufferObject(JSContext* cx, HandleObject proto_,
   MOZ_ASSERT(!CanNurseryAllocateFinalizedClass(clasp));
   constexpr gc::Heap heap = gc::Heap::Tenured;
 
-  return NativeObject::create<ArrayBufferType>(cx, allocKind, heap, shape);
+  auto* buffer =
+      NativeObject::create<ArrayBufferType>(cx, allocKind, heap, shape);
+  if (!buffer) {
+    MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode, "create NativeObject failed");
+  }
+  return buffer;
 }
 
 // Creates a new ArrayBufferObject with %ArrayBuffer.prototype% as proto and no
@@ -1888,6 +1886,15 @@ ArrayBufferObject::createUninitializedBufferAndData(
                ? AllocateUninitializedArrayBufferContents(cx, nbytes)
                : AllocateArrayBufferContents(cx, nbytes);
     if (!data) {
+      if (cx->brittleMode) {
+        if (nbytes < INT32_MAX) {
+          MOZ_DIAGNOSTIC_CRASH("ArrayBuffer allocation OOM < 2GB - 1");
+        } else {
+          MOZ_DIAGNOSTIC_ASSERT(
+              false,
+              "ArrayBuffer allocation OOM between 2GB and ByteLengthLimit");
+        }
+      }
       return {nullptr, nullptr};
     }
   }
@@ -2246,6 +2253,7 @@ ArrayBufferObject* ArrayBufferObject::createZeroed(
     JSContext* cx, size_t nbytes, HandleObject proto /* = nullptr */) {
   // 24.1.1.1, step 3 (Inlined 6.2.6.1 CreateByteDataBlock, step 2).
   if (!CheckArrayBufferTooLarge(cx, nbytes)) {
+    MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode, "buffer too large");
     return nullptr;
   }
 
@@ -2468,6 +2476,7 @@ bool ArrayBufferObject::ensureNonInline(JSContext* cx,
   if (buffer->isLengthPinned()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_ARRAYBUFFER_LENGTH_PINNED);
+    MOZ_DIAGNOSTIC_ASSERT(!cx->brittleMode, "ArrayBuffer length pinned");
     return false;
   }
 
@@ -2578,8 +2587,15 @@ size_t ArrayBufferObject::objectMoved(JSObject* obj, JSObject* old) {
   auto& dst = obj->as<ArrayBufferType>();
   const auto& src = old->as<ArrayBufferType>();
 
-  MOZ_ASSERT(
-      !obj->runtimeFromMainThread()->gc.nursery().isInside(src.dataPointer()));
+#ifdef DEBUG
+  // Check the data pointer is not inside the nursery, but take account of the
+  // fact that inline data pointers for zero length buffers can point to the end
+  // of a chunk which can abut the start of the nursery.
+  if (src.byteLength() != 0 || (uintptr_t(src.dataPointer()) & gc::ChunkMask)) {
+    Nursery& nursery = obj->runtimeFromMainThread()->gc.nursery();
+    MOZ_ASSERT(!nursery.isInside(src.dataPointer()));
+  }
+#endif
 
   // Fix up possible inline data pointer.
   if (src.hasInlineData()) {
@@ -2830,7 +2846,7 @@ bool InnerViewTable::addView(JSContext* cx, ArrayBufferObject* buffer,
   if (isNurseryView && !hadNurseryViews && nurseryKeysValid) {
 #ifdef DEBUG
     if (nurseryKeys.length() < 100) {
-      for (auto* key : nurseryKeys) {
+      for (const auto& key : nurseryKeys) {
         MOZ_ASSERT(key != buffer);
       }
     }
@@ -2859,31 +2875,53 @@ void InnerViewTable::removeViews(ArrayBufferObject* buffer) {
   map.remove(ptr);
 }
 
-bool InnerViewTable::traceWeak(JSTracer* trc) { return map.traceWeak(trc); }
+bool InnerViewTable::traceWeak(JSTracer* trc) {
+  nurseryKeys.traceWeak(trc);
+  map.traceWeak(trc);
+  return true;
+}
 
 void InnerViewTable::sweepAfterMinorGC(JSTracer* trc) {
   MOZ_ASSERT(needsSweepAfterMinorGC());
 
-  if (nurseryKeysValid) {
-    for (size_t i = 0; i < nurseryKeys.length(); i++) {
-      ArrayBufferObject* buffer = nurseryKeys[i];
+  NurseryKeysVector keys;
+  bool valid = true;
+  std::swap(nurseryKeys, keys);
+  std::swap(nurseryKeysValid, valid);
+
+  // Use nursery keys vector if possible.
+  if (valid) {
+    for (ArrayBufferObject* buffer : keys) {
       MOZ_ASSERT(!gc::IsInsideNursery(buffer));
       auto ptr = map.lookup(buffer);
-      if (ptr && !ptr->value().sweepAfterMinorGC(trc)) {
+      if (ptr && !sweepViewsAfterMinorGC(trc, buffer, ptr->value())) {
         map.remove(ptr);
       }
     }
-  } else {
-    for (ArrayBufferViewMap::Enum e(map); !e.empty(); e.popFront()) {
-      MOZ_ASSERT(!gc::IsInsideNursery(e.front().key()));
-      if (!e.front().value().sweepAfterMinorGC(trc)) {
-        e.removeFront();
-      }
-    }
+    return;
   }
 
-  nurseryKeys.clear();
-  nurseryKeysValid = true;
+  // Otherwise look at every map entry.
+  for (ArrayBufferViewMap::Enum e(map); !e.empty(); e.popFront()) {
+    MOZ_ASSERT(!gc::IsInsideNursery(e.front().key()));
+    if (!sweepViewsAfterMinorGC(trc, e.front().key(), e.front().value())) {
+      e.removeFront();
+    }
+  }
+}
+
+bool InnerViewTable::sweepViewsAfterMinorGC(JSTracer* trc,
+                                            ArrayBufferObject* buffer,
+                                            Views& views) {
+  if (!views.sweepAfterMinorGC(trc)) {
+    return false;  // No more views.
+  }
+
+  if (views.hasNurseryViews() && !nurseryKeys.append(buffer)) {
+    nurseryKeysValid = false;
+  }
+
+  return true;
 }
 
 size_t InnerViewTable::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) {

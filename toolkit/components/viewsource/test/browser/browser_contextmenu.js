@@ -42,7 +42,7 @@ async function onViewSourceWindowOpen(aWindow) {
   gCopyEmailMenuItem = aWindow.document.getElementById("context-copyemail");
 
   let browser = gBrowser.selectedBrowser;
-  await SpecialPowers.spawn(browser, [], async function (arg) {
+  await SpecialPowers.spawn(browser, [], async function () {
     let tags = content.document.querySelectorAll("a[href]");
     Assert.equal(
       tags[0].href,
@@ -54,7 +54,7 @@ async function onViewSourceWindowOpen(aWindow) {
 
   expectedData.push(["a[href]", true, false, "http://example.com/"]);
   expectedData.push(["a[href^=mailto]", false, true, "abc@def.ghi"]);
-  expectedData.push(["span", false, false, null]);
+  expectedData.push(["span:not([id])", false, false, null]);
 }
 
 async function checkMenuItems(

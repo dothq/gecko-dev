@@ -65,14 +65,6 @@ const CONFIG_EVERYWHERE = [
       },
     ],
   },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
-  },
 ];
 
 const CONFIG_EXPERIMENT = [
@@ -88,14 +80,6 @@ const CONFIG_EXPERIMENT = [
         },
       },
     ],
-  },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
   },
 ];
 
@@ -162,14 +146,6 @@ const CONFIG_LOCALES_AND_REGIONS = [
         },
       },
     ],
-  },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
   },
 ];
 
@@ -238,14 +214,6 @@ const CONFIG_DISTRIBUTION = [
       },
     ],
   },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
-  },
 ];
 
 const CONFIG_CHANNEL_APPLICATION = [
@@ -274,14 +242,6 @@ const CONFIG_CHANNEL_APPLICATION = [
         },
       },
     ],
-  },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
   },
 ];
 
@@ -327,14 +287,6 @@ const CONFIG_OPTIONAL = [
       },
     ],
   },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
-  },
 ];
 
 const CONFIG_VERSIONS = [
@@ -378,21 +330,60 @@ const CONFIG_VERSIONS = [
       },
     ],
   },
+];
+
+const CONFIG_DEVICE_TYPE_LAYOUT = [
   {
-    recordType: "defaultEngines",
-    specificDefaults: [],
+    recordType: "engine",
+    identifier: "engine-no-device-type",
+    base: {},
+    variants: [
+      {
+        environment: {
+          allRegionsAndLocales: true,
+        },
+      },
+    ],
   },
   {
-    recordType: "engineOrders",
-    orders: [],
+    recordType: "engine",
+    identifier: "engine-single-device-type",
+    base: {},
+    variants: [
+      {
+        environment: {
+          allRegionsAndLocales: true,
+          deviceType: ["tablet"],
+        },
+      },
+    ],
+  },
+  {
+    recordType: "engine",
+    identifier: "engine-multiple-device-type",
+    base: {},
+    variants: [
+      {
+        environment: {
+          allRegionsAndLocales: true,
+          deviceType: ["tablet", "smartphone"],
+        },
+      },
+    ],
   },
 ];
 
 const engineSelector = new SearchEngineSelector();
-let settings;
-let settingOverrides;
-let configStub;
-let overrideStub;
+
+add_setup(async () => {
+  // In this test we have not specified the combinations of default search engine
+  // according to the environment. This causes the selector to fall back to the first
+  // engine in the list and throw an error about it. For the purposes of this test,
+  // this is not an issue.
+  consoleAllowList.push(
+    "Could not find a matching default engine, using the first one in the list"
+  );
+});
 
 /**
  * This function asserts if the actual engine identifiers returned equals
@@ -414,22 +405,20 @@ async function assertActualEnginesEqualsExpected(
   message
 ) {
   engineSelector._configuration = null;
-  configStub.returns(config);
+  SearchTestUtils.setRemoteSettingsConfig(config, []);
 
-  let { engines } = await engineSelector.fetchEngineConfiguration(userEnv);
-  let actualEngines = engines.map(engine => engine.identifier);
-  Assert.deepEqual(actualEngines, expectedEngines, message);
+  if (expectedEngines.length) {
+    let { engines } = await engineSelector.fetchEngineConfiguration(userEnv);
+    let actualEngines = engines.map(engine => engine.identifier);
+    Assert.deepEqual(actualEngines, expectedEngines, message);
+  } else {
+    await Assert.rejects(
+      engineSelector.fetchEngineConfiguration(userEnv),
+      /Could not find any engines in the filtered configuration/,
+      message
+    );
+  }
 }
-
-add_setup(async function () {
-  settings = await RemoteSettings(SearchUtils.NEW_SETTINGS_KEY);
-  configStub = sinon.stub(settings, "get");
-  settingOverrides = await RemoteSettings(
-    SearchUtils.NEW_SETTINGS_OVERRIDES_KEY
-  );
-  overrideStub = sinon.stub(settingOverrides, "get");
-  overrideStub.returns([]);
-});
 
 add_task(async function test_selector_match_experiment() {
   await assertActualEnginesEqualsExpected(
@@ -791,5 +780,17 @@ add_task(async function test_engine_selector_does_not_match_optional_engines() {
     },
     ["engine-optional-false", "engine-optional-undefined"],
     "Should match engines where optional flag is false or undefined"
+  );
+});
+
+add_task(async function test_engine_selector_match_device_type() {
+  await assertActualEnginesEqualsExpected(
+    CONFIG_DEVICE_TYPE_LAYOUT,
+    {
+      locale: "en-CA",
+      region: "CA",
+    },
+    ["engine-no-device-type"],
+    "Should only match engines with no device type."
   );
 });

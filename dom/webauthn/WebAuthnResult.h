@@ -13,7 +13,7 @@
 #include "nsString.h"
 
 #ifdef MOZ_WIDGET_ANDROID
-#  include "mozilla/java/WebAuthnTokenManagerNatives.h"
+#  include "mozilla/java/WebAuthnUtilsNatives.h"
 #endif
 
 #ifdef XP_WIN
@@ -44,16 +44,17 @@ class WebAuthnRegisterResult final : public nsIWebAuthnRegisterResult {
 
 #ifdef MOZ_WIDGET_ANDROID
   explicit WebAuthnRegisterResult(
-      const java::WebAuthnTokenManager::MakeCredentialResponse::LocalRef&
-          aResponse) {
+      const java::WebAuthnUtils::MakeCredentialResponse::LocalRef& aResponse) {
     mAttestationObject.AppendElements(
         reinterpret_cast<uint8_t*>(
             aResponse->AttestationObject()->GetElements().Elements()),
         aResponse->AttestationObject()->Length());
-    mClientDataJSON = Some(nsAutoCString(
-        reinterpret_cast<const char*>(
-            aResponse->ClientDataJson()->GetElements().Elements()),
-        aResponse->ClientDataJson()->Length()));
+    if (aResponse->ClientDataJson()) {
+      mClientDataJSON = Some(nsAutoCString(
+          reinterpret_cast<const char*>(
+              aResponse->ClientDataJson()->GetElements().Elements()),
+          aResponse->ClientDataJson()->Length()));
+    }
     mCredentialId.AppendElements(
         reinterpret_cast<uint8_t*>(
             aResponse->KeyHandle()->GetElements().Elements()),
@@ -63,8 +64,8 @@ class WebAuthnRegisterResult final : public nsIWebAuthnRegisterResult {
       mTransports.AppendElement(
           jni::String::LocalRef(transports->GetElement(i))->ToString());
     }
-    // authenticator attachment is not available on Android
-    mAuthenticatorAttachment = Nothing();
+    mAuthenticatorAttachment =
+        Some(aResponse->AuthenticatorAttachment()->ToString());
   }
 #endif
 
@@ -95,6 +96,7 @@ class WebAuthnRegisterResult final : public nsIWebAuthnRegisterResult {
                 (BOOL*)pExtension->pvExtension;
             if (*pCredentialCreatedWithHmacSecret) {
               mHmacCreateSecret = Some(true);
+              mPrf = Some(true);
             }
           }
         }
@@ -131,10 +133,14 @@ class WebAuthnRegisterResult final : public nsIWebAuthnRegisterResult {
         mAuthenticatorAttachment = Some(u"cross-platform"_ns);
       }
     }
+
+    if (aResponse->dwVersion >= WEBAUTHN_CREDENTIAL_ATTESTATION_VERSION_5) {
+      if (aResponse->bPrfEnabled) {
+        mPrf = Some(true);
+      }
+    }
   }
 #endif
-
-  nsresult Anonymize();
 
  private:
   ~WebAuthnRegisterResult() = default;
@@ -145,6 +151,7 @@ class WebAuthnRegisterResult final : public nsIWebAuthnRegisterResult {
   Maybe<nsCString> mClientDataJSON;
   Maybe<bool> mCredPropsRk;
   Maybe<bool> mHmacCreateSecret;
+  Maybe<bool> mPrf;
   Maybe<nsString> mAuthenticatorAttachment;
 };
 
@@ -169,16 +176,17 @@ class WebAuthnSignResult final : public nsIWebAuthnSignResult {
 
 #ifdef MOZ_WIDGET_ANDROID
   explicit WebAuthnSignResult(
-      const java::WebAuthnTokenManager::GetAssertionResponse::LocalRef&
-          aResponse) {
+      const java::WebAuthnUtils::GetAssertionResponse::LocalRef& aResponse) {
     mAuthenticatorData.AppendElements(
         reinterpret_cast<uint8_t*>(
             aResponse->AuthData()->GetElements().Elements()),
         aResponse->AuthData()->Length());
-    mClientDataJSON = Some(nsAutoCString(
-        reinterpret_cast<const char*>(
-            aResponse->ClientDataJson()->GetElements().Elements()),
-        aResponse->ClientDataJson()->Length()));
+    if (aResponse->ClientDataJson()) {
+      mClientDataJSON = Some(nsAutoCString(
+          reinterpret_cast<const char*>(
+              aResponse->ClientDataJson()->GetElements().Elements()),
+          aResponse->ClientDataJson()->Length()));
+    }
     mCredentialId.AppendElements(
         reinterpret_cast<uint8_t*>(
             aResponse->KeyHandle()->GetElements().Elements()),
@@ -191,8 +199,8 @@ class WebAuthnSignResult final : public nsIWebAuthnSignResult {
         reinterpret_cast<uint8_t*>(
             aResponse->UserHandle()->GetElements().Elements()),
         aResponse->UserHandle()->Length());
-    // authenticator attachment is not available on Android
-    mAuthenticatorAttachment = Nothing();
+    mAuthenticatorAttachment =
+        Some(aResponse->AuthenticatorAttachment()->ToString());
   }
 #endif
 
@@ -210,6 +218,20 @@ class WebAuthnSignResult final : public nsIWebAuthnSignResult {
                                       aResponse->cbAuthenticatorData);
 
     mAuthenticatorAttachment = Nothing();  // not available
+    if (aResponse->dwVersion >= WEBAUTHN_ASSERTION_VERSION_3) {
+      if (aResponse->pHmacSecret) {
+        if (aResponse->pHmacSecret->cbFirst > 0) {
+          mPrfFirst.emplace();
+          mPrfFirst->AppendElements(aResponse->pHmacSecret->pbFirst,
+                                    aResponse->pHmacSecret->cbFirst);
+        }
+        if (aResponse->pHmacSecret->cbSecond > 0) {
+          mPrfSecond.emplace();
+          mPrfSecond->AppendElements(aResponse->pHmacSecret->pbSecond,
+                                     aResponse->pHmacSecret->cbSecond);
+        }
+      }
+    }
   }
 #endif
 
@@ -223,6 +245,8 @@ class WebAuthnSignResult final : public nsIWebAuthnSignResult {
   nsTArray<uint8_t> mUserHandle;
   Maybe<nsString> mAuthenticatorAttachment;
   Maybe<bool> mUsedAppId;
+  Maybe<nsTArray<uint8_t>> mPrfFirst;
+  Maybe<nsTArray<uint8_t>> mPrfSecond;
 };
 
 }  // namespace mozilla::dom

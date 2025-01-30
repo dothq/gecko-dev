@@ -194,6 +194,7 @@ using namespace dom;
   return NS_ERROR_FAILURE;
 #  endif
   int mib[] = {
+      // clang-format off
     CTL_KERN,
     KERN_PROC,
     KERN_PROC_PID,
@@ -202,6 +203,7 @@ using namespace dom;
     sizeof(KINFO_PROC),
     1,
 #  endif
+      // clang-format on
   };
   u_int miblen = sizeof(mib) / sizeof(mib[0]);
   size_t size = sizeof(KINFO_PROC);
@@ -1247,7 +1249,7 @@ NS_IMPL_ISUPPORTS(PageFaultsHardReporter, nsIMemoryReporter)
 #ifdef HAVE_JEMALLOC_STATS
 
 static size_t HeapOverhead(const jemalloc_stats_t& aStats) {
-  return aStats.waste + aStats.bookkeeping + aStats.page_cache +
+  return aStats.waste + aStats.bookkeeping + aStats.pages_dirty +
          aStats.bin_unused;
 }
 
@@ -1278,7 +1280,7 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
 
     // clang-format off
     MOZ_COLLECT_REPORT(
-      "heap-committed/allocated", KIND_OTHER, UNITS_BYTES, stats.allocated,
+      "heap/committed/allocated", KIND_OTHER, UNITS_BYTES, stats.allocated,
 "Memory mapped by the heap allocator that is currently allocated to the "
 "application.  This may exceed the amount of memory requested by the "
 "application because the allocator regularly rounds up request sizes. (The "
@@ -1286,14 +1288,14 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
 
     MOZ_COLLECT_REPORT(
       "heap-allocated", KIND_OTHER, UNITS_BYTES, stats.allocated,
-"The same as 'heap-committed/allocated'.");
+"The same as 'heap/committed/allocated'.");
 
-    // We mark this and the other heap-overhead reporters as KIND_NONHEAP
+    // We mark this and the other heap/committed/overhead reporters as KIND_NONHEAP
     // because KIND_HEAP memory means "counted in heap-allocated", which
     // this is not.
     for (auto& bin : bin_stats) {
       MOZ_ASSERT(bin.size);
-      nsPrintfCString path("explicit/heap-overhead/bin-unused/bin-%zu",
+      nsPrintfCString path("heap/committed/bin-unused/bin-%zu",
           bin.size);
       aHandleReport->Callback(EmptyCString(), path, KIND_NONHEAP, UNITS_BYTES,
         bin.bytes_unused,
@@ -1304,36 +1306,63 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
 
     if (stats.waste > 0) {
       MOZ_COLLECT_REPORT(
-        "explicit/heap-overhead/waste", KIND_NONHEAP, UNITS_BYTES,
+        "heap/committed/waste", KIND_NONHEAP, UNITS_BYTES,
         stats.waste,
 "Committed bytes which do not correspond to an active allocation and which the "
 "allocator is not intentionally keeping alive (i.e., not "
-"'explicit/heap-overhead/{bookkeeping,page-cache,bin-unused}').");
+"'heap/{bookkeeping,unused-pages,bin-unused}').");
     }
 
     MOZ_COLLECT_REPORT(
-      "explicit/heap-overhead/bookkeeping", KIND_NONHEAP, UNITS_BYTES,
+      "heap/committed/bookkeeping", KIND_NONHEAP, UNITS_BYTES,
       stats.bookkeeping,
 "Committed bytes which the heap allocator uses for internal data structures.");
 
     MOZ_COLLECT_REPORT(
-      "explicit/heap-overhead/page-cache", KIND_NONHEAP, UNITS_BYTES,
-      stats.page_cache,
+      "heap/committed/unused-pages/dirty", KIND_NONHEAP, UNITS_BYTES,
+      stats.pages_dirty,
 "Memory which the allocator could return to the operating system, but hasn't. "
 "The allocator keeps this memory around as an optimization, so it doesn't "
 "have to ask the OS the next time it needs to fulfill a request. This value "
 "is typically not larger than a few megabytes.");
 
     MOZ_COLLECT_REPORT(
-      "heap-committed/overhead", KIND_OTHER, UNITS_BYTES,
-      HeapOverhead(stats),
-"The sum of 'explicit/heap-overhead/*'.");
-
+      "heap/decommitted/unused-pages/fresh", KIND_OTHER, UNITS_BYTES, stats.pages_fresh,
+"Amount of memory currently mapped but has never been used.");
+    // A duplicate entry in the decommitted part of the tree.
     MOZ_COLLECT_REPORT(
-      "heap-mapped", KIND_OTHER, UNITS_BYTES, stats.mapped,
-"Amount of memory currently mapped. Includes memory that is uncommitted, i.e. "
-"neither in physical memory nor paged to disk.");
+      "decommitted/heap/unused-pages/fresh", KIND_OTHER, UNITS_BYTES, stats.pages_fresh,
+"Amount of memory currently mapped but has never been used.");
 
+// On MacOS madvised memory is still counted in the resident set until the OS
+// actually decommits it.
+#ifdef XP_MACOSX
+#define MADVISED_GROUP "committed"
+#else
+#define MADVISED_GROUP "decommitted"
+#endif
+    MOZ_COLLECT_REPORT(
+      "heap/" MADVISED_GROUP "/unused-pages/madvised", KIND_OTHER, UNITS_BYTES,
+      stats.pages_madvised,
+"Amount of memory currently mapped, not used and that the OS should remove "
+"from the application's resident set.");
+    // A duplicate entry in the decommitted part of the tree.
+    MOZ_COLLECT_REPORT(
+      "decommitted/heap/unused-pages/madvised", KIND_OTHER, UNITS_BYTES, stats.pages_madvised,
+"Amount of memory currently mapped, not used and that the OS should remove "
+"from the application's resident set.");
+
+    {
+      size_t decommitted = stats.mapped - stats.allocated - stats.waste - stats.pages_dirty - stats.pages_fresh - stats.bookkeeping - stats.bin_unused;
+      MOZ_COLLECT_REPORT(
+        "heap/decommitted/unmapped", KIND_OTHER, UNITS_BYTES, decommitted,
+  "Amount of memory currently mapped but not committed, "
+  "neither in physical memory nor paged to disk.");
+      MOZ_COLLECT_REPORT(
+        "decommitted/heap/decommitted", KIND_OTHER, UNITS_BYTES, decommitted,
+  "Amount of memory currently mapped but not committed, "
+  "neither in physical memory nor paged to disk.");
+    }
     MOZ_COLLECT_REPORT(
       "heap-chunksize", KIND_OTHER, UNITS_BYTES, stats.chunksize,
       "Size of chunks.");
@@ -1343,11 +1372,11 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
     mozilla::phc::PHCMemoryUsage(usage);
 
     MOZ_COLLECT_REPORT(
-      "explicit/heap-overhead/phc/metadata", KIND_NONHEAP, UNITS_BYTES,
+      "explicit/phc/metadata", KIND_NONHEAP, UNITS_BYTES,
       usage.mMetadataBytes,
 "Memory used by PHC to store stacks and other metadata for each allocation");
     MOZ_COLLECT_REPORT(
-      "explicit/heap-overhead/phc/fragmentation", KIND_NONHEAP, UNITS_BYTES,
+      "explicit/phc/fragmentation", KIND_NONHEAP, UNITS_BYTES,
       usage.mFragmentationBytes,
 "The amount of memory lost due to rounding up allocations to the next page "
 "size. "
@@ -1703,72 +1732,82 @@ nsMemoryReporterManager::Init() {
   }
   isInited = true;
 
+  {
+    // Add a series of low-level reporters meant to be executed in order and
+    // before any other reporters. These reporters are never released until
+    // the manager dies (at process shutdown). Note that this currently only
+    // works for reporters expecting to be executed sync.
+    //
+    // Note that we explicitly handle our self-reporting inside
+    // GetReportsForThisProcessExtended, such that we do not need to register
+    // ourself to any array/table here.
+
+    mozilla::MutexAutoLock autoLock(mMutex);
+
 #ifdef HAVE_JEMALLOC_STATS
-  RegisterStrongReporter(new JemallocHeapReporter());
+    mStrongEternalReporters->AppendElement(new JemallocHeapReporter());
 #endif
 
 #ifdef HAVE_VSIZE_AND_RESIDENT_REPORTERS
-  RegisterStrongReporter(new VsizeReporter());
-  RegisterStrongReporter(new ResidentReporter());
+    mStrongEternalReporters->AppendElement(new VsizeReporter());
+    mStrongEternalReporters->AppendElement(new ResidentReporter());
 #endif
 
 #ifdef HAVE_VSIZE_MAX_CONTIGUOUS_REPORTER
-  RegisterStrongReporter(new VsizeMaxContiguousReporter());
+    mStrongEternalReporters->AppendElement(new VsizeMaxContiguousReporter());
 #endif
 
 #ifdef HAVE_RESIDENT_PEAK_REPORTER
-  RegisterStrongReporter(new ResidentPeakReporter());
+    mStrongEternalReporters->AppendElement(new ResidentPeakReporter());
 #endif
 
 #ifdef HAVE_RESIDENT_UNIQUE_REPORTER
-  RegisterStrongReporter(new ResidentUniqueReporter());
+    mStrongEternalReporters->AppendElement(new ResidentUniqueReporter());
 #endif
 
 #ifdef HAVE_PAGE_FAULT_REPORTERS
-  RegisterStrongReporter(new PageFaultsSoftReporter());
-  RegisterStrongReporter(new PageFaultsHardReporter());
+    mStrongEternalReporters->AppendElement(new PageFaultsSoftReporter());
+    mStrongEternalReporters->AppendElement(new PageFaultsHardReporter());
 #endif
 
 #ifdef HAVE_PRIVATE_REPORTER
-  RegisterStrongReporter(new PrivateReporter());
+    mStrongEternalReporters->AppendElement(new PrivateReporter());
 #endif
 
 #ifdef HAVE_SYSTEM_HEAP_REPORTER
-  RegisterStrongReporter(new SystemHeapReporter());
+    mStrongEternalReporters->AppendElement(new SystemHeapReporter());
 #endif
 
-  RegisterStrongReporter(new AtomTablesReporter());
+    mStrongEternalReporters->AppendElement(new AtomTablesReporter());
 
-  RegisterStrongReporter(new ThreadsReporter());
+    mStrongEternalReporters->AppendElement(new ThreadsReporter());
 
 #ifdef DEBUG
-  RegisterStrongReporter(new DeadlockDetectorReporter());
+    mStrongEternalReporters->AppendElement(new DeadlockDetectorReporter());
 #endif
 
 #ifdef MOZ_GECKO_PROFILER
-  // We have to register this here rather than in profiler_init() because
-  // profiler_init() runs prior to nsMemoryReporterManager's creation.
-  RegisterStrongReporter(new GeckoProfilerReporter());
+    // We have to register this here rather than in profiler_init() because
+    // profiler_init() runs prior to nsMemoryReporterManager's creation.
+    mStrongEternalReporters->AppendElement(new GeckoProfilerReporter());
 #endif
 
 #ifdef MOZ_DMD
-  RegisterStrongReporter(new mozilla::dmd::DMDReporter());
+    mStrongEternalReporters->AppendElement(new mozilla::dmd::DMDReporter());
 #endif
 
 #ifdef XP_WIN
-  RegisterStrongReporter(new WindowsAddressSpaceReporter());
+    mStrongEternalReporters->AppendElement(new WindowsAddressSpaceReporter());
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
-  RegisterStrongReporter(new AndroidMemoryReporter());
+    mStrongEternalReporters->AppendElement(new AndroidMemoryReporter());
 #endif
+  }  // autoLock(mMutex);
 
 #ifdef XP_UNIX
   nsMemoryInfoDumper::Initialize();
 #endif
-
-  // Report our own memory usage as well.
-  RegisterWeakReporter(this);
 
   return NS_OK;
 }
@@ -1776,8 +1815,10 @@ nsMemoryReporterManager::Init() {
 nsMemoryReporterManager::nsMemoryReporterManager()
     : mMutex("nsMemoryReporterManager::mMutex"),
       mIsRegistrationBlocked(false),
+      mStrongEternalReporters(new StrongReportersArray()),
       mStrongReporters(new StrongReportersTable()),
       mWeakReporters(new WeakReportersTable()),
+      mSavedStrongEternalReporters(nullptr),
       mSavedStrongReporters(nullptr),
       mSavedWeakReporters(nullptr),
       mNextGeneration(1),
@@ -1791,8 +1832,8 @@ nsMemoryReporterManager::nsMemoryReporterManager()
 }
 
 nsMemoryReporterManager::~nsMemoryReporterManager() {
-  delete mStrongReporters;
-  delete mWeakReporters;
+  NS_ASSERTION(!mSavedStrongEternalReporters,
+               "failed to restore eternal reporters");
   NS_ASSERTION(!mSavedStrongReporters, "failed to restore strong reporters");
   NS_ASSERTION(!mSavedWeakReporters, "failed to restore weak reporters");
 }
@@ -1803,8 +1844,12 @@ nsMemoryReporterManager::CollectReports(nsIHandleReportCallback* aHandleReport,
   size_t n = MallocSizeOf(this);
   {
     mozilla::MutexAutoLock autoLock(mMutex);
+    n += mStrongEternalReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
     n += mStrongReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
     n += mWeakReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
+    // Note that we do not include the mSaved<X>Reporters here, as during
+    // normal operations they are always nullptr and during testing we want to
+    // hide the saved variants entirely.
   }
 
   MOZ_COLLECT_REPORT("explicit/memory-reporter-manager", KIND_HEAP, UNITS_BYTES,
@@ -2027,11 +2072,26 @@ nsMemoryReporterManager::GetReportsForThisProcessExtended(
   {
     mozilla::MutexAutoLock autoLock(mMutex);
 
+    // We process our own, most sensible reporters before anyone else to avoid
+    // them measuring changes caused by other reporters' dynamic structures.
+    // Note that all eternal reporters need to be sync, too.
+    for (const auto& entry : *mStrongEternalReporters) {
+      DispatchReporter(entry, false, aHandleReport, aHandleReportData,
+                       aAnonymize);
+    }
+    // Process our self-reporting (not in any array/table). Note that when
+    // we test, we expect to execute only reporters in the swapped-in tables.
+    if (!mIsRegistrationBlocked) {
+      DispatchReporter(this, false, aHandleReport, aHandleReportData,
+                       aAnonymize);
+    }
+
+    // Now process additional reporters. Note that these are executed in an
+    // unforeseeable order (due to the hashtables being keyed on pointers).
     for (const auto& entry : *mStrongReporters) {
       DispatchReporter(entry.GetKey(), entry.GetData(), aHandleReport,
                        aHandleReportData, aAnonymize);
     }
-
     for (const auto& entry : *mWeakReporters) {
       nsCOMPtr<nsIMemoryReporter> reporter = entry.GetKey();
       DispatchReporter(reporter, entry.GetData(), aHandleReport,
@@ -2406,12 +2466,15 @@ nsMemoryReporterManager::BlockRegistrationAndHideExistingReporters() {
   mIsRegistrationBlocked = true;
 
   // Hide the existing reporters, saving them for later restoration.
+  MOZ_ASSERT(!mSavedStrongEternalReporters);
   MOZ_ASSERT(!mSavedStrongReporters);
   MOZ_ASSERT(!mSavedWeakReporters);
-  mSavedStrongReporters = mStrongReporters;
-  mSavedWeakReporters = mWeakReporters;
-  mStrongReporters = new StrongReportersTable();
-  mWeakReporters = new WeakReportersTable();
+  mSavedStrongEternalReporters.swap(mStrongEternalReporters);
+  mSavedStrongReporters.swap(mStrongReporters);
+  mSavedWeakReporters.swap(mWeakReporters);
+  mStrongEternalReporters.reset(new StrongReportersArray());
+  mStrongReporters.reset(new StrongReportersTable());
+  mWeakReporters.reset(new WeakReportersTable());
 
   return NS_OK;
 }
@@ -2425,12 +2488,9 @@ nsMemoryReporterManager::UnblockRegistrationAndRestoreOriginalReporters() {
   }
 
   // Banish the current reporters, and restore the hidden ones.
-  delete mStrongReporters;
-  delete mWeakReporters;
-  mStrongReporters = mSavedStrongReporters;
-  mWeakReporters = mSavedWeakReporters;
-  mSavedStrongReporters = nullptr;
-  mSavedWeakReporters = nullptr;
+  mStrongEternalReporters = std::move(mSavedStrongEternalReporters);
+  mStrongReporters = std::move(mSavedStrongReporters);
+  mWeakReporters = std::move(mSavedWeakReporters);
 
   mIsRegistrationBlocked = false;
   return NS_OK;

@@ -21,6 +21,7 @@
 #include "js/CallAndConstruct.h"  // JS::IsCallable, JS_CallFunctionValue
 #include "js/CompilationAndEvaluation.h"
 #include "js/CompileOptions.h"
+#include "js/EnvironmentChain.h"  // JS::EnvironmentChain
 #include "js/experimental/JSStencil.h"
 #include "js/GCVector.h"
 #include "js/JSON.h"
@@ -455,17 +456,15 @@ bool nsFrameMessageManager::GetParamsForMessage(JSContext* aCx,
   nsCOMPtr<nsIConsoleService> console(
       do_GetService(NS_CONSOLESERVICE_CONTRACTID));
   if (console) {
-    nsAutoString filename;
-    uint32_t lineno = 0, column = 1;
-    nsJSUtils::GetCallingLocation(aCx, filename, &lineno, &column);
+    auto location = JSCallingLocation::Get(aCx);
     nsCOMPtr<nsIScriptError> error(
         do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
     error->Init(
         u"Sending message that cannot be cloned. Are "
         "you trying to send an XPCOM object?"_ns,
-        filename, u""_ns, lineno, column, nsIScriptError::warningFlag,
-        "chrome javascript"_ns, false /* from private window */,
-        true /* from chrome context */);
+        location.FileName(), location.mLine, location.mColumn,
+        nsIScriptError::warningFlag, "chrome javascript"_ns,
+        false /* from private window */, true /* from chrome context */);
     console->LogMessage(error);
   }
 
@@ -474,15 +473,21 @@ bool nsFrameMessageManager::GetParamsForMessage(JSContext* aCx,
   //    properly cases when interface is implemented in JS and used
   //    as a dictionary.
   nsAutoString json;
-  NS_ENSURE_TRUE(
-      nsContentUtils::StringifyJSON(aCx, v, json, UndefinedIsNullStringLiteral),
-      false);
+  if (!nsContentUtils::StringifyJSON(aCx, v, json,
+                                     UndefinedIsNullStringLiteral)) {
+    NS_WARNING("nsContentUtils::StringifyJSON() failed");
+    JS_ClearPendingException(aCx);
+    return false;
+  }
   NS_ENSURE_TRUE(!json.IsEmpty(), false);
 
   JS::Rooted<JS::Value> val(aCx, JS::NullValue());
-  NS_ENSURE_TRUE(JS_ParseJSON(aCx, static_cast<const char16_t*>(json.get()),
-                              json.Length(), &val),
-                 false);
+  if (!JS_ParseJSON(aCx, static_cast<const char16_t*>(json.get()),
+                    json.Length(), &val)) {
+    NS_WARNING("JS_ParseJSON");
+    JS_ClearPendingException(aCx);
+    return false;
+  }
 
   aData.Write(aCx, val, rv);
   if (NS_WARN_IF(rv.Failed())) {
@@ -506,7 +511,7 @@ void nsFrameMessageManager::SendSyncMessage(JSContext* aCx,
                "Should not have parent manager in content!");
 
   AUTO_PROFILER_LABEL_DYNAMIC_LOSSY_NSSTRING(
-      "nsFrameMessageManager::SendMessage", OTHER, aMessageName);
+      "nsFrameMessageManager::SendSyncMessage", OTHER, aMessageName);
   profiler_add_marker("SendSyncMessage", geckoprofiler::category::IPC, {},
                       FrameMessageMarker{}, aMessageName, true);
 
@@ -537,21 +542,9 @@ void nsFrameMessageManager::SendSyncMessage(JSContext* aCx,
 
   nsTArray<StructuredCloneData> retval;
 
-  TimeStamp start = TimeStamp::Now();
   sSendingSyncMessage = true;
   bool ok = mCallback->DoSendBlockingMessage(aMessageName, data, &retval);
   sSendingSyncMessage = false;
-
-  uint32_t latencyMs = round((TimeStamp::Now() - start).ToMilliseconds());
-  if (latencyMs >= kMinTelemetrySyncMessageManagerLatencyMs) {
-    NS_ConvertUTF16toUTF8 messageName(aMessageName);
-    // NOTE: We need to strip digit characters from the message name in order to
-    // avoid a large number of buckets due to generated names from addons (such
-    // as "ublock:sb:{N}"). See bug 1348113 comment 10.
-    messageName.StripTaggedASCII(ASCIIMask::Mask0to9());
-    Telemetry::Accumulate(Telemetry::IPC_SYNC_MESSAGE_MANAGER_LATENCY_MS,
-                          messageName, latencyMs);
-  }
 
   if (!ok) {
     return;
@@ -801,17 +794,16 @@ void nsFrameMessageManager::ReceiveMessage(
         data->Write(cx, rval, aError);
         if (NS_WARN_IF(aError.Failed())) {
           aRetVal->RemoveLastElement();
-          nsString msg =
-              aMessage + nsLiteralString(
-                             u": message reply cannot be cloned. Are "
-                             "you trying to send an XPCOM object?");
+          nsString msg = aMessage +
+                         u": message reply cannot be cloned. Are "
+                         "you trying to send an XPCOM object?"_ns;
 
           nsCOMPtr<nsIConsoleService> console(
               do_GetService(NS_CONSOLESERVICE_CONTRACTID));
           if (console) {
             nsCOMPtr<nsIScriptError> error(
                 do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
-            error->Init(msg, u""_ns, u""_ns, 0, 0, nsIScriptError::warningFlag,
+            error->Init(msg, ""_ns, 0, 0, nsIScriptError::warningFlag,
                         "chrome javascript"_ns, false /* from private window */,
                         true /* from chrome context */);
             console->LogMessage(error);
@@ -1221,7 +1213,7 @@ void nsMessageManagerScriptExecutor::LoadScriptInternal(
         }
       } else {
         JS::Rooted<JS::Value> rval(cx);
-        JS::RootedVector<JSObject*> envChain(cx);
+        JS::EnvironmentChain envChain(cx, JS::SupportUnscopables::No);
         if (!envChain.append(aMessageManager)) {
           return;
         }
@@ -1428,8 +1420,7 @@ class SameParentProcessMessageManagerCallback : public MessageManagerCallback {
                                   bool aRunInGlobalScope) override {
     auto* global = ContentProcessMessageManager::Get();
     MOZ_ASSERT(!aRunInGlobalScope);
-    global->LoadScript(aURL);
-    return true;
+    return global && global->LoadScript(aURL);
   }
 
   nsresult DoSendAsyncMessage(const nsAString& aMessage,
@@ -1631,8 +1622,6 @@ nsSameProcessAsyncMessageBase::nsSameProcessAsyncMessageBase()
 nsresult nsSameProcessAsyncMessageBase::Init(const nsAString& aMessage,
                                              StructuredCloneData& aData) {
   if (!mData.Copy(aData)) {
-    Telemetry::Accumulate(Telemetry::IPC_SAME_PROCESS_MESSAGE_COPY_OOM_KB,
-                          aData.DataLength());
     return NS_ERROR_OUT_OF_MEMORY;
   }
 

@@ -73,10 +73,12 @@ Register IonIC::scratchRegisterForEntryJump() {
       return asOptimizeGetIteratorIC()->temp();
     case CacheKind::Call:
     case CacheKind::TypeOf:
+    case CacheKind::TypeOfEq:
     case CacheKind::ToBool:
-    case CacheKind::GetIntrinsic:
+    case CacheKind::LazyConstant:
     case CacheKind::NewArray:
     case CacheKind::NewObject:
+    case CacheKind::Lambda:
       MOZ_CRASH("Unsupported IC");
   }
 
@@ -175,11 +177,25 @@ bool IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript,
 
   if (ic->kind() == CacheKind::GetProp) {
     Rooted<PropertyName*> name(cx, idVal.toString()->asAtom().asPropertyName());
-    if (!GetProperty(cx, val, name, res)) {
-      return false;
+
+    JSOp op = JSOp(*ic->pc());
+    if (op == JSOp::GetBoundName) {
+      RootedObject env(cx, &val.toObject());
+      RootedId id(cx, NameToId(name));
+      if (!GetNameBoundInEnvironment(cx, env, id, res)) {
+        return false;
+      }
+    } else {
+      MOZ_ASSERT(op == JSOp::GetProp || op == JSOp::GetElem);
+
+      if (!GetProperty(cx, val, name, res)) {
+        return false;
+      }
     }
   } else {
     MOZ_ASSERT(ic->kind() == CacheKind::GetElem);
+    MOZ_ASSERT(JSOp(*ic->pc()) == JSOp::GetElem);
+
     if (!GetElementOperation(cx, val, idVal, res)) {
       return false;
     }
@@ -263,6 +279,9 @@ bool IonSetPropertyIC::update(JSContext* cx, HandleScript outerScript,
         MOZ_ASSERT(deferType != DeferType::None);
         break;
     }
+    if (deferType == DeferType::None && !attached) {
+      ic->state().trackNotAttached();
+    }
   }
 
   jsbytecode* pc = ic->pc();
@@ -339,9 +358,9 @@ bool IonSetPropertyIC::update(JSContext* cx, HandleScript outerScript,
         MOZ_ASSERT_UNREACHABLE("Invalid attach result");
         break;
     }
-  }
-  if (!attached && canAttachStub) {
-    ic->state().trackNotAttached();
+    if (!attached) {
+      ic->state().trackNotAttached();
+    }
   }
 
   return true;
@@ -364,7 +383,7 @@ bool IonGetNameIC::update(JSContext* cx, HandleScript outerScript,
     return false;
   }
 
-  if (JSOp(*GetNextPc(pc)) == JSOp::Typeof) {
+  if (IsTypeOfNameOp(JSOp(*GetNextPc(pc)))) {
     return FetchName<GetNameMode::TypeOf>(cx, obj, holder, name, prop, res);
   }
 
@@ -376,16 +395,18 @@ JSObject* IonBindNameIC::update(JSContext* cx, HandleScript outerScript,
                                 IonBindNameIC* ic, HandleObject envChain) {
   IonScript* ionScript = outerScript->ionScript();
   jsbytecode* pc = ic->pc();
+  JSOp op = JSOp(*pc);
+  MOZ_ASSERT(op == JSOp::BindName || op == JSOp::BindUnqualifiedName ||
+             op == JSOp::BindUnqualifiedGName);
+
   Rooted<PropertyName*> name(cx, ic->script()->getName(pc));
 
   TryAttachIonStub<BindNameIRGenerator>(cx, ic, ionScript, envChain, name);
 
-  RootedObject holder(cx);
-  if (!LookupNameUnqualified(cx, name, envChain, &holder)) {
-    return nullptr;
+  if (op == JSOp::BindName) {
+    return LookupNameWithGlobalDefault(cx, name, envChain);
   }
-
-  return holder;
+  return LookupNameUnqualified(cx, name, envChain);
 }
 
 /* static */
@@ -395,12 +416,7 @@ JSObject* IonGetIteratorIC::update(JSContext* cx, HandleScript outerScript,
 
   TryAttachIonStub<GetIteratorIRGenerator>(cx, ic, ionScript, value);
 
-  PropertyIteratorObject* iterObj = ValueToIterator(cx, value);
-  if (!iterObj) {
-    return nullptr;
-  }
-
-  return iterObj;
+  return ValueToIterator(cx, value);
 }
 
 /* static */

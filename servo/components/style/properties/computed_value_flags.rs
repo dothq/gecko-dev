@@ -4,16 +4,19 @@
 
 //! Misc information about a given computed style.
 
+/// Misc information about a given computed style.
+///
+/// All flags are currently inherited for text, pseudo elements, and
+/// anonymous boxes, see StyleBuilder::for_inheritance and its callsites.
+/// If we ever want to add some flags that shouldn't inherit for them,
+/// we might want to add a function to handle this.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
+pub struct ComputedValueFlags(u32);
+
 bitflags! {
-    /// Misc information about a given computed style.
-    ///
-    /// All flags are currently inherited for text, pseudo elements, and
-    /// anonymous boxes, see StyleBuilder::for_inheritance and its callsites.
-    /// If we ever want to add some flags that shouldn't inherit for them,
-    /// we might want to add a function to handle this.
-    #[repr(C)]
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub struct ComputedValueFlags: u32 {
+    impl ComputedValueFlags: u32 {
         /// Whether the style or any of the ancestors has a text-decoration-line
         /// property that should get propagated to descendants.
         ///
@@ -119,21 +122,16 @@ bitflags! {
         /// A flag used to mark styles which have `container-type` of `size` or
         /// `inline-size`, or under one.
         const SELF_OR_ANCESTOR_HAS_SIZE_CONTAINER_TYPE = 1 << 23;
-
-        /// Whether the style evaluated any relative selector.
-        const CONSIDERED_RELATIVE_SELECTOR = 1 << 24;
-
-        /// Whether the style evaluated the matched element to be an anchor of
-        /// a relative selector.
-        const ANCHORS_RELATIVE_SELECTOR = 1 << 25;
-
         /// Whether the style uses container query units, in which case the style depends on the
         /// container's size and we can't reuse it across cousins (without double-checking the
         /// container at least).
-        const USES_CONTAINER_UNITS = 1 << 26;
+        const USES_CONTAINER_UNITS = 1 << 24;
 
         /// Whether there are author-specific rules for text `color`.
-        const HAS_AUTHOR_SPECIFIED_TEXT_COLOR = 1 << 27;
+        const HAS_AUTHOR_SPECIFIED_TEXT_COLOR = 1 << 25;
+
+        /// Whether this style considered a scope style rule.
+        const CONSIDERED_NONTRIVIAL_SCOPED_STYLE = 1 << 26;
     }
 }
 
@@ -167,8 +165,7 @@ impl ComputedValueFlags {
     #[inline]
     fn cascade_input_flags() -> Self {
         Self::USES_VIEWPORT_UNITS_ON_CONTAINER_QUERIES |
-            Self::CONSIDERED_RELATIVE_SELECTOR |
-            Self::ANCHORS_RELATIVE_SELECTOR
+        Self::CONSIDERED_NONTRIVIAL_SCOPED_STYLE
     }
 
     /// Returns the flags that are always propagated to descendants.

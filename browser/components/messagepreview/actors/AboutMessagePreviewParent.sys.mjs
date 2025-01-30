@@ -3,11 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import { ASRouter } from "resource:///modules/asrouter/ASRouter.sys.mjs";
 import { JsonSchema } from "resource://gre/modules/JsonSchema.sys.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
+  BookmarksBarButton: "resource:///modules/asrouter/BookmarksBarButton.sys.mjs",
   CFRPageActions: "resource:///modules/asrouter/CFRPageActions.sys.mjs",
   FeatureCalloutBroker:
     "resource:///modules/asrouter/FeatureCalloutBroker.sys.mjs",
@@ -17,6 +20,11 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Spotlight: "resource:///modules/asrouter/Spotlight.sys.mjs",
 });
 
+const SWITCH_THEMES = {
+  DARK: "firefox-compact-dark@mozilla.org",
+  LIGHT: "firefox-compact-light@mozilla.org",
+};
+
 function dispatchCFRAction({ type, data }, browser) {
   if (type === "USER_ACTION") {
     lazy.SpecialMessageActions.handleAction(data, browser);
@@ -24,12 +32,34 @@ function dispatchCFRAction({ type, data }, browser) {
 }
 
 export class AboutMessagePreviewParent extends JSWindowActorParent {
+  constructor() {
+    super();
+
+    const EXISTING_THEME = Services.prefs.getStringPref(
+      "extensions.activeThemeID"
+    );
+
+    this._onUnload = () => {
+      lazy.AddonManager.getAddonByID(EXISTING_THEME).then(addon =>
+        addon.enable()
+      );
+    };
+  }
+
+  didDestroy() {
+    this._onUnload();
+  }
+
   showInfoBar(message, browser) {
     lazy.InfoBar.showInfoBarMessage(browser, message, dispatchCFRAction);
   }
 
   showSpotlight(message, browser) {
     lazy.Spotlight.showSpotlightDialog(browser, message, () => {});
+  }
+
+  showBookmarksBarButton(message, browser) {
+    lazy.BookmarksBarButton.showBookmarksBarButton(message, browser);
   }
 
   showCFR(message, browser) {
@@ -40,15 +70,46 @@ export class AboutMessagePreviewParent extends JSWindowActorParent {
     );
   }
 
-  showFeatureCallout(message, browser) {
-    switch (message.trigger.id) {
-      case "featureCalloutCheck":
-        // For messagePreview, force the trigger to be something we can show
-        message.trigger.id = "nthTabClosed";
-        lazy.FeatureCalloutBroker.showFeatureCallout(browser, message);
-        break;
-      default:
-        lazy.FeatureCalloutBroker.showFeatureCallout(browser, message);
+  showPrivateBrowsingMessage(message, browser) {
+    ASRouter.forcePBWindow(browser, message);
+  }
+
+  async showFeatureCallout(message, browser) {
+    // Clear the Feature Tour prefs used by some callouts, to ensure
+    // the behaviour of the message is correct
+    let tourPref = message.content.tour_pref_name;
+    if (tourPref) {
+      Services.prefs.clearUserPref(tourPref);
+    }
+    // For messagePreview, force the trigger && targeting to be something we can show.
+    message.trigger = { id: "nthTabClosed" };
+    message.targeting = "true";
+    // Check whether or not the callout is showing already, then
+    // modify the anchor property of the feature callout to
+    // ensure it's something we can show.
+    let showing = await lazy.FeatureCalloutBroker.showFeatureCallout(
+      browser,
+      message
+    );
+    if (!showing) {
+      for (const screen of message.content.screens) {
+        let existingAnchors = screen.anchors;
+        let fallbackAnchor = { selector: "#star-button-box" };
+
+        if (existingAnchors[0].hasOwnProperty("arrow_position")) {
+          fallbackAnchor.arrow_position = "top-center-arrow-end";
+        } else {
+          fallbackAnchor.panel_position = {
+            anchor_attachment: "bottomcenter",
+            callout_attachment: "topright",
+          };
+        }
+
+        screen.anchors = [...existingAnchors, fallbackAnchor];
+        console.log("ANCHORS: ", screen.anchors);
+      }
+      // Try showing again
+      await lazy.FeatureCalloutBroker.showFeatureCallout(browser, message);
     }
   }
 
@@ -88,6 +149,12 @@ export class AboutMessagePreviewParent extends JSWindowActorParent {
       case "feature_callout":
         this.showFeatureCallout(message, browser);
         return;
+      case "bookmarks_bar_button":
+        this.showBookmarksBarButton(message, browser);
+        return;
+      case "pb_newtab":
+        this.showPrivateBrowsingMessage(message, browser);
+        return;
       default:
         console.error(`Unsupported message template ${message.template}`);
     }
@@ -99,7 +166,12 @@ export class AboutMessagePreviewParent extends JSWindowActorParent {
     switch (name) {
       case "MessagePreview:SHOW_MESSAGE":
         this.showMessage(data);
-        break;
+        return;
+      case "MessagePreview:CHANGE_THEME": {
+        const theme = data.isDark ? SWITCH_THEMES.LIGHT : SWITCH_THEMES.DARK;
+        lazy.AddonManager.getAddonByID(theme).then(addon => addon.enable());
+        return;
+      }
       default:
         console.log(`Unexpected event ${name} was not handled.`);
     }

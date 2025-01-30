@@ -20,6 +20,9 @@
 #include "mozilla/StaticPrefs_webgl.h"
 #include "mozilla/widget/AndroidVsync.h"
 
+#include "AndroidBuild.h"
+#include "AndroidSystemFontIterator.h"
+#include "GeckoProfiler.h"
 #include "gfx2DGlue.h"
 #include "gfxFT2FontList.h"
 #include "gfxImageSurface.h"
@@ -73,6 +76,67 @@ NS_IMPL_ISUPPORTS(FreetypeReporter, nsIMemoryReporter)
 
 static FT_MemoryRec_ sFreetypeMemoryRecord;
 
+void gfxAndroidPlatform::FontAPIInitializeCallback(void* aUnused) {
+  AUTO_PROFILER_REGISTER_THREAD("InitializingFontAPI");
+  PR_SetCurrentThreadName("InitializingFontAPI");
+
+  // Call ASystemFontIterator_open
+  AndroidSystemFontIterator iterator;
+  iterator.Init();
+}
+
+PRThread* gfxAndroidPlatform::sFontAPIInitializeThread = nullptr;
+MOZ_CONSTINIT nsCString gfxAndroidPlatform::sManufacturer;
+
+// static
+bool gfxAndroidPlatform::IsFontAPIDisabled(bool aDontCheckPref) {
+  if (!aDontCheckPref &&
+      StaticPrefs::gfx_font_list_use_font_match_api_force_enabled_AtStartup()) {
+    return false;
+  }
+
+  // OPPO, realme and OnePlus device seem to crash when using font match API
+  // (Bug 1787551).
+
+  if (sManufacturer.IsEmpty()) {
+    sManufacturer = java::sdk::Build::MANUFACTURER()->ToCString();
+  }
+  return (sManufacturer.EqualsLiteral("OPPO") ||
+          sManufacturer.EqualsLiteral("realme") ||
+          sManufacturer.EqualsLiteral("OnePlus"));
+}
+
+// static
+void gfxAndroidPlatform::InitializeFontAPI() {
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    return;
+  }
+
+  // Android 12+ doesn't read font configuration XML files directly.
+  // It means that it is slow to call font API at first.
+  if (jni::GetAPIVersion() < 31) {
+    return;
+  }
+
+  // This will be called before XPCOM service isn't started. So don't check
+  // preferences.
+  if (IsFontAPIDisabled(true)) {
+    return;
+  }
+
+  sFontAPIInitializeThread = PR_CreateThread(
+      PR_USER_THREAD, FontAPIInitializeCallback, nullptr, PR_PRIORITY_NORMAL,
+      PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
+}
+
+// static
+void gfxAndroidPlatform::WaitForInitializeFontAPI() {
+  if (sFontAPIInitializeThread) {
+    PR_JoinThread(sFontAPIInitializeThread);
+    sFontAPIInitializeThread = nullptr;
+  }
+}
+
 gfxAndroidPlatform::gfxAndroidPlatform() {
   // A custom allocator.  It counts allocations, enabling memory reporting.
   sFreetypeMemoryRecord.user = nullptr;
@@ -89,8 +153,12 @@ gfxAndroidPlatform::gfxAndroidPlatform() {
 
   RegisterStrongMemoryReporter(new FreetypeReporter());
 
-  mOffscreenFormat = GetScreenDepth() == 16 ? SurfaceFormat::R5G6B5_UINT16
-                                            : SurfaceFormat::X8R8G8B8_UINT32;
+  // Bug 1886573: At this point, we don't yet have primary screen depth.
+  // This setting of screen depth to 0 is preserving existing behavior,
+  // and should be fixed.
+  int32_t screenDepth = 0;
+  mOffscreenFormat = screenDepth == 16 ? SurfaceFormat::R5G6B5_UINT16
+                                       : SurfaceFormat::X8R8G8B8_UINT32;
 
   if (StaticPrefs::gfx_android_rgb16_force_AtStartup()) {
     mOffscreenFormat = SurfaceFormat::R5G6B5_UINT16;

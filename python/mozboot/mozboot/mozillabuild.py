@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from mozbuild.util import mozilla_build_version
+from mozbuild.buildversion import mozilla_build_version
 from packaging.version import Version
 
 from mozboot.base import BaseBootstrapper
@@ -217,8 +217,8 @@ class MozillaBuildBootstrapper(BaseBootstrapper):
     def ensure_sccache_packages(self):
         from mozboot import sccache
 
-        self.install_toolchain_artifact(sccache.RUSTC_DIST_TOOLCHAIN, no_unpack=True)
-        self.install_toolchain_artifact(sccache.CLANG_DIST_TOOLCHAIN, no_unpack=True)
+        self.install_toolchain_artifact(sccache.RUSTC_DIST_TOOLCHAIN)
+        self.install_toolchain_artifact(sccache.CLANG_DIST_TOOLCHAIN)
 
     def _update_package_manager(self):
         pass

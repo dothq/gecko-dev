@@ -47,7 +47,7 @@
   }
 }
 
-@media (prefers-contrast) {
+@media (forced-colors) {
   :root {
     --fxview-element-background-hover: ButtonText;
     --fxview-element-background-active: ButtonText;
@@ -56,6 +56,12 @@
     --newtab-primary-action-background: LinkText;
     --newtab-background-color: Canvas;
     --newtab-background-color-secondary: Canvas;
+  }
+}
+
+@media (prefers-contrast) {
+  :root {
+    --fxview-border: var(--border-color);
   }
 }
 
@@ -148,6 +154,23 @@ panel-item::part(button):hover:active {
   background-color: var(--fxview-element-background-active);
 }
 
-fxview-empty-state:not([isSelectedTab]) button[slot="primary-action"] {
-  margin-inline-start: 0;
+fxview-empty-state {
+  &:not([isSelectedTab]) button[slot="primary-action"] {
+    margin-inline-start: 0;
+  }
+
+  /* these illustrations need a larger width otherwise they look too small */
+  &.synced-tabs::part(image-container) {
+    min-width: 250px;
+  }
+
+  /* center align the empty state image */
+  &.recentlyclosed::part(image-container) {
+    margin-inline-start: 50px;
+  }
+
+  /* align empty state text with synced tabs on recent browsing page */
+  &.recentlyclosed::part(main) {
+    padding-inline-start: 50px;
+  }
 }

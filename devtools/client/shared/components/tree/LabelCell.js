@@ -5,9 +5,11 @@
 
 // Make this available to both AMD and CJS environments
 define(function (require, exports, module) {
-  const { Component } = require("devtools/client/shared/vendor/react");
-  const dom = require("devtools/client/shared/vendor/react-dom-factories");
-  const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+  const {
+    Component,
+  } = require("resource://devtools/client/shared/vendor/react.js");
+  const dom = require("resource://devtools/client/shared/vendor/react-dom-factories.js");
+  const PropTypes = require("resource://devtools/client/shared/vendor/react-prop-types.js");
 
   /**
    * Render the default cell used for toggle buttons
@@ -17,7 +19,6 @@ define(function (require, exports, module) {
     // to the 'member' object.
     static get propTypes() {
       return {
-        id: PropTypes.string.isRequired,
         title: PropTypes.string,
         member: PropTypes.object.isRequired,
         renderSuffix: PropTypes.func,
@@ -25,7 +26,6 @@ define(function (require, exports, module) {
     }
 
     render() {
-      const id = this.props.id;
       const title = this.props.title;
       const member = this.props.member;
       const level = member.level || 0;
@@ -61,7 +61,6 @@ define(function (require, exports, module) {
           {
             className: "treeLabel " + member.type + "Label",
             title,
-            "aria-labelledby": id,
             "data-level": level,
           },
           member.name

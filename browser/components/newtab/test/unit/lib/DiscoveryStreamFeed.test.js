@@ -2,7 +2,7 @@ import {
   actionCreators as ac,
   actionTypes as at,
   actionUtils as au,
-} from "common/Actions.sys.mjs";
+} from "common/Actions.mjs";
 import { combineReducers, createStore } from "redux";
 import { GlobalOverrider } from "test/unit/utils";
 import { DiscoveryStreamFeed } from "lib/DiscoveryStreamFeed.sys.mjs";
@@ -15,7 +15,6 @@ const CONFIG_PREF_NAME = "discoverystream.config";
 const ENDPOINTS_PREF_NAME = "discoverystream.endpoints";
 const DUMMY_ENDPOINT = "https://getpocket.cdn.mozilla.net/dummy";
 const SPOC_IMPRESSION_TRACKING_PREF = "discoverystream.spoc.impressions";
-const REC_IMPRESSION_TRACKING_PREF = "discoverystream.rec.impressions";
 const THIRTY_MINUTES = 30 * 60 * 1000;
 const ONE_WEEK = 7 * 24 * 60 * 60 * 1000; // 1 week
 
@@ -86,6 +85,7 @@ describe("DiscoveryStreamFeed", () => {
           "discoverystream.spocs.personalized": true,
           "discoverystream.recs.personalized": true,
           "system.showSponsored": false,
+          "discoverystream.spocs.startupCache.enabled": true,
         },
       },
     });
@@ -440,8 +440,8 @@ describe("DiscoveryStreamFeed", () => {
       feed.store = createStore(combineReducers(reducers), {
         Prefs: {
           values: {
+            "discoverystream.spoc-positions": "1, 2",
             pocketConfig: {
-              spocPositions: "1, 2",
               widgetPositions: "3, 4",
             },
           },
@@ -613,7 +613,11 @@ describe("DiscoveryStreamFeed", () => {
     let fakeDiscoveryStream;
     beforeEach(() => {
       fakeDiscoveryStream = {
-        Prefs: {},
+        Prefs: {
+          values: {
+            "discoverystream.spocs.startupCache.enabled": true,
+          },
+        },
         DiscoveryStream: {
           layout: [
             { components: [{ feed: { url: "foo.com" } }] },
@@ -715,7 +719,7 @@ describe("DiscoveryStreamFeed", () => {
         .stub(feed, "scoreItems")
         .callsFake(val => ({ data: val, filtered: [], personalized: false }));
       sandbox.stub(feed, "fetchFromEndpoint").resolves({
-        recommendations: "data",
+        recommendations: ["data"],
         settings: {
           recsExpireTime: 1,
         },
@@ -729,7 +733,7 @@ describe("DiscoveryStreamFeed", () => {
       const fakeCache = { feeds: { "foo.com": { lastUpdated: Date.now() } } };
       sandbox.stub(feed.cache, "get").returns(Promise.resolve(fakeCache));
       sandbox.stub(feed, "fetchFromEndpoint").resolves({
-        recommendations: "data",
+        recommendations: ["data"],
         settings: {
           recsExpireTime: 1,
         },
@@ -849,6 +853,8 @@ describe("DiscoveryStreamFeed", () => {
         spocs: { items: [{ id: "data" }] },
       });
       sandbox.stub(feed.cache, "set").returns(Promise.resolve());
+      const loadTimestamp = 100;
+      clock.tick(loadTimestamp);
 
       await feed.loadSpocs(feed.store.dispatch);
 
@@ -860,15 +866,15 @@ describe("DiscoveryStreamFeed", () => {
             title: "",
             sponsor: "",
             sponsored_by_override: undefined,
-            items: [{ id: "data", score: 1 }],
+            items: [{ id: "data", score: 1, fetchTimestamp: loadTimestamp }],
           },
         },
-        lastUpdated: 0,
+        lastUpdated: loadTimestamp,
       });
 
       assert.deepEqual(
         feed.store.getState().DiscoveryStream.spocs.data.spocs.items[0],
-        { id: "data", score: 1 }
+        { id: "data", score: 1, fetchTimestamp: loadTimestamp }
       );
     });
     it("should normalizeSpocsItems for older spoc data", async () => {
@@ -882,7 +888,7 @@ describe("DiscoveryStreamFeed", () => {
 
       assert.deepEqual(
         feed.store.getState().DiscoveryStream.spocs.data.spocs.items[0],
-        { id: "data", score: 1 }
+        { id: "data", score: 1, fetchTimestamp: 0 }
       );
     });
     it("should dispatch DISCOVERY_STREAM_PERSONALIZATION_OVERRIDE with feature_flags", async () => {
@@ -936,7 +942,7 @@ describe("DiscoveryStreamFeed", () => {
           context: "",
           sponsor: "",
           sponsored_by_override: undefined,
-          items: [{ id: "data", score: 1 }],
+          items: [{ id: "data", score: 1, fetchTimestamp: 0 }],
         },
         placement2: {
           title: "",
@@ -978,7 +984,7 @@ describe("DiscoveryStreamFeed", () => {
           context: "context",
           sponsor: "",
           sponsored_by_override: undefined,
-          items: [{ id: "data", score: 1 }],
+          items: [{ id: "data", score: 1, fetchTimestamp: 0 }],
         },
       });
     });
@@ -1422,7 +1428,6 @@ describe("DiscoveryStreamFeed", () => {
     });
     it("should properly call clearSpocs when sponsored content is changed", async () => {
       sandbox.stub(feed, "clearSpocs").returns(Promise.resolve());
-      // sandbox.stub(feed, "updatePlacements").returns();
       sandbox.stub(feed, "loadSpocs").returns();
 
       await feed.onAction({
@@ -1464,8 +1469,7 @@ describe("DiscoveryStreamFeed", () => {
   });
 
   describe("#rotate", () => {
-    it("should move seen first story to the back of the response", () => {
-      const recsExpireTime = 5600;
+    it("should move seen first story to the back of the response", async () => {
       const feedResponse = {
         recommendations: [
           {
@@ -1481,20 +1485,18 @@ describe("DiscoveryStreamFeed", () => {
             id: "fourth",
           },
         ],
-        settings: {
-          recsExpireTime,
-        },
       };
       const fakeImpressions = {
-        first: Date.now() - recsExpireTime * 1000,
+        first: Date.now() - 60 * 60 * 1000, // 1 hour
         third: Date.now(),
       };
-      sandbox.stub(feed, "readDataPref").returns(fakeImpressions);
+      const cache = {
+        recsImpressions: fakeImpressions,
+      };
+      sandbox.stub(feed.cache, "get").returns(Promise.resolve());
+      feed.cache.get.resolves(cache);
 
-      const result = feed.rotate(
-        feedResponse.recommendations,
-        feedResponse.settings.recsExpireTime
-      );
+      const result = await feed.rotate(feedResponse.recommendations);
 
       assert.equal(result[3].id, "first");
     });
@@ -1524,18 +1526,20 @@ describe("DiscoveryStreamFeed", () => {
 
       await feed.resetCache();
 
-      assert.callCount(feed.cache.set, 3);
+      assert.callCount(feed.cache.set, 4);
       const firstCall = feed.cache.set.getCall(0);
       const secondCall = feed.cache.set.getCall(1);
       const thirdCall = feed.cache.set.getCall(2);
+      const fourthCall = feed.cache.set.getCall(3);
       assert.deepEqual(firstCall.args, ["feeds", {}]);
       assert.deepEqual(secondCall.args, ["spocs", {}]);
       assert.deepEqual(thirdCall.args, ["sov", {}]);
+      assert.deepEqual(fourthCall.args, ["recsImpressions", {}]);
     });
   });
 
   describe("#scoreItems", () => {
-    it("should return initial data if spocs are empty", async () => {
+    it("should return initial data from scoreItems if spocs are empty", async () => {
       const { data: result } = await feed.scoreItems([]);
 
       assert.equal(result.length, 0);
@@ -1611,24 +1615,54 @@ describe("DiscoveryStreamFeed", () => {
   });
 
   describe("#filterBlocked", () => {
-    it("should return initial data if spocs are empty", () => {
-      const { data: result } = feed.filterBlocked([]);
+    it("should return initial data from filterBlocked if spocs are empty", async () => {
+      const { data: result } = await feed.filterBlocked([]);
 
       assert.equal(result.length, 0);
     });
-    it("should return initial data if links are not blocked", () => {
-      const { data: result } = feed.filterBlocked([
+    it("should return initial data if links are not blocked", async () => {
+      const { data: result } = await feed.filterBlocked([
         { url: "https://foo.com" },
         { url: "test.com" },
       ]);
       assert.equal(result.length, 2);
     });
-    it("should return initial recommendations data if links are not blocked", () => {
-      const { data: result } = feed.filterBlocked([
-        { url: "https://foo.com" },
-        { url: "test.com" },
+    it("should return filtered data if links are blocked", async () => {
+      const fakeBlocks = {
+        flight_id_3: 1,
+      };
+      sandbox.stub(feed, "readDataPref").returns(fakeBlocks);
+      sandbox
+        .stub(fakeNewTabUtils.blockedLinks, "isBlocked")
+        .callsFake(({ url }) => url === "https://blocked_url.com");
+      const cache = {
+        recsBlocks: {
+          id_4: 1,
+        },
+      };
+      sandbox.stub(feed.cache, "get").returns(Promise.resolve());
+      sandbox.stub(feed.cache, "set");
+      feed.cache.get.resolves(cache);
+      const { data: result } = await feed.filterBlocked([
+        {
+          url: "https://not_blocked.com",
+          flight_id: "flight_id_1",
+          id: "id_1",
+        },
+        {
+          url: "https://blocked_url.com",
+          flight_id: "flight_id_2",
+          id: "id_2",
+        },
+        {
+          url: "https://blocked_flight.com",
+          flight_id: "flight_id_3",
+          id: "id_3",
+        },
+        { url: "https://blocked_id.com", flight_id: "flight_id_4", id: "id_4" },
       ]);
-      assert.equal(result.length, 2);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].url, "https://not_blocked.com");
     });
     it("filterRecommendations based on blockedlist by passing feed data", () => {
       fakeNewTabUtils.blockedLinks.links = [{ url: "https://foo.com" }];
@@ -1824,13 +1858,11 @@ describe("DiscoveryStreamFeed", () => {
   describe("#retryFeed", () => {
     it("should retry a feed fetch", async () => {
       sandbox.stub(feed, "getComponentFeed").returns(Promise.resolve({}));
-      sandbox.stub(feed, "filterRecommendations").returns({});
       sandbox.spy(feed.store, "dispatch");
 
       await feed.retryFeed({ url: "https://feed.com" });
 
       assert.calledOnce(feed.getComponentFeed);
-      assert.calledOnce(feed.filterRecommendations);
       assert.calledOnce(feed.store.dispatch);
       assert.equal(
         feed.store.dispatch.firstCall.args[0].type,
@@ -1915,68 +1947,55 @@ describe("DiscoveryStreamFeed", () => {
     });
   });
 
-  describe("#recordTopRecImpressions", () => {
-    it("should add a rec id to the rec impression pref", () => {
-      sandbox.stub(feed, "readDataPref").returns({});
-      sandbox.stub(feed, "writeDataPref");
+  describe("#recordTopRecImpression", () => {
+    it("should add a rec id to the rec impression pref", async () => {
+      const cache = {
+        recsImpressions: {},
+      };
+      sandbox.stub(feed.cache, "get").returns(Promise.resolve());
+      sandbox.stub(feed.cache, "set");
+      feed.cache.get.resolves(cache);
 
-      feed.recordTopRecImpressions("rec");
+      await feed.recordTopRecImpression("rec");
 
-      assert.calledWith(feed.writeDataPref, REC_IMPRESSION_TRACKING_PREF, {
+      assert.calledWith(feed.cache.set, "recsImpressions", {
         rec: 0,
       });
     });
-    it("should not add an impression if it already exists", () => {
-      sandbox.stub(feed, "readDataPref").returns({ rec: 4 });
-      sandbox.stub(feed, "writeDataPref");
+    it("should not add an impression if it already exists", async () => {
+      const cache = {
+        recsImpressions: { rec: 4 },
+      };
+      sandbox.stub(feed.cache, "get").returns(Promise.resolve());
+      sandbox.stub(feed.cache, "set");
+      feed.cache.get.resolves(cache);
 
-      feed.recordTopRecImpressions("rec");
+      await feed.recordTopRecImpression("rec");
 
-      assert.notCalled(feed.writeDataPref);
+      assert.notCalled(feed.cache.set);
     });
   });
 
-  describe("#cleanUpTopRecImpressionPref", () => {
-    it("should remove recs no longer being used", () => {
-      const newFeeds = {
-        "https://foo.com": {
-          data: {
-            recommendations: [
-              {
-                id: "rec1",
-              },
-              {
-                id: "rec2",
-              },
-            ],
-          },
-        },
-        "https://bar.com": {
-          data: {
-            recommendations: [
-              {
-                id: "rec3",
-              },
-              {
-                id: "rec4",
-              },
-            ],
-          },
-        },
-      };
+  describe("#cleanUpTopRecImpressions", () => {
+    it("should remove rec impressions older than 7 days", async () => {
       const fakeImpressions = {
-        rec2: Date.now() - 1,
-        rec3: Date.now() - 1,
-        rec5: Date.now() - 1,
+        rec2: Date.now(),
+        rec3: Date.now(),
+        rec5: Date.now() - 7 * 24 * 60 * 60 * 1000, // 7 days
       };
-      sandbox.stub(feed, "readDataPref").returns(fakeImpressions);
-      sandbox.stub(feed, "writeDataPref").returns();
 
-      feed.cleanUpTopRecImpressionPref(newFeeds);
+      const cache = {
+        recsImpressions: fakeImpressions,
+      };
+      sandbox.stub(feed.cache, "get").returns(Promise.resolve());
+      sandbox.stub(feed.cache, "set");
+      feed.cache.get.resolves(cache);
 
-      assert.calledWith(feed.writeDataPref, REC_IMPRESSION_TRACKING_PREF, {
-        rec2: -1,
-        rec3: -1,
+      await feed.cleanUpTopRecImpressions();
+
+      assert.calledWith(feed.cache.set, "recsImpressions", {
+        rec2: 0,
+        rec3: 0,
       });
     });
   });
@@ -2105,13 +2124,13 @@ describe("DiscoveryStreamFeed", () => {
 
   describe("#onAction: DISCOVERY_STREAM_IMPRESSION_STATS", () => {
     it("should call recordTopRecImpressions from DISCOVERY_STREAM_IMPRESSION_STATS", async () => {
-      sandbox.stub(feed, "recordTopRecImpressions").returns();
+      sandbox.stub(feed, "recordTopRecImpression").returns();
       await feed.onAction({
         type: at.DISCOVERY_STREAM_IMPRESSION_STATS,
         data: { tiles: [{ id: "seen" }] },
       });
 
-      assert.calledWith(feed.recordTopRecImpressions, "seen");
+      assert.calledWith(feed.recordTopRecImpression, "seen");
     });
   });
 
@@ -2253,32 +2272,35 @@ describe("DiscoveryStreamFeed", () => {
 
   describe("#onAction: PLACES_LINK_BLOCKED", () => {
     beforeEach(() => {
-      const data = {
-        spocs: {
-          items: [
-            {
-              id: 1,
-              flight_id: "foo",
-              url: "foo.com",
-            },
-            {
-              id: 2,
-              flight_id: "bar",
-              url: "bar.com",
-            },
-          ],
+      const spocsData = {
+        data: {
+          spocs: {
+            items: [
+              {
+                id: 1,
+                flight_id: "foo",
+                url: "foo.com",
+              },
+              {
+                id: 2,
+                flight_id: "bar",
+                url: "bar.com",
+              },
+            ],
+          },
         },
+        placements: [{ name: "spocs" }],
+      };
+      const feedsData = {
+        data: {},
       };
       sandbox.stub(feed.store, "getState").returns({
         DiscoveryStream: {
-          spocs: {
-            data,
-            placements: [{ name: "spocs" }],
-          },
+          spocs: spocsData,
+          feeds: feedsData,
         },
       });
     });
-
     it("should call dispatch if found a blocked spoc", async () => {
       Object.defineProperty(feed, "showSpocs", { get: () => true });
 
@@ -2753,9 +2775,7 @@ describe("DiscoveryStreamFeed", () => {
       feed.store.getState = () => ({
         Prefs: {
           values: {
-            pocketConfig: {
-              spocsCacheTimeout: 1,
-            },
+            "discoverystream.spocs.cacheTimeout": 1,
           },
         },
       });
@@ -2767,9 +2787,7 @@ describe("DiscoveryStreamFeed", () => {
       feed.store.getState = () => ({
         Prefs: {
           values: {
-            pocketConfig: {
-              spocsCacheTimeout: 31,
-            },
+            "discoverystream.spocs.cacheTimeout": 31,
           },
         },
       });
@@ -2780,9 +2798,7 @@ describe("DiscoveryStreamFeed", () => {
       feed.store.getState = () => ({
         Prefs: {
           values: {
-            pocketConfig: {
-              spocsCacheTimeout: 20,
-            },
+            "discoverystream.spocs.cacheTimeout": 20,
           },
         },
       });
@@ -2985,15 +3001,15 @@ describe("DiscoveryStreamFeed", () => {
         sandbox
           .stub(feed, "scoreItems")
           .callsFake(val => ({ data: val, filtered: [], personalized: false }));
-        sandbox.stub(feed, "cleanUpTopRecImpressionPref").callsFake(val => val);
+        sandbox.stub(feed, "filterBlocked").callsFake(val => ({ data: val }));
 
         const fakeCache = {
-          feeds: { "foo.com": { lastUpdated: Date.now(), data: "data" } },
+          feeds: { "foo.com": { lastUpdated: Date.now(), data: ["data"] } },
         };
         sandbox.stub(feed.cache, "get").resolves(fakeCache);
         clock.tick(THIRTY_MINUTES + 1);
         sandbox.stub(feed, "fetchFromEndpoint").resolves({
-          recommendations: "data",
+          recommendations: ["data"],
           settings: {
             recsExpireTime: 1,
           },
@@ -3003,8 +3019,8 @@ describe("DiscoveryStreamFeed", () => {
 
         assert.calledOnce(feed.fetchFromEndpoint);
         // Once from cache, once to update the feed, once to update that all
-        // feeds are done.
-        assert.calledThrice(feed.store.dispatch);
+        // feeds are done, and once to update scores.
+        assert.callCount(feed.store.dispatch, 4);
         assert.equal(
           feed.store.dispatch.secondCall.args[0].type,
           at.DISCOVERY_STREAM_FEEDS_UPDATE
@@ -3040,12 +3056,6 @@ describe("DiscoveryStreamFeed", () => {
         },
       };
       sandbox.stub(feed.store, "getState").returns(fakeDiscoveryStream);
-      const recsExpireTime = 5600;
-      const fakeImpressions = {
-        first: Date.now() - recsExpireTime * 1000,
-        third: Date.now(),
-      };
-      sandbox.stub(feed, "readDataPref").returns(fakeImpressions);
       const fakeFeeds = {
         data: {
           "https://foo.com": {
@@ -3060,9 +3070,6 @@ describe("DiscoveryStreamFeed", () => {
                   item_score: 0.6,
                 },
               ],
-              settings: {
-                recsExpireTime,
-              },
             },
           },
           "https://bar.com": {
@@ -3081,9 +3088,6 @@ describe("DiscoveryStreamFeed", () => {
                   item_score: 0.8,
                 },
               ],
-              settings: {
-                recsExpireTime,
-              },
             },
           },
         },
@@ -3094,19 +3098,16 @@ describe("DiscoveryStreamFeed", () => {
           data: {
             recommendations: [
               {
-                id: "second",
-                item_score: 0.6,
-                score: 0.6,
-              },
-              {
                 id: "first",
                 item_score: 0.7,
                 score: 0.7,
               },
+              {
+                id: "second",
+                item_score: 0.6,
+                score: 0.6,
+              },
             ],
-            settings: {
-              recsExpireTime,
-            },
           },
         },
         "https://bar.com": {
@@ -3129,9 +3130,6 @@ describe("DiscoveryStreamFeed", () => {
                 score: 0.4,
               },
             ],
-            settings: {
-              recsExpireTime,
-            },
           },
         },
       };
@@ -3381,6 +3379,16 @@ describe("DiscoveryStreamFeed", () => {
     });
   });
 
+  describe("#onAction: TOPIC_SELECTION_MAYBE_LATER", () => {
+    it("should call topicSelectionMaybeLaterEvent", async () => {
+      sandbox.stub(feed, "topicSelectionMaybeLaterEvent").resolves();
+      await feed.onAction({
+        type: at.TOPIC_SELECTION_MAYBE_LATER,
+      });
+      assert.calledOnce(feed.topicSelectionMaybeLaterEvent);
+    });
+  });
+
   describe("#observe", () => {
     it("should call configReset on Pocket button pref change", async () => {
       sandbox.stub(feed, "configReset").returns();
@@ -3444,16 +3452,12 @@ describe("DiscoveryStreamFeed", () => {
         },
       });
       sandbox.stub(global.Region, "home").get(() => "DE");
-      globals.set("NimbusFeatures", {
-        saveToPocket: {
-          getVariable: sandbox.stub(),
-        },
-      });
-      global.NimbusFeatures.saveToPocket.getVariable
-        .withArgs("bffApi")
+      sandbox.stub(global.Services.prefs, "getStringPref");
+      global.Services.prefs.getStringPref
+        .withArgs("extensions.pocket.bffApi")
         .returns("bffApi");
-      global.NimbusFeatures.saveToPocket.getVariable
-        .withArgs("oAuthConsumerKeyBff")
+      global.Services.prefs.getStringPref
+        .withArgs("extensions.pocket.oAuthConsumerKeyBff")
         .returns("oAuthConsumerKeyBff");
     });
     it("should return true with isBff", async () => {
@@ -3467,6 +3471,22 @@ describe("DiscoveryStreamFeed", () => {
       assert.equal(
         layout[0].components[2].feed.url,
         "https://bffApi/desktop/v1/recommendations?locale=$locale&region=$region&count=30"
+      );
+    });
+    it("should update the new feed url with pocketFeedParameters", async () => {
+      globals.set("NimbusFeatures", {
+        pocketNewtab: {
+          getVariable: sandbox.stub(),
+        },
+      });
+      global.NimbusFeatures.pocketNewtab.getVariable
+        .withArgs("pocketFeedParameters")
+        .returns("&enableRankingByRegion=1");
+      await feed.loadLayout(feed.store.dispatch);
+      const { layout } = feed.store.getState().DiscoveryStream;
+      assert.equal(
+        layout[0].components[2].feed.url,
+        "https://bffApi/desktop/v1/recommendations?locale=$locale&region=$region&count=30&enableRankingByRegion=1"
       );
     });
     it("should fetch proper data from getComponentFeed", async () => {
@@ -3497,6 +3517,7 @@ describe("DiscoveryStreamFeed", () => {
         personalized: false,
         data: {
           settings: {},
+          sections: [],
           recommendations: [
             {
               id: 1234,

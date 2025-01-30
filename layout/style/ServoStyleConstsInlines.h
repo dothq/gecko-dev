@@ -45,6 +45,7 @@ template struct StyleStrong<StyleLockedKeyframesRule>;
 template struct StyleStrong<StyleMediaRule>;
 template struct StyleStrong<StyleDocumentRule>;
 template struct StyleStrong<StyleNamespaceRule>;
+template struct StyleStrong<StyleMarginRule>;
 template struct StyleStrong<StyleLockedPageRule>;
 template struct StyleStrong<StylePropertyRule>;
 template struct StyleStrong<StyleSupportsRule>;
@@ -53,6 +54,10 @@ template struct StyleStrong<StyleFontPaletteValuesRule>;
 template struct StyleStrong<StyleLockedFontFaceRule>;
 template struct StyleStrong<StyleLockedCounterStyleRule>;
 template struct StyleStrong<StyleContainerRule>;
+template struct StyleStrong<StyleScopeRule>;
+template struct StyleStrong<StyleStartingStyleRule>;
+template struct StyleStrong<StyleLockedPositionTryRule>;
+template struct StyleStrong<StyleLockedNestedDeclarationsRule>;
 
 template <typename T>
 inline void StyleOwnedSlice<T>::Clear() {
@@ -375,22 +380,25 @@ inline const URLExtraData& StyleCssUrl::ExtraData() const {
   return _0->extra_data.get();
 }
 
-inline StyleLoadData& StyleCssUrl::LoadData() const {
+inline const StyleLoadData& StyleCssUrl::LoadData() const {
   if (MOZ_LIKELY(_0->load_data.tag == StyleLoadDataSource::Tag::Owned)) {
-    MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread() ||
-                          dom::IsCurrentThreadRunningWorker());
-    return const_cast<StyleLoadData&>(_0->load_data.owned._0);
+    return _0->load_data.owned._0;
   }
-  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread(),
-                        "Lazy load datas should come from user-agent sheets, "
-                        "which don't make sense on workers");
-  return const_cast<StyleLoadData&>(*Servo_LoadData_GetLazy(&_0->load_data));
+  return *Servo_LoadData_GetLazy(&_0->load_data);
+}
+
+inline StyleLoadData& StyleCssUrl::MutLoadData() const {
+  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread() ||
+                        dom::IsCurrentThreadRunningWorker());
+  return const_cast<StyleLoadData&>(LoadData());
 }
 
 inline nsIURI* StyleCssUrl::GetURI() const {
-  auto& loadData = LoadData();
-  if (!(loadData.flags & StyleLoadDataFlags::TRIED_TO_RESOLVE_URI)) {
-    loadData.flags |= StyleLoadDataFlags::TRIED_TO_RESOLVE_URI;
+  auto& loadData = const_cast<StyleLoadData&>(LoadData());
+  // Try to read the flags first. If it's set we can avoid entering the CAS
+  // loop.
+  auto flags = __atomic_load_n(&loadData.flags.bits, __ATOMIC_RELAXED);
+  if (!(flags & StyleLoadDataFlags::TRIED_TO_RESOLVE_URI.bits)) {
     nsDependentCSubstring serialization = SpecifiedSerialization();
     // https://drafts.csswg.org/css-values-4/#url-empty:
     //
@@ -398,14 +406,29 @@ inline nsIURI* StyleCssUrl::GetURI() const {
     //     url()), the url must resolve to an invalid resource (similar to what
     //     the url about:invalid does).
     //
+    nsIURI* resolved = nullptr;
     if (!serialization.IsEmpty()) {
-      RefPtr<nsIURI> resolved;
-      NS_NewURI(getter_AddRefs(resolved), serialization, nullptr,
-                ExtraData().BaseURI());
-      loadData.resolved_uri = resolved.forget().take();
+      nsIURI* old_resolved = nullptr;
+      // NOTE: This addrefs `resolved`, and `resolved` might still be null for
+      // invalid URIs.
+      NS_NewURI(&resolved, serialization, nullptr, ExtraData().BaseURI());
+      if (!__atomic_compare_exchange_n(&loadData.resolved_uri, &old_resolved,
+                                       resolved, /* weak = */ false,
+                                       __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+        // In the unlikely case two threads raced to write the url, avoid
+        // leaking resolved. The actual value is in `old_resolved`.
+        NS_IF_RELEASE(resolved);
+        resolved = old_resolved;
+      }
     }
+    // The flag is effectively just an optimization so we can use relaxed
+    // ordering.
+    __atomic_fetch_or(&loadData.flags.bits,
+                      StyleLoadDataFlags::TRIED_TO_RESOLVE_URI.bits,
+                      __ATOMIC_RELAXED);
+    return resolved;
   }
-  return loadData.resolved_uri;
+  return __atomic_load_n(&loadData.resolved_uri, __ATOMIC_ACQUIRE);
 }
 
 inline nsDependentCSubstring StyleComputedUrl::SpecifiedSerialization() const {
@@ -414,8 +437,11 @@ inline nsDependentCSubstring StyleComputedUrl::SpecifiedSerialization() const {
 inline const URLExtraData& StyleComputedUrl::ExtraData() const {
   return _0.ExtraData();
 }
-inline StyleLoadData& StyleComputedUrl::LoadData() const {
+inline const StyleLoadData& StyleComputedUrl::LoadData() const {
   return _0.LoadData();
+}
+inline StyleLoadData& StyleComputedUrl::MutLoadData() const {
+  return _0.MutLoadData();
 }
 inline StyleCorsMode StyleComputedUrl::CorsMode() const {
   return _0._0->cors_mode;
@@ -569,7 +595,7 @@ StyleCalcLengthPercentage& LengthPercentage::AsCalc() {
   MOZ_ASSERT(IsCalc());
   // NOTE: in 32-bits, the pointer is not swapped, and goes along with the tag.
 #ifdef SERVO_32_BITS
-  return *calc.ptr;
+  return *reinterpret_cast<StyleCalcLengthPercentage*>(calc.ptr);
 #else
   return *reinterpret_cast<StyleCalcLengthPercentage*>(
       NativeEndian::swapFromLittleEndian(calc.ptr));
@@ -697,9 +723,12 @@ CSSCoord StyleCalcLengthPercentage::ResolveToCSSPixels(CSSCoord aBasis) const {
   return Servo_ResolveCalcLengthPercentage(this, aBasis);
 }
 
-nscoord StyleCalcLengthPercentage::Resolve(nscoord aBasis) const {
-  return detail::DefaultLengthToAppUnits(
-      ResolveToCSSPixels(CSSPixel::FromAppUnits(aBasis)));
+template <typename Rounder>
+nscoord StyleCalcLengthPercentage::Resolve(nscoord aBasis,
+                                           Rounder aRounder) const {
+  static_assert(std::is_same_v<decltype(aRounder(1.0f)), nscoord>);
+  CSSCoord result = ResolveToCSSPixels(CSSPixel::FromAppUnits(aBasis));
+  return aRounder(result * AppUnitsPerCSSPixel());
 }
 
 template <>
@@ -724,11 +753,10 @@ CSSCoord LengthPercentage::ResolveToCSSPixelsWith(T aPercentageGetter) const {
   return ResolveToCSSPixels(aPercentageGetter());
 }
 
-template <typename T, typename PercentRounder>
-nscoord LengthPercentage::Resolve(T aPercentageGetter,
-                                  PercentRounder aPercentRounder) const {
+template <typename T, typename Rounder>
+nscoord LengthPercentage::Resolve(T aPercentageGetter, Rounder aRounder) const {
   static_assert(std::is_same_v<decltype(aPercentageGetter()), nscoord>);
-  static_assert(std::is_same_v<decltype(aPercentRounder(1.0f)), nscoord>);
+  static_assert(std::is_same_v<decltype(aRounder(1.0f)), nscoord>);
   if (ConvertsToLength()) {
     return ToLength();
   }
@@ -737,9 +765,9 @@ nscoord LengthPercentage::Resolve(T aPercentageGetter,
   }
   nscoord basis = aPercentageGetter();
   if (IsPercentage()) {
-    return aPercentRounder(basis * AsPercentage()._0);
+    return aRounder(basis * AsPercentage()._0);
   }
-  return AsCalc().Resolve(basis);
+  return AsCalc().Resolve(basis, aRounder);
 }
 
 nscoord LengthPercentage::Resolve(nscoord aPercentageBasis) const {
@@ -752,11 +780,10 @@ nscoord LengthPercentage::Resolve(T aPercentageGetter) const {
   return Resolve(aPercentageGetter, detail::DefaultPercentLengthToAppUnits);
 }
 
-template <typename PercentRounder>
+template <typename Rounder>
 nscoord LengthPercentage::Resolve(nscoord aPercentageBasis,
-                                  PercentRounder aPercentRounder) const {
-  return Resolve([aPercentageBasis] { return aPercentageBasis; },
-                 aPercentRounder);
+                                  Rounder aRounder) const {
+  return Resolve([aPercentageBasis] { return aPercentageBasis; }, aRounder);
 }
 
 void LengthPercentage::ScaleLengthsBy(float aScale) {
@@ -801,6 +828,15 @@ void LengthPercentage::ScaleLengthsBy(float aScale) {
 IMPL_LENGTHPERCENTAGE_FORWARDS(LengthPercentageOrAuto)
 IMPL_LENGTHPERCENTAGE_FORWARDS(StyleSize)
 IMPL_LENGTHPERCENTAGE_FORWARDS(StyleMaxSize)
+IMPL_LENGTHPERCENTAGE_FORWARDS(StyleInset)
+IMPL_LENGTHPERCENTAGE_FORWARDS(StyleMargin)
+
+template <>
+inline bool StyleInset::IsAnchorPositioningFunction() const {
+  return IsAnchorFunction() || IsAnchorSizeFunction();
+}
+
+#undef IMPL_LENGTHPERCENTAGE_FORWARDS
 
 template <>
 inline bool LengthOrAuto::IsLength() const {
@@ -822,15 +858,26 @@ inline bool StyleFlexBasis::IsAuto() const {
   return IsSize() && AsSize().IsAuto();
 }
 
-template <>
-inline bool StyleSize::BehavesLikeInitialValueOnBlockAxis() const {
-  return IsAuto() || !IsLengthPercentage();
-}
+#define IMPL_BEHAVES_LIKE_SIZE_METHODS(ty_, isInitialValMethod_)        \
+  template <>                                                           \
+  inline bool ty_::BehavesLikeStretchOnInlineAxis() const {             \
+    return IsStretch() || IsMozAvailable() || IsWebkitFillAvailable();  \
+  }                                                                     \
+  template <>                                                           \
+  inline bool ty_::BehavesLikeStretchOnBlockAxis() const {              \
+    /* TODO(dholbert): Add "|| IsMozAvailable()" in bug 527285. */      \
+    return IsStretch() || IsWebkitFillAvailable();                      \
+  }                                                                     \
+  template <>                                                           \
+  inline bool ty_::BehavesLikeInitialValueOnBlockAxis() const {         \
+    return isInitialValMethod_() ||                                     \
+           (!BehavesLikeStretchOnBlockAxis() && !IsLengthPercentage()); \
+  }
 
-template <>
-inline bool StyleMaxSize::BehavesLikeInitialValueOnBlockAxis() const {
-  return IsNone() || !IsLengthPercentage();
-}
+IMPL_BEHAVES_LIKE_SIZE_METHODS(StyleSize, IsAuto)
+IMPL_BEHAVES_LIKE_SIZE_METHODS(StyleMaxSize, IsNone)
+
+#undef IMPL_BEHAVES_LIKE_SIZE_METHODS
 
 template <>
 inline bool StyleBackgroundSize::IsInitialValue() const {
@@ -1199,6 +1246,20 @@ inline nsRect StyleZoom::Unzoom(const nsRect& aValue) const {
   }
   return nsRect(UnzoomCoord(aValue.X()), UnzoomCoord(aValue.Y()),
                 UnzoomCoord(aValue.Width()), UnzoomCoord(aValue.Height()));
+}
+
+template <>
+inline gfx::Point StyleCoordinatePair<StyleCSSFloat>::ToGfxPoint(
+    const CSSSize* aBasis) const {
+  return gfx::Point(x, y);
+}
+
+template <>
+inline gfx::Point StyleCoordinatePair<LengthPercentage>::ToGfxPoint(
+    const CSSSize* aBasis) const {
+  MOZ_ASSERT(aBasis);
+  return gfx::Point(x.ResolveToCSSPixels(aBasis->Width()),
+                    y.ResolveToCSSPixels(aBasis->Height()));
 }
 
 }  // namespace mozilla

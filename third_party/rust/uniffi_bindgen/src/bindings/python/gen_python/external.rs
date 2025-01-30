@@ -17,10 +17,10 @@ impl ExternalCodeType {
 
 impl CodeType for ExternalCodeType {
     fn type_label(&self) -> String {
-        self.name.clone()
+        super::PythonCodeOracle.class_name(&self.name)
     }
 
     fn canonical_name(&self) -> String {
-        format!("Type{}", self.name)
+        format!("Type{}", self.type_label())
     }
 }

@@ -15,7 +15,7 @@
   flex-direction: column;
   text-align: center;
   gap: 22px;
-  height: 264px;
+  min-height: 264px;
 }
 
 [slot="main"].selectedTab .header {
@@ -72,12 +72,6 @@
   }
 }
 
-
-.info {
-  -moz-context-properties: fill;
-  fill: var(--in-content-primary-button-background);
-}
-
 .description {
   color: var(--text-color-deemphasized);
   margin-block: 4px 15px;
@@ -93,7 +87,7 @@
 
 img.greyscale {
   filter: grayscale(100%);
-  @media not (prefers-contrast) {
+  @media not (forced-colors) {
     opacity: 0.5;
   }
 }

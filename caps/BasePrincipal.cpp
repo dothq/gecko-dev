@@ -372,7 +372,7 @@ nsresult BasePrincipal::ToJSON(nsACString& aJSON) {
 }
 
 nsresult BasePrincipal::ToJSON(JSONWriter& aWriter) {
-  static_assert(eKindMax < ArrayLength(JSONEnumKeyStrings));
+  static_assert(eKindMax < std::size(JSONEnumKeyStrings));
 
   aWriter.Start(JSONWriter::CollectionStyle::SingleLineStyle);
 
@@ -610,7 +610,6 @@ BasePrincipal::SubsumesConsideringDomainIgnoringFPD(nsIPrincipal* aOther,
 
 NS_IMETHODIMP
 BasePrincipal::CheckMayLoad(nsIURI* aURI, bool aAllowIfInheritsPrincipal) {
-  AssertIsOnMainThread();
   return CheckMayLoadHelper(aURI, aAllowIfInheritsPrincipal, false, 0);
 }
 
@@ -627,12 +626,11 @@ nsresult BasePrincipal::CheckMayLoadHelper(nsIURI* aURI,
                                            bool aAllowIfInheritsPrincipal,
                                            bool aReport,
                                            uint64_t aInnerWindowID) {
-  AssertIsOnMainThread();  // Accesses non-threadsafe URI flags and the
-                           // non-threadsafe ExtensionPolicyService
   NS_ENSURE_ARG_POINTER(aURI);
   MOZ_ASSERT(
       aReport || aInnerWindowID == 0,
       "Why do we have an inner window id if we're not supposed to report?");
+  MOZ_ASSERT(!aReport || NS_IsMainThread(), "Must be on main thread to report");
 
   // Check the internal method first, which allows us to quickly approve loads
   // for the System Principal.
@@ -653,41 +651,36 @@ nsresult BasePrincipal::CheckMayLoadHelper(nsIURI* aURI,
     }
   }
 
-  // Web Accessible Resources in MV2 Extensions are marked with
-  // URI_FETCHABLE_BY_ANYONE
-  bool fetchableByAnyone;
-  rv = NS_URIChainHasFlags(aURI, nsIProtocolHandler::URI_FETCHABLE_BY_ANYONE,
-                           &fetchableByAnyone);
-  if (NS_SUCCEEDED(rv) && fetchableByAnyone) {
-    return NS_OK;
-  }
-
-  // Get the principal uri for the last flag check or error.
+  // Get the principal uri for the WebExtension access check or error.
   nsCOMPtr<nsIURI> prinURI;
   rv = GetURI(getter_AddRefs(prinURI));
   if (!(NS_SUCCEEDED(rv) && prinURI)) {
     return NS_ERROR_DOM_BAD_URI;
   }
 
-  // If MV3 Extension uris are web accessible by this principal it is allowed to
-  // load.
-  bool maybeWebAccessible = false;
-  NS_URIChainHasFlags(aURI, nsIProtocolHandler::WEBEXT_URI_WEB_ACCESSIBLE,
-                      &maybeWebAccessible);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (maybeWebAccessible) {
-    bool isWebAccessible = false;
-    rv = ExtensionPolicyService::GetSingleton().SourceMayLoadExtensionURI(
-        prinURI, aURI, &isWebAccessible);
-    if (NS_SUCCEEDED(rv) && isWebAccessible) {
-      return NS_OK;
+  // If the URL being loaded corresponds to a WebExtension URL, ask the policy
+  // if the path should be accessible.
+  bool isWebExtensionResource;
+  rv = NS_URIChainHasFlags(aURI,
+                           nsIProtocolHandler::URI_IS_WEBEXTENSION_RESOURCE,
+                           &isWebExtensionResource);
+  if (NS_SUCCEEDED(rv) && isWebExtensionResource) {
+    extensions::URLInfo urlInfo(aURI);
+    if (RefPtr<extensions::WebExtensionPolicyCore> urlPolicyCore =
+            ExtensionPolicyService::GetCoreByURL(urlInfo)) {
+      extensions::URLInfo prinUrlInfo(prinURI);
+      if (urlPolicyCore->SourceMayAccessPath(prinUrlInfo, urlInfo.FilePath())) {
+        return NS_OK;
+      }
     }
   }
 
   if (aReport) {
-    nsScriptSecurityManager::ReportError(
-        "CheckSameOriginError", prinURI, aURI,
-        mOriginAttributes.mPrivateBrowsingId > 0, aInnerWindowID);
+    // FIXME: Once bug 1900706 is complete, reporting can be updated to work
+    // off-main-thread.
+    nsScriptSecurityManager::ReportError("CheckSameOriginError", prinURI, aURI,
+                                         mOriginAttributes.IsPrivateBrowsing(),
+                                         aInnerWindowID);
   }
 
   return NS_ERROR_DOM_BAD_URI;
@@ -771,6 +764,10 @@ BasePrincipal::IsL10nAllowed(nsIURI* aURI, bool* aRes) {
   nsresult rv = GetURI(getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, NS_OK);
 
+  if (!uri) {
+    return NS_OK;
+  }
+
   bool hasFlags;
 
   // Allow access to uris that cannot be loaded by web content.
@@ -793,18 +790,6 @@ BasePrincipal::IsL10nAllowed(nsIURI* aURI, bool* aRes) {
 
   auto policy = AddonPolicyCore();
   *aRes = (policy && policy->IsPrivileged());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-BasePrincipal::AllowsRelaxStrictFileOriginPolicy(nsIURI* aURI, bool* aRes) {
-  *aRes = false;
-  nsCOMPtr<nsIURI> prinURI;
-  nsresult rv = GetURI(getter_AddRefs(prinURI));
-  if (NS_FAILED(rv) || !prinURI) {
-    return NS_OK;
-  }
-  *aRes = NS_RelaxStrictFileOriginPolicy(aURI, prinURI);
   return NS_OK;
 }
 
@@ -853,12 +838,24 @@ BasePrincipal::HasFirstpartyStorageAccess(mozIDOMWindow* aCheckWindow,
   *aRejectedReason = 0;
   *aOutAllowed = false;
 
+  if (IsSystemPrincipal()) {
+    // System principal is always considered to have first-party storage access.
+    *aOutAllowed = true;
+    return NS_OK;
+  }
+
   nsPIDOMWindowInner* win = nsPIDOMWindowInner::From(aCheckWindow);
   nsCOMPtr<nsIURI> uri;
   nsresult rv = GetURI(getter_AddRefs(uri));
   if (NS_FAILED(rv)) {
     return rv;
   }
+
+  // The uri could be null if the principal is an expanded principal.
+  if (!uri) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
   *aOutAllowed = ShouldAllowAccessFor(win, uri, aRejectedReason);
   return NS_OK;
 }
@@ -1187,6 +1184,12 @@ BasePrincipal::GetUserContextId(uint32_t* aUserContextId) {
 NS_IMETHODIMP
 BasePrincipal::GetPrivateBrowsingId(uint32_t* aPrivateBrowsingId) {
   *aPrivateBrowsingId = PrivateBrowsingId();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::GetIsInPrivateBrowsing(bool* aIsInPrivateBrowsing) {
+  *aIsInPrivateBrowsing = mOriginAttributes.IsPrivateBrowsing();
   return NS_OK;
 }
 

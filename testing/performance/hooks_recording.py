@@ -20,6 +20,11 @@ next_site = None
 
 RECORDING_LIST = Path(Path(__file__).parent, "pageload_sites.json")
 
+# Uncomment this to record tp7 desktop sites in CI or locally.
+# This is still a WIP (Bug 1831310) and meant to be used by the
+# perftest team.
+# RECORDING_LIST = Path(Path(__file__).parent, "tp7_desktop_sites.json")
+
 SCM_1_LOGIN_SITES = ("facebook", "netflix")
 
 
@@ -116,8 +121,9 @@ def before_runs(env):
             platform_name = platform.system().lower()
             app_name = "firefox"
 
+        # bug 1883701 linux uses a different version for now
         name = [
-            "mitm8",
+            "mitm8" if platform_name == "linux" else "mitm11",
             platform_name,
             "gve" if app_name == "geckoview_example" else app_name,
             test_site["name"],

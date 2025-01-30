@@ -9,12 +9,16 @@
 #include "transportlayerdtls.h"
 
 #include <algorithm>
+#include <iomanip>
 #include <queue>
 #include <sstream>
 
 #include "dtlsidentity.h"
 #include "keyhi.h"
 #include "logging.h"
+#include "mozilla/glean/GleanMetrics.h"
+#include "mozilla/StaticPrefs_media.h"
+#include "mozilla/StaticPrefs_security.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
@@ -445,11 +449,6 @@ void TransportLayerDtls::SetMinMaxVersion(Version min_version,
   maxVersion_ = max_version;
 }
 
-// These are the named groups that we will allow.
-static const SSLNamedGroup NamedGroupPreferences[] = {
-    ssl_grp_ec_curve25519, ssl_grp_ec_secp256r1, ssl_grp_ec_secp384r1,
-    ssl_grp_ffdhe_2048, ssl_grp_ffdhe_3072};
-
 // TODO: make sure this is called from STS. Otherwise
 // we have thread safety issues
 bool TransportLayerDtls::Setup() {
@@ -595,10 +594,36 @@ bool TransportLayerDtls::Setup() {
     return false;
   }
 
-  rv = SSL_NamedGroupConfig(ssl_fd.get(), NamedGroupPreferences,
-                            mozilla::ArrayLength(NamedGroupPreferences));
+  unsigned int additional_shares =
+      StaticPrefs::security_tls_client_hello_send_p256_keyshare();
+
+  const SSLNamedGroup namedGroups[] = {
+      ssl_grp_ec_curve25519, ssl_grp_ec_secp256r1, ssl_grp_ec_secp384r1,
+      ssl_grp_ffdhe_2048, ssl_grp_ffdhe_3072,
+      // Advertise MLKEM support but do not pro-actively send a keyshare
+
+      // Mlkem must stay the last in the list because if we don't support it
+      // the amount of supported_groups will be sent without it.
+      ssl_grp_kem_mlkem768x25519};
+
+  size_t numGroups = std::size(namedGroups);
+  if (!(StaticPrefs::security_tls_enable_kyber() &&
+        StaticPrefs::media_webrtc_enable_pq_dtls() &&
+        maxVersion_ >= Version::DTLS_1_3)) {
+    // Excluding the last group of the namedGroups.
+    numGroups -= 1;
+  }
+
+  rv = SSL_NamedGroupConfig(ssl_fd.get(), namedGroups, numGroups);
+
   if (rv != SECSuccess) {
     MOZ_MTLOG(ML_ERROR, "Couldn't set named groups");
+    return false;
+  }
+
+  if (SECSuccess !=
+      SSL_SendAdditionalKeyShares(ssl_fd.get(), additional_shares)) {
+    MOZ_MTLOG(ML_ERROR, "Couldn't set up additional key shares");
     return false;
   }
 
@@ -877,6 +902,11 @@ void TransportLayerDtls::Handshake() {
     return;
   }
 
+  if (!handshakeTelemetryRecorded) {
+    RecordStartedHandshakeTelemetry();
+    handshakeTelemetryRecorded = true;
+  }
+
   // Clear the retransmit timer
   timer_->Cancel();
 
@@ -888,6 +918,7 @@ void TransportLayerDtls::Handshake() {
     MOZ_MTLOG(ML_NOTICE, LAYER_INFO << "****** SSL handshake completed ******");
     if (!cert_ok_) {
       MOZ_MTLOG(ML_ERROR, LAYER_INFO << "Certificate check never occurred");
+      RecordHandshakeCompletionTelemetry("CERT_FAILURE");
       TL_SET_STATE(TS_ERROR);
       return;
     }
@@ -896,10 +927,12 @@ void TransportLayerDtls::Handshake() {
       // Forcibly close the connection so that the peer isn't left hanging
       // (assuming the close_notify isn't dropped).
       ssl_fd_ = nullptr;
+      RecordHandshakeCompletionTelemetry("ALPN_FAILURE");
       TL_SET_STATE(TS_ERROR);
       return;
     }
 
+    RecordHandshakeCompletionTelemetry("SUCCESS");
     TL_SET_STATE(TS_OPEN);
 
     RecordTlsTelemetry();
@@ -931,6 +964,7 @@ void TransportLayerDtls::Handshake() {
         const char* err_msg = PR_ErrorToName(err);
         MOZ_MTLOG(ML_ERROR, LAYER_INFO << "DTLS handshake error " << err << " ("
                                        << err_msg << ")");
+        RecordHandshakeCompletionTelemetry(err_msg);
         TL_SET_STATE(TS_ERROR);
         break;
     }
@@ -1468,6 +1502,25 @@ void TransportLayerDtls::TimerCallback(nsITimer* timer, void* arg) {
   dtls->Handshake();
 }
 
+void TransportLayerDtls::RecordHandshakeCompletionTelemetry(
+    const char* aResult) {
+  if (role_ == CLIENT) {
+    mozilla::glean::webrtcdtls::client_handshake_result.Get(nsCString(aResult))
+        .Add(1);
+  } else {
+    mozilla::glean::webrtcdtls::server_handshake_result.Get(nsCString(aResult))
+        .Add(1);
+  }
+}
+
+void TransportLayerDtls::RecordStartedHandshakeTelemetry() {
+  if (role_ == CLIENT) {
+    mozilla::glean::webrtcdtls::client_handshake_started_counter.Add(1);
+  } else {
+    mozilla::glean::webrtcdtls::server_handshake_started_counter.Add(1);
+  }
+}
+
 void TransportLayerDtls::RecordTlsTelemetry() {
   MOZ_ASSERT(state_ == TS_OPEN);
   SSLChannelInfo info;
@@ -1478,54 +1531,29 @@ void TransportLayerDtls::RecordTlsTelemetry() {
     return;
   }
 
-  uint16_t telemetry_cipher = 0;
-
-  switch (info.cipherSuite) {
-    /* Old DHE ciphers: candidates for removal, see bug 1227519 */
-    case TLS_DHE_RSA_WITH_AES_128_CBC_SHA:
-      telemetry_cipher = 1;
+  switch (info.protocolVersion) {
+    case SSL_LIBRARY_VERSION_TLS_1_1:
+      mozilla::glean::webrtcdtls::protocol_version.Get("1.0"_ns).Add(1);
       break;
-    case TLS_DHE_RSA_WITH_AES_256_CBC_SHA:
-      telemetry_cipher = 2;
+    case SSL_LIBRARY_VERSION_TLS_1_2:
+      mozilla::glean::webrtcdtls::protocol_version.Get("1.2"_ns).Add(1);
       break;
-    /* Current ciphers */
-    case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
-      telemetry_cipher = 3;
+    case SSL_LIBRARY_VERSION_TLS_1_3:
+      mozilla::glean::webrtcdtls::protocol_version.Get("1.3"_ns).Add(1);
       break;
-    case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
-      telemetry_cipher = 4;
-      break;
-    case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-      telemetry_cipher = 5;
-      break;
-    case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
-      telemetry_cipher = 6;
-      break;
-    case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
-      telemetry_cipher = 7;
-      break;
-    case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
-      telemetry_cipher = 8;
-      break;
-    case TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
-      telemetry_cipher = 9;
-      break;
-    case TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
-      telemetry_cipher = 10;
-      break;
-    /* TLS 1.3 ciphers */
-    case TLS_AES_128_GCM_SHA256:
-      telemetry_cipher = 11;
-      break;
-    case TLS_CHACHA20_POLY1305_SHA256:
-      telemetry_cipher = 12;
-      break;
-    case TLS_AES_256_GCM_SHA384:
-      telemetry_cipher = 13;
-      break;
+    default:
+      MOZ_CRASH("Unknown SSL version");
   }
 
-  Telemetry::Accumulate(Telemetry::WEBRTC_DTLS_CIPHER, telemetry_cipher);
+  {
+    std::ostringstream oss;
+    // Record TLS cipher-suite ID as a string (eg;
+    // TLS_DHE_RSA_WITH_AES_128_CBC_SHA is 0x0033)
+    oss << "0x" << std::setfill('0') << std::setw(4) << std::hex
+        << info.cipherSuite;
+    mozilla::glean::webrtcdtls::cipher.Get(nsCString(oss.str().c_str())).Add(1);
+    MOZ_MTLOG(ML_DEBUG, "cipher: " << oss.str());
+  }
 
   uint16_t cipher;
   nsresult rv = GetSrtpCipher(&cipher);
@@ -1535,24 +1563,15 @@ void TransportLayerDtls::RecordTlsTelemetry() {
     return;
   }
 
-  auto cipher_label = mozilla::Telemetry::LABELS_WEBRTC_SRTP_CIPHER::Unknown;
-
-  switch (cipher) {
-    case kDtlsSrtpAes128CmHmacSha1_80:
-      cipher_label = Telemetry::LABELS_WEBRTC_SRTP_CIPHER::Aes128CmHmacSha1_80;
-      break;
-    case kDtlsSrtpAes128CmHmacSha1_32:
-      cipher_label = Telemetry::LABELS_WEBRTC_SRTP_CIPHER::Aes128CmHmacSha1_32;
-      break;
-    case kDtlsSrtpAeadAes128Gcm:
-      cipher_label = Telemetry::LABELS_WEBRTC_SRTP_CIPHER::AeadAes128Gcm;
-      break;
-    case kDtlsSrtpAeadAes256Gcm:
-      cipher_label = Telemetry::LABELS_WEBRTC_SRTP_CIPHER::AeadAes256Gcm;
-      break;
+  {
+    std::ostringstream oss;
+    // Record SRTP cipher-suite ID as a string (eg;
+    // SRTP_AES128_CM_HMAC_SHA1_80 is 0x0001)
+    oss << "0x" << std::setfill('0') << std::setw(4) << std::hex << cipher;
+    mozilla::glean::webrtcdtls::srtp_cipher.Get(nsCString(oss.str().c_str()))
+        .Add(1);
+    MOZ_MTLOG(ML_DEBUG, "srtp cipher: " << oss.str());
   }
-
-  Telemetry::AccumulateCategorical(cipher_label);
 }
 
 }  // namespace mozilla

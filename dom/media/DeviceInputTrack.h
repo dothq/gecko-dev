@@ -44,8 +44,7 @@ class NonNativeInputTrack;
 //     } else {
 //       MOZ_ASSERT(mInputs.Length() == 1);
 //       AudioSegment data;
-//       DeviceInputConsumerTrack::GetInputSourceData(data, mInputs[0], aFrom,
-//                                                    aTo);
+//       DeviceInputConsumerTrack::GetInputSourceData(data, aFrom, aTo);
 //       // You can do audio data processing before appending to mSegment here.
 //       GetData<AudioSegment>()->AppendFrom(&data);
 //     }
@@ -77,20 +76,22 @@ class DeviceInputConsumerTrack : public ProcessedMediaTrack {
   void DisconnectDeviceInput();
   Maybe<CubebUtils::AudioDeviceID> DeviceId() const;
   NotNull<AudioDataListener*> GetAudioDataListener() const;
-  bool ConnectToNativeDevice() const;
-  bool ConnectToNonNativeDevice() const;
+  bool ConnectedToNativeDevice() const;
+  bool ConnectedToNonNativeDevice() const;
 
   // Any thread:
   DeviceInputConsumerTrack* AsDeviceInputConsumerTrack() override {
     return this;
   }
 
- protected:
   // Graph thread API:
-  // Get the data in [aFrom, aTo) from aPort->GetSource() to aOutput. aOutput
-  // needs to be empty.
-  void GetInputSourceData(AudioSegment& aOutput, const MediaInputPort* aPort,
-                          GraphTime aFrom, GraphTime aTo) const;
+  DeviceInputTrack* GetDeviceInputTrackGraphThread() const;
+
+ protected:
+  // Get the data in [aFrom, aTo) from the device input to aOutput. aOutput
+  // needs to be empty. A device input must be connected. Graph thread.
+  void GetInputSourceData(AudioSegment& aOutput, GraphTime aFrom,
+                          GraphTime aTo) const;
 
   // Main Thread variables:
   RefPtr<MediaInputPort> mPort;
@@ -176,6 +177,23 @@ class DeviceInputTrack : public ProcessedMediaTrack {
   // Query audio settings from its users.
   uint32_t MaxRequestedInputChannels() const;
   bool HasVoiceInput() const;
+  // Query for the aggregated form of processing params from all consumers. If
+  // different from the previous call, the generation is updated and listeners
+  // notified that new processing params are being requested. The caller is
+  // responsible for performing the request.
+  [[nodiscard]] AudioInputProcessingParamsRequest
+  UpdateRequestedProcessingParams();
+  // Signal to listeners that the requested platform processing params is about
+  // to change.
+  void NotifySetRequestedProcessingParams(
+      MediaTrackGraph* aGraph, int aGeneration,
+      cubeb_input_processing_params aRequestedParams);
+  // Handle the result of an async operation to set processing params on a cubeb
+  // stream. If the operation failed, signal this to listeners and then disable
+  // processing. If the operation succeeded, directly signal this to listeners.
+  void NotifySetRequestedProcessingParamsResult(
+      MediaTrackGraph* aGraph, int aGeneration,
+      const Result<cubeb_input_processing_params, int>& aResult);
   // Deliver notification to its users.
   void DeviceChanged(MediaTrackGraph* aGraph) const;
 
@@ -205,6 +223,7 @@ class DeviceInputTrack : public ProcessedMediaTrack {
 
   // Only accessed on the graph thread.
   nsTArray<RefPtr<AudioDataListener>> mListeners;
+  AudioInputProcessingParamsRequest mProcessingParamsRequest;
 };
 
 class NativeInputTrack final : public DeviceInputTrack {
@@ -264,6 +283,7 @@ class NonNativeInputTrack final : public DeviceInputTrack {
   void NotifyDeviceChanged(AudioInputSource::Id aSourceId);
   void NotifyInputStopped(AudioInputSource::Id aSourceId);
   AudioInputSource::Id GenerateSourceId();
+  void ReevaluateProcessingParams();
 
  private:
   ~NonNativeInputTrack() = default;
@@ -271,6 +291,7 @@ class NonNativeInputTrack final : public DeviceInputTrack {
   // Graph thread only.
   RefPtr<AudioInputSource> mAudioSource;
   AudioInputSource::Id mSourceIdNumber;
+  int mRequestedProcessingParamsGeneration{};
 
 #ifdef DEBUG
   // Graph thread only.

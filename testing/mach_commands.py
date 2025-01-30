@@ -5,8 +5,8 @@
 import argparse
 import logging
 import os
-import subprocess
 import sys
+from datetime import date, timedelta
 
 import requests
 from mach.decorators import Command, CommandArgument, SubCommand
@@ -717,57 +717,6 @@ def run_jsshelltests(command_context, **kwargs):
 
 
 @Command(
-    "cramtest",
-    category="testing",
-    description="Mercurial style .t tests for command line applications.",
-)
-@CommandArgument(
-    "test_paths",
-    nargs="*",
-    metavar="N",
-    help="Test paths to run. Each path can be a test file or directory. "
-    "If omitted, the entire suite will be run.",
-)
-@CommandArgument(
-    "cram_args",
-    nargs=argparse.REMAINDER,
-    help="Extra arguments to pass down to the cram binary. See "
-    "'./mach python -m cram -- -h' for a list of available options.",
-)
-def cramtest(command_context, cram_args=None, test_paths=None, test_objects=None):
-    command_context.activate_virtualenv()
-    import mozinfo
-    from manifestparser import TestManifest
-
-    if test_objects is None:
-        from moztest.resolve import TestResolver
-
-        resolver = command_context._spawn(TestResolver)
-        if test_paths:
-            # If we were given test paths, try to find tests matching them.
-            test_objects = resolver.resolve_tests(paths=test_paths, flavor="cram")
-        else:
-            # Otherwise just run everything in CRAMTEST_MANIFESTS
-            test_objects = resolver.resolve_tests(flavor="cram")
-
-    if not test_objects:
-        message = "No tests were collected, check spelling of the test paths."
-        command_context.log(logging.WARN, "cramtest", {}, message)
-        return 1
-
-    mp = TestManifest()
-    mp.tests.extend(test_objects)
-    tests = mp.active_tests(disabled=False, **mozinfo.info)
-
-    python = command_context.virtualenv_manager.python_path
-    cmd = [python, "-m", "cram"] + cram_args + [t["relpath"] for t in tests]
-    return subprocess.call(cmd, cwd=command_context.topsrcdir)
-
-
-from datetime import date, timedelta
-
-
-@Command(
     "test-info", category="testing", description="Display historical test results."
 )
 def test_info(command_context):
@@ -887,6 +836,10 @@ def test_info_tests(
 )
 @CommandArgument("--output-file", help="Path to report file.")
 @CommandArgument("--runcounts-input-file", help="Optional path to report file.")
+@CommandArgument(
+    "--config-matrix-output-file",
+    help="Path to report the config matrix for each manifest.",
+)
 @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
 @CommandArgument(
     "--start",
@@ -915,6 +868,7 @@ def test_report(
     end,
     show_testruns,
     runcounts_input_file,
+    config_matrix_output_file,
 ):
     import testinfo
     from mozbuild import build_commands
@@ -943,6 +897,7 @@ def test_report(
         end,
         show_testruns,
         runcounts_input_file,
+        config_matrix_output_file,
     )
 
 
@@ -1080,7 +1035,7 @@ def test_info_failures(
     # query VCS to get current list of variants:
     import yaml
 
-    url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/taskcluster/ci/test/variants.yml"
+    url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/taskcluster/kinds/test/variants.yml"
     r = requests.get(url, headers={"User-agent": "mach-test-info/1.0"})
     variants = yaml.safe_load(r.text)
 
@@ -1184,14 +1139,8 @@ def run_rusttests(command_context, **kwargs):
     category="testing",
     description="Test Fluent migration recipes.",
 )
-@CommandArgument(
-    "--l10n-git",
-    action="store_true",
-    dest="l10n_git",
-    help="Use git rather than hg source repository",
-)
 @CommandArgument("test_paths", nargs="*", metavar="N", help="Recipe paths to test.")
-def run_migration_tests(command_context, l10n_git=False, test_paths=None, **kwargs):
+def run_migration_tests(command_context, test_paths=None, **kwargs):
     if not test_paths:
         test_paths = []
     command_context.activate_virtualenv()
@@ -1228,11 +1177,9 @@ def run_migration_tests(command_context, l10n_git=False, test_paths=None, **kwar
                 "ERROR in {file}: {error}",
             )
             rv |= 1
-    obj_dir, repo_dir = fmt.prepare_directories(command_context, l10n_git)
+    obj_dir, repo_dir = fmt.prepare_directories(command_context)
     for context in with_context:
-        rv |= fmt.test_migration(
-            command_context, obj_dir, repo_dir, l10n_git, **context
-        )
+        rv |= fmt.test_migration(command_context, obj_dir, repo_dir, **context)
     return rv
 
 
@@ -1255,7 +1202,11 @@ def manifest(_command_context):
 )
 @CommandArgument("try_url", nargs=1, help="Treeherder URL for try (please use quotes)")
 @CommandArgument(
-    "-b", "--bugzilla", default=None, dest="bugzilla", help="Bugzilla instance"
+    "-b",
+    "--bugzilla",
+    default=None,
+    dest="bugzilla",
+    help="Bugzilla instance (or disable)",
 )
 @CommandArgument(
     "-m", "--meta-bug-id", default=None, dest="meta_bug_id", help="Meta Bug id"
@@ -1301,6 +1252,18 @@ def manifest(_command_context):
     action="store_true",
     help="Determine manifest changes, but do not write them",
 )
+@CommandArgument(
+    "-I",
+    "--implicit-vars",
+    action="store_true",
+    help="Use implicit variables in reftest manifests",
+)
+@CommandArgument(
+    "-n",
+    "--new-version",
+    dest="new_version",
+    help="New version to use for annotations",
+)
 def skipfails(
     command_context,
     try_url,
@@ -1314,6 +1277,8 @@ def skipfails(
     max_failures=-1,
     verbose=False,
     dry_run=False,
+    implicit_vars=False,
+    new_version=None,
 ):
     from skipfails import Skipfails
 
@@ -1331,7 +1296,16 @@ def skipfails(
     else:
         max_failures = -1
 
-    Skipfails(command_context, try_url, verbose, bugzilla, dry_run, turbo).run(
+    Skipfails(
+        command_context,
+        try_url,
+        verbose,
+        bugzilla,
+        dry_run,
+        turbo,
+        implicit_vars,
+        new_version,
+    ).run(
         meta_bug_id,
         save_tasks,
         use_tasks,

@@ -54,6 +54,9 @@ elif CONFIG['TARGET_CPU'] == 'x86_64':
         # The rest of the platforms are all Linux-like: plain Linux
         # Android, OpenBSD, NetBSD, FreeBSD, DragonFly, SunOS
         ASFLAGS += ['-I%s/media/libdav1d/asm/x86_64/linux/' % TOPSRCDIR]
+elif CONFIG['TARGET_CPU'] == 'arm':
+    stack_alignment = 4
+    ASFLAGS += ['-I%s/dist/include/dav1d/' % TOPOBJDIR]
 elif CONFIG['TARGET_CPU'] == 'aarch64':
     stack_alignment = 16
     ASFLAGS += ['-I%s/dist/include/dav1d/' % TOPOBJDIR]
@@ -211,6 +214,7 @@ elif CONFIG['TARGET_CPU'] == 'arm' or CONFIG['TARGET_CPU'] == 'aarch64':
             '../../../third_party/dav1d/src/arm/64/looprestoration_tmpl.S',
             '../../../third_party/dav1d/src/arm/64/mc.S',
             '../../../third_party/dav1d/src/arm/64/mc16.S',
+            '../../../third_party/dav1d/src/arm/64/mc_dotprod.S',
             '../../../third_party/dav1d/src/arm/64/msac.S',
             '../../../third_party/dav1d/src/arm/64/refmvs.S',
         ]
@@ -242,7 +246,7 @@ if CONFIG['TARGET_CPU'] in ('x86', 'x86_64'):
 elif CONFIG['TARGET_CPU'] == 'aarch64' and CONFIG['OS_TARGET'] == 'WINNT':
     USE_INTEGRATED_CLANGCL_AS = True
 
-FINAL_LIBRARY = 'gkmedias'
+FINAL_LIBRARY = 'xul'
 
 # We allow warnings for third-party code that can be updated from upstream.
 AllowCompilerWarnings()

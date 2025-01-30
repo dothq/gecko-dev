@@ -24,6 +24,10 @@
 #include "skia/include/core/SkRegion.h"
 #include "skia/include/effects/SkImageFilters.h"
 #include "skia/include/private/base/SkMalloc.h"
+#include "skia/src/core/SkEffectPriv.h"
+#include "skia/src/core/SkRasterPipeline.h"
+#include "skia/src/core/SkWriteBuffer.h"
+#include "skia/src/shaders/SkEmptyShader.h"
 #include "Blur.h"
 #include "Logging.h"
 #include "Tools.h"
@@ -257,7 +261,7 @@ static sk_sp<SkImage> GetSkImageForSurface(SourceSurface* aSurface,
   }
 
   DataSourceSurface::MappedSurface map;
-  SkImage::RasterReleaseProc releaseProc;
+  void (*releaseProc)(const void*, void*);
   if (dataSurface->GetType() == SurfaceType::DATA_SHARED_WRAPPER) {
     // Technically all surfaces should be mapped and unmapped explicitly but it
     // appears SourceSurfaceSkia and DataSourceSurfaceWrapper have issues with
@@ -283,7 +287,7 @@ static sk_sp<SkImage> GetSkImageForSurface(SourceSurface* aSurface,
 
   SkPixmap pixmap(MakeSkiaImageInfo(surf->GetSize(), surf->GetFormat()),
                   map.mData, map.mStride);
-  sk_sp<SkImage> image = SkImage::MakeFromRaster(pixmap, releaseProc, surf);
+  sk_sp<SkImage> image = SkImages::RasterFromPixmap(pixmap, releaseProc, surf);
   if (!image) {
     releaseProc(map.mData, surf);
     gfxDebug() << "Failed making Skia raster image for temporary surface";
@@ -347,7 +351,7 @@ already_AddRefed<SourceSurface> DrawTargetSkia::Snapshot(
     // pixels.
     SkPixmap pixmap;
     if (mSurface->peekPixels(&pixmap)) {
-      image = SkImage::MakeFromRaster(pixmap, nullptr, nullptr);
+      image = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
     } else {
       image = mSurface->makeImageSnapshot();
     }
@@ -412,10 +416,10 @@ static sk_sp<SkImage> ExtractSubset(sk_sp<SkImage> aImage,
       pixmap.extractSubset(&subsetPixmap, subsetRect)) {
     // Release the original image reference so only the subset image keeps it
     // alive.
-    return SkImage::MakeFromRaster(subsetPixmap, ReleaseImage,
-                                   aImage.release());
+    return SkImages::RasterFromPixmap(subsetPixmap, ReleaseImage,
+                                      aImage.release());
   }
-  return aImage->makeSubset(subsetRect);
+  return aImage->makeSubset(nullptr, subsetRect);
 }
 
 static void FreeAlphaPixels(void* aBuf, void*) { sk_free(aBuf); }
@@ -711,7 +715,7 @@ struct AutoPaintSetup {
   Float mAlpha;
 };
 
-void DrawTargetSkia::Flush() { mCanvas->flush(); }
+void DrawTargetSkia::Flush() {}
 
 void DrawTargetSkia::DrawSurface(SourceSurface* aSurface, const Rect& aDest,
                                  const Rect& aSource,
@@ -1252,7 +1256,8 @@ static bool CanDrawFont(ScaledFont* aFont) {
 void DrawTargetSkia::DrawGlyphs(ScaledFont* aFont, const GlyphBuffer& aBuffer,
                                 const Pattern& aPattern,
                                 const StrokeOptions* aStrokeOptions,
-                                const DrawOptions& aOptions) {
+                                const DrawOptions& aOptions,
+                                SkShader* aShader) {
   if (!CanDrawFont(aFont)) {
     return;
   }
@@ -1288,6 +1293,10 @@ void DrawTargetSkia::DrawGlyphs(ScaledFont* aFont, const GlyphBuffer& aBuffer,
 
   skiaFont->SetupSkFontDrawOptions(font);
 
+  if (aShader) {
+    paint.mPaint.setShader(sk_ref_sp(aShader));
+  }
+
   // Limit the amount of internal batch allocations Skia does.
   const uint32_t kMaxGlyphBatchSize = 8192;
 
@@ -1304,6 +1313,51 @@ void DrawTargetSkia::DrawGlyphs(ScaledFont* aFont, const GlyphBuffer& aBuffer,
     sk_sp<SkTextBlob> text = builder.make();
     mCanvas->drawTextBlob(text, 0, 0, paint.mPaint);
   }
+}
+
+// This shader overrides the luminance color used to generate the preblend
+// tables for glyphs, without actually changing the rasterized color. This is
+// necesary for subpixel AA blending which requires both the mask and color
+// as separate inputs.
+class GlyphMaskShader : public SkEmptyShader {
+ public:
+  explicit GlyphMaskShader(const DeviceColor& aColor)
+      : mColor({aColor.r, aColor.g, aColor.b, aColor.a}) {}
+
+  bool onAsLuminanceColor(SkColor4f* aLum) const override {
+    *aLum = mColor;
+    return true;
+  }
+
+  bool isOpaque() const override { return true; }
+  bool isConstant() const override { return true; }
+
+  void flatten(SkWriteBuffer& buffer) const override {
+    buffer.writeColor4f(mColor);
+  }
+
+  bool appendStages(const SkStageRec& rec,
+                    const SkShaders::MatrixRec&) const override {
+    rec.fPipeline->appendConstantColor(rec.fAlloc,
+                                       SkColor4f{1, 1, 1, 1}.premul().vec());
+    return true;
+  }
+
+ private:
+  SkColor4f mColor;
+};
+
+void DrawTargetSkia::DrawGlyphMask(ScaledFont* aFont,
+                                   const GlyphBuffer& aBuffer,
+                                   const DeviceColor& aColor,
+                                   const StrokeOptions* aStrokeOptions,
+                                   const DrawOptions& aOptions) {
+  // Draw a mask using the GlyphMaskShader that can be used for subpixel AA
+  // but that uses the gamma preblend weighting of the given color, even though
+  // the mask itself does not use that color.
+  sk_sp<GlyphMaskShader> shader = sk_make_sp<GlyphMaskShader>(aColor);
+  DrawGlyphs(aFont, aBuffer, ColorPattern(DeviceColor(1, 1, 1, 1)),
+             aStrokeOptions, aOptions, shader.get());
 }
 
 Maybe<Rect> DrawTargetSkia::GetGlyphLocalBounds(
@@ -1376,6 +1430,8 @@ Maybe<Rect> DrawTargetSkia::GetGlyphLocalBounds(
     return Nothing();
   }
 
+  // Inflate the bounds to account for potential font hinting.
+  bounds.Inflate(1);
   return Some(bounds);
 }
 
@@ -1509,7 +1565,6 @@ bool DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface,
 
   dstCanvas->drawImage(srcImage, 0, 0, SkSamplingOptions(SkFilterMode::kLinear),
                        &paint);
-  dstCanvas->flush();
 
   // Temporarily reset the DT's transform, since it has already been composed
   // above.
@@ -1756,10 +1811,10 @@ bool DrawTargetSkia::Init(const IntSize& aSize, SurfaceFormat aFormat) {
     if (!buf) {
       return false;
     }
-    mSurface = AsRefPtr(SkSurface::MakeRasterDirectReleaseProc(
+    mSurface = AsRefPtr(SkSurfaces::WrapPixels(
         info, buf, stride, FreeAlphaPixels, nullptr, &props));
   } else {
-    mSurface = AsRefPtr(SkSurface::MakeRaster(info, stride, &props));
+    mSurface = AsRefPtr(SkSurfaces::Raster(info, stride, &props));
   }
   if (!mSurface) {
     return false;
@@ -1805,8 +1860,8 @@ bool DrawTargetSkia::Init(unsigned char* aData, const IntSize& aSize,
              VerifyRGBXFormat(aData, aSize, aStride, aFormat));
 
   SkSurfaceProps props(0, GetSkPixelGeometry());
-  mSurface = AsRefPtr(SkSurface::MakeRasterDirect(
-      MakeSkiaImageInfo(aSize, aFormat), aData, aStride, &props));
+  mSurface = AsRefPtr(SkSurfaces::WrapPixels(MakeSkiaImageInfo(aSize, aFormat),
+                                             aData, aStride, &props));
   if (!mSurface) {
     return false;
   }
@@ -1832,7 +1887,7 @@ bool DrawTargetSkia::Init(RefPtr<DataSourceSurface>&& aSurface) {
              VerifyRGBXFormat(map->GetData(), size, map->GetStride(), format));
 
   SkSurfaceProps props(0, GetSkPixelGeometry());
-  mSurface = AsRefPtr(SkSurface::MakeRasterDirectReleaseProc(
+  mSurface = AsRefPtr(SkSurfaces::WrapPixels(
       MakeSkiaImageInfo(size, format), map->GetData(), map->GetStride(),
       DrawTargetSkia::ReleaseMappedSkSurface, map, &props));
   if (!mSurface) {
@@ -1873,14 +1928,12 @@ already_AddRefed<PathBuilder> DrawTargetSkia::CreatePathBuilder(
 
 void DrawTargetSkia::ClearRect(const Rect& aRect) {
   MarkChanged();
-  mCanvas->save();
-  // Restrict clearing to the clip region if requested
-  mCanvas->clipRect(RectToSkRect(aRect), SkClipOp::kIntersect, true);
-  SkColor clearColor = (mFormat == SurfaceFormat::B8G8R8X8)
-                           ? SK_ColorBLACK
-                           : SK_ColorTRANSPARENT;
-  mCanvas->clear(clearColor);
-  mCanvas->restore();
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setColor((mFormat == SurfaceFormat::B8G8R8X8) ? SK_ColorBLACK
+                                                      : SK_ColorTRANSPARENT);
+  paint.setBlendMode(SkBlendMode::kSrc);
+  mCanvas->drawRect(RectToSkRect(aRect), paint);
 }
 
 void DrawTargetSkia::PushClip(const Path* aPath) {

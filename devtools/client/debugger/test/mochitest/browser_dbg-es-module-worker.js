@@ -38,9 +38,10 @@ add_task(async function () {
   await waitForThreadCount(dbg, 1);
   const threads = dbg.selectors.getThreads();
   is(threads.length, 1, "Got the page and the worker threads");
-  is(threads[0].name, WORKER_URL, "Thread name is correct");
+  is(threads[0].name, "worker.js", "Thread name is correct");
+  is(threads[0].url, WORKER_URL, "Thread URL is correct");
 
-  const source = findSource(dbg, "worker.js");
+  const source = await waitForSource(dbg, "worker.js");
   await selectSource(dbg, source);
   await addBreakpoint(dbg, source, 3);
 
@@ -50,7 +51,7 @@ add_task(async function () {
   });
 
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, source.id, 3);
+  await assertPausedAtSourceAndLine(dbg, source.id, 3);
   assertTextContentOnLine(dbg, 3, `console.log("breakpoint line");`);
 
   await SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {

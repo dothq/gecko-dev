@@ -124,7 +124,12 @@ JS::Realm* JitFrameIter::realm() const {
     return asWasm().instance()->realm();
   }
 
-  return asJSJit().script()->realm();
+  if (asJSJit().isScripted()) {
+    return asJSJit().script()->realm();
+  }
+
+  MOZ_RELEASE_ASSERT(asJSJit().isTrampolineNative());
+  return asJSJit().callee()->realm();
 }
 
 uint8_t* JitFrameIter::resumePCinCurrentFrame() const {
@@ -181,7 +186,7 @@ void JitFrameIter::settle() {
 
   if (isWasm()) {
     const wasm::WasmFrameIter& wasmFrame = asWasm();
-    if (!wasmFrame.hasUnwoundJitFrame()) {
+    if (!wasmFrame.done() || !wasmFrame.unwoundCallerFPIsJSJit()) {
       return;
     }
 
@@ -195,16 +200,14 @@ void JitFrameIter::settle() {
     //
     // The wasm iterator has saved the previous jit frame pointer for us.
 
-    MOZ_ASSERT(wasmFrame.done());
     uint8_t* prevFP = wasmFrame.unwoundCallerFP();
-    jit::FrameType prevFrameType = wasmFrame.unwoundJitFrameType();
 
     if (mustUnwindActivation_) {
       act_->setJSExitFP(prevFP);
     }
 
     iter_.destroy();
-    iter_.construct<jit::JSJitFrameIter>(act_, prevFrameType, prevFP);
+    iter_.construct<jit::JSJitFrameIter>(act_, prevFP, mustUnwindActivation_);
     MOZ_ASSERT(!asJSJit().done());
     return;
   }
@@ -399,6 +402,7 @@ void FrameIter::nextJitFrame() {
   }
 
   MOZ_ASSERT(isWasm());
+  wasmFrame().enableInlinedFrames();
   data_.pc_ = nullptr;
 }
 
@@ -778,7 +782,7 @@ void FrameIter::wasmUpdateBytecodeOffset() {
 
   // Relookup the current frame, updating the bytecode offset in the process.
   data_.jitFrames_ = JitFrameIter(data_.activations_->asJit());
-  while (wasmFrame().debugFrame() != frame) {
+  while (!isWasm() || wasmFrame().debugFrame() != frame) {
     ++data_.jitFrames_;
   }
 

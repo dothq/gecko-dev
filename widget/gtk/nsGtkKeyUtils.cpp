@@ -32,7 +32,9 @@
 #include "nsWindow.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 
@@ -62,12 +64,6 @@ Time KeymapWrapper::sLastRepeatableKeyTime = 0;
 #endif
 KeymapWrapper::RepeatState KeymapWrapper::sRepeatState =
     KeymapWrapper::NOT_PRESSED;
-
-#ifdef MOZ_WAYLAND
-wl_seat* KeymapWrapper::sSeat = nullptr;
-int KeymapWrapper::sSeatID = -1;
-wl_keyboard* KeymapWrapper::sKeyboard = nullptr;
-#endif
 
 static const char* GetBoolName(bool aBool) { return aBool ? "TRUE" : "FALSE"; }
 
@@ -535,7 +531,7 @@ void KeymapWrapper::InitBySystemSettingsX11() {
   // mod[0] is Modifier introduced by Mod1.
   MappedModifier mod[5];
   int32_t foundLevel[5];
-  for (uint32_t i = 0; i < ArrayLength(mod); i++) {
+  for (uint32_t i = 0; i < std::size(mod); i++) {
     mod[i] = NOT_MODIFIER;
     foundLevel[i] = INT32_MAX;
   }
@@ -634,7 +630,7 @@ void KeymapWrapper::InitBySystemSettingsX11() {
       default:
         MOZ_CRASH("All indexes must be handled here");
     }
-    for (uint32_t j = 0; j < ArrayLength(mod); j++) {
+    for (uint32_t j = 0; j < std::size(mod); j++) {
       if (modifier == mod[j]) {
         mModifierMasks[i] |= 1 << (j + 3);
       }
@@ -650,11 +646,7 @@ void KeymapWrapper::InitBySystemSettingsX11() {
 void KeymapWrapper::SetModifierMask(xkb_keymap* aKeymap,
                                     ModifierIndex aModifierIndex,
                                     const char* aModifierName) {
-  static auto sXkbKeymapModGetIndex =
-      (xkb_mod_index_t(*)(struct xkb_keymap*, const char*))dlsym(
-          RTLD_DEFAULT, "xkb_keymap_mod_get_index");
-
-  xkb_mod_index_t index = sXkbKeymapModGetIndex(aKeymap, aModifierName);
+  xkb_mod_index_t index = xkb_keymap_mod_get_index(aKeymap, aModifierName);
   if (index != XKB_MOD_INVALID) {
     mModifierMasks[aModifierIndex] = (1 << index);
   }
@@ -692,97 +684,48 @@ void KeymapWrapper::SetModifierMasks(xkb_keymap* aKeymap) {
 
 /* This keymap routine is derived from weston-2.0.0/clients/simple-im.c
  */
-static void keyboard_handle_keymap(void* data, struct wl_keyboard* wl_keyboard,
-                                   uint32_t format, int fd, uint32_t size) {
+void KeymapWrapper::HandleKeymap(uint32_t format, int fd, uint32_t size) {
+  MOZ_LOG(gKeyLog, LogLevel::Info,
+          ("KeymapWrapper::HandleKeymap() format %d fd %d size %d", format, fd,
+           size));
   KeymapWrapper::ResetKeyboard();
 
   if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+    MOZ_LOG(gKeyLog, LogLevel::Info,
+            ("KeymapWrapper::HandleKeymap(): format is not "
+             "WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1!"));
     close(fd);
     return;
   }
 
-  char* mapString = (char*)mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+  char* mapString = (char*)mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
   if (mapString == MAP_FAILED) {
+    MOZ_LOG(gKeyLog, LogLevel::Info,
+            ("KeymapWrapper::HandleKeymap(): failed to allocate shm!"));
     close(fd);
     return;
   }
 
-  static auto sXkbContextNew =
-      (struct xkb_context * (*)(enum xkb_context_flags))
-          dlsym(RTLD_DEFAULT, "xkb_context_new");
-  static auto sXkbKeymapNewFromString =
-      (struct xkb_keymap * (*)(struct xkb_context*, const char*,
-                               enum xkb_keymap_format,
-                               enum xkb_keymap_compile_flags))
-          dlsym(RTLD_DEFAULT, "xkb_keymap_new_from_string");
-
-  struct xkb_context* xkb_context = sXkbContextNew(XKB_CONTEXT_NO_FLAGS);
-  struct xkb_keymap* keymap =
-      sXkbKeymapNewFromString(xkb_context, mapString, XKB_KEYMAP_FORMAT_TEXT_V1,
-                              XKB_KEYMAP_COMPILE_NO_FLAGS);
+  struct xkb_context* xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  struct xkb_keymap* keymap = xkb_keymap_new_from_string(
+      xkb_context, mapString, XKB_KEYMAP_FORMAT_TEXT_V1,
+      XKB_KEYMAP_COMPILE_NO_FLAGS);
 
   munmap(mapString, size);
   close(fd);
 
   if (!keymap) {
-    NS_WARNING("keyboard_handle_keymap(): Failed to compile keymap!\n");
+    MOZ_LOG(gKeyLog, LogLevel::Info,
+            ("KeymapWrapper::HandleKeymap(): Failed to compile keymap!"));
     return;
   }
 
   KeymapWrapper::SetModifierMasks(keymap);
 
-  static auto sXkbKeymapUnRef =
-      (void (*)(struct xkb_keymap*))dlsym(RTLD_DEFAULT, "xkb_keymap_unref");
-  sXkbKeymapUnRef(keymap);
+  xkb_keymap_unref(keymap);
 
-  static auto sXkbContextUnref =
-      (void (*)(struct xkb_context*))dlsym(RTLD_DEFAULT, "xkb_context_unref");
-  sXkbContextUnref(xkb_context);
+  xkb_context_unref(xkb_context);
 }
-
-static void keyboard_handle_enter(void* data, struct wl_keyboard* keyboard,
-                                  uint32_t serial, struct wl_surface* surface,
-                                  struct wl_array* keys) {
-  KeymapWrapper::SetFocusIn(surface, serial);
-}
-
-static void keyboard_handle_leave(void* data, struct wl_keyboard* keyboard,
-                                  uint32_t serial, struct wl_surface* surface) {
-  KeymapWrapper::SetFocusOut(surface);
-}
-
-static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard,
-                                uint32_t serial, uint32_t time, uint32_t key,
-                                uint32_t state) {}
-static void keyboard_handle_modifiers(void* data, struct wl_keyboard* keyboard,
-                                      uint32_t serial, uint32_t mods_depressed,
-                                      uint32_t mods_latched,
-                                      uint32_t mods_locked, uint32_t group) {}
-static void keyboard_handle_repeat_info(void* data,
-                                        struct wl_keyboard* keyboard,
-                                        int32_t rate, int32_t delay) {}
-
-static const struct wl_keyboard_listener keyboard_listener = {
-    keyboard_handle_keymap,    keyboard_handle_enter,
-    keyboard_handle_leave,     keyboard_handle_key,
-    keyboard_handle_modifiers, keyboard_handle_repeat_info};
-
-static void seat_handle_capabilities(void* data, struct wl_seat* seat,
-                                     unsigned int caps) {
-  wl_keyboard* keyboard = KeymapWrapper::GetKeyboard();
-  if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !keyboard) {
-    keyboard = wl_seat_get_keyboard(seat);
-    wl_keyboard_add_listener(keyboard, &keyboard_listener, nullptr);
-    KeymapWrapper::SetKeyboard(keyboard);
-  } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && keyboard) {
-    KeymapWrapper::ClearKeyboard();
-  }
-}
-
-static const struct wl_seat_listener seat_listener = {
-    seat_handle_capabilities,
-};
-
 #endif
 
 KeymapWrapper::~KeymapWrapper() {
@@ -1112,6 +1055,7 @@ void KeymapWrapper::InitInputEvent(WidgetInputEvent& aInputEvent,
 
   switch (aInputEvent.mClass) {
     case eMouseEventClass:
+    case ePointerEventClass:
     case eMouseScrollEventClass:
     case eWheelEventClass:
     case eDragEventClass:
@@ -1449,10 +1393,8 @@ bool KeymapWrapper::MaybeDispatchContextMenuEvent(nsWindow* aWindow,
     return false;
   }
 
-  WidgetMouseEvent contextMenuEvent(true, eContextMenu, aWindow,
-                                    WidgetMouseEvent::eReal,
-                                    WidgetMouseEvent::eContextMenuKey);
-
+  WidgetPointerEvent contextMenuEvent(true, eContextMenu, aWindow,
+                                      WidgetMouseEvent::eContextMenuKey);
   contextMenuEvent.mRefPoint = LayoutDeviceIntPoint(0, 0);
   contextMenuEvent.AssignEventTime(aWindow->GetWidgetEventTime(aEvent->time));
   contextMenuEvent.mClickCount = 1;
@@ -2093,7 +2035,7 @@ bool KeymapWrapper::IsLatinGroup(guint8 aGroup) {
 bool KeymapWrapper::IsAutoRepeatableKey(guint aHardwareKeyCode) {
 #ifdef MOZ_X11
   uint8_t indexOfArray = aHardwareKeyCode / 8;
-  MOZ_ASSERT(indexOfArray < ArrayLength(mKeyboardState.auto_repeats),
+  MOZ_ASSERT(indexOfArray < std::size(mKeyboardState.auto_repeats),
              "invalid index");
   char bitMask = 1 << (aHardwareKeyCode % 8);
   return (mKeyboardState.auto_repeats[indexOfArray] & bitMask) != 0;
@@ -2711,35 +2653,6 @@ void KeymapWrapper::GetFocusInfo(wl_surface** aFocusSurface,
   KeymapWrapper* keymapWrapper = KeymapWrapper::GetInstance();
   *aFocusSurface = keymapWrapper->mFocusSurface;
   *aFocusSerial = keymapWrapper->mFocusSerial;
-}
-
-void KeymapWrapper::SetSeat(wl_seat* aSeat, int aId) {
-  sSeat = aSeat;
-  sSeatID = aId;
-  wl_seat_add_listener(aSeat, &seat_listener, nullptr);
-}
-
-void KeymapWrapper::ClearSeat(int aId) {
-  if (sSeatID == aId) {
-    ClearKeyboard();
-    sSeat = nullptr;
-    sSeatID = -1;
-  }
-}
-
-wl_seat* KeymapWrapper::GetSeat() { return sSeat; }
-
-void KeymapWrapper::SetKeyboard(wl_keyboard* aKeyboard) {
-  sKeyboard = aKeyboard;
-}
-
-wl_keyboard* KeymapWrapper::GetKeyboard() { return sKeyboard; }
-
-void KeymapWrapper::ClearKeyboard() {
-  if (sKeyboard) {
-    wl_keyboard_destroy(sKeyboard);
-    sKeyboard = nullptr;
-  }
 }
 #endif
 

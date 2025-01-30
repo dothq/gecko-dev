@@ -34,8 +34,9 @@ static bool sLibPresent;
     return sLibPresent;
   }
   sInitialized = true;
-#define FUNC(name, type, params) \
-  {#name, (DBusMenuFunc*)&DBusMenuFunctions::s_##name},
+#define FUNC(name, type, params)                         \
+  { #name, (DBusMenuFunc*)&DBusMenuFunctions::s_##name } \
+  ,
   static const DBusMenuDynamicFunction kDbusmenuGlibSymbols[] = {
       DBUSMENU_GLIB_FUNCTIONS};
   static const DBusMenuDynamicFunction kDbusmenuGtkSymbols[] = {
@@ -48,7 +49,7 @@ static bool sLibPresent;
       return false;                                                           \
     }                                                                         \
   }                                                                           \
-  for (uint32_t i = 0; i < mozilla::ArrayLength(k##symbol##Symbols); ++i) {   \
+  for (uint32_t i = 0; i < std::size(k##symbol##Symbols); ++i) {              \
     *k##symbol##Symbols[i].function =                                         \
         PR_FindFunctionSymbol(g##symbol, k##symbol##Symbols[i].functionName); \
     if (!*k##symbol##Symbols[i].function) {                                   \

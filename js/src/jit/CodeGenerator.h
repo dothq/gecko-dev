@@ -88,6 +88,9 @@ class OutOfLineWasmNewStruct;
 class OutOfLineWasmNewArray;
 
 class CodeGenerator final : public CodeGeneratorSpecific {
+  // Warp snapshot. This is nullptr for Wasm compilations.
+  const WarpSnapshot* snapshot_ = nullptr;
+
   [[nodiscard]] bool generateBody();
 
   ConstantOrRegister toConstantOrRegister(LInstruction* lir, size_t n,
@@ -109,6 +112,11 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                                   const StoreOutputTo& out);
 
   template <typename LCallIns>
+  void emitCallNative(LCallIns* call, JSNative native, Register argContextReg,
+                      Register argUintNReg, Register argVpReg, Register tempReg,
+                      uint32_t unusedStack);
+
+  template <typename LCallIns>
   void emitCallNative(LCallIns* call, JSNative native);
 
  public:
@@ -116,14 +124,17 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                 MacroAssembler* masm = nullptr);
   ~CodeGenerator();
 
-  [[nodiscard]] bool generate();
-  [[nodiscard]] bool generateWasm(
-      wasm::CallIndirectId callIndirectId, wasm::BytecodeOffset trapOffset,
-      const wasm::ArgTypeVector& argTys, const RegisterOffsets& trapExitLayout,
-      size_t trapExitLayoutNumWords, wasm::FuncOffsets* offsets,
-      wasm::StackMaps* stackMaps, wasm::Decoder* decoder);
+  [[nodiscard]] bool generate(const WarpSnapshot* snapshot);
+  [[nodiscard]] bool generateWasm(wasm::CallIndirectId callIndirectId,
+                                  const wasm::TrapSiteDesc& entryTrapSiteDesc,
+                                  const wasm::ArgTypeVector& argTys,
+                                  const RegisterOffsets& trapExitLayout,
+                                  size_t trapExitLayoutNumWords,
+                                  wasm::FuncOffsets* offsets,
+                                  wasm::StackMaps* stackMaps,
+                                  wasm::Decoder* decoder);
 
-  [[nodiscard]] bool link(JSContext* cx, const WarpSnapshot* snapshot);
+  [[nodiscard]] bool link(JSContext* cx);
 
   void emitOOLTestObject(Register objreg, Label* ifTruthy, Label* ifFalsy,
                          Register scratch);
@@ -195,14 +206,28 @@ class CodeGenerator final : public CodeGeneratorSpecific {
       OutOfLineWasmCallPostWriteBarrierIndex* ool);
 
   void callWasmStructAllocFun(LInstruction* lir, wasm::SymbolicAddress fun,
-                              Register typeDefData, Register output);
+                              Register typeDefData, Register output,
+                              const wasm::TrapSiteDesc& trapSiteDesc);
   void visitOutOfLineWasmNewStruct(OutOfLineWasmNewStruct* ool);
 
   void callWasmArrayAllocFun(LInstruction* lir, wasm::SymbolicAddress fun,
                              Register numElements, Register typeDefData,
                              Register output,
-                             wasm::BytecodeOffset bytecodeOffset);
+                             const wasm::TrapSiteDesc& trapSiteDesc);
   void visitOutOfLineWasmNewArray(OutOfLineWasmNewArray* ool);
+
+#ifdef ENABLE_WASM_JSPI
+  void callWasmUpdateSuspenderState(wasm::UpdateSuspenderStateAction kind,
+                                    Register suspender, Register temp);
+  // Stack switching trampoline requires two arguments (suspender and data) to
+  // be passed. The function prepares stack and registers according Wasm ABI.
+  void prepareWasmStackSwitchTrampolineCall(Register suspender, Register data);
+#endif
+
+  void setCompilationTime(mozilla::TimeDuration duration) {
+    compileTime_ = duration;
+  }
+  mozilla::TimeDuration getCompilationTime() const { return compileTime_; }
 
  private:
   void emitPostWriteBarrier(const LAllocation* obj);
@@ -239,11 +264,34 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                          uint32_t extraFormals);
   void emitPushArrayAsArguments(Register tmpArgc, Register srcBaseAndArgc,
                                 Register scratch, size_t argvSrcOffset);
-  void emitPushArguments(LApplyArgsGeneric* apply, Register scratch);
-  void emitPushArguments(LApplyArgsObj* apply, Register scratch);
-  void emitPushArguments(LApplyArrayGeneric* apply, Register scratch);
-  void emitPushArguments(LConstructArgsGeneric* construct, Register scratch);
-  void emitPushArguments(LConstructArrayGeneric* construct, Register scratch);
+  void emitPushArguments(LApplyArgsGeneric* apply);
+  void emitPushArguments(LApplyArgsObj* apply);
+  void emitPushArguments(LApplyArrayGeneric* apply);
+  void emitPushArguments(LConstructArgsGeneric* construct);
+  void emitPushArguments(LConstructArrayGeneric* construct);
+
+  template <typename T>
+  void emitApplyNative(T* apply);
+  template <typename T>
+  void emitAlignStackForApplyNative(T* apply, Register argc);
+  template <typename T>
+  void emitPushNativeArguments(T* apply);
+  template <typename T>
+  void emitPushArrayAsNativeArguments(T* apply);
+  void emitPushArguments(LApplyArgsNative* apply);
+  void emitPushArguments(LApplyArgsObjNative* apply);
+  void emitPushArguments(LApplyArrayNative* apply);
+  void emitPushArguments(LConstructArgsNative* construct);
+  void emitPushArguments(LConstructArrayNative* construct);
+
+  template <typename T>
+  void emitApplyArgsGuard(T* apply);
+
+  template <typename T>
+  void emitApplyArgsObjGuard(T* apply);
+
+  template <typename T>
+  void emitApplyArrayGuard(T* apply);
 
   template <class GetInlinedArgument>
   void emitGetInlinedArgument(GetInlinedArgument* lir, Register index,
@@ -300,10 +348,10 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                            const ConstantOrRegister& id,
                            const ConstantOrRegister& value, bool strict);
 
-  template <class IteratorObject, class OrderedHashTable>
+  template <class IteratorObject, class TableObject>
   void emitGetNextEntryForIterator(LGetNextEntryForIterator* lir);
 
-  template <class OrderedHashTable>
+  template <class TableObject>
   void emitLoadIteratorValues(Register result, Register temp, Register front);
 
   void emitStringToInt64(LInstruction* lir, Register input, Register64 output);
@@ -312,7 +360,8 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                                        Register64 input, Register output);
 
   void emitCreateBigInt(LInstruction* lir, Scalar::Type type, Register64 input,
-                        Register output, Register maybeTemp);
+                        Register output, Register maybeTemp,
+                        Register64 maybeTemp64 = Register64::Invalid());
 
   template <size_t NumDefs>
   void emitIonToWasmCallBase(LIonToWasmCallBase<NumDefs>* lir);
@@ -416,14 +465,13 @@ class CodeGenerator final : public CodeGeneratorSpecific {
 
   IonPerfSpewer perfSpewer_;
 
-  // Bit mask of JitZone stubs that are to be read-barriered.
-  uint32_t zoneStubsToReadBarrier_;
+  // Total Ion compilation time.
+  mozilla::TimeDuration compileTime_;
 
 #ifdef FUZZING_JS_FUZZILLI
-  void emitFuzzilliHashDouble(FloatRegister floatDouble, Register scratch,
-                              Register output);
   void emitFuzzilliHashObject(LInstruction* lir, Register obj, Register output);
-  void emitFuzzilliHashBigInt(Register bigInt, Register output);
+  void emitFuzzilliHashBigInt(LInstruction* lir, Register bigInt,
+                              Register output);
 #endif
 
 #define LIR_OP(op) void visit##op(L##op* ins);
@@ -435,55 +483,35 @@ class CodeGenerator final : public CodeGeneratorSpecific {
   void assertObjectDoesNotEmulateUndefined(Register input, Register temp,
                                            const MInstruction* mir);
 
-  // Enumerates the fuses that a code generation can depend on. These will
-  // be mapped to an actual fuse by validateAndRegisterFuseDependencies.
-  enum class FuseDependencyKind {
-    HasSeenObjectEmulateUndefinedFuse,
-  };
-
-  // The set of fuses this code generation depends on.
-  mozilla::EnumSet<FuseDependencyKind> fuseDependencies;
-
   // Register a dependency on the HasSeenObjectEmulateUndefined fuse.
-  void addHasSeenObjectEmulateUndefinedFuseDependency() {
-    fuseDependencies += FuseDependencyKind::HasSeenObjectEmulateUndefinedFuse;
-  }
+  bool addHasSeenObjectEmulateUndefinedFuseDependency();
 
-  // Called during linking on main-thread: Ensures that the fuses are still
-  // intact, and registers a script dependency on a specific fuse before
-  // finishing compilation.
-  void validateAndRegisterFuseDependencies(JSContext* cx, HandleScript script,
-                                           bool* isValid);
-
-  // Return true if the fuse is intact, andd if the fuse is intact note the
+  // Return true if the fuse is intact, and if the fuse is intact note the
   // dependency
   bool hasSeenObjectEmulateUndefinedFuseIntactAndDependencyNoted() {
-    if (!JS::Prefs::use_emulates_undefined_fuse()) {
-      // if we're not active, simply pretend the fuse is popped.
-      return false;
-    }
-
     bool intact = gen->outerInfo().hasSeenObjectEmulateUndefinedFuseIntact();
     if (intact) {
-      addHasSeenObjectEmulateUndefinedFuseDependency();
+      bool tryToAdd = addHasSeenObjectEmulateUndefinedFuseDependency();
+      // If we oom, just pretend that the fuse is popped.
+      return tryToAdd;
     }
-    return intact;
+    return false;
   }
 };
 
 class OutOfLineResumableWasmTrap : public OutOfLineCodeBase<CodeGenerator> {
   LInstruction* lir_;
   size_t framePushed_;
-  wasm::BytecodeOffset bytecodeOffset_;
+  wasm::TrapSiteDesc trapSiteDesc_;
   wasm::Trap trap_;
 
  public:
   OutOfLineResumableWasmTrap(LInstruction* lir, size_t framePushed,
-                             wasm::BytecodeOffset bytecodeOffset,
+                             const wasm::TrapSiteDesc& trapSiteDesc,
                              wasm::Trap trap)
       : lir_(lir),
         framePushed_(framePushed),
-        bytecodeOffset_(bytecodeOffset),
+        trapSiteDesc_(trapSiteDesc),
         trap_(trap) {}
 
   void accept(CodeGenerator* codegen) override {
@@ -491,23 +519,23 @@ class OutOfLineResumableWasmTrap : public OutOfLineCodeBase<CodeGenerator> {
   }
   LInstruction* lir() const { return lir_; }
   size_t framePushed() const { return framePushed_; }
-  wasm::BytecodeOffset bytecodeOffset() const { return bytecodeOffset_; }
+  const wasm::TrapSiteDesc& trapSiteDesc() const { return trapSiteDesc_; }
   wasm::Trap trap() const { return trap_; }
 };
 
 class OutOfLineAbortingWasmTrap : public OutOfLineCodeBase<CodeGenerator> {
-  wasm::BytecodeOffset bytecodeOffset_;
+  wasm::TrapSiteDesc trapSiteDesc_;
   wasm::Trap trap_;
 
  public:
-  OutOfLineAbortingWasmTrap(wasm::BytecodeOffset bytecodeOffset,
+  OutOfLineAbortingWasmTrap(const wasm::TrapSiteDesc& trapSiteDesc,
                             wasm::Trap trap)
-      : bytecodeOffset_(bytecodeOffset), trap_(trap) {}
+      : trapSiteDesc_(trapSiteDesc), trap_(trap) {}
 
   void accept(CodeGenerator* codegen) override {
     codegen->visitOutOfLineAbortingWasmTrap(this);
   }
-  wasm::BytecodeOffset bytecodeOffset() const { return bytecodeOffset_; }
+  const wasm::TrapSiteDesc& trapSiteDesc() const { return trapSiteDesc_; }
   wasm::Trap trap() const { return trap_; }
 };
 

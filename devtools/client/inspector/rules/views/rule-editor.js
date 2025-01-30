@@ -45,6 +45,9 @@ const STYLE_INSPECTOR_PROPERTIES =
 const { LocalizationHelper } = require("resource://devtools/shared/l10n.js");
 const STYLE_INSPECTOR_L10N = new LocalizationHelper(STYLE_INSPECTOR_PROPERTIES);
 
+const COMPONENT_PROPERTIES = "devtools/client/locales/components.properties";
+const COMPONENT_L10N = new LocalizationHelper(COMPONENT_PROPERTIES);
+
 loader.lazyGetter(this, "NEW_PROPERTY_NAME_INPUT_LABEL", function () {
   return STYLE_INSPECTOR_L10N.getStr("rule.newPropertyName.label");
 });
@@ -142,7 +145,11 @@ RuleEditor.prototype = {
     });
     this.source.addEventListener("click", this._onSourceClick);
 
-    const sourceLabel = this.doc.createElement("span");
+    // inline style are not visible in the StyleEditor, so don't create an actual link
+    // element for their location.
+    const sourceLabel = this.doc.createElement(
+      this.rule.domRule.type === ELEMENT_STYLE ? "span" : "a"
+    );
     sourceLabel.classList.add("ruleview-rule-source-label");
     this.source.appendChild(sourceLabel);
 
@@ -182,10 +189,8 @@ RuleEditor.prototype = {
             }`,
           });
 
-          // We can't use a button, otherwise a line break is added when copy/pasting the rule
-          const jumpToNodeButton = createChild(selectorContainer, "span", {
+          const jumpToNodeButton = createChild(selectorContainer, "button", {
             class: "open-inspector",
-            role: "button",
             title: l10n("rule.containerQuery.selectContainerButton.tooltip"),
           });
 
@@ -253,6 +258,18 @@ RuleEditor.prototype = {
           selectorContainer.append(
             this.doc.createTextNode(`@import ${ancestorData.value}`)
           );
+        } else if (ancestorData.type == "scope") {
+          let text = `@scope`;
+          if (ancestorData.start) {
+            text += ` (${ancestorData.start})`;
+
+            if (ancestorData.end) {
+              text += ` to (${ancestorData.end})`;
+            }
+          }
+          selectorContainer.append(this.doc.createTextNode(text));
+        } else if (ancestorData.type == "starting-style") {
+          selectorContainer.append(this.doc.createTextNode(`@starting-style`));
         } else if (ancestorData.selectors) {
           ancestorData.selectors.forEach((selector, i) => {
             if (i !== 0) {
@@ -336,17 +353,16 @@ RuleEditor.prototype = {
     }
 
     if (this.rule.domRule.type !== CSSRule.KEYFRAME_RULE) {
-      let selector = "";
-      let desugaredSelector = "";
+      // This is a "normal" rule with a selector.
+      let computedSelector = "";
       if (this.rule.domRule.selectors) {
-        // This is a "normal" rule with a selector.
-        selector = this.rule.domRule.selectors.join(", ");
-        desugaredSelector = this.rule.domRule.desugaredSelectors?.join(", ");
+        computedSelector = this.rule.domRule.computedSelector;
         // Otherwise, the rule is either inherited or inline, and selectors will
         // be computed on demand when the highlighter is requested.
       }
 
-      const isHighlighted = this.ruleView.isSelectorHighlighted(selector);
+      const isHighlighted =
+        this.ruleView.isSelectorHighlighted(computedSelector);
       // Handling of click events is delegated to CssRuleView.handleEvent()
       createChild(header, "button", {
         class:
@@ -354,7 +370,7 @@ RuleEditor.prototype = {
           (isHighlighted ? " highlighted" : ""),
         "aria-pressed": isHighlighted,
         // This is used in rules.js for the selector highlighter
-        "data-computed-selector": desugaredSelector,
+        "data-computed-selector": computedSelector,
         title: l10n("rule.selectorHighlighter.tooltip"),
       });
     }
@@ -501,7 +517,8 @@ RuleEditor.prototype = {
     this.updateSourceLink();
   },
 
-  _onSourceClick() {
+  _onSourceClick(e) {
+    e.preventDefault();
     if (this.source.hasAttribute("unselectable")) {
       return;
     }
@@ -537,17 +554,22 @@ RuleEditor.prototype = {
       constructed,
       href: displayURL,
     });
-    let title = displayURL ? displayURL : sourceTextContent;
+
+    let displayLocation = displayURL ? displayURL : sourceTextContent;
     if (line > 0) {
       sourceTextContent += ":" + line;
-      title += ":" + line;
+      displayLocation += ":" + line;
     }
+    const title = COMPONENT_L10N.getFormatStr(
+      "frame.viewsourceinstyleeditor",
+      displayLocation
+    );
 
     const sourceLabel = this.element.querySelector(
       ".ruleview-rule-source-label"
     );
     sourceLabel.setAttribute("title", title);
-    sourceLabel.setAttribute("data-url", displayURL);
+    sourceLabel.setAttribute("href", displayURL);
     sourceLabel.textContent = sourceTextContent;
   },
 
@@ -558,7 +580,7 @@ RuleEditor.prototype = {
       );
       const uaLabel = STYLE_INSPECTOR_L10N.getStr("rule.userAgentStyles");
       sourceLabel.textContent = uaLabel + " " + this.rule.title;
-      sourceLabel.setAttribute("data-url", this.rule.sheet?.href);
+      sourceLabel.setAttribute("href", this.rule.sheet?.href);
     } else {
       this._updateLocation(null);
     }
@@ -613,66 +635,8 @@ RuleEditor.prototype = {
     } else if (this.rule.domRule.type === CSSRule.KEYFRAME_RULE) {
       this.selectorText.textContent = this.rule.domRule.keyText;
     } else {
-      const desugaredSelectors = this.rule.domRule.desugaredSelectors;
       this.rule.domRule.selectors.forEach((selector, i) => {
-        if (i !== 0) {
-          createChild(this.selectorText, "span", {
-            class: "ruleview-selector-separator",
-            textContent: ", ",
-          });
-        }
-
-        let containerClass = "ruleview-selector ";
-
-        // Only add matched/unmatched class when the rule does have some matched
-        // selectors. We don't always have some (e.g. rules for pseudo elements)
-        if (this.rule.matchedDesugaredSelectors.length) {
-          const desugaredSelector = desugaredSelectors[i];
-          const matchedSelector =
-            this.rule.matchedDesugaredSelectors.includes(desugaredSelector);
-          containerClass += matchedSelector ? "matched" : "unmatched";
-        }
-
-        const selectorContainer = createChild(this.selectorText, "span", {
-          class: containerClass,
-        });
-
-        const parsedSelector = parsePseudoClassesAndAttributes(selector);
-
-        for (const selectorText of parsedSelector) {
-          let selectorClass = "";
-
-          switch (selectorText.type) {
-            case SELECTOR_ATTRIBUTE:
-              selectorClass = "ruleview-selector-attribute";
-              break;
-            case SELECTOR_ELEMENT:
-              selectorClass = "ruleview-selector-element";
-              break;
-            case SELECTOR_PSEUDO_CLASS:
-              selectorClass = PSEUDO_CLASSES.some(
-                pseudo => selectorText.value === pseudo
-              )
-                ? "ruleview-selector-pseudo-class-lock"
-                : "ruleview-selector-pseudo-class";
-              break;
-            default:
-              break;
-          }
-
-          createChild(selectorContainer, "span", {
-            textContent: selectorText.value,
-            class: selectorClass,
-          });
-        }
-
-        const warningsContainer = this._createWarningsElementForSelector(
-          i,
-          this.rule.domRule.selectorWarnings
-        );
-        if (warningsContainer) {
-          selectorContainer.append(warningsContainer);
-        }
+        this._populateSelector(selector, i);
       });
     }
 
@@ -710,6 +674,91 @@ RuleEditor.prototype = {
           this.ruleView.emitForTests("rule-editor-focus-reset");
         }, 0);
       }
+    }
+  },
+
+  /**
+   * Render a given rule selector in this.selectorText element
+   *
+   * @param {String} selector: The selector text to display
+   * @param {Number} selectorIndex: Its index in the rule
+   */
+  _populateSelector(selector, selectorIndex) {
+    if (selectorIndex !== 0) {
+      createChild(this.selectorText, "span", {
+        class: "ruleview-selector-separator",
+        textContent: ", ",
+      });
+    }
+
+    let containerClass = "ruleview-selector ";
+
+    // Only add matched/unmatched class when the rule does have some matched
+    // selectors. We don't always have some (e.g. rules for pseudo elements)
+
+    if (this.rule.matchedSelectorIndexes.length) {
+      containerClass += this.rule.matchedSelectorIndexes.includes(selectorIndex)
+        ? "matched"
+        : "unmatched";
+    }
+
+    let selectorContainerTitle;
+    if (
+      typeof this.rule.selector.selectorsSpecificity?.[selectorIndex] !==
+      "undefined"
+    ) {
+      // The specificity that we get from the platform is a single number that we
+      // need to format into the common `(x,y,z)` specificity string.
+      const specificity =
+        this.rule.selector.selectorsSpecificity?.[selectorIndex];
+      const a = Math.floor(specificity / (1024 * 1024));
+      const b = Math.floor((specificity % (1024 * 1024)) / 1024);
+      const c = specificity % 1024;
+      selectorContainerTitle = STYLE_INSPECTOR_L10N.getFormatStr(
+        "rule.selectorSpecificity.title",
+        `(${a},${b},${c})`
+      );
+    }
+    const selectorContainer = createChild(this.selectorText, "span", {
+      class: containerClass,
+      title: selectorContainerTitle,
+    });
+
+    const parsedSelector = parsePseudoClassesAndAttributes(selector);
+
+    for (const selectorText of parsedSelector) {
+      let selectorClass = "";
+
+      switch (selectorText.type) {
+        case SELECTOR_ATTRIBUTE:
+          selectorClass = "ruleview-selector-attribute";
+          break;
+        case SELECTOR_ELEMENT:
+          selectorClass = "ruleview-selector-element";
+          break;
+        case SELECTOR_PSEUDO_CLASS:
+          selectorClass = PSEUDO_CLASSES.some(
+            pseudo => selectorText.value === pseudo
+          )
+            ? "ruleview-selector-pseudo-class-lock"
+            : "ruleview-selector-pseudo-class";
+          break;
+        default:
+          break;
+      }
+
+      createChild(selectorContainer, "span", {
+        textContent: selectorText.value,
+        class: selectorClass,
+      });
+    }
+
+    const warningsContainer = this._createWarningsElementForSelector(
+      selectorIndex,
+      this.rule.domRule.selectorWarnings
+    );
+    if (warningsContainer) {
+      selectorContainer.append(warningsContainer);
     }
   },
 
@@ -825,15 +874,17 @@ RuleEditor.prototype = {
     this.editor = new InplaceEditor({
       element: this.newPropSpan,
       done: this._onNewProperty,
+      // (Shift+)Tab will move the focus to the previous/next editable field
+      focusEditableFieldAfterApply: true,
+      focusEditableFieldContainerSelector: ".ruleview-rule",
       destroy: this._newPropertyDestroy,
       advanceChars: ":",
       contentType: InplaceEditor.CONTENT_TYPES.CSS_PROPERTY,
       popup: this.ruleView.popup,
       cssProperties: this.rule.cssProperties,
       inputAriaLabel: NEW_PROPERTY_NAME_INPUT_LABEL,
-      cssVariables: this.rule.elementStyle.getAllCustomProperties(
-        this.rule.pseudoElement
-      ),
+      getCssVariables: () =>
+        this.rule.elementStyle.getAllCustomProperties(this.rule.pseudoElement),
     });
 
     // Auto-close the input if multiple rules get pasted into new property.
@@ -923,8 +974,12 @@ RuleEditor.prototype = {
     this.isEditing = true;
 
     // Remove highlighter for the previous selector.
-    if (this.ruleView.isSelectorHighlighted(this.rule.selectorText)) {
-      await this.ruleView.toggleSelectorHighlighter(this.rule.selectorText);
+    const computedSelector = this.rule.domRule.computedSelector;
+    if (this.ruleView.isSelectorHighlighted(computedSelector)) {
+      await this.ruleView.toggleSelectorHighlighter(
+        this.rule,
+        computedSelector
+      );
     }
 
     try {

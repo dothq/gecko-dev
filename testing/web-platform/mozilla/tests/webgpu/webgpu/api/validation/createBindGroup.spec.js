@@ -8,6 +8,7 @@
 import { assert, makeValueTestVariant, unreachable } from '../../../common/util/util.js';
 import {
   allBindingEntries,
+
   bindingTypeInfo,
   bufferBindingEntries,
   bufferBindingTypeInfo,
@@ -106,7 +107,7 @@ g.test('binding_must_contain_resource_defined_in_layout').
 desc(
   'Test that only compatible resource types specified in the BindGroupLayout are allowed for each entry.'
 ).
-paramsSubcasesOnly((u) =>
+params((u) =>
 u //
 .combine('resourceType', kBindableResources).
 combine('entry', allBindingEntries(false))
@@ -121,6 +122,17 @@ fn((t) => {
 
   const resource = t.getBindingResource(resourceType);
 
+  const IsStorageTextureResourceType = (resourceType) => {
+    switch (resourceType) {
+      case 'readonlyStorageTex':
+      case 'readwriteStorageTex':
+      case 'writeonlyStorageTex':
+        return true;
+      default:
+        return false;
+    }
+  };
+
   let resourceBindingIsCompatible;
   switch (info.resource) {
     // Either type of sampler may be bound to a filtering sampler binding.
@@ -130,6 +142,11 @@ fn((t) => {
     // But only non-filtering samplers can be used with non-filtering sampler bindings.
     case 'nonFiltSamp':
       resourceBindingIsCompatible = resourceType === 'nonFiltSamp';
+      break;
+    case 'readonlyStorageTex':
+    case 'readwriteStorageTex':
+    case 'writeonlyStorageTex':
+      resourceBindingIsCompatible = IsStorageTextureResourceType(resourceType);
       break;
     default:
       resourceBindingIsCompatible = info.resource === resourceType;
@@ -166,11 +183,11 @@ fn((t) => {
 
   const descriptor = {
     size: { width: 16, height: 16, depthOrArrayLayers: 1 },
-    format: 'rgba8unorm',
+    format: 'r32float',
     usage: appliedUsage,
     sampleCount: info.resource === 'sampledTexMS' ? 4 : 1
   };
-  const resource = t.device.createTexture(descriptor).createView();
+  const resource = t.createTextureTracked(descriptor).createView();
 
   const shouldError = (usage & info.usage) === 0;
   t.expectValidationError(() => {
@@ -224,7 +241,7 @@ fn((t) => {
     entries: [
     {
       binding: 0,
-      resource: t.device.createTexture(goodDescriptor).createView()
+      resource: t.createTextureTracked(goodDescriptor).createView()
     }],
 
     layout: bindGroupLayout
@@ -249,7 +266,7 @@ fn((t) => {
 
     t.expectValidationError(() => {
       t.device.createBindGroup({
-        entries: [{ binding: 0, resource: t.device.createTexture(badDescriptor).createView() }],
+        entries: [{ binding: 0, resource: t.createTextureTracked(badDescriptor).createView() }],
         layout: bindGroupLayout
       });
     });
@@ -305,7 +322,7 @@ fn((t) => {
     depthOrArrayLayers = 1;
   }
 
-  const texture = t.device.createTexture({
+  const texture = t.createTextureTracked({
     size: { width: 16, height, depthOrArrayLayers },
     format: 'rgba8unorm',
     usage,
@@ -313,6 +330,19 @@ fn((t) => {
   });
 
   t.skipIfTextureViewDimensionNotSupported(viewDimension, dimension);
+  if (t.isCompatibility && texture.dimension === '2d') {
+    if (depthOrArrayLayers === 1) {
+      t.skipIf(
+        viewDimension !== '2d',
+        '1 layer 2d textures default to textureBindingViewDimension: "2d" in compat mode'
+      );
+    } else {
+      t.skipIf(
+        viewDimension !== '2d-array',
+        '> 1 layer 2d textures default to textureBindingViewDimension "2d-array" in compat mode'
+      );
+    }
+  }
 
   const shouldError = viewDimension !== dimension;
   const textureView = texture.createView({ dimension });
@@ -350,7 +380,7 @@ fn((t) => {
 
   });
 
-  const texture = t.device.createTexture({
+  const texture = t.createTextureTracked({
     size: { width: 16, height: 16, depthOrArrayLayers: 1 },
     format: 'rgba8unorm',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -408,7 +438,7 @@ fn((t) => {
     entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }]
   });
 
-  const buffer = t.device.createBuffer({
+  const buffer = t.createBufferTracked({
     size: 1024,
     usage: GPUBufferUsage.STORAGE
   });
@@ -461,7 +491,7 @@ fn((t) => {
 
   });
 
-  const storageBuffer = t.device.createBuffer({
+  const storageBuffer = t.createBufferTracked({
     size,
     usage: GPUBufferUsage.STORAGE
   });
@@ -526,9 +556,7 @@ fn((t) => {
 g.test('texture,resource_state').
 desc('Test bind group creation with various texture resource states').
 paramsSubcasesOnly((u) =>
-u.
-combine('state', kResourceStates).
-combine('entry', sampledAndStorageBindingEntries(true, 'rgba8unorm'))
+u.combine('state', kResourceStates).combine('entry', sampledAndStorageBindingEntries(true))
 ).
 fn((t) => {
   const { state, entry } = t.params;
@@ -548,10 +576,11 @@ fn((t) => {
   const usage = entry.texture?.multisampled ?
   info.usage | GPUConst.TextureUsage.RENDER_ATTACHMENT :
   info.usage;
+  const format = entry.storageTexture !== undefined ? 'r32float' : 'rgba8unorm';
   const texture = t.createTextureWithState(state, {
     usage,
     size: [1, 1],
-    format: 'rgba8unorm',
+    format,
     sampleCount: entry.texture?.multisampled ? 4 : 1
   });
 
@@ -626,7 +655,9 @@ combine('entry', [
 { buffer: { type: 'storage' } },
 { sampler: { type: 'filtering' } },
 { texture: { multisampled: false } },
-{ storageTexture: { access: 'write-only', format: 'rgba8unorm' } }]
+{ storageTexture: { access: 'write-only', format: 'r32float' } },
+{ storageTexture: { access: 'read-only', format: 'r32float' } },
+{ storageTexture: { access: 'read-write', format: 'r32float' } }]
 ).
 beginSubcases().
 combineWithParams([
@@ -711,7 +742,7 @@ fn((t) => {
 
   });
 
-  const texture = t.device.createTexture({
+  const texture = t.createTextureTracked({
     size: { width: 16, height: 16, depthOrArrayLayers: 1 },
     format: 'rgba8unorm',
     usage
@@ -755,7 +786,7 @@ fn((t) => {
   });
 
   const MIP_LEVEL_COUNT = 4;
-  const texture = t.device.createTexture({
+  const texture = t.createTextureTracked({
     size: { width: 16, height: 16, depthOrArrayLayers: 1 },
     format: 'rgba8unorm',
     usage: GPUTextureUsage.STORAGE_BINDING,
@@ -784,6 +815,10 @@ u //
 .combine('storageTextureFormat', kStorageTextureFormats).
 combine('resourceFormat', kStorageTextureFormats)
 ).
+beforeAllSubcases((t) => {
+  const { storageTextureFormat, resourceFormat } = t.params;
+  t.skipIfTextureFormatNotUsableAsStorageTexture(storageTextureFormat, resourceFormat);
+}).
 fn((t) => {
   const { storageTextureFormat, resourceFormat } = t.params;
 
@@ -797,7 +832,7 @@ fn((t) => {
 
   });
 
-  const texture = t.device.createTexture({
+  const texture = t.createTextureTracked({
     size: { width: 16, height: 16, depthOrArrayLayers: 1 },
     format: resourceFormat,
     usage: GPUTextureUsage.STORAGE_BINDING
@@ -850,7 +885,7 @@ fn((t) => {
 
   });
 
-  const buffer = t.device.createBuffer({
+  const buffer = t.createBufferTracked({
     size: 4,
     usage
   });
@@ -910,7 +945,7 @@ fn((t) => {
   const usage = type === 'uniform' ? GPUBufferUsage.UNIFORM : GPUBufferUsage.STORAGE;
   const isValid = offset % minAlignment === 0;
 
-  const buffer = t.device.createBuffer({
+  const buffer = t.createBufferTracked({
     size: 1024,
     usage
   });
@@ -969,7 +1004,7 @@ fn((t) => {
   const isValid = bindingSize <= maxBindingSize;
 
   // MAINTENANCE_TODO: Allocating the max size seems likely to fail. Refactor test.
-  const buffer = t.device.createBuffer({
+  const buffer = t.createBufferTracked({
     size: maxBindingSize,
     usage
   });
@@ -1026,7 +1061,7 @@ fn((t) => {
     isValid = effectiveBindingSize % 4 === 0;
   }
 
-  const buffer = t.device.createBuffer({
+  const buffer = t.createBufferTracked({
     size: bufferSize,
     usage
   });

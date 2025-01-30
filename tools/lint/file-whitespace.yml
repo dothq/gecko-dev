@@ -104,6 +104,8 @@ file-whitespace:
         - layout/xul/test
         - layout/xul/tree
         - modules/libjar/zipwriter/test/unit/data/test_bug399727.html
+        # Room-generated database schemas for migration
+        - mobile/android/android-components/components/lib/crash/schemas
         - netwerk/test/crashtests
         - netwerk/test/mochitests/test1.css
         - netwerk/test/mochitests/test2.css
@@ -124,7 +126,6 @@ file-whitespace:
         - toolkit/components/passwordmgr/test/mochitest/
         - toolkit/content/tests/chrome
         - toolkit/locales/en-US/chrome/passwordmgr/passwordmgr.properties
-        - tools/jprof/README.html
         - tools/lint/eslint
         - tools/lint/test/test_clang_format.py
         - view/crashtests
@@ -133,7 +134,6 @@ file-whitespace:
         - widget/tests
         - widget/windows/tests/TestUrisToValidate.h
         - xpcom/reflect/xptcall/porting.html
-        - xpcom/tests/test.properties
         - xpcom/tests/unit/data/bug121341.properties
         # Excluded below files because tests were failing unexpectedly
         - dom/bindings/test/test_barewordGetsWindow.html
@@ -146,6 +146,7 @@ file-whitespace:
         - python/mozperftest/perfdocs/running.rst
         - python/mozperftest/perfdocs/vision.rst
         - python/mozperftest/perfdocs/writing.rst
+
     extensions:
         - .c
         - .cc

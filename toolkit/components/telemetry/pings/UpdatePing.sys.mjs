@@ -47,30 +47,15 @@ export var UpdatePing = {
   },
 
   /**
-   * Get the information about the update we're going to apply/was just applied
-   * from the update manager.
-   *
-   * @return {nsIUpdate} The information about the update, if available, or null.
-   */
-  _getActiveUpdate() {
-    let updateManager = Cc["@mozilla.org/updates/update-manager;1"].getService(
-      Ci.nsIUpdateManager
-    );
-    if (!updateManager || !updateManager.readyUpdate) {
-      return null;
-    }
-
-    return updateManager.readyUpdate;
-  },
-
-  /**
    * Generate an "update" ping with reason "success" and dispatch it
    * to the Telemetry system.
    *
    * @param {String} aPreviousVersion The browser version we updated from.
    * @param {String} aPreviousBuildId The browser build id we updated from.
+   * @param {String} progress An object to measure the progress of handleUpdateSuccess
+   *                          to provide to the shutdown blocker (Bug 1917651)
    */
-  handleUpdateSuccess(aPreviousVersion, aPreviousBuildId) {
+  async handleUpdateSuccess(aPreviousVersion, aPreviousBuildId, progress) {
     if (!this._enabled) {
       return;
     }
@@ -84,7 +69,14 @@ export var UpdatePing = {
     // update manager should still have information about the active update: given the
     // previous assumptions, we can simply get the channel from the update and assume
     // it matches with the state previous to the update.
-    let update = this._getActiveUpdate();
+    let updateManager = Cc["@mozilla.org/updates/update-manager;1"].getService(
+      Ci.nsIUpdateManager
+    );
+    let update = updateManager
+      ? await updateManager.updateInstalledAtStartup()
+      : null;
+
+    progress.updateFetched = true;
 
     const payload = {
       reason: "success",
@@ -96,16 +88,19 @@ export var UpdatePing = {
     const options = {
       addClientId: true,
       addEnvironment: true,
-      usePingSender: false,
+      usePingSender: true,
     };
+
+    progress.payloadCreated = true;
 
     lazy.TelemetryController.submitExternalPing(
       PING_TYPE,
       payload,
       options
-    ).catch(e =>
-      this._log.error("handleUpdateSuccess - failed to submit update ping", e)
-    );
+    ).catch(e => {
+      progress.pingFailed = true;
+      this._log.error("handleUpdateSuccess - failed to submit update ping", e);
+    });
   },
 
   /**
@@ -115,7 +110,7 @@ export var UpdatePing = {
    * @param {String} aUpdateState The state of the downloaded patch. See
    *        nsIUpdateService.idl for a list of possible values.
    */
-  _handleUpdateReady(aUpdateState) {
+  async _handleUpdateReady(aUpdateState) {
     const ALLOWED_STATES = [
       "applied",
       "applied-service",
@@ -130,7 +125,10 @@ export var UpdatePing = {
 
     // Get the information about the update we're going to apply from the
     // update manager.
-    let update = this._getActiveUpdate();
+    let updateManager = Cc["@mozilla.org/updates/update-manager;1"].getService(
+      Ci.nsIUpdateManager
+    );
+    let update = updateManager ? await updateManager.getReadyUpdate() : null;
     if (!update) {
       this._log.trace(
         "Cannot get the update manager or no update is currently active."
@@ -164,10 +162,10 @@ export var UpdatePing = {
   /**
    * The notifications handler.
    */
-  observe(aSubject, aTopic, aData) {
+  async observe(aSubject, aTopic, aData) {
     this._log.trace("observe - aTopic: " + aTopic);
     if (aTopic == UPDATE_DOWNLOADED_TOPIC || aTopic == UPDATE_STAGED_TOPIC) {
-      this._handleUpdateReady(aData);
+      await this._handleUpdateReady(aData);
     }
   },
 

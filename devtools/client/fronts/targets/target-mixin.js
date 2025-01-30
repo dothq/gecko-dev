@@ -10,12 +10,6 @@ loader.lazyRequireGetter(
   "resource://devtools/shared/protocol.js",
   true
 );
-loader.lazyRequireGetter(
-  this,
-  "getThreadOptions",
-  "resource://devtools/client/shared/thread-utils.js",
-  true
-);
 
 /**
  * A Target represents a debuggable context. It can be a browser tab, a tab on
@@ -60,7 +54,7 @@ function TargetMixin(parentClass) {
       // [typeName:string => Front instance]
       this.fronts = new Map();
 
-      // `resource-available-form` and `resource-updated-form` events can be emitted
+      // `resources-available-array` and `resources-updated-array` events can be emitted
       // by target actors before the ResourceCommand could add event listeners.
       // The target front will cache those events until the ResourceCommand has
       // added the listeners.
@@ -68,18 +62,18 @@ function TargetMixin(parentClass) {
 
       // In order to avoid destroying the `_resourceCache[event]`, we need to call `super.on()`
       // instead of `this.on()`.
-      const offResourceAvailable = super.on(
-        "resource-available-form",
-        this._onResourceEvent.bind(this, "resource-available-form")
+      const offResourceAvailableArray = super.on(
+        "resources-available-array",
+        this._onResourceEventArray.bind(this, "resources-available-array")
       );
-      const offResourceUpdated = super.on(
-        "resource-updated-form",
-        this._onResourceEvent.bind(this, "resource-updated-form")
+      const offResourceUpdatedArray = super.on(
+        "resources-updated-array",
+        this._onResourceEventArray.bind(this, "resources-updated-array")
       );
 
       this._offResourceEvent = new Map([
-        ["resource-available-form", offResourceAvailable],
-        ["resource-updated-form", offResourceUpdated],
+        ["resources-available-array", offResourceAvailableArray],
+        ["resources-updated-array", offResourceUpdatedArray],
       ]);
 
       // Expose a promise that is resolved once the target front is usable
@@ -91,7 +85,7 @@ function TargetMixin(parentClass) {
 
     on(eventName, listener) {
       if (this._offResourceEvent && this._offResourceEvent.has(eventName)) {
-        // If a callsite sets an event listener for resource-(available|update)-form:
+        // If a callsite sets an event listener for resource-(available|update)-(form|array):
 
         // we want to remove the listener we set here in the constructor…
         const off = this._offResourceEvent.get(eventName);
@@ -283,8 +277,24 @@ function TargetMixin(parentClass) {
       return this.typeName === "windowGlobalTarget";
     }
 
+    /**
+     * Return the name to be displayed in the debugger and console context selector.
+     */
     get name() {
-      if (this.isWebExtension || this.isContentProcess) {
+      // When debugging Web Extensions, all documents have moz-extension://${uuid}/... URL
+      // When the developer don't set a custom title, fallback on displaying the pathname
+      // to avoid displaying long URL prefix with the addon internal UUID.
+      if (this.commands.descriptorFront.isWebExtensionDescriptor) {
+        if (this._title) {
+          return this._title;
+        }
+        return URL.canParse(this._url)
+          ? new URL(this._url).pathname
+          : // If document URL can't be parsed, fallback to the raw URL.
+            this._url;
+      }
+
+      if (this.isContentProcess) {
         return this.targetForm.name;
       }
       return this.title;
@@ -302,15 +312,6 @@ function TargetMixin(parentClass) {
       // XXX Remove the check on `workerDescriptor` as part of Bug 1667404.
       return (
         this.typeName === "workerTarget" || this.typeName === "workerDescriptor"
-      );
-    }
-
-    get isWebExtension() {
-      return !!(
-        this.targetForm &&
-        this.targetForm.actor &&
-        (this.targetForm.actor.match(/conn\d+\.webExtension(Target)?\d+/) ||
-          this.targetForm.actor.match(/child\d+\/webExtension(Target)?\d+/))
       );
     }
 
@@ -334,25 +335,6 @@ function TargetMixin(parentClass) {
         this.targetForm.actor &&
         this.targetForm.actor.match(/conn\d+\.parentProcessTarget\d+/)
       );
-    }
-
-    getExtensionPathName(url) {
-      // Return the url if the target is not a webextension.
-      if (!this.isWebExtension) {
-        throw new Error("Target is not a WebExtension");
-      }
-
-      try {
-        const parsedURL = new URL(url);
-        // Only moz-extension URL should be shortened into the URL pathname.
-        if (parsedURL.protocol !== "moz-extension:") {
-          return url;
-        }
-        return parsedURL.pathname;
-      } catch (e) {
-        // Return the url if unable to resolve the pathname.
-        return url;
-      }
     }
 
     /**
@@ -420,39 +402,16 @@ function TargetMixin(parentClass) {
         return;
       }
 
-      const options = await getThreadOptions();
       // If the target is destroyed or soon will be, don't go further
       if (this.isDestroyedOrBeingDestroyed()) {
         return;
       }
-      await this.attachThread(options);
-    }
-
-    async attachThread(options = {}) {
       if (!this.targetForm || !this.targetForm.threadActor) {
         throw new Error(
-          "TargetMixin sub class should set targetForm.threadActor before calling " +
-            "attachThread"
+          "TargetMixin sub class should set targetForm.threadActor before calling attachAndInitThread"
         );
       }
       this.threadFront = await this.getFront("thread");
-
-      // Avoid attaching if the thread actor was already attached on target creation from the server side.
-      // This doesn't include:
-      // * targets that aren't yet supported by the Watcher (like web extensions),
-      // * workers, which still use a unique codepath for thread actor attach
-      // * all targets when connecting to an older server
-      // If all targets are supported by watcher actor, and workers no longer use
-      // its unique attach sequence, we can assume the thread front is always attached.
-      const isAttached = await this.threadFront.isAttached();
-
-      const isDestroyed =
-        this.isDestroyedOrBeingDestroyed() || this.threadFront.isDestroyed();
-      if (!isAttached && !isDestroyed) {
-        await this.threadFront.attach(options);
-      }
-
-      return this.threadFront;
     }
 
     isDestroyedOrBeingDestroyed() {
@@ -573,11 +532,11 @@ function TargetMixin(parentClass) {
       this._url = null;
     }
 
-    _onResourceEvent(eventName, resources) {
+    _onResourceEventArray(eventName, array) {
       if (!this._resourceCache[eventName]) {
         this._resourceCache[eventName] = [];
       }
-      this._resourceCache[eventName].push(resources);
+      this._resourceCache[eventName].push(array);
     }
 
     toString() {
@@ -623,6 +582,17 @@ function TargetMixin(parentClass) {
         return this.logInPage({ text, category, flags: warningFlag });
       }
       return Promise.resolve();
+    }
+
+    /**
+     * The tracer actor emits frames which should be collected per target/thread.
+     * The tracer will emit other resources, refering to the frame indexes in that collected array.
+     * The indexes and this array in general is specific to a given tracer actor instance
+     * and so is specific per thread and target.
+     */
+    #jsTracerCollectedFrames = [];
+    getJsTracerCollectedFramesArray() {
+      return this.#jsTracerCollectedFrames;
     }
   }
   return Target;

@@ -20,6 +20,7 @@ function Home(props) {
     utmContent,
   } = props;
 
+  // eslint-disable-next-line no-shadow
   const [{ articles, status }, setArticlesState] = useState({
     articles: [],
     // Can be success, loading, or error.
@@ -32,7 +33,7 @@ function Home(props) {
       : ``
   }`;
 
-  const loadingRecentSaves = useCallback(resp => {
+  const loadingRecentSaves = useCallback(() => {
     setArticlesState(prevState => ({
       ...prevState,
       status: "loading",

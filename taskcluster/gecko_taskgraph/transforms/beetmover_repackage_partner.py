@@ -38,7 +38,7 @@ beetmover_description_schema = Schema(
         Required("shipping-phase"): task_description_schema["shipping-phase"],
         Optional("shipping-product"): task_description_schema["shipping-product"],
         Optional("priority"): task_description_schema["priority"],
-        Optional("job-from"): task_description_schema["job-from"],
+        Optional("task-from"): task_description_schema["task-from"],
     }
 )
 
@@ -149,7 +149,7 @@ def generate_upstream_artifacts(
             {
                 "taskId": {"task-reference": build_task_ref},
                 "taskType": "build",
-                "paths": [f"{artifact_prefix}/{repack_id}/target.tar.bz2"],
+                "paths": [f"{artifact_prefix}/{repack_id}/target.tar.xz"],
                 "locale": partner_path,
             }
         )
@@ -157,7 +157,7 @@ def generate_upstream_artifacts(
             {
                 "taskId": {"task-reference": repackage_signing_task_ref},
                 "taskType": "repackage",
-                "paths": [f"{artifact_prefix}/{repack_id}/target.tar.bz2.asc"],
+                "paths": [f"{artifact_prefix}/{repack_id}/target.tar.xz.asc"],
                 "locale": partner_path,
             }
         )

@@ -73,7 +73,7 @@ class Perftest(object):
         app,
         binary,
         run_local=False,
-        noinstall=False,
+        no_install=False,
         obj_path=None,
         profile_class=None,
         installerpath=None,
@@ -111,7 +111,8 @@ class Perftest(object):
         benchmark_branch=None,
         clean=False,
         screenshot_on_failure=False,
-        **kwargs
+        power_test=False,
+        **kwargs,
     ):
         self._remote_test_root = None
         self._dirs_to_remove = []
@@ -158,6 +159,7 @@ class Perftest(object):
             "benchmark_branch": benchmark_branch,
             "clean": clean,
             "screenshot_on_failure": screenshot_on_failure,
+            "power_test": power_test,
         }
 
         self.firefox_android_apps = FIREFOX_ANDROID_APPS
@@ -181,7 +183,6 @@ class Perftest(object):
         if self.config["app"] in (
             "chrome",
             "chrome-m",
-            "chromium",
             "custom-car",
             "cstm-car-m",
         ):
@@ -696,7 +697,11 @@ class PerftestAndroid(Perftest):
             device = ADBDeviceFactory(verbose=True)
 
             # Chrome uses a specific binary that we don't set as a command line option
-            binary = "com.android.chrome"
+            binary = (
+                "com.android.chrome"
+                if self.config["app"] == "chrome-m"
+                else "org.chromium.chrome"
+            )
             if self.config["app"] not in CHROME_ANDROID_APPS:
                 binary = self.config["binary"]
 
@@ -811,8 +816,8 @@ class PerftestDesktop(Perftest):
 
     def desktop_chrome_args(self, test):
         """Returns cmd line options required to run pageload tests on Desktop Chrome
-        and Chromium. Also add the cmd line options to turn on the proxy and
-        ignore security certificate errors if using host localhost, 127.0.0.1.
+        and Chromium as Release (CaR). Also add the cmd line options to turn on the
+        proxy and ignore security certificate errors if using host localhost, 127.0.0.1.
         """
         chrome_args = ["--use-mock-keychain", "--no-default-browser-check"]
 
@@ -885,19 +890,26 @@ class PerftestDesktop(Perftest):
                     else:
                         LOG.info("Couldn't get browser version and name")
                 else:
-                    # On windows we need to use wimc to get the version
-                    command = r'wmic datafile where name="{0}"'.format(
-                        self.config["binary"].replace("\\", r"\\")
+                    # Define the PowerShell command. We use this method on Windows since WMIC will
+                    # soon be deprecated.
+                    binary_path = self.config.get("binary")
+                    command = rf'(Get-ItemProperty -Path "{binary_path}").VersionInfo.FileVersion'
+                    LOG.info(
+                        "Attempting to get browser application version with powershell..."
                     )
-                    bmeta = subprocess.check_output(command)
-
-                    meta_re = re.compile(r"\s+([\d.a-z]+)\s+")
-                    match = meta_re.findall(bmeta.decode("utf-8"))
-                    if len(match) > 0:
-                        browser_name = self.config["app"]
-                        browser_version = match[-1]
+                    bmeta = subprocess.check_output(
+                        ["powershell", "-Command", command],
+                        text=True,
+                    )
+                    if not bmeta:
+                        LOG.warning("Unable to acquire browser version")
                     else:
-                        LOG.info("Couldn't get browser version and name")
+                        browser_version = bmeta.strip()
+                        browser_name = self.config["app"]
+                        LOG.info(
+                            "Successfully acquired browser version: %s"
+                            % browser_version
+                        )
             except Exception as e:
                 LOG.warning(
                     "Failed to get browser meta data through fallback method: %s-%s"

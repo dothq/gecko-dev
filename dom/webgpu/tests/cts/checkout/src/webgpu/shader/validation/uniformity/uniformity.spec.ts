@@ -21,6 +21,7 @@ const kCollectiveOps = [
   { op: 'fwidthCoarse', stage: 'fragment' },
   { op: 'fwidthFine', stage: 'fragment' },
   { op: 'storageBarrier', stage: 'compute' },
+  { op: 'textureBarrier', stage: 'compute' },
   { op: 'workgroupBarrier', stage: 'compute' },
   { op: 'workgroupUniformLoad', stage: 'compute' },
 ];
@@ -43,6 +44,8 @@ const kConditions = [
   { cond: 'nonuniform_and2', expectation: false },
   { cond: 'uniform_func_var', expectation: true },
   { cond: 'nonuniform_func_var', expectation: false },
+  { cond: 'storage_texture_ro', expectation: true },
+  { cond: 'storage_texture_rw', expectation: false },
 ];
 
 function generateCondition(condition: string): string {
@@ -98,6 +101,12 @@ function generateCondition(condition: string): string {
     case 'nonuniform_func_var': {
       return `n_f == 0`;
     }
+    case 'storage_texture_ro': {
+      return `textureLoad(ro_storage_texture, vec2()).x == 0`;
+    }
+    case 'storage_texture_rw': {
+      return `textureLoad(rw_storage_texture, vec2()).x == 0`;
+    }
     default: {
       unreachable(`Unhandled condition`);
     }
@@ -116,6 +125,7 @@ function generateOp(op: string): string {
       return `let x = ${op}(tex_depth, s_comp, vec2(0,0), 0);\n`;
     }
     case 'storageBarrier':
+    case 'textureBarrier':
     case 'workgroupBarrier': {
       return `${op}();\n`;
     }
@@ -133,6 +143,35 @@ function generateOp(op: string): string {
     case 'fwidthFine': {
       return `let x = ${op}(0);\n`;
     }
+    case 'subgroupAdd':
+    case 'subgroupInclusiveAdd':
+    case 'subgroupExclusiveAdd':
+    case 'subgroupMul':
+    case 'subgroupInclusiveMul':
+    case 'subgroupExclusiveMul':
+    case 'subgroupMax':
+    case 'subgroupMin':
+    case 'subgroupAnd':
+    case 'subgroupOr':
+    case 'subgroupXor':
+    case 'subgroupBroadcastFirst':
+    case 'quadSwapX':
+    case 'quadSwapY':
+    case 'quadSwapDiagonal':
+      return `let x = ${op}(0);\n`;
+    case 'subgroupAll':
+    case 'subgroupAny':
+    case 'subgroupBallot':
+      return `let x = ${op}(false);\n`;
+    case 'subgroupElect':
+      return `let x = ${op}();\n`;
+    case 'subgroupBroadcast':
+    case 'subgroupShuffle':
+    case 'subgroupShuffleUp':
+    case 'subgroupShuffleDown':
+    case 'subgroupShuffleXor':
+    case 'quadBroadcast':
+      return `let x = ${op}(0, 0);\n`;
     default: {
       unreachable(`Unhandled op`);
     }
@@ -181,12 +220,16 @@ g.test('basics')
   .desc(`Test collective operations in simple uniform or non-uniform control flow.`)
   .params(u =>
     u
-      .combineWithParams(kCollectiveOps)
-      .combineWithParams(kConditions)
       .combine('statement', ['if', 'for', 'while', 'switch'] as const)
       .beginSubcases()
+      .combineWithParams(kConditions)
+      .combineWithParams(kCollectiveOps)
   )
   .fn(t => {
+    if (t.params.op === 'textureBarrier' || t.params.cond.startsWith('storage_texture')) {
+      t.skipIfLanguageFeatureNotSupported('readonly_and_readwrite_storage_textures');
+    }
+
     let code = `
  @group(0) @binding(0) var s : sampler;
  @group(0) @binding(1) var s_comp : sampler_comparison;
@@ -196,6 +239,98 @@ g.test('basics')
  @group(1) @binding(0) var<storage, read> ro_buffer : array<f32, 4>;
  @group(1) @binding(1) var<storage, read_write> rw_buffer : array<f32, 4>;
  @group(1) @binding(2) var<uniform> uniform_buffer : vec4<f32>;
+
+ @group(2) @binding(0) var ro_storage_texture : texture_storage_2d<rgba8unorm, read>;
+ @group(2) @binding(1) var rw_storage_texture : texture_storage_2d<rgba8unorm, read_write>;
+
+ var<private> priv_var : array<f32, 4> = array(0,0,0,0);
+
+ const c = false;
+ override o : f32;
+`;
+
+    if (t.params.stage === 'compute') {
+      code += `var<workgroup> wg : f32;\n`;
+      code += ` @workgroup_size(16, 1, 1)`;
+    }
+    code += `@${t.params.stage}`;
+    code += `\nfn main(`;
+    if (t.params.stage === 'compute') {
+      code += `@builtin(global_invocation_id) p : vec3<u32>`;
+    } else {
+      code += `@builtin(position) p : vec4<f32>`;
+    }
+    code += `) {
+      let u_let = uniform_buffer.x;
+      let n_let = rw_buffer[0];
+      var u_f = uniform_buffer.z;
+      var n_f = rw_buffer[1];
+    `;
+
+    // Simple control statement containing the op.
+    code += generateConditionalStatement(t.params.statement, t.params.cond, t.params.op);
+
+    code += `\n}\n`;
+
+    t.expectCompileResult(t.params.expectation, code);
+  });
+
+const kSubgroupOps = [
+  'subgroupAdd',
+  'subgroupInclusiveAdd',
+  'subgroupExclusiveAdd',
+  'subgroupMul',
+  'subgroupInclusiveMul',
+  'subgroupExclusiveMul',
+  'subgroupMax',
+  'subgroupMin',
+  'subgroupAll',
+  'subgroupAny',
+  'subgroupAnd',
+  'subgroupOr',
+  'subgroupXor',
+  'subgroupBallot',
+  'subgroupElect',
+  'subgroupBroadcast',
+  'subgroupBroadcastFirst',
+  'subgroupShuffle',
+  'subgroupShuffleUp',
+  'subgroupShuffleDown',
+  'subgroupShuffleXor',
+  'quadBroadcast',
+  'quadSwapX',
+  'quadSwapY',
+  'quadSwapDiagonal',
+] as const;
+
+g.test('basics,subgroups')
+  .desc(`Test subgroup operations in simple uniform or non-uniform control flow.`)
+  .params(u =>
+    u
+      .combine('statement', ['if', 'for', 'while', 'switch'] as const)
+      .beginSubcases()
+      .combineWithParams(kConditions)
+      .combine('op', kSubgroupOps)
+      .combine('stage', ['compute', 'fragment'] as const)
+  )
+  .beforeAllSubcases(t => {
+    t.selectDeviceOrSkipTestCase('subgroups' as GPUFeatureName);
+  })
+  .fn(t => {
+    let code = `
+ enable subgroups;
+
+ @group(0) @binding(0) var s : sampler;
+ @group(0) @binding(1) var s_comp : sampler_comparison;
+ @group(0) @binding(2) var tex : texture_2d<f32>;
+ @group(0) @binding(3) var tex_depth : texture_depth_2d;
+
+ @group(1) @binding(0) var<storage, read> ro_buffer : array<f32, 4>;
+ @group(1) @binding(1) var<storage, read_write> rw_buffer : array<f32, 4>;
+ @group(1) @binding(2) var<uniform> uniform_buffer : vec4<f32>;
+
+ @group(2) @binding(0) var ro_storage_texture : texture_storage_2d<rgba8unorm, read>;
+ @group(2) @binding(1) var rw_storage_texture : texture_storage_2d<rgba8unorm, read_write>;
 
  var<private> priv_var : array<f32, 4> = array(0,0,0,0);
 
@@ -246,11 +381,29 @@ const kFragmentBuiltinValues = [
     builtin: `sample_mask`,
     type: `u32`,
   },
+  {
+    builtin: `subgroup_invocation_id`,
+    type: `u32`,
+  },
+  {
+    builtin: `subgroup_size`,
+    type: `u32`,
+  },
 ];
 
 g.test('fragment_builtin_values')
   .desc(`Test uniformity of fragment built-in values`)
   .params(u => u.combineWithParams(kFragmentBuiltinValues).beginSubcases())
+  .beforeAllSubcases(t => {
+    t.skipIf(
+      t.isCompatibility && ['sample_index', 'sample_mask'].includes(t.params.builtin),
+      'compatibility mode does not support sample_index or sample_mask'
+    );
+    const builtin = t.params.builtin;
+    if (builtin.includes('subgroup')) {
+      t.selectDeviceOrSkipTestCase('subgroups' as GPUFeatureName);
+    }
+  })
   .fn(t => {
     let cond = ``;
     switch (t.params.type) {
@@ -274,7 +427,9 @@ g.test('fragment_builtin_values')
         unreachable(`Unhandled type`);
       }
     }
+    const enable = t.params.builtin.includes('subgroup') ? 'enable subgroups;' : '';
     const code = `
+${enable}
 @group(0) @binding(0) var s : sampler;
 @group(0) @binding(1) var tex : texture_2d<f32>;
 
@@ -316,11 +471,26 @@ const kComputeBuiltinValues = [
     type: `vec3<u32>`,
     uniform: true,
   },
+  {
+    builtin: `subgroup_invocation_id`,
+    type: `u32`,
+    uniform: false,
+  },
+  {
+    builtin: `subgroup_size`,
+    type: `u32`,
+    uniform: true,
+  },
 ];
 
 g.test('compute_builtin_values')
   .desc(`Test uniformity of compute built-in values`)
   .params(u => u.combineWithParams(kComputeBuiltinValues).beginSubcases())
+  .beforeAllSubcases(t => {
+    if (t.params.builtin.includes('subgroup')) {
+      t.selectDeviceOrSkipTestCase('subgroups' as GPUFeatureName);
+    }
+  })
   .fn(t => {
     let cond = ``;
     switch (t.params.type) {
@@ -344,7 +514,9 @@ g.test('compute_builtin_values')
         unreachable(`Unhandled type`);
       }
     }
+    const enable = t.params.builtin.includes('subgroup') ? 'enable subgroups;' : '';
     const code = `
+${enable}
 @compute @workgroup_size(16,1,1)
 fn main(@builtin(${t.params.builtin}) p : ${t.params.type}) {
   if ${cond} {
@@ -367,7 +539,14 @@ function generatePointerCheck(check: string): string {
   }
 }
 
-const kPointerCases = {
+interface PointerCase {
+  code: string;
+  check: 'address' | 'contents';
+  uniform: boolean | 'never';
+  needs_deref_sugar?: boolean;
+}
+
+const kPointerCases: Record<string, PointerCase> = {
   address_uniform_literal: {
     code: `let ptr = &wg_array[0];`,
     check: `address`,
@@ -585,6 +764,182 @@ const kPointerCases = {
     check: `contents`,
     uniform: false,
   },
+  contents_lhs_ref_pointer_deref1: {
+    code: `*&func_scalar = uniform_value;
+    let test_val = func_scalar;`,
+    check: `contents`,
+    uniform: true,
+  },
+  contents_lhs_ref_pointer_deref1a: {
+    code: `*&func_scalar = nonuniform_value;
+    let test_val = func_scalar;`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref2: {
+    code: `*&(func_array[nonuniform_value]) = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref2a: {
+    code: `(func_array[nonuniform_value]) = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref3: {
+    code: `*&(func_array[needs_uniform(uniform_value)]) = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: true,
+  },
+  contents_lhs_ref_pointer_deref3a: {
+    code: `*&(func_array[needs_uniform(nonuniform_value)]) = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: 'never',
+  },
+  contents_lhs_ref_pointer_deref4: {
+    code: `*&((*&(func_struct.x[uniform_value])).x[uniform_value].x[uniform_value]) = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: true,
+  },
+  contents_lhs_ref_pointer_deref4a: {
+    code: `*&((*&(func_struct.x[uniform_value])).x[uniform_value].x[uniform_value]) = nonuniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref4b: {
+    code: `*&((*&(func_struct.x[uniform_value])).x[uniform_value].x[nonuniform_value]) = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref4c: {
+    code: `*&((*&(func_struct.x[uniform_value])).x[nonuniform_value]).x[uniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref4d: {
+    code: `*&((*&(func_struct.x[nonuniform_value])).x[uniform_value].x)[uniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+  },
+  contents_lhs_ref_pointer_deref4e: {
+    code: `*&((*&(func_struct.x[uniform_value])).x[needs_uniform(nonuniform_value)].x[uniform_value]) = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: 'never',
+  },
+
+  // The following cases require the 'pointer_composite_access' language feature.
+  contents_lhs_pointer_deref2: {
+    code: `(&func_array)[uniform_value] = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: true,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref2a: {
+    code: `(&func_array)[nonuniform_value] = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref3: {
+    code: `(&func_array)[needs_uniform(uniform_value)] = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: true,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref3a: {
+    code: `(&func_array)[needs_uniform(nonuniform_value)] = uniform_value;
+    let test_val = func_array[0];`,
+    check: `contents`,
+    uniform: 'never',
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4: {
+    code: `(&((&(func_struct.x[uniform_value])).x[uniform_value]).x)[uniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: true,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4a: {
+    code: `(&((&(func_struct.x[uniform_value])).x[uniform_value]).x)[uniform_value] = nonuniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4b: {
+    code: `(&((&(func_struct.x[uniform_value])).x)[uniform_value]).x[nonuniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4c: {
+    code: `(&((&(func_struct.x[uniform_value])).x[nonuniform_value]).x)[uniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4d: {
+    code: `(&((&(func_struct.x[nonuniform_value])).x[uniform_value]).x)[uniform_value] = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_lhs_pointer_deref4e: {
+    code: `(&((&(func_struct.x[uniform_value])).x)[needs_uniform(nonuniform_value)].x[uniform_value]) = uniform_value;
+    let test_val = func_struct.x[0].x[0].x[0];`,
+    check: `contents`,
+    uniform: 'never',
+    needs_deref_sugar: true,
+  },
+  contents_rhs_pointer_deref1: {
+    code: `let test_val = (&func_array)[uniform_value];`,
+    check: `contents`,
+    uniform: true,
+    needs_deref_sugar: true,
+  },
+  contents_rhs_pointer_deref1a: {
+    code: `let test_val = (&func_array)[nonuniform_value];`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
+  contents_rhs_pointer_deref2: {
+    code: `let test_val = (&func_array)[needs_uniform(nonuniform_value)];`,
+    check: `contents`,
+    uniform: `never`,
+    needs_deref_sugar: true,
+  },
+  contents_rhs_pointer_swizzle_uniform: {
+    code: `func_vector = vec4(uniform_value);
+    let test_val = dot((&func_vector).yw, vec2());`,
+    check: `contents`,
+    uniform: true,
+    needs_deref_sugar: true,
+  },
+  contents_rhs_pointer_swizzle_non_uniform: {
+    code: `func_vector = vec4(nonuniform_value);
+    let test_val = dot((&func_vector).yw, vec2());`,
+    check: `contents`,
+    uniform: false,
+    needs_deref_sugar: true,
+  },
 };
 
 g.test('pointers')
@@ -612,10 +967,18 @@ var<storage> uniform_value : u32;
 @group(0) @binding(1)
 var<storage, read_write> nonuniform_value : u32;
 
+fn needs_uniform(val : u32) -> u32{
+  if val == 0 {
+    workgroupBarrier();
+  }
+  return val;
+}
+
 @compute @workgroup_size(16, 1, 1)
 fn main(@builtin(local_invocation_id) lid : vec3<u32>,
         @builtin(global_invocation_id) gid : vec3<u32>) {
   var func_scalar : u32;
+  var func_vector : vec4u;
   var func_array : array<u32, 16>;
   var func_struct : Outer;
 
@@ -627,11 +990,16 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
       `
 ${generatePointerCheck(testcase.check)}
 }`;
-    if (!testcase.uniform) {
+
+    if (testcase.needs_deref_sugar === true) {
+      t.skipIfLanguageFeatureNotSupported('pointer_composite_access');
+    }
+    // Explicitly check false to distinguish from never.
+    if (testcase.uniform === false) {
       const without_check = code + `}\n`;
       t.expectCompileResult(true, without_check);
     }
-    t.expectCompileResult(testcase.uniform, with_check);
+    t.expectCompileResult(testcase.uniform === true, with_check);
   });
 
 function expectedUniformity(uniform: string, init: string): boolean {
@@ -2019,6 +2387,7 @@ g.test('binary_expressions')
     u
       .combine('e1', keysOf(kExpressionCases))
       .combine('e2', keysOf(kExpressionCases))
+      .beginSubcases()
       .combine('op', keysOf(kBinOps))
   )
   .fn(t => {
@@ -2441,4 +2810,31 @@ fn main() {
       t.expectCompileResult(true, `diagnostic(off, derivative_uniformity);\n` + code);
     }
     t.expectCompileResult(res, code);
+  });
+
+g.test('subgroups,parameters')
+  .desc('Test subgroup operations that require a uniform parameter')
+  .params(u =>
+    u
+      .combine('op', ['subgroupShuffleUp', 'subgroupShuffleDown', 'subgroupShuffleXor'] as const)
+      .combine('uniform', [false, true] as const)
+  )
+  .beforeAllSubcases(t => {
+    t.selectDeviceOrSkipTestCase('subgroups' as GPUFeatureName);
+  })
+  .fn(t => {
+    const wgsl = `
+enable subgroups;
+
+var<private> non_uniform : u32 = 0;
+
+@group(0) @binding(0)
+var<storage> uniform : u32;
+
+@compute @workgroup_size(16,1,1)
+fn main() {
+  let x = ${t.params.op}(non_uniform, ${t.params.uniform ? 'uniform' : 'non_uniform'});
+}`;
+
+    t.expectCompileResult(t.params.uniform, wgsl);
   });

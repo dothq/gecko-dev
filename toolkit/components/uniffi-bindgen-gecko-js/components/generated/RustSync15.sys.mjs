@@ -153,6 +153,20 @@ class ArrayBufferDataStream {
       this.pos += size;
       return value;
     }
+
+    readBytes() {
+      const size = this.readInt32();
+      const bytes = new Uint8Array(this.dataView.buffer, this.pos, size);
+      this.pos += size;
+      return bytes
+    }
+
+    writeBytes(uint8Array) {
+      this.writeUint32(uint8Array.length);
+      value.forEach((elt) => {
+        dataStream.writeUint8(elt);
+      })
+    }
 }
 
 function handleRustResult(result, liftCallback, liftErrCallback) {
@@ -164,9 +178,8 @@ function handleRustResult(result, liftCallback, liftErrCallback) {
             throw liftErrCallback(result.data);
 
         case "internal-error":
-            let message = result.internalErrorMessage;
-            if (message) {
-                throw new UniFFIInternalError(message);
+            if (result.data) {
+                throw new UniFFIInternalError(FfiConverterString.lift(result.data));
             } else {
                 throw new UniFFIInternalError("Unknown error");
             }
@@ -255,12 +268,38 @@ export class FfiConverterString extends FfiConverter {
 }
 
 
+/**
+ * Enumeration for the different types of device.
+ *
+ * Firefox Accounts separates devices into broad categories for display purposes,
+ * such as distinguishing a desktop PC from a mobile phone. Upon signin, the
+ * application should inspect the device it is running on and select an appropriate
+ * [`DeviceType`] to include in its device registration record.
+ */
 export const DeviceType = {
+    /**
+     * DESKTOP
+     */
     DESKTOP: 1,
+    /**
+     * MOBILE
+     */
     MOBILE: 2,
+    /**
+     * TABLET
+     */
     TABLET: 3,
+    /**
+     * VR
+     */
     VR: 4,
+    /**
+     * TV
+     */
     TV: 5,
+    /**
+     * UNKNOWN
+     */
     UNKNOWN: 6,
 };
 
@@ -282,7 +321,7 @@ export class FfiConverterTypeDeviceType extends FfiConverterArrayBuffer {
             case 6:
                 return DeviceType.UNKNOWN
             default:
-                return new Error("Unknown DeviceType variant");
+                throw new UniFFITypeError("Unknown DeviceType variant");
         }
     }
 
@@ -311,7 +350,7 @@ export class FfiConverterTypeDeviceType extends FfiConverterArrayBuffer {
             dataStream.writeInt32(6);
             return;
         }
-        return new Error("Unknown DeviceType variant");
+        throw new UniFFITypeError("Unknown DeviceType variant");
     }
 
     static computeSize(value) {

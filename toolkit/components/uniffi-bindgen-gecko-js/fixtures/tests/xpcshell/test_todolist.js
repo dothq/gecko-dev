@@ -1,12 +1,21 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const { TodoList, TodoEntry, getDefaultList, setDefaultList } =
+const { TodoList, TodoEntry, TodoError, getDefaultList, setDefaultList } =
   ChromeUtils.importESModule("resource://gre/modules/RustTodolist.sys.mjs");
 
 add_task(async function () {
   const todo = await TodoList.init();
-  const entry = new TodoEntry("Write bindings for strings in records");
+
+  await Assert.rejects(
+    todo.getLastEntry(),
+    TodoError,
+    "getLastEntry called before there were any entries"
+  );
+
+  const entry = new TodoEntry({
+    text: "Write bindings for strings in records",
+  });
 
   await todo.addItem("Write JS bindings");
   Assert.equal(await todo.getLast(), "Write JS bindings");
@@ -30,9 +39,9 @@ add_task(async function () {
     "Test Ünicode hàndling without an entry can't believe I didn't test this at first 🤣"
   );
 
-  const entry2 = new TodoEntry(
-    "Test Ünicode hàndling in an entry can't believe I didn't test this at first 🤣"
-  );
+  const entry2 = new TodoEntry({
+    text: "Test Ünicode hàndling in an entry can't believe I didn't test this at first 🤣",
+  });
   await todo.addEntry(entry2);
   Assert.equal(
     (await todo.getLastEntry()).text,

@@ -10,6 +10,7 @@ Services.scriptloader.loadSubScript(
 
 ChromeUtils.defineESModuleGetters(this, {
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
+  sinon: "resource://testing-common/Sinon.sys.mjs",
 });
 
 const lazy = {};
@@ -51,19 +52,22 @@ async function addTopSites(url) {
 }
 
 function assertAbandonmentTelemetry(expectedExtraList) {
-  _assertGleanTelemetry("abandonment", expectedExtraList);
+  assertGleanTelemetry("abandonment", expectedExtraList);
 }
 
 function assertEngagementTelemetry(expectedExtraList) {
-  _assertGleanTelemetry("engagement", expectedExtraList);
+  assertGleanTelemetry("engagement", expectedExtraList);
 }
 
 function assertExposureTelemetry(expectedExtraList) {
-  _assertGleanTelemetry("exposure", expectedExtraList);
+  assertGleanTelemetry("exposure", expectedExtraList);
 }
 
-function _assertGleanTelemetry(telemetryName, expectedExtraList) {
-  const telemetries = Glean.urlbar[telemetryName].testGetValue() ?? [];
+function assertGleanTelemetry(telemetryName, expectedExtraList) {
+  const camelName = telemetryName.replaceAll(/_(.)/g, (match, p1) =>
+    p1.toUpperCase()
+  );
+  const telemetries = Glean.urlbar[camelName].testGetValue() ?? [];
   info(
     "Asserting Glean telemetry is correct, actual events are: " +
       JSON.stringify(telemetries)
@@ -92,40 +96,28 @@ function _assertGleanTelemetry(telemetryName, expectedExtraList) {
 
 async function ensureQuickSuggestInit({ ...args } = {}) {
   return lazy.QuickSuggestTestUtils.ensureQuickSuggestInit({
-    ...args,
     remoteSettingsRecords: [
       {
         type: "data",
         attachment: [
-          {
-            id: 1,
-            url: "https://example.com/sponsored",
-            title: "Sponsored suggestion",
-            keywords: ["sponsored"],
-            click_url: "https://example.com/click",
-            impression_url: "https://example.com/impression",
-            advertiser: "TestAdvertiser",
-            iab_category: "22 - Shopping",
-            icon: "1234",
-          },
-          {
-            id: 2,
-            url: `https://example.com/nonsponsored`,
-            title: "Non-sponsored suggestion",
-            keywords: ["nonsponsored"],
-            click_url: "https://example.com/click",
-            impression_url: "https://example.com/impression",
-            advertiser: "Wikipedia",
-            iab_category: "5 - Education",
-            icon: "1234",
-          },
+          lazy.QuickSuggestTestUtils.ampRemoteSettings({
+            keywords: ["amp", "amp and wikipedia"],
+          }),
+          lazy.QuickSuggestTestUtils.wikipediaRemoteSettings({
+            keywords: ["wikipedia", "amp and wikipedia"],
+          }),
         ],
       },
+      lazy.QuickSuggestTestUtils.weatherRecord(),
       {
-        type: "weather",
-        weather: MerinoTestUtils.WEATHER_RS_DATA,
+        type: "exposure-suggestions",
+        suggestion_type: "aaa",
+        attachment: {
+          keywords: ["aaa keyword"],
+        },
       },
     ],
+    ...args,
   });
 }
 
@@ -210,12 +202,7 @@ async function doTest(testFn) {
   await QuickSuggest.blockedSuggestions.clear();
   await QuickSuggest.blockedSuggestions._test_readyPromise;
   await updateTopSites(() => true);
-
-  try {
-    await BrowserTestUtils.withNewTab(gBrowser, testFn);
-  } catch (e) {
-    console.error(e);
-  }
+  await BrowserTestUtils.withNewTab(gBrowser, testFn);
 }
 
 async function initGroupTest() {
@@ -311,7 +298,6 @@ async function loadRemoteTab(url) {
       ["browser.urlbar.maxHistoricalSearchSuggestions", 0],
       ["browser.urlbar.autoFill", false],
       ["services.sync.username", "fake"],
-      ["services.sync.syncedTabs.showRemoteTabs", true],
     ],
   });
 
@@ -410,13 +396,12 @@ async function setup() {
     set: [
       ["browser.urlbar.searchEngagementTelemetry.enabled", true],
       ["browser.urlbar.quickactions.enabled", true],
-      ["browser.urlbar.quickactions.minimumSearchString", 0],
-      ["browser.urlbar.suggest.quickactions", true],
-      ["browser.urlbar.shortcuts.quickactions", true],
+      ["browser.urlbar.secondaryActions.featureGate", true],
+      ["browser.urlbar.scotchBonnet.enableOverride", false],
     ],
   });
 
-  const engine = await SearchTestUtils.promiseNewSearchEngine({
+  const engine = await SearchTestUtils.installOpenSearchEngine({
     url: "chrome://mochitests/content/browser/browser/components/urlbar/tests/browser/searchSuggestionEngine.xml",
   });
   const originalDefaultEngine = await Services.search.getDefault();
@@ -446,4 +431,24 @@ async function showResultByArrowDown() {
     EventUtils.synthesizeKey("KEY_ArrowDown");
   });
   await UrlbarTestUtils.promiseSearchComplete(window);
+}
+
+async function expectNoConsoleErrors(task) {
+  let endConsoleListening = TestUtils.listenForConsoleMessages();
+  let msgs;
+  let taskResult;
+
+  try {
+    taskResult = await task();
+  } finally {
+    msgs = await endConsoleListening();
+  }
+
+  for (let msg of msgs) {
+    if (msg.level === "error") {
+      throw new Error(`Console error detected: ${msg.arguments[0]}`);
+    }
+  }
+
+  return taskResult;
 }

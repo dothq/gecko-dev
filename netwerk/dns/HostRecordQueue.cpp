@@ -19,7 +19,7 @@ void HostRecordQueue::InsertRecord(nsHostRecord* aRec,
     MOZ_DIAGNOSTIC_ASSERT(!mHighQ.contains(aRec), "Already in high queue");
     MOZ_DIAGNOSTIC_ASSERT(!mMediumQ.contains(aRec), "Already in med queue");
     MOZ_DIAGNOSTIC_ASSERT(!mLowQ.contains(aRec), "Already in low queue");
-    MOZ_DIAGNOSTIC_ASSERT(false, "Already on some other queue?");
+    MOZ_DIAGNOSTIC_CRASH("Already on some other queue?");
   }
 
   switch (AddrHostRecord::GetPriority(aFlags)) {
@@ -51,7 +51,7 @@ void HostRecordQueue::AddToEvictionQ(
     MOZ_DIAGNOSTIC_ASSERT(!inMediumQ, "Already in med queue");
     bool inLowQ = mLowQ.contains(aRec);
     MOZ_DIAGNOSTIC_ASSERT(!inLowQ, "Already in low queue");
-    MOZ_DIAGNOSTIC_ASSERT(false, "Already on some other queue?");
+    MOZ_DIAGNOSTIC_CRASH("Already on some other queue?");
 
     // Bug 1678117 - it's not clear why this can happen, but let's fix it
     // for release users.
@@ -166,6 +166,10 @@ void HostRecordQueue::MoveToAnotherPendingQ(nsHostRecord* aRec,
   }
 
   aRec->remove();
+  // We just removed from pending queue. Insert record will
+  // increment this value again.
+  mPendingCount--;
+
   InsertRecord(aRec, aFlags, aProofOfLock);
 }
 

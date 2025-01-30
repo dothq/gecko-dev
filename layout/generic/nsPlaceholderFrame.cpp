@@ -46,38 +46,41 @@ NS_QUERYFRAME_TAIL_INHERITING(nsIFrame)
 #endif
 
 /* virtual */
-void nsPlaceholderFrame::AddInlineMinISize(
-    gfxContext* aRenderingContext, nsIFrame::InlineMinISizeData* aData) {
-  // Override AddInlineMinWith so that *nothing* happens.  In
+void nsPlaceholderFrame::AddInlineMinISize(const IntrinsicSizeInput& aInput,
+                                           InlineMinISizeData* aData) {
+  // Override AddInlineMinISize so that *nothing* happens. In
   // particular, we don't want to zero out |aData->mTrailingWhitespace|,
   // since nsLineLayout skips placeholders when trimming trailing
   // whitespace, and we don't want to set aData->mSkipWhitespace to
   // false.
 
-  // ...but push floats onto the list
-  if (mOutOfFlowFrame->IsFloating()) {
-    nscoord floatWidth = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, mOutOfFlowFrame, IntrinsicISizeType::MinISize);
-    aData->mFloats.AppendElement(
-        InlineIntrinsicISizeData::FloatInfo(mOutOfFlowFrame, floatWidth));
-  }
+  // ...but push floats onto aData's list.
+  AddFloatToIntrinsicISizeData(aInput, IntrinsicISizeType::MinISize, aData);
 }
 
 /* virtual */
-void nsPlaceholderFrame::AddInlinePrefISize(
-    gfxContext* aRenderingContext, nsIFrame::InlinePrefISizeData* aData) {
-  // Override AddInlinePrefWith so that *nothing* happens.  In
+void nsPlaceholderFrame::AddInlinePrefISize(const IntrinsicSizeInput& aInput,
+                                            InlinePrefISizeData* aData) {
+  // Override AddInlinePrefISize so that *nothing* happens. In
   // particular, we don't want to zero out |aData->mTrailingWhitespace|,
   // since nsLineLayout skips placeholders when trimming trailing
   // whitespace, and we don't want to set aData->mSkipWhitespace to
   // false.
 
-  // ...but push floats onto the list
+  // ...but push floats onto aData's list.
+  AddFloatToIntrinsicISizeData(aInput, IntrinsicISizeType::PrefISize, aData);
+}
+
+void nsPlaceholderFrame::AddFloatToIntrinsicISizeData(
+    const IntrinsicSizeInput& aInput, IntrinsicISizeType aType,
+    InlineIntrinsicISizeData* aData) const {
   if (mOutOfFlowFrame->IsFloating()) {
-    nscoord floatWidth = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, mOutOfFlowFrame, IntrinsicISizeType::PrefISize);
-    aData->mFloats.AppendElement(
-        InlineIntrinsicISizeData::FloatInfo(mOutOfFlowFrame, floatWidth));
+    const IntrinsicSizeInput floatInput(
+        aInput, mOutOfFlowFrame->GetWritingMode(), GetWritingMode());
+    const nscoord floatISize = nsLayoutUtils::IntrinsicForContainer(
+        floatInput.mContext, mOutOfFlowFrame, aType,
+        floatInput.mPercentageBasisForChildren);
+    aData->mFloats.EmplaceBack(mOutOfFlowFrame, floatISize);
   }
 }
 
@@ -124,7 +127,6 @@ void nsPlaceholderFrame::Reflow(nsPresContext* aPresContext,
 
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsPlaceholderFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   aDesiredSize.ClearSize();
 }
@@ -142,7 +144,7 @@ static FrameChildListID ChildListIDForOutOfFlow(nsFrameState aPlaceholderState,
   if (aPlaceholderState & PLACEHOLDER_FOR_ABSPOS) {
     return FrameChildListID::Absolute;
   }
-  MOZ_DIAGNOSTIC_ASSERT(false, "unknown list");
+  MOZ_DIAGNOSTIC_CRASH("unknown list");
   return FrameChildListID::Float;
 }
 

@@ -290,7 +290,7 @@
  *
  * Barriers for use outside of the JS engine call into the same barrier
  * implementations at InternalBarrierMethods<T>::post via an indirect call to
- * Heap(.+)PostWriteBarrier.
+ * Heap(.+)WriteBarriers.
  *
  * These clases are designed to be used to wrap GC thing pointers or values that
  * act like them (i.e. JS::Value and jsid).  It is possible to use them for
@@ -617,11 +617,13 @@ class GCPtr : public WriteBarriered<T> {
 
 #ifdef DEBUG
   ~GCPtr() {
-    // No barriers are necessary as this only happens when the GC is sweeping.
+    // No barriers are necessary as this only happens when the GC is sweeping or
+    // before this has been initialized (see above comment).
     //
     // If this assertion fails you may need to make the containing object use a
     // HeapPtr instead, as this can be deleted from outside of GC.
-    MOZ_ASSERT(CurrentThreadIsGCSweeping() || CurrentThreadIsGCFinalizing());
+    MOZ_ASSERT(CurrentThreadIsGCSweeping() || CurrentThreadIsGCFinalizing() ||
+               this->value == JS::SafelyInitialized<T>::create());
 
     Poison(this, JS_FREED_HEAP_PTR_PATTERN, sizeof(*this),
            MemCheckKind::MakeNoAccess);
@@ -1112,6 +1114,7 @@ struct RemoveBarrier<WeakHeapPtr<T>> {
 
 #if MOZ_IS_GCC
 template struct JS_PUBLIC_API StableCellHasher<JSObject*>;
+template struct JS_PUBLIC_API StableCellHasher<JSScript*>;
 #endif
 
 template <typename T>

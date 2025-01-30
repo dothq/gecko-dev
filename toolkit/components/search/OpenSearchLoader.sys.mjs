@@ -60,8 +60,6 @@ const MOZSEARCH_LOCALNAME = "SearchPlugin";
  *   Non-standard. The update URL for the engine.
  * @property {number} [UpdateInterval]
  *   Non-standard. The update interval for the engine.
- * @property {string} [IconUpdateUrl]
- *   Non-standard. The update URL for the icon.
  * @property {OpenSearchURL[]} urls
  *   An array of URLs associated with the engine.
  * @property {OpenSearchImage[]} images
@@ -90,12 +88,10 @@ const MOZSEARCH_LOCALNAME = "SearchPlugin";
  * @typedef {object} OpenSearchImage
  * @property {string} url
  *   The source URL of the image.
- * @property {boolean} isPrefered
+ * @property {boolean} isPreferred
  *   If this image is of the preferred 16x16 size.
- * @property {width} width
- *   The reported width of the image.
- * @property {height} height
- *   The reported height of the image.
+ * @property {number} size
+ *   The reported width and height of the image.
  */
 
 /**
@@ -167,6 +163,11 @@ function loadEngineXML(sourceURI, lastModified) {
     // TYPE_DOCUMENT captures that load best.
     Ci.nsIContentPolicy.TYPE_DOCUMENT
   );
+
+  // we collect https telemetry for all top-level (document) loads.
+  chan.loadInfo.httpsUpgradeTelemetry = sourceURI.schemeIs("https")
+    ? Ci.nsILoadInfo.ALREADY_HTTPS
+    : Ci.nsILoadInfo.NO_UPGRADE;
 
   if (lastModified && chan instanceof Ci.nsIHttpChannel) {
     chan.setRequestHeader("If-Modified-Since", lastModified, false);
@@ -275,9 +276,6 @@ function processXMLDocument(xmlDocument) {
       case "UpdateInterval":
         result.updateInterval = parseInt(child.textContent);
         break;
-      case "IconUpdateUrl":
-        result.iconUpdateURL = child.textContent;
-        break;
     }
   }
   if (!result.name || !result.urls.length) {
@@ -358,20 +356,17 @@ function parseURL(element) {
 function parseImage(element) {
   let width = parseInt(element.getAttribute("width"), 10);
   let height = parseInt(element.getAttribute("height"), 10);
-  let isPrefered = width == 16 && height == 16;
 
-  if (isNaN(width) || isNaN(height) || width <= 0 || height <= 0) {
+  if (isNaN(width) || isNaN(height) || width <= 0 || width != height) {
     lazy.logConsole.warn(
-      "OpenSearch image element must have positive width and height."
+      "OpenSearch image element must have equal and positive width and height."
     );
     return null;
   }
 
   return {
     url: element.textContent,
-    isPrefered,
-    width,
-    height,
+    size: width,
   };
 }
 

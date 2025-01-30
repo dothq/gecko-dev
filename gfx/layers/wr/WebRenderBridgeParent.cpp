@@ -6,6 +6,7 @@
 
 #include "mozilla/layers/WebRenderBridgeParent.h"
 
+#include "mozmemory.h"
 #include "CompositableHost.h"
 #include "gfxEnv.h"
 #include "gfxPlatform.h"
@@ -157,6 +158,55 @@ void gfx_wr_clear_crash_annotation(mozilla::wr::CrashAnnotation aAnnotation) {
 namespace mozilla::layers {
 
 using namespace mozilla::gfx;
+
+static bool sAllocAsjustmentTaskCancelled = false;
+static bool sIncreasedDirtyPageThreshold = false;
+
+void ResetDirtyPageModifier();
+
+void ScheduleResetMaxDirtyPageModifier() {
+  NS_DelayedDispatchToCurrentThread(
+      NewRunnableFunction("ResetDirtyPageModifier", &ResetDirtyPageModifier),
+      100  // In ms.
+  );
+}
+
+void NeedIncreasedMaxDirtyPageModifier() {
+  if (sIncreasedDirtyPageThreshold) {
+    sAllocAsjustmentTaskCancelled = true;
+    return;
+  }
+
+  moz_set_max_dirty_page_modifier(3);
+  sIncreasedDirtyPageThreshold = true;
+
+  ScheduleResetMaxDirtyPageModifier();
+}
+
+void ResetDirtyPageModifier() {
+  if (!sIncreasedDirtyPageThreshold) {
+    return;
+  }
+
+  if (sAllocAsjustmentTaskCancelled) {
+    sAllocAsjustmentTaskCancelled = false;
+    ScheduleResetMaxDirtyPageModifier();
+    return;
+  }
+
+  moz_set_max_dirty_page_modifier(0);
+
+  wr::RenderThread* renderThread = wr::RenderThread::Get();
+  if (renderThread) {
+    renderThread->NotifyIdle();
+  }
+
+#if defined(MOZ_MEMORY)
+  jemalloc_free_excess_dirty_pages();
+#endif
+
+  sIncreasedDirtyPageThreshold = false;
+}
 
 LazyLogModule gWebRenderBridgeParentLog("WebRenderBridgeParent");
 #define LOG(...) \
@@ -843,7 +893,8 @@ bool WebRenderBridgeParent::UpdateSharedExternalImage(
   wr::ImageDescriptor descriptor(surfaceSize, dSurf->Stride(),
                                  dSurf->GetFormat());
   aResources.UpdateExternalImageWithDirtyRect(
-      aKey, descriptor, aExtId, imageType, wr::ToDeviceIntRect(aDirtyRect), 0);
+      aKey, descriptor, aExtId, imageType, wr::ToDeviceIntRect(aDirtyRect), 0,
+      /* aNormalizedUvs */ false);
 
   return true;
 }
@@ -1110,6 +1161,8 @@ bool WebRenderBridgeParent::SetDisplayList(
                                                 this, aWrEpoch, aTxnStartTime));
   }
 
+  NeedIncreasedMaxDirtyPageModifier();
+
   mApi->SendTransaction(aTxn);
 
   // We will schedule generating a frame after the scene
@@ -1120,7 +1173,8 @@ bool WebRenderBridgeParent::SetDisplayList(
 bool WebRenderBridgeParent::ProcessDisplayListData(
     DisplayListData& aDisplayList, wr::Epoch aWrEpoch,
     const TimeStamp& aTxnStartTime, bool aValidTransaction) {
-  wr::TransactionBuilder txn(mApi);
+  wr::TransactionBuilder txn(mApi, /* aUseSceneBuilderThread */ true,
+                             mRemoteTextureTxnScheduler, mFwdTransactionId);
   Maybe<wr::AutoTransactionSender> sender;
 
   if (aDisplayList.mScrollData && !aDisplayList.mScrollData->Validate()) {
@@ -1239,10 +1293,6 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvSetDisplayList(
   wr::IpcResourceUpdateQueue::ReleaseShmems(this, aDisplayList.mSmallShmems);
   wr::IpcResourceUpdateQueue::ReleaseShmems(this, aDisplayList.mLargeShmems);
 
-  if (mRemoteTextureTxnScheduler) {
-    mRemoteTextureTxnScheduler->NotifyTxn(aFwdTransactionId);
-  }
-
   if (!success) {
     return IPC_FAIL(this, "Failed to process DisplayListData.");
   }
@@ -1253,7 +1303,8 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvSetDisplayList(
 bool WebRenderBridgeParent::ProcessEmptyTransactionUpdates(
     TransactionData& aData, bool* aScheduleComposite) {
   *aScheduleComposite = false;
-  wr::TransactionBuilder txn(mApi);
+  wr::TransactionBuilder txn(mApi, /* aUseSceneBuilderThread */ true,
+                             mRemoteTextureTxnScheduler, mFwdTransactionId);
   txn.SetLowPriority(!IsRootWebRenderBridgeParent());
 
   if (!aData.mScrollUpdates.IsEmpty()) {
@@ -1286,6 +1337,7 @@ bool WebRenderBridgeParent::ProcessEmptyTransactionUpdates(
     // There are resource updates, then we update Epoch of transaction.
     txn.UpdateEpoch(mPipelineId, mWrEpoch);
     *aScheduleComposite = true;
+    NeedIncreasedMaxDirtyPageModifier();
   } else {
     // If TransactionBuilder does not have resource updates nor display list,
     // ScheduleGenerateFrame is not triggered via SceneBuilder and there is no
@@ -1395,10 +1447,6 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvEmptyTransaction(
                                               aTransactionData->mLargeShmems);
   }
 
-  if (mRemoteTextureTxnScheduler) {
-    mRemoteTextureTxnScheduler->NotifyTxn(aFwdTransactionId);
-  }
-
   if (!success) {
     return IPC_FAIL(this, "Failed to process empty transaction update.");
   }
@@ -1432,6 +1480,7 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvParentCommands(
   wr::TransactionBuilder txn(mApi);
   txn.SetLowPriority(!IsRootWebRenderBridgeParent());
   bool success = ProcessWebRenderParentCommands(aCommands, txn);
+  NeedIncreasedMaxDirtyPageModifier();
   mApi->SendTransaction(txn);
 
   if (!success) {
@@ -1464,7 +1513,9 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
       case WebRenderParentCommand::TOpRemovePipelineIdForCompositable: {
         const OpRemovePipelineIdForCompositable& op =
             cmd.get_OpRemovePipelineIdForCompositable();
-        RemovePipelineIdForCompositable(op.pipelineId(), aTxn);
+        auto* pendingOps = mApi->GetPendingAsyncImagePipelineOps(aTxn);
+
+        RemovePipelineIdForCompositable(op.pipelineId(), pendingOps, aTxn);
         break;
       }
       case WebRenderParentCommand::TOpReleaseTextureOfImage: {
@@ -1646,6 +1697,8 @@ void WebRenderBridgeParent::UpdateParameters() {
   mApi->SetBatchingLookback(count);
   mApi->SetInt(wr::IntParameter::BatchedUploadThreshold,
                gfxVars::WebRenderBatchedUploadThreshold());
+  uint32_t slow_cpu_frame = gfxVars::WebRenderSlowCpuFrameThreshold();
+  mApi->SetFloat(wr::FloatParameter::SlowCpuFrameThreshold, slow_cpu_frame);
 
   mBlobTileSize = gfxVars::WebRenderBlobTileSize();
 }
@@ -1846,7 +1899,8 @@ void WebRenderBridgeParent::AddPipelineIdForCompositable(
 }
 
 void WebRenderBridgeParent::RemovePipelineIdForCompositable(
-    const wr::PipelineId& aPipelineId, wr::TransactionBuilder& aTxn) {
+    const wr::PipelineId& aPipelineId, AsyncImagePipelineOps* aPendingOps,
+    wr::TransactionBuilder& aTxn) {
   if (mDestroyed) {
     return;
   }
@@ -1858,7 +1912,7 @@ void WebRenderBridgeParent::RemovePipelineIdForCompositable(
   RefPtr<WebRenderImageHost>& wrHost = it->second;
 
   wrHost->ClearWrBridge(aPipelineId, this);
-  mAsyncImageManager->RemoveAsyncImagePipeline(aPipelineId, aTxn);
+  mAsyncImageManager->RemoveAsyncImagePipeline(aPipelineId, aPendingOps, aTxn);
   aTxn.RemovePipeline(aPipelineId);
   mAsyncCompositables.erase(wr::AsUint64(aPipelineId));
 }
@@ -1918,6 +1972,10 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvClearCachedResources() {
       " Id %" PRIx64 " root %d",
       wr::AsUint64(mPipelineId), wr::AsUint64(mApi->GetId()),
       IsRootWebRenderBridgeParent());
+
+  if (!IsRootWebRenderBridgeParent()) {
+    mApi->FlushPendingWrTransactionEventsWithoutWait();
+  }
 
   // Clear resources
   wr::TransactionBuilder txn(mApi);
@@ -2291,7 +2349,7 @@ void WebRenderBridgeParent::CompositeToTarget(VsyncId aId,
                          MarkerInnerWindowId(innerWindowId),
                          "Too many pending frames");
 
-    Telemetry::ScalarAdd(Telemetry::ScalarID::GFX_SKIPPED_COMPOSITES, 1);
+    glean::gfx::skipped_composites.Add(1);
 
     return;
   }
@@ -2389,6 +2447,8 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
 
   fastTxn.GenerateFrame(aId, aReasons);
   wr::RenderThread::Get()->IncPendingFrameCount(mApi->GetId(), aId, start);
+
+  NeedIncreasedMaxDirtyPageModifier();
 
   mApi->SendTransaction(fastTxn);
 
@@ -2618,17 +2678,17 @@ void WebRenderBridgeParent::ScheduleGenerateFrame(wr::RenderReasons aReasons) {
 }
 
 void WebRenderBridgeParent::FlushRendering(wr::RenderReasons aReasons,
-                                           bool aWaitForPresent) {
+                                           bool aBlocking) {
   if (mDestroyed) {
     return;
   }
 
-  // This gets called during e.g. window resizes, so we need to flush the
-  // scene (which has the display list at the new window size).
-  FlushSceneBuilds();
-  FlushFrameGeneration(aReasons);
-  if (aWaitForPresent) {
+  if (aBlocking) {
+    FlushSceneBuilds();
+    FlushFrameGeneration(aReasons);
     FlushFramePresentation();
+  } else {
+    ScheduleGenerateFrame(aReasons);
   }
 }
 
@@ -2726,7 +2786,8 @@ void WebRenderBridgeParent::ClearResources() {
     wr::PipelineId pipelineId = wr::AsPipelineId(entry.first);
     RefPtr<WebRenderImageHost> host = entry.second;
     host->ClearWrBridge(pipelineId, this);
-    mAsyncImageManager->RemoveAsyncImagePipeline(pipelineId, txn);
+    mAsyncImageManager->RemoveAsyncImagePipeline(
+        pipelineId, /* aPendingOps */ nullptr, txn);
     txn.RemovePipeline(pipelineId);
   }
   mAsyncCompositables.clear();

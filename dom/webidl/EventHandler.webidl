@@ -19,7 +19,7 @@ callback OnBeforeUnloadEventHandlerNonNull = DOMString? (Event event);
 typedef OnBeforeUnloadEventHandlerNonNull? OnBeforeUnloadEventHandler;
 
 [LegacyTreatNonObjectAsNull]
-callback OnErrorEventHandlerNonNull = any ((Event or DOMString) event, optional DOMString source, optional unsigned long lineno, optional unsigned long column, optional any error);
+callback OnErrorEventHandlerNonNull = any ((Event or DOMString) event, optional UTF8String source, optional unsigned long lineno, optional unsigned long column, optional any error);
 typedef OnErrorEventHandlerNonNull? OnErrorEventHandler;
 
 interface mixin GlobalEventHandlers {
@@ -32,13 +32,13 @@ interface mixin GlobalEventHandlers {
            attribute EventHandler oncancel;
            attribute EventHandler onauxclick;
            attribute EventHandler onbeforeinput;
-           [Pref="dom.element.popover.enabled"]
            attribute EventHandler onbeforetoggle;
            attribute EventHandler oncanplay;
            attribute EventHandler oncanplaythrough;
            attribute EventHandler onchange;
            attribute EventHandler onclick;
            attribute EventHandler onclose;
+           attribute EventHandler oncontentvisibilityautostatechange;
            attribute EventHandler oncontextlost;
            attribute EventHandler oncontextmenu;
            attribute EventHandler oncontextrestored;

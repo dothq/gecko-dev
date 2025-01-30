@@ -31,15 +31,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
 
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
-  "SUPPORT_URL",
-  "app.support.baseURL",
-  "",
-  null,
-  val => Services.urlFormatter.formatURL(val)
-);
-
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
   "XPINSTALL_ENABLED",
   "xpinstall.enabled",
   true
@@ -248,22 +239,24 @@ function isInState(install, state) {
   return install.state == AddonManager["STATE_" + state.toUpperCase()];
 }
 
-async function getAddonMessageInfo(addon) {
+async function getAddonMessageInfo(
+  addon,
+  { isCardExpanded, isInDisabledSection }
+) {
   const { name } = addon;
   const { STATE_BLOCKED, STATE_SOFTBLOCKED } = Ci.nsIBlocklistService;
 
   if (addon.blocklistState === STATE_BLOCKED) {
+    let typeSuffix = addon.type === "extension" ? "extension" : "other";
     return {
       linkUrl: await addon.getBlocklistURL(),
-      linkId: "details-notification-blocked-link",
-      messageId: "details-notification-blocked2",
-      messageArgs: { name },
+      linkId: "details-notification-blocked-link2",
+      messageId: `details-notification-hard-blocked-${typeSuffix}`,
       type: "error",
     };
   } else if (isDisabledUnsigned(addon)) {
     return {
-      linkUrl: SUPPORT_URL + "unsigned-addons",
-      linkId: "details-notification-unsigned-and-disabled-link",
+      linkSumoPage: "unsigned-addons",
       messageId: "details-notification-unsigned-and-disabled2",
       messageArgs: { name },
       type: "error",
@@ -274,24 +267,38 @@ async function getAddonMessageInfo(addon) {
       addon.blocklistState !== STATE_SOFTBLOCKED)
   ) {
     return {
+      // TODO: (Bug 1921870) consider adding a SUMO page.
+      // NOTE: this messagebar is customized by Thunderbird to include
+      // a non-SUMO link (see Bug 1921870 comment 0).
       messageId: "details-notification-incompatible2",
       messageArgs: { name, version: Services.appinfo.version },
       type: "error",
     };
   } else if (!isCorrectlySigned(addon)) {
     return {
-      linkUrl: SUPPORT_URL + "unsigned-addons",
-      linkId: "details-notification-unsigned-link",
+      linkSumoPage: "unsigned-addons",
       messageId: "details-notification-unsigned2",
       messageArgs: { name },
       type: "warning",
     };
   } else if (addon.blocklistState === STATE_SOFTBLOCKED) {
+    const fluentBaseId = "details-notification-soft-blocked";
+    let typeSuffix = addon.type === "extension" ? "extension" : "other";
+    let stateSuffix;
+    // If the Addon Card is not expanded, delay changing the messagebar
+    // string to when the Addon card is refreshed as part of moving
+    // it between the enabled and disabled sections.
+    if (isCardExpanded) {
+      stateSuffix = addon.isActive ? "enabled" : "disabled";
+    } else {
+      stateSuffix = !isInDisabledSection ? "enabled" : "disabled";
+    }
+    let messageId = `${fluentBaseId}-${typeSuffix}-${stateSuffix}`;
+
     return {
       linkUrl: await addon.getBlocklistURL(),
-      linkId: "details-notification-softblocked-link",
-      messageId: "details-notification-softblocked2",
-      messageArgs: { name },
+      linkId: "details-notification-softblocked-link2",
+      messageId,
       type: "warning",
     };
   } else if (addon.isGMPlugin && !addon.isInstalled && addon.isActive) {
@@ -322,12 +329,12 @@ function checkForUpdate(addon) {
             onDownloadFailed: failed,
             onInstallCancelled: failed,
             onInstallFailed: failed,
-            onInstallEnded: (...args) => {
+            onInstallEnded: () => {
               detachUpdateHandler(install);
               install.removeListener(updateListener);
               resolve({ installed: true, pending: false, found: true });
             },
-            onInstallPostponed: (...args) => {
+            onInstallPostponed: () => {
               detachUpdateHandler(install);
               install.removeListener(updateListener);
               resolve({ installed: false, pending: true, found: true });
@@ -375,7 +382,7 @@ const OPTIONS_TYPE_MAP = {
 
 // Check if an add-on has the provided options type, accounting for the pref
 // to disable inline options.
-function getOptionsType(addon, type) {
+function getOptionsType(addon) {
   return OPTIONS_TYPE_MAP[addon.optionsType];
 }
 
@@ -1064,7 +1071,7 @@ class AddonPageOptions extends HTMLElement {
     }
   }
 
-  async checkForUpdates(e) {
+  async checkForUpdates() {
     let message = document.getElementById("updates-message");
     message.state = "updating";
     message.hidden = false;
@@ -1921,10 +1928,11 @@ class AddonPermissionsList extends HTMLElement {
       // If optional permissions include <all_urls>, extension can request and
       // be granted permission for individual sites not listed in the manifest.
       // Include them as well in the optional origins list.
-      optionalPerms.origins = [
-        ...optionalPerms.origins,
+      let origins = [
+        ...(this.addon.optionalOriginsNormalized ?? []),
         ...grantedPerms.origins.filter(o => !requiredPerms.origins.includes(o)),
       ];
+      optionalPerms.origins = [...new Set(origins)];
     }
 
     let permissions = Extension.formatPermissionStrings(
@@ -1991,6 +1999,14 @@ class AddonPermissionsList extends HTMLElement {
 
         toggle.setAttribute("permission-key", perm);
         toggle.setAttribute("action", "toggle-permission");
+
+        if (perm === "userScripts") {
+          let mb = document.createElement("moz-message-bar");
+          mb.setAttribute("type", "warning");
+          mb.messageL10nId = "webext-perms-extra-warning-userScripts-long";
+          mb.slot = "nested";
+          toggle.append(mb);
+        }
         item.appendChild(toggle);
         list.appendChild(item);
       }
@@ -2096,11 +2112,11 @@ class AddonDetails extends HTMLElement {
     }
   }
 
-  onDisabled(addon) {
+  onDisabled() {
     this.extensionShutdown();
   }
 
-  onEnabled(addon) {
+  onEnabled() {
     this.extensionStartup();
   }
 
@@ -2451,45 +2467,27 @@ class AddonCard extends HTMLElement {
 
   async setAddonPermission(permission, type, action) {
     let { addon } = this;
-    let origins = [],
-      permissions = [];
+    let perms = { origins: [], permissions: [] };
+
     if (!["add", "remove"].includes(action)) {
       throw new Error("invalid action for permission change");
     }
-    if (type == "permission") {
-      if (
-        action == "add" &&
-        !addon.optionalPermissions.permissions.includes(permission)
-      ) {
-        throw new Error("permission missing from manifest");
-      }
-      permissions = [permission];
-    } else if (type == "origin") {
-      if (action === "add") {
-        let { origins } = addon.optionalPermissions;
-        let patternSet = new MatchPatternSet(origins, { ignorePath: true });
-        if (!patternSet.subsumes(new MatchPattern(permission))) {
-          throw new Error("origin missing from manifest");
-        }
-      }
-      origins = [permission];
 
-      // If this is one of the "all sites" permissions
-      if (Extension.isAllSitesPermission(permission)) {
-        // Grant/revoke ALL "all sites" optional permissions from the manifest.
-        origins = addon.optionalPermissions.origins.filter(perm =>
-          Extension.isAllSitesPermission(perm)
-        );
-      }
+    if (type === "permission") {
+      perms.permissions = [permission];
+    } else if (type === "origin") {
+      perms.origins = [permission];
     } else {
       throw new Error("unknown permission type changed");
     }
-    let policy = WebExtensionPolicy.getByID(addon.id);
-    ExtensionPermissions[action](
-      addon.id,
-      { origins, permissions },
-      policy?.extension
+
+    let normalized = ExtensionPermissions.normalizeOptional(
+      perms,
+      addon.optionalPermissions
     );
+
+    let policy = WebExtensionPolicy.getByID(addon.id);
+    ExtensionPermissions[action](addon.id, normalized, policy?.extension);
   }
 
   async handleEvent(e) {
@@ -2575,9 +2573,8 @@ class AddonCard extends HTMLElement {
               return;
             }
             let { BrowserAddonUI } = windowRoot.ownerGlobal;
-            let { remove, report } = await BrowserAddonUI.promptRemoveExtension(
-              addon
-            );
+            let { remove, report } =
+              await BrowserAddonUI.promptRemoveExtension(addon);
             if (remove) {
               await addon.uninstall(true);
               this.sendEvent("remove");
@@ -2834,25 +2831,45 @@ class AddonCard extends HTMLElement {
     const {
       linkUrl,
       linkId,
+      linkSumoPage,
       messageId,
       messageArgs,
       type = "",
-    } = await getAddonMessageInfo(this.addon);
+    } = await getAddonMessageInfo(this.addon, {
+      isCardExpanded: this.expanded,
+      isInDisabledSection:
+        !this.expanded &&
+        !!this.closest(`section.${this.addon.type}-disabled-section`),
+    });
 
     if (messageId) {
       document.l10n.pauseObserving();
       document.l10n.setAttributes(messageBar, messageId, messageArgs);
       messageBar.setAttribute("data-l10n-attrs", "message");
 
-      const link = messageBar.querySelector("button");
+      messageBar.innerHTML = "";
       if (linkUrl) {
-        document.l10n.setAttributes(link, linkId);
-        link.setAttribute("url", linkUrl);
-        link.setAttribute("slot", "actions");
-        link.hidden = false;
-      } else {
-        link.removeAttribute("slot");
-        link.hidden = true;
+        const linkButton = document.createElement("button");
+        document.l10n.setAttributes(linkButton, linkId);
+        linkButton.setAttribute("action", "link");
+        linkButton.setAttribute("url", linkUrl);
+        linkButton.setAttribute("slot", "actions");
+        messageBar.append(linkButton);
+      }
+
+      if (linkSumoPage) {
+        const sumoLinkEl = document.createElement("a", {
+          is: "moz-support-link",
+        });
+        sumoLinkEl.setAttribute("support-page", linkSumoPage);
+        sumoLinkEl.setAttribute("slot", "support-link");
+        // Set a custom fluent id for the learn more if there
+        // is one (otherwise moz-support-link custom element
+        // will use the default "Learn more" localized string).
+        if (linkId) {
+          document.l10n.setAttributes(sumoLinkEl, linkId);
+        }
+        messageBar.append(sumoLinkEl);
       }
 
       document.l10n.resumeObserving();
@@ -2968,18 +2985,18 @@ class AddonCard extends HTMLElement {
     this.sendEvent("update-postponed");
   }
 
-  onDisabled(addon) {
+  onDisabled() {
     if (!this.reloading) {
       this.update();
     }
   }
 
-  onEnabled(addon) {
+  onEnabled() {
     this.reloading = false;
     this.update();
   }
 
-  onInstalled(addon) {
+  onInstalled() {
     // When a temporary addon is reloaded, onInstalled is triggered instead of
     // onEnabled.
     this.reloading = false;
@@ -3005,6 +3022,10 @@ class AddonCard extends HTMLElement {
 
     if (this.details && changed.includes("quarantineIgnoredByUser")) {
       this.details.updateQuarantinedDomainsUserAllowed();
+    }
+
+    if (changed.includes("blocklistState")) {
+      this.update();
     }
   }
 

@@ -140,8 +140,8 @@ bool MiscContainer::GetString(nsAString& aString) const {
     return false;
   }
   if (isString) {
-    auto* buffer = static_cast<nsStringBuffer*>(ptr);
-    buffer->ToString(buffer->StorageSize() / sizeof(char16_t) - 1, aString);
+    auto* buffer = static_cast<mozilla::StringBuffer*>(ptr);
+    aString.Assign(buffer, buffer->StorageSize() / sizeof(char16_t) - 1);
   } else {
     static_cast<nsAtom*>(ptr)->ToString(aString);
   }
@@ -280,11 +280,9 @@ void nsAttrValue::Shutdown() {
 void nsAttrValue::Reset() {
   switch (BaseType()) {
     case eStringBase: {
-      nsStringBuffer* str = static_cast<nsStringBuffer*>(GetPtr());
-      if (str) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
         str->Release();
       }
-
       break;
     }
     case eOtherBase: {
@@ -320,8 +318,7 @@ void nsAttrValue::SetTo(const nsAttrValue& aOther) {
   switch (aOther.BaseType()) {
     case eStringBase: {
       ResetIfSet();
-      nsStringBuffer* str = static_cast<nsStringBuffer*>(aOther.GetPtr());
-      if (str) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(aOther.GetPtr())) {
         str->AddRef();
         SetPtrValueAndType(str, eStringBase);
       }
@@ -398,7 +395,7 @@ void nsAttrValue::SetTo(const nsAttrValue& aOther) {
   bool isString;
   if (void* otherPtr = otherCont->GetStringOrAtomPtr(isString)) {
     if (isString) {
-      static_cast<nsStringBuffer*>(otherPtr)->AddRef();
+      static_cast<mozilla::StringBuffer*>(otherPtr)->AddRef();
     } else {
       static_cast<nsAtom*>(otherPtr)->AddRef();
     }
@@ -411,7 +408,7 @@ void nsAttrValue::SetTo(const nsAttrValue& aOther) {
 
 void nsAttrValue::SetTo(const nsAString& aValue) {
   ResetIfSet();
-  nsStringBuffer* buf = GetStringBuffer(aValue).take();
+  mozilla::StringBuffer* buf = GetStringBuffer(aValue).take();
   if (buf) {
     SetPtrValueAndType(buf, eStringBase);
   }
@@ -592,7 +589,7 @@ void nsAttrValue::RemoveDuplicatesFromAtomArray() {
   if (void* otherPtr = oldCont->GetStringOrAtomPtr(isString)) {
     stringBits = oldCont->mStringBits;
     if (isString) {
-      static_cast<nsStringBuffer*>(otherPtr)->AddRef();
+      static_cast<mozilla::StringBuffer*>(otherPtr)->AddRef();
     } else {
       static_cast<nsAtom*>(otherPtr)->AddRef();
     }
@@ -623,18 +620,16 @@ void nsAttrValue::ToString(nsAString& aResult) const {
 
   switch (Type()) {
     case eString: {
-      nsStringBuffer* str = static_cast<nsStringBuffer*>(GetPtr());
-      if (str) {
-        str->ToString(str->StorageSize() / sizeof(char16_t) - 1, aResult);
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
+        aResult.Assign(str, str->StorageSize() / sizeof(char16_t) - 1);
       } else {
         aResult.Truncate();
       }
       break;
     }
     case eAtom: {
-      nsAtom* atom = static_cast<nsAtom*>(GetPtr());
+      auto* atom = static_cast<nsAtom*>(GetPtr());
       atom->ToString(aResult);
-
       break;
     }
     case eInteger: {
@@ -775,7 +770,7 @@ already_AddRefed<nsAtom> nsAttrValue::GetAsAtom() const {
 const nsCheapString nsAttrValue::GetStringValue() const {
   MOZ_ASSERT(Type() == eString, "wrong type");
 
-  return nsCheapString(static_cast<nsStringBuffer*>(GetPtr()));
+  return nsCheapString(static_cast<mozilla::StringBuffer*>(GetPtr()));
 }
 
 bool nsAttrValue::GetColorValue(nscolor& aColor) const {
@@ -895,8 +890,7 @@ nsAtom* nsAttrValue::AtomAt(int32_t aIndex) const {
 uint32_t nsAttrValue::HashValue() const {
   switch (BaseType()) {
     case eStringBase: {
-      nsStringBuffer* str = static_cast<nsStringBuffer*>(GetPtr());
-      if (str) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
         uint32_t len = str->StorageSize() / sizeof(char16_t) - 1;
         return HashString(static_cast<char16_t*>(str->Data()), len);
       }
@@ -1064,9 +1058,9 @@ bool nsAttrValue::Equals(const nsAttrValue& aOther) const {
         (static_cast<ValueBaseType>(otherCont->mStringBits &
                                     NS_ATTRVALUE_BASETYPE_MASK) ==
          eStringBase)) {
-      return nsCheapString(reinterpret_cast<nsStringBuffer*>(
+      return nsCheapString(reinterpret_cast<mozilla::StringBuffer*>(
                                static_cast<uintptr_t>(thisCont->mStringBits)))
-          .Equals(nsCheapString(reinterpret_cast<nsStringBuffer*>(
+          .Equals(nsCheapString(reinterpret_cast<mozilla::StringBuffer*>(
               static_cast<uintptr_t>(otherCont->mStringBits))));
     }
   }
@@ -1077,7 +1071,7 @@ bool nsAttrValue::Equals(const nsAString& aValue,
                          nsCaseTreatment aCaseSensitive) const {
   switch (BaseType()) {
     case eStringBase: {
-      if (auto* str = static_cast<nsStringBuffer*>(GetPtr())) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
         nsDependentString dep(static_cast<char16_t*>(str->Data()),
                               str->StorageSize() / sizeof(char16_t) - 1);
         return aCaseSensitive == eCaseMatters
@@ -1123,7 +1117,7 @@ bool nsAttrValue::Equals(const nsAtom* aValue,
           nsDependentAtomString(atom), nsDependentAtomString(aValue));
     }
     case eStringBase: {
-      if (auto* str = static_cast<nsStringBuffer*>(GetPtr())) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
         size_t strLen = str->StorageSize() / sizeof(char16_t) - 1;
         if (aValue->GetLength() != strLen) {
           return false;
@@ -1208,8 +1202,7 @@ bool nsAttrValue::SubstringCheck(const nsAString& aValue,
                                  nsCaseTreatment aCaseSensitive) const {
   switch (BaseType()) {
     case eStringBase: {
-      auto str = static_cast<nsStringBuffer*>(GetPtr());
-      if (str) {
+      if (auto* str = static_cast<mozilla::StringBuffer*>(GetPtr())) {
         return F::Check(static_cast<char16_t*>(str->Data()),
                         str->StorageSize() / sizeof(char16_t) - 1, aValue,
                         aCaseSensitive);
@@ -1217,7 +1210,7 @@ bool nsAttrValue::SubstringCheck(const nsAString& aValue,
       return aValue.IsEmpty();
     }
     case eAtomBase: {
-      auto atom = static_cast<nsAtom*>(GetPtr());
+      auto* atom = static_cast<nsAtom*>(GetPtr());
       return F::Check(atom->GetUTF16String(), atom->GetLength(), aValue,
                       aCaseSensitive);
     }
@@ -1525,9 +1518,9 @@ nsAtom* nsAttrValue::GetStoredAtom() const {
   return nullptr;
 }
 
-nsStringBuffer* nsAttrValue::GetStoredStringBuffer() const {
+mozilla::StringBuffer* nsAttrValue::GetStoredStringBuffer() const {
   if (BaseType() == eStringBase) {
-    return static_cast<nsStringBuffer*>(GetPtr());
+    return static_cast<mozilla::StringBuffer*>(GetPtr());
   }
   if (BaseType() == eOtherBase) {
     return GetMiscContainer()->GetStoredStringBuffer();
@@ -1835,10 +1828,10 @@ bool nsAttrValue::ParsePositiveIntValue(const nsAString& aString) {
   return true;
 }
 
-void nsAttrValue::SetColorValue(nscolor aColor, const nsAString& aString) {
-  nsStringBuffer* buf = GetStringBuffer(aString).take();
+bool nsAttrValue::SetColorValue(nscolor aColor, const nsAString& aString) {
+  mozilla::StringBuffer* buf = GetStringBuffer(aString).take();
   if (!buf) {
-    return;
+    return false;
   }
 
   MiscContainer* cont = EnsureEmptyMiscContainer();
@@ -1847,6 +1840,7 @@ void nsAttrValue::SetColorValue(nscolor aColor, const nsAString& aString) {
 
   // Save the literal string we were passed for round-tripping.
   cont->SetStringBitsMainThread(reinterpret_cast<uintptr_t>(buf) | eStringBase);
+  return true;
 }
 
 bool nsAttrValue::ParseColor(const nsAString& aString) {
@@ -1868,17 +1862,14 @@ bool nsAttrValue::ParseColor(const nsAString& aString) {
   if (colorStr.First() == '#') {
     nsDependentString withoutHash(colorStr.get() + 1, colorStr.Length() - 1);
     if (NS_HexToRGBA(withoutHash, nsHexColorType::NoAlpha, &color)) {
-      SetColorValue(color, aString);
-      return true;
+      return SetColorValue(color, aString);
     }
   } else if (colorStr.LowerCaseEqualsLiteral("transparent")) {
-    SetColorValue(NS_RGBA(0, 0, 0, 0), aString);
-    return true;
+    return SetColorValue(NS_RGBA(0, 0, 0, 0), aString);
   } else {
     const NS_ConvertUTF16toUTF8 colorNameU8(colorStr);
     if (Servo_ColorNameToRgb(&colorNameU8, &color)) {
-      SetColorValue(color, aString);
-      return true;
+      return SetColorValue(color, aString);
     }
   }
 
@@ -1889,8 +1880,7 @@ bool nsAttrValue::ParseColor(const nsAString& aString) {
 
   // Use NS_LooseHexToRGB as a fallback if nothing above worked.
   if (NS_LooseHexToRGB(colorStr, &color)) {
-    SetColorValue(color, aString);
-    return true;
+    return SetColorValue(color, aString);
   }
 
   return false;
@@ -1995,7 +1985,7 @@ void nsAttrValue::SetMiscAtomOrString(const nsAString* aValue) {
         atom->Release();
       }
     } else {
-      nsStringBuffer* buffer = GetStringBuffer(*aValue).take();
+      mozilla::StringBuffer* buffer = GetStringBuffer(*aValue).take();
       NS_ENSURE_TRUE_VOID(buffer);
       uintptr_t bits = reinterpret_cast<uintptr_t>(buffer) | eStringBase;
 
@@ -2016,7 +2006,7 @@ void nsAttrValue::ResetMiscAtomOrString() {
   bool isString;
   if (void* ptr = cont->GetStringOrAtomPtr(isString)) {
     if (isString) {
-      static_cast<nsStringBuffer*>(ptr)->Release();
+      static_cast<mozilla::StringBuffer*>(ptr)->Release();
     } else {
       static_cast<nsAtom*>(ptr)->Release();
     }
@@ -2101,20 +2091,19 @@ MiscContainer* nsAttrValue::EnsureEmptyMiscContainer() {
   return cont;
 }
 
-already_AddRefed<nsStringBuffer> nsAttrValue::GetStringBuffer(
+already_AddRefed<mozilla::StringBuffer> nsAttrValue::GetStringBuffer(
     const nsAString& aValue) const {
   uint32_t len = aValue.Length();
   if (!len) {
     return nullptr;
   }
-
-  RefPtr<nsStringBuffer> buf = nsStringBuffer::FromString(aValue);
-  if (buf && (buf->StorageSize() / sizeof(char16_t) - 1) == len) {
+  if (mozilla::StringBuffer* buf = aValue.GetStringBuffer();
+      buf && (buf->StorageSize() / sizeof(char16_t) - 1) == len) {
     // We can only reuse the buffer if it's exactly sized, since we rely on
     // StorageSize() to get the string length in ToString().
-    return buf.forget();
+    return do_AddRef(buf);
   }
-  return nsStringBuffer::Create(aValue.Data(), aValue.Length());
+  return mozilla::StringBuffer::Create(aValue.Data(), aValue.Length());
 }
 
 size_t nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const {
@@ -2122,7 +2111,8 @@ size_t nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const {
 
   switch (BaseType()) {
     case eStringBase: {
-      nsStringBuffer* str = static_cast<nsStringBuffer*>(GetPtr());
+      mozilla::StringBuffer* str =
+          static_cast<mozilla::StringBuffer*>(GetPtr());
       n += str ? str->SizeOfIncludingThisIfUnshared(aMallocSizeOf) : 0;
       break;
     }
@@ -2141,8 +2131,8 @@ size_t nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const {
       n += aMallocSizeOf(container);
 
       // We only count the size of the object pointed by otherPtr if it's a
-      // string. When it's an atom, it's counted separatly.
-      if (nsStringBuffer* buf = container->GetStoredStringBuffer()) {
+      // string. When it's an atom, it's counted separately.
+      if (mozilla::StringBuffer* buf = container->GetStoredStringBuffer()) {
         n += buf->SizeOfIncludingThisIfUnshared(aMallocSizeOf);
       }
 
@@ -2153,8 +2143,8 @@ size_t nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const {
         // need a way to call the Servo heap_size_of function.
         // n += container->mCSSDeclaration->SizeOfIncludingThis(aMallocSizeOf);
       } else if (Type() == eAtomArray && container->mValue.mAtomArray) {
-        // Don't measure each nsAtom, they are measured separatly.
-        n += container->mValue.mAtomArray->mArray.ShallowSizeOfIncludingThis(
+        // Don't measure each nsAtom, because they are measured separately.
+        n += container->mValue.mAtomArray->ShallowSizeOfIncludingThis(
             aMallocSizeOf);
       }
       break;

@@ -11,6 +11,7 @@
 #include "include/core/SkPoint.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkScalar.h"
+#include "include/core/SkSpan.h"
 #include "include/core/SkTypes.h"
 
 #include <cstdint>
@@ -269,6 +270,10 @@ public:
         @return        x-axis and y-axis radii for one corner
     */
     SkVector radii(Corner corner) const { return fRadii[corner]; }
+    /**
+     * Returns the corner radii for all four corners, in the same order as `Corner`.
+     */
+    SkSpan<const SkVector> radii() const { return SkSpan(fRadii, 4); }
 
     /** Returns bounds. Bounds may have zero width or zero height. Bounds right is
         greater than or equal to left; bounds bottom is greater than or equal to top.
@@ -394,7 +399,7 @@ public:
         @param dy  offset added to rect().fTop and rect().fBottom
         @return    SkRRect bounds offset by (dx, dy), with unchanged corner radii
     */
-    SkRRect SK_WARN_UNUSED_RESULT makeOffset(SkScalar dx, SkScalar dy) const {
+    [[nodiscard]] SkRRect makeOffset(SkScalar dx, SkScalar dy) const {
         return SkRRect(fRect.makeOffset(dx, dy), fRadii, fType);
     }
 

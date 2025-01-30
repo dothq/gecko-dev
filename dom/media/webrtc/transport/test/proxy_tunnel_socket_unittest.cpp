@@ -19,7 +19,8 @@
 using namespace mozilla;
 
 // update TestReadMultipleSizes if you change this
-const std::string kHelloMessage = "HELLO IS IT ME YOU'RE LOOKING FOR?";
+MOZ_RUNINIT const std::string kHelloMessage =
+    "HELLO IS IT ME YOU'RE LOOKING FOR?";
 
 class NrTcpSocketTest : public MtransportTest {
  public:
@@ -33,6 +34,8 @@ class NrTcpSocketTest : public MtransportTest {
         mConnected(false) {}
 
   void SetUp() override {
+    MtransportTest::SetUp();
+
     mSProxy = new NrTcpSocket(nullptr);
     int r = nr_socket_create_int((void*)mSProxy.get(), mSProxy->vtbl(),
                                  &nr_socket_);
@@ -42,7 +45,10 @@ class NrTcpSocketTest : public MtransportTest {
     mSProxy->AssignChannel_DoNotUse(new WebrtcTCPSocketWrapper(nullptr));
   }
 
-  void TearDown() override { mSProxy->close(); }
+  void TearDown() override {
+    mSProxy->close();
+    MtransportTest::TearDown();
+  }
 
   static void readable_cb(NR_SOCKET s, int how, void* cb_arg) {
     NrTcpSocketTest* test = (NrTcpSocketTest*)cb_arg;

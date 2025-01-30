@@ -21,6 +21,7 @@
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/net/NeckoParent.h"
 #include "mozilla/net/CookieServiceParent.h"
+#include "mozilla/Components.h"
 #include "mozilla/InputStreamLengthHelper.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Preferences.h"
@@ -177,7 +178,8 @@ bool HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs) {
           a.handleFetchEventStart(), a.handleFetchEventEnd(),
           a.forceMainDocumentChannel(), a.navigationStartTimeStamp(),
           a.earlyHintPreloaderId(), a.classicScriptHintCharset(),
-          a.documentCharacterSet(), a.isUserAgentHeaderModified());
+          a.documentCharacterSet(), a.isUserAgentHeaderModified(),
+          a.initiatorType());
     }
     case HttpChannelCreationArgs::THttpChannelConnectArgs: {
       const HttpChannelConnectArgs& cArgs = aArgs.get_HttpChannelConnectArgs();
@@ -325,8 +327,8 @@ HttpChannelParent::GetInterface(const nsIID& aIID, void** result) {
   if (!mBrowserParent && (aIID.Equals(NS_GET_IID(nsIAuthPrompt)) ||
                           aIID.Equals(NS_GET_IID(nsIAuthPrompt2)))) {
     nsresult rv;
-    nsCOMPtr<nsIWindowWatcher> wwatch =
-        do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
+    nsCOMPtr<nsIWindowWatcher> wwatch;
+    wwatch = mozilla::components::WindowWatcher::Service(&rv);
     NS_ENSURE_SUCCESS(rv, NS_ERROR_NO_INTERFACE);
 
     bool hasWindowCreator = false;
@@ -445,7 +447,7 @@ bool HttpChannelParent::DoAsyncOpen(
     const uint64_t& aEarlyHintPreloaderId,
     const nsAString& aClassicScriptHintCharset,
     const nsAString& aDocumentCharacterSet,
-    const bool& aIsUserAgentHeaderModified) {
+    const bool& aIsUserAgentHeaderModified, const nsString& aInitiatorType) {
   MOZ_ASSERT(aURI, "aURI should not be NULL");
 
   if (aEarlyHintPreloaderId) {
@@ -477,7 +479,8 @@ bool HttpChannelParent::DoAsyncOpen(
        " browserid=%" PRIx64 "]\n",
        this, aURI->GetSpecOrDefault().get(), aChannelId, aBrowserId));
 
-  PROFILER_MARKER("Receive AsyncOpen in Parent", NETWORK, {}, ChannelMarker,
+  PROFILER_MARKER("Receive AsyncOpen in Parent", NETWORK,
+                  MarkerThreadId::MainThread(), ChannelMarker,
                   aURI->GetSpecOrDefault(), aChannelId);
 
   nsresult rv;
@@ -527,7 +530,6 @@ bool HttpChannelParent::DoAsyncOpen(
   if (httpChannelImpl) {
     httpChannelImpl->SetWarningReporter(this);
   }
-  httpChannel->SetTimingEnabled(true);
   if (mPBOverride != kPBOverride_Unset) {
     httpChannel->SetPrivate(mPBOverride == kPBOverride_Private);
   }
@@ -580,6 +582,8 @@ bool HttpChannelParent::DoAsyncOpen(
 
   httpChannel->SetIsUserAgentHeaderModified(aIsUserAgentHeaderModified);
 
+  httpChannel->SetInitiatorType(aInitiatorType);
+
   RefPtr<ParentChannelListener> parentListener = new ParentChannelListener(
       this, mBrowserParent ? mBrowserParent->GetBrowsingContext() : nullptr);
 
@@ -587,7 +591,7 @@ bool HttpChannelParent::DoAsyncOpen(
 
   if (aCorsPreflightArgs.isSome()) {
     const CorsPreflightArgs& args = aCorsPreflightArgs.ref();
-    httpChannel->SetCorsPreflightParameters(args.unsafeHeaders(), false);
+    httpChannel->SetCorsPreflightParameters(args.unsafeHeaders(), false, false);
   }
 
   nsCOMPtr<nsIInputStream> stream = DeserializeIPCStream(uploadStream);
@@ -896,7 +900,7 @@ mozilla::ipc::IPCResult HttpChannelParent::RecvRedirect2Verify(
         MOZ_RELEASE_ASSERT(newInternalChannel);
         const CorsPreflightArgs& args = aCorsPreflightArgs.ref();
         newInternalChannel->SetCorsPreflightParameters(args.unsafeHeaders(),
-                                                       false);
+                                                       false, false);
       }
 
       if (aReferrerInfo) {
@@ -1055,7 +1059,8 @@ mozilla::ipc::IPCResult HttpChannelParent::RecvRemoveCorsPreflightCacheEntry(
 
 mozilla::ipc::IPCResult HttpChannelParent::RecvSetCookies(
     const nsACString& aBaseDomain, const OriginAttributes& aOriginAttributes,
-    nsIURI* aHost, const bool& aFromHttp, nsTArray<CookieStruct>&& aCookies) {
+    nsIURI* aHost, const bool& aFromHttp, const bool& aIsThirdParty,
+    nsTArray<CookieStruct>&& aCookies) {
   net::PCookieServiceParent* csParent =
       LoneManagedOrNullAsserts(Manager()->ManagedPCookieServiceParent());
   NS_ENSURE_TRUE(csParent, IPC_OK());
@@ -1068,7 +1073,7 @@ mozilla::ipc::IPCResult HttpChannelParent::RecvSetCookies(
   }
 
   return cs->SetCookies(nsCString(aBaseDomain), aOriginAttributes, aHost,
-                        aFromHttp, aCookies, browsingContext);
+                        aFromHttp, aIsThirdParty, aCookies, browsingContext);
 }
 
 //-----------------------------------------------------------------------------
@@ -1180,7 +1185,7 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
     PContentParent* pcp = Manager()->Manager();
     MOZ_ASSERT(pcp, "We should have a manager if our IPC isn't closed");
     DebugOnly<nsresult> rv =
-        static_cast<ContentParent*>(pcp)->AboutToLoadHttpFtpDocumentForChild(
+        static_cast<ContentParent*>(pcp)->AboutToLoadHttpDocumentForChild(
             chan, &args.shouldWaitForOnStartRequestSent());
     MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
@@ -1292,9 +1297,7 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
   if (mOverrideReferrerInfo) {
     args.overrideReferrerInfo() = ToRefPtr(std::move(mOverrideReferrerInfo));
   }
-  if (!mCookie.IsEmpty()) {
-    args.cookie() = std::move(mCookie);
-  }
+  args.cookieHeaders().SwapElements(mCookieHeaders);
 
   nsHttpRequestHead* requestHead = chan->GetRequestHead();
   // !!! We need to lock headers and please don't forget to unlock them !!!
@@ -1333,13 +1336,18 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
   mChannel->GetTrrSkipReason(&reason);
   args.trrSkipReason() = reason;
 
-  if (mIPCClosed ||
-      !mBgParent->OnStartRequest(
-          *responseHead, useResponseHead,
-          cleanedUpRequest ? cleanedUpRequestHeaders : requestHead->Headers(),
-          args, altDataSource, chan->GetOnStartRequestStartTime())) {
+  if (mIPCClosed) {
     rv = NS_ERROR_UNEXPECTED;
+  } else {
+    nsHttpResponseHead newResponseHead = *responseHead;
+    if (!mBgParent->OnStartRequest(
+            std::move(newResponseHead), useResponseHead,
+            cleanedUpRequest ? cleanedUpRequestHeaders : requestHead->Headers(),
+            args, altDataSource, chan->GetOnStartRequestStartTime())) {
+      rv = NS_ERROR_UNEXPECTED;
+    }
   }
+
   requestHead->Exit();
 
   // Need to wait for the cookies/permissions to content process, which is sent
@@ -1906,9 +1914,11 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
   }
 
   if (!mIPCClosed) {
+    cleanedUpResponseHead = *responseHead;
     if (!SendRedirect1Begin(mRedirectChannelId, newOriginalURI, newLoadFlags,
-                            redirectFlags, loadInfoForwarderArg, *responseHead,
-                            securityInfo, channelId, mChannel->GetPeerAddr(),
+                            redirectFlags, loadInfoForwarderArg,
+                            std::move(cleanedUpResponseHead), securityInfo,
+                            channelId, mChannel->GetPeerAddr(),
                             GetTimingAttributes(mChannel))) {
       return NS_BINDING_ABORTED;
     }
@@ -2181,10 +2191,11 @@ void HttpChannelParent::SetHttpChannelFromEarlyHintPreloader(
   mChannel = aChannel;
 }
 
-void HttpChannelParent::SetCookie(nsCString&& aCookie) {
+void HttpChannelParent::SetCookieHeaders(
+    const nsTArray<nsCString>& aCookieHeaders) {
   LOG(("HttpChannelParent::SetCookie [this=%p]", this));
   MOZ_ASSERT(!mAfterOnStartRequestBegun);
-  MOZ_ASSERT(mCookie.IsEmpty());
+  MOZ_ASSERT(mCookieHeaders.IsEmpty());
 
   // The loadGroup of the channel in the parent process could be null in the
   // XPCShell content process test, see test_cookiejars_wrap.js. In this case,
@@ -2196,7 +2207,7 @@ void HttpChannelParent::SetCookie(nsCString&& aCookie) {
       mChannel->IsBrowsingContextDiscarded()) {
     return;
   }
-  mCookie = std::move(aCookie);
+  mCookieHeaders.AppendElements(aCookieHeaders);
 }
 
 }  // namespace mozilla::net

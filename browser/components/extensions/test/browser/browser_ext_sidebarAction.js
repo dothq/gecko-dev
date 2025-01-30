@@ -7,6 +7,10 @@ requestLongerTimeout(2);
 let extData = {
   manifest: {
     sidebar_action: {
+      default_icon: {
+        16: "icon.png",
+        32: "icon@2x.png",
+      },
       default_panel: "sidebar.html",
     },
   },
@@ -29,6 +33,10 @@ let extData = {
         browser.test.sendMessage("sidebar");
       };
     },
+
+    "icon.png": imageBuffer,
+    "icon@2x.png": imageBuffer,
+    "updated-icon.png": imageBuffer,
   },
 
   background: function () {
@@ -44,6 +52,8 @@ let extData = {
         let { arg = {}, result } = data;
         let isOpen = await browser.sidebarAction.isOpen(arg);
         browser.test.assertEq(result, isOpen, "expected value from isOpen");
+      } else if (msg === "set-icon") {
+        await browser.sidebarAction.setIcon({ path: data });
       }
       browser.test.sendMessage("done");
     });
@@ -65,17 +75,39 @@ async function sendMessage(ext, msg, data = undefined) {
   await ext.awaitMessage("done");
 }
 
+add_setup(() =>
+  SpecialPowers.pushPrefEnv({
+    set: [["layout.css.devPixelsPerPx", 1]],
+  })
+);
+registerCleanupFunction(() => SpecialPowers.popPrefEnv());
+
 add_task(async function sidebar_initial_install() {
   ok(
     document.getElementById("sidebar-box").hidden,
     "sidebar box is not visible"
   );
-  let extension = ExtensionTestUtils.loadExtension(getExtData());
+  let extData = getExtData({
+    browser_specific_settings: { gecko: { id: "@sidebar" } },
+    version: "1.0",
+  });
+  extData.useAddonManager = "permanent";
+
+  let extension = ExtensionTestUtils.loadExtension(extData);
   await extension.startup();
   await extension.awaitMessage("sidebar");
 
   // Test sidebar is opened on install
   ok(!document.getElementById("sidebar-box").hidden, "sidebar box is visible");
+
+  extData.manifest.version = "1.1";
+  let updatedExt = ExtensionTestUtils.loadExtension(extData);
+  await updatedExt.startup();
+  await updatedExt.awaitMessage("sidebar");
+
+  // Test sidebar is still opened after update.
+  ok(!document.getElementById("sidebar-box").hidden, "sidebar still visible");
+  await updatedExt.unload();
 
   await extension.unload();
   // Test that the sidebar was closed on unload.
@@ -86,17 +118,27 @@ add_task(async function sidebar_initial_install() {
 });
 
 add_task(async function sidebar__install_closed() {
-  ok(
-    document.getElementById("sidebar-box").hidden,
-    "sidebar box is not visible"
-  );
+  let sidebarBox = document.getElementById("sidebar-box");
+  ok(sidebarBox.hidden, "sidebar box is not visible");
   let tempExtData = getExtData();
   tempExtData.manifest.sidebar_action.open_at_install = false;
   let extension = ExtensionTestUtils.loadExtension(tempExtData);
   await extension.startup();
 
   // Test sidebar is closed on install
-  ok(document.getElementById("sidebar-box").hidden, "sidebar box is hidden");
+  ok(sidebarBox.hidden, "sidebar box is hidden");
+
+  SidebarController.show(`${makeWidgetId(extension.id)}-sidebar-action`);
+  ok(!sidebarBox.hidden, "Opened by the user.");
+
+  SidebarController.hide();
+  ok(sidebarBox.hidden, "Hidden by the user.");
+
+  info("Reloading to verify the sidebar stays closed.");
+  let addon = await AddonManager.getAddonByID(extension.id);
+  await addon.reload();
+
+  ok(sidebarBox.hidden, "Hidden after reload.");
 
   await extension.unload();
   // This is the default value
@@ -148,7 +190,7 @@ add_task(async function sidebar_isOpen() {
   info("Test extension1's sidebar is opened on install");
   await extension1.awaitMessage("sidebar");
   await sendMessage(extension1, "isOpen", { result: true });
-  let sidebar1ID = SidebarUI.currentID;
+  let sidebar1ID = SidebarController.currentID;
 
   info("Load extension2");
   let extension2 = ExtensionTestUtils.loadExtension(getExtData());
@@ -160,7 +202,7 @@ add_task(async function sidebar_isOpen() {
   await sendMessage(extension2, "isOpen", { result: true });
 
   info("Switch back to extension1's sidebar");
-  SidebarUI.show(sidebar1ID);
+  SidebarController.show(sidebar1ID);
   await extension1.awaitMessage("sidebar");
   await sendMessage(extension1, "isOpen", { result: true });
   await sendMessage(extension2, "isOpen", { result: false });
@@ -195,7 +237,7 @@ add_task(async function sidebar_isOpen() {
   newWin.close();
 
   info("Close the sidebar in the original window");
-  SidebarUI.hide();
+  SidebarController.hide();
   await sendMessage(extension1, "isOpen", { result: false });
   await sendMessage(extension2, "isOpen", { result: false });
 
@@ -204,6 +246,13 @@ add_task(async function sidebar_isOpen() {
 });
 
 add_task(async function testShortcuts() {
+  // This test covers the access key expected to be set on the switcher panel
+  // element for the extension, which is not part of the new sidebar design.
+  if (Services.prefs.getBoolPref("sidebar.revamp", false)) {
+    info("skipping test because sidebar.revamp is set");
+    return;
+  }
+
   function verifyShortcut(id, commandKey, win = window) {
     const doc = win.document;
     // We're just testing the command key since the modifiers have different
@@ -223,11 +272,15 @@ add_task(async function testShortcuts() {
 
   async function toggleSwitcherPanel(win = window) {
     // Open and close the switcher panel to trigger shortcut content rendering.
-    let switcherPanelShown = promisePopupShown(win.SidebarUI._switcherPanel);
-    win.SidebarUI.showSwitcherPanel();
+    let switcherPanelShown = promisePopupShown(
+      win.SidebarController._switcherPanel
+    );
+    win.SidebarController.showSwitcherPanel();
     await switcherPanelShown;
-    let switcherPanelHidden = promisePopupHidden(win.SidebarUI._switcherPanel);
-    win.SidebarUI.hideSwitcherPanel();
+    let switcherPanelHidden = promisePopupHidden(
+      win.SidebarController._switcherPanel
+    );
+    win.SidebarController.hideSwitcherPanel();
     await switcherPanelHidden;
   }
 
@@ -300,4 +353,176 @@ add_task(async function testShortcuts() {
   await extension2.unload();
 
   await BrowserTestUtils.closeWindow(win);
+});
+
+add_task(async function sidebar_action_icon_update() {
+  const isNewSidebar = Services.prefs.getBoolPref("sidebar.revamp", false);
+  const sidebar = isNewSidebar && document.querySelector("sidebar-main");
+
+  info("Load extension");
+  const extension = ExtensionTestUtils.loadExtension(getExtData());
+  await extension.startup();
+
+  info("Test extension's sidebar is opened on install");
+  await extension.awaitMessage("sidebar");
+  await sendMessage(extension, "isOpen", { result: true });
+  const sidebarID = SidebarController.currentID;
+
+  let iconUrl = `moz-extension://${extension.uuid}/icon.png`;
+  let icon2xUrl = `moz-extension://${extension.uuid}/icon@2x.png`;
+
+  if (isNewSidebar) {
+    ok(sidebar, "sidebar is shown");
+    const { iconSrc } = sidebar.extensionButtons[0];
+    is(iconSrc, iconUrl, "Extension has the correct icon.");
+  } else {
+    const item = SidebarController._switcherPanel.querySelector(
+      ".webextension-menuitem"
+    );
+    is(
+      item.style.getPropertyValue("--webextension-menuitem-image"),
+      `image-set(url("${iconUrl}"), url("${icon2xUrl}") 2x)`,
+      "Extension has the correct icon."
+    );
+  }
+  SidebarController.hide();
+  await sendMessage(extension, "isOpen", { result: false });
+
+  await sendMessage(extension, "set-icon", "1.png");
+  await SidebarController.show(sidebarID);
+  await extension.awaitMessage("sidebar");
+  await sendMessage(extension, "isOpen", { result: true });
+  iconUrl = `moz-extension://${extension.uuid}/1.png`;
+
+  if (isNewSidebar) {
+    const { iconSrc } = sidebar.extensionButtons[0];
+    is(iconSrc, iconUrl, "Extension has updated icon.");
+  } else {
+    const item = SidebarController._switcherPanel.querySelector(
+      ".webextension-menuitem"
+    );
+    is(
+      item.style.getPropertyValue("--webextension-menuitem-image"),
+      `image-set(url("${iconUrl}"), url("${iconUrl}") 2x)`,
+      "Extension has updated icon."
+    );
+  }
+
+  await extension.unload();
+});
+
+add_task(async function sidebar_action_hidpi_icon() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["layout.css.devPixelsPerPx", 2]],
+  });
+
+  const isNewSidebar = Services.prefs.getBoolPref("sidebar.revamp", false);
+
+  info("Load extension");
+  const extension = ExtensionTestUtils.loadExtension(getExtData());
+  await extension.startup();
+
+  info("Test extension's sidebar is opened on install");
+  await extension.awaitMessage("sidebar");
+  await sendMessage(extension, "isOpen", { result: true });
+
+  let iconUrl = `moz-extension://${extension.uuid}/icon.png`;
+  let icon2xUrl = `moz-extension://${extension.uuid}/icon@2x.png`;
+
+  if (isNewSidebar) {
+    const sidebar = document.querySelector("sidebar-main");
+    const { iconSrc } = sidebar.extensionButtons[0];
+    is(
+      iconSrc,
+      icon2xUrl,
+      "Extension has the correct icon for HiDPI displays."
+    );
+  } else {
+    const item = SidebarController._switcherPanel.querySelector(
+      ".webextension-menuitem"
+    );
+    is(
+      item.style.getPropertyValue("--webextension-menuitem-image"),
+      `image-set(url("${iconUrl}"), url("${icon2xUrl}") 2x)`,
+      "Extension has the correct icon for HiDPI displays."
+    );
+  }
+
+  await extension.unload();
+  await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function sidebar_switcher_label_bug1905771_regression_test() {
+  // This test covers a regression specific to the current sidebar design and
+  // doesn't need to be covered with the new sidebar design.
+  if (Services.prefs.getBoolPref("sidebar.revamp", false)) {
+    info("skipping test because sidebar.revamp is set");
+    return;
+  }
+
+  let extData = getExtData({
+    name: "Test Extension",
+    browser_specific_settings: { gecko: { id: "@sidebar" } },
+    version: "1.0",
+    sidebar_action: {
+      default_icon: {
+        16: "icon.png",
+        32: "icon@2x.png",
+      },
+      default_panel: "sidebar.html",
+      open_at_install: true,
+    },
+  });
+  extData.useAddonManager = "permanent";
+
+  await window.SidebarController.promiseInitialized;
+  let extension = ExtensionTestUtils.loadExtension(extData);
+  await extension.startup();
+  await extension.awaitMessage("sidebar");
+
+  // Recreate Bug 1905771 conditions:
+  // - sidebar extension installed
+  // - sidebar extension page selected
+  // - open a new tab
+  //
+  // Under these conditions SidebarController._setExtensionAttributes used to trigger the bug
+  // by setting a label DOM attribute on the SidebarController._switcherTarget element if the
+  // extension sidebar was the one selected for the SidebarController instance.
+
+  const extSidebarActionID = `${makeWidgetId(extension.id)}-sidebar-action`;
+  is(
+    window.SidebarController.currentID,
+    extSidebarActionID,
+    "Expect extension sidebar ID to be set as currently selected"
+  );
+
+  await BrowserTestUtils.withNewTab("about:blank", async () => {
+    is(
+      window.SidebarController._switcherTarget.querySelector(
+        "label#sidebar-title"
+      ).value,
+      extData.manifest.name,
+      "sidebar switcher target element textContent expected to be the extension name"
+    );
+    await window.SidebarController.show("viewBookmarksSidebar");
+    is(
+      window.SidebarController._switcherTarget.querySelector(
+        "label#sidebar-title"
+      ).value,
+      "Bookmarks",
+      "sidebar switcher target element textContent expected to be set to Bookmarks"
+    );
+    // NOTE: assertion to prevent Bug 1905771 from regressing.
+    is(
+      window.SidebarController._switcherTarget.getAttribute("label"),
+      null,
+      "sidebar switcher target element should not have a label attribute set"
+    );
+  });
+
+  // NOTE: explicitly close the sidebar to prevent perma-failure when running in
+  // test-verify mode (due to the sidebar not being inizially closed as the first
+  // test ask in this file expects).
+  await window.SidebarController.hide();
+  await extension.unload();
 });

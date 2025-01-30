@@ -25,11 +25,6 @@ const { LENGTH: GENERATED_PASSWORD_LENGTH, REGEX: GENERATED_PASSWORD_REGEX } =
 const LOGIN_FIELD_UTILS = LoginTestUtils.loginField;
 const TESTS_DIR = "/tests/toolkit/components/passwordmgr/test/";
 
-// Depending on pref state we either show auth prompts as windows or on tab level.
-let authPromptModalType = SpecialPowers.Services.prefs.getIntPref(
-  "prompts.modalType.httpAuth"
-);
-
 /**
  * Recreate a DOM tree using the outerHTML to ensure that any event listeners
  * and internal state for the elements are removed.
@@ -426,10 +421,10 @@ async function checkUnmodifiedFormInFrame(bc, formNum) {
   return SpecialPowers.spawn(bc, [formNum], formNumF => {
     let form = this.content.document.getElementById(`form${formNumF}`);
     ok(form, "Locating form " + formNumF);
+    const elements =
+      form.nodeName === "form" ? form.elements : form.querySelectorAll("input");
 
-    for (var i = 0; i < form.elements.length; i++) {
-      var ele = form.elements[i];
-
+    for (const ele of elements) {
       // No point in checking form submit/reset buttons.
       if (ele.type == "submit" || ele.type == "reset") {
         continue;
@@ -471,10 +466,15 @@ async function checkLoginFormInFrameWithElementValues(
 
       let numToCheck = arguments.length - 1;
 
+      const elements =
+        form.nodeName === "form"
+          ? form.elements
+          : form.querySelectorAll("input");
+
       if (!numToCheck--) {
         return;
       }
-      e = form.elements[0];
+      e = elements[0];
       if (val1F == null) {
         is(
           e.value,
@@ -493,7 +493,7 @@ async function checkLoginFormInFrameWithElementValues(
         return;
       }
 
-      e = form.elements[1];
+      e = elements[1];
       if (val2F == null) {
         is(
           e.value,
@@ -511,7 +511,7 @@ async function checkLoginFormInFrameWithElementValues(
       if (!numToCheck--) {
         return;
       }
-      e = form.elements[2];
+      e = elements[2];
       if (val3F == null) {
         is(
           e.value,
@@ -633,28 +633,26 @@ function registerRunTests(existingPasswordFieldsCount = 0, callback) {
       form.appendChild(password);
 
       let foundForcer = false;
-      var observer = SpecialPowers.wrapCallback(function (
-        _subject,
-        _topic,
-        data
-      ) {
-        if (data === "observerforcer") {
-          foundForcer = true;
-        } else {
-          existingPasswordFieldsCount--;
-        }
+      var observer = SpecialPowers.wrapCallback(
+        function (_subject, _topic, data) {
+          if (data === "observerforcer") {
+            foundForcer = true;
+          } else {
+            existingPasswordFieldsCount--;
+          }
 
-        if (!foundForcer || existingPasswordFieldsCount > 0) {
-          return;
-        }
+          if (!foundForcer || existingPasswordFieldsCount > 0) {
+            return;
+          }
 
-        SpecialPowers.removeObserver(observer, "passwordmgr-processed-form");
-        form.remove();
-        SimpleTest.executeSoon(() => {
-          callback?.();
-          resolve();
-        });
-      });
+          SpecialPowers.removeObserver(observer, "passwordmgr-processed-form");
+          form.remove();
+          SimpleTest.executeSoon(() => {
+            callback?.();
+            resolve();
+          });
+        }
+      );
       SpecialPowers.addObserver(observer, "passwordmgr-processed-form");
 
       document.body.appendChild(form);
@@ -1051,6 +1049,23 @@ SimpleTest.registerCleanupFunction(() => {
   });
 });
 
+// This is a version of LoginHelper.loginToVanillaObject that is adapted to run
+// as content JS instead of chrome JS. This is needed to make it return a
+// content JS object because the structured cloning we use to send it over
+// JS IPC can't deal with a cross compartment wrapper.
+function loginToVanillaObject(login) {
+  let obj = {};
+  for (let i in SpecialPowers.do_QueryInterface(
+    login,
+    SpecialPowers.Ci.nsILoginMetaInfo
+  )) {
+    if (typeof login[i] !== "function") {
+      obj[i] = login[i];
+    }
+  }
+  return obj;
+}
+
 /**
  * Proxy for Services.logins (nsILoginManager).
  * Only supports arguments which support structured clone plus {nsILoginInfo}
@@ -1067,7 +1082,7 @@ this.LoginManager = new Proxy(
             SpecialPowers.call_Instanceof(val, SpecialPowers.Ci.nsILoginInfo)
           ) {
             loginInfoIndices.push(index);
-            return LoginHelper.loginToVanillaObject(val);
+            return loginToVanillaObject(val);
           }
 
           return val;

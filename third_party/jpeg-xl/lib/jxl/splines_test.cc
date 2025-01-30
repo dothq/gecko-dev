@@ -6,6 +6,7 @@
 #include "lib/jxl/splines.h"
 
 #include <jxl/cms.h>
+#include <jxl/memory_manager.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -18,15 +19,18 @@
 #include "lib/jxl/base/common.h"
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/printf_macros.h"
+#include "lib/jxl/base/rect.h"
 #include "lib/jxl/base/span.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/chroma_from_luma.h"
+#include "lib/jxl/common.h"
 #include "lib/jxl/enc_aux_out.h"
 #include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_splines.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/image_test_utils.h"
+#include "lib/jxl/test_memory_manager.h"
 #include "lib/jxl/test_utils.h"
 #include "lib/jxl/testing.h"
 
@@ -43,34 +47,35 @@ std::ostream& operator<<(std::ostream& os, const Spline& spline) {
 
 namespace {
 
-using test::ReadTestData;
+using ::jxl::test::ReadTestData;
 
 constexpr int kQuantizationAdjustment = 0;
-const ColorCorrelationMap* const cmap = new ColorCorrelationMap;
-const float kYToX = cmap->YtoXRatio(0);
-const float kYToB = cmap->YtoBRatio(0);
+const ColorCorrelation color_correlation{};
+const float kYToX = color_correlation.YtoXRatio(0);
+const float kYToB = color_correlation.YtoBRatio(0);
 
 constexpr float kTolerance = 0.003125;
 
-std::vector<Spline> DequantizeSplines(const Splines& splines) {
+Status DequantizeSplines(const Splines& splines,
+                         std::vector<Spline>& dequantized) {
   const auto& quantized_splines = splines.QuantizedSplines();
   const auto& starting_points = splines.StartingPoints();
-  JXL_CHECK(quantized_splines.size() == starting_points.size());
+  JXL_ENSURE(quantized_splines.size() == starting_points.size());
 
-  std::vector<Spline> dequantized;
   uint64_t total = 0;
   for (size_t i = 0; i < quantized_splines.size(); ++i) {
     dequantized.emplace_back();
-    JXL_CHECK(quantized_splines[i].Dequantize(
+    JXL_RETURN_IF_ERROR(quantized_splines[i].Dequantize(
         starting_points[i], kQuantizationAdjustment, kYToX, kYToB, 2u << 30u,
         &total, dequantized.back()));
   }
-  return dequantized;
+  return true;
 }
 
 }  // namespace
 
 TEST(SplinesTest, Serialization) {
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
   Spline spline1{
       /*control_points=*/{
           {109, 54}, {218, 159}, {80, 3}, {110, 274}, {94, 185}, {17, 277}},
@@ -141,14 +146,18 @@ TEST(SplinesTest, Serialization) {
   std::vector<QuantizedSpline> quantized_splines;
   std::vector<Spline::Point> starting_points;
   for (const Spline& spline : spline_data) {
-    quantized_splines.emplace_back(spline, kQuantizationAdjustment, kYToX,
-                                   kYToB);
+    JXL_ASSIGN_OR_QUIT(
+        QuantizedSpline qspline,
+        QuantizedSpline::Create(spline, kQuantizationAdjustment, kYToX, kYToB),
+        "Failed to create QuantizedSpline.");
+    quantized_splines.emplace_back(std::move(qspline));
     starting_points.push_back(spline.control_points.front());
   }
 
   Splines splines(kQuantizationAdjustment, std::move(quantized_splines),
                   std::move(starting_points));
-  const std::vector<Spline> quantized_spline_data = DequantizeSplines(splines);
+  std::vector<Spline> quantized_spline_data;
+  ASSERT_TRUE(DequantizeSplines(splines, quantized_spline_data));
   EXPECT_EQ(quantized_spline_data.size(), spline_data.size());
   for (size_t i = 0; i < quantized_spline_data.size(); ++i) {
     const Spline& actual = quantized_spline_data[i];
@@ -164,8 +173,9 @@ TEST(SplinesTest, Serialization) {
     }
   }
 
-  BitWriter writer;
-  EncodeSplines(splines, &writer, kLayerSplines, HistogramParams(), nullptr);
+  BitWriter writer{memory_manager};
+  ASSERT_TRUE(EncodeSplines(splines, &writer, LayerType::Splines,
+                            HistogramParams(), nullptr));
   writer.ZeroPadToByte();
   const size_t bits_written = writer.BitsWritten();
 
@@ -173,13 +183,14 @@ TEST(SplinesTest, Serialization) {
 
   BitReader reader(writer.GetSpan());
   Splines decoded_splines;
-  ASSERT_TRUE(decoded_splines.Decode(&reader, /*num_pixels=*/1000));
+  ASSERT_TRUE(
+      decoded_splines.Decode(memory_manager, &reader, /*num_pixels=*/1000));
   ASSERT_TRUE(reader.JumpToByteBoundary());
   EXPECT_EQ(reader.TotalBitsConsumed(), bits_written);
   ASSERT_TRUE(reader.Close());
 
-  const std::vector<Spline> decoded_spline_data =
-      DequantizeSplines(decoded_splines);
+  std::vector<Spline> decoded_spline_data;
+  ASSERT_TRUE(DequantizeSplines(decoded_splines, decoded_spline_data));
 
   EXPECT_EQ(decoded_spline_data.size(), quantized_spline_data.size());
   for (size_t i = 0; i < decoded_spline_data.size(); ++i) {
@@ -204,11 +215,11 @@ TEST(SplinesTest, Serialization) {
   }
 }
 
-#ifdef JXL_CRASH_ON_ERROR
-TEST(SplinesTest, DISABLED_TooManySplinesTest) {
-#else
 TEST(SplinesTest, TooManySplinesTest) {
-#endif
+  if (JXL_CRASH_ON_ERROR) {
+    GTEST_SKIP() << "Skipping due to JXL_CRASH_ON_ERROR";
+  }
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
   // This is more than the limit for 1000 pixels.
   const size_t kNumSplines = 300;
 
@@ -220,29 +231,33 @@ TEST(SplinesTest, TooManySplinesTest) {
         /*color_dct=*/
         {Dct32{1.f, 0.2f, 0.1f}, Dct32{35.7f, 10.3f}, Dct32{35.7f, 7.8f}},
         /*sigma_dct=*/{10.f, 0.f, 0.f, 2.f}};
-    quantized_splines.emplace_back(spline, kQuantizationAdjustment, kYToX,
-                                   kYToB);
+    JXL_ASSIGN_OR_QUIT(
+        QuantizedSpline qspline,
+        QuantizedSpline::Create(spline, kQuantizationAdjustment, kYToX, kYToB),
+        "Failed to create QuantizedSpline.");
+    quantized_splines.emplace_back(std::move(qspline));
     starting_points.push_back(spline.control_points.front());
   }
 
   Splines splines(kQuantizationAdjustment, std::move(quantized_splines),
                   std::move(starting_points));
-  BitWriter writer;
-  EncodeSplines(splines, &writer, kLayerSplines,
-                HistogramParams(SpeedTier::kFalcon, 1), nullptr);
+  BitWriter writer{memory_manager};
+  ASSERT_TRUE(EncodeSplines(splines, &writer, LayerType::Splines,
+                            HistogramParams(SpeedTier::kFalcon, 1), nullptr));
   writer.ZeroPadToByte();
   // Re-read splines.
   BitReader reader(writer.GetSpan());
   Splines decoded_splines;
-  EXPECT_FALSE(decoded_splines.Decode(&reader, /*num_pixels=*/1000));
+  EXPECT_FALSE(
+      decoded_splines.Decode(memory_manager, &reader, /*num_pixels=*/1000));
   EXPECT_TRUE(reader.Close());
 }
 
-#ifdef JXL_CRASH_ON_ERROR
-TEST(SplinesTest, DISABLED_DuplicatePoints) {
-#else
 TEST(SplinesTest, DuplicatePoints) {
-#endif
+  if (JXL_CRASH_ON_ERROR) {
+    GTEST_SKIP() << "Skipping due to JXL_CRASH_ON_ERROR";
+  }
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
   std::vector<Spline::Point> control_points{
       {9, 54}, {118, 159}, {97, 3},  // Repeated.
       {97, 3}, {10, 40},   {150, 25}, {120, 300}};
@@ -255,21 +270,26 @@ TEST(SplinesTest, DuplicatePoints) {
   std::vector<QuantizedSpline> quantized_splines;
   std::vector<Spline::Point> starting_points;
   for (const Spline& spline : spline_data) {
-    quantized_splines.emplace_back(spline, kQuantizationAdjustment, kYToX,
-                                   kYToB);
+    JXL_ASSIGN_OR_QUIT(
+        QuantizedSpline qspline,
+        QuantizedSpline::Create(spline, kQuantizationAdjustment, kYToX, kYToB),
+        "Failed to create QuantizedSpline.");
+    quantized_splines.emplace_back(std::move(qspline));
     starting_points.push_back(spline.control_points.front());
   }
   Splines splines(kQuantizationAdjustment, std::move(quantized_splines),
                   std::move(starting_points));
 
-  JXL_ASSIGN_OR_DIE(Image3F image, Image3F::Create(320, 320));
+  JXL_TEST_ASSIGN_OR_DIE(Image3F image,
+                         Image3F::Create(memory_manager, 320, 320));
   ZeroFillImage(&image);
-  EXPECT_FALSE(
-      splines.InitializeDrawCache(image.xsize(), image.ysize(), *cmap));
+  EXPECT_FALSE(splines.InitializeDrawCache(image.xsize(), image.ysize(),
+                                           color_correlation));
 }
 
 TEST(SplinesTest, Drawing) {
-  CodecInOut io_expected;
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
+  CodecInOut io_expected{memory_manager};
   const std::vector<uint8_t> orig = ReadTestData("jxl/splines.pfm");
   ASSERT_TRUE(SetFromBytes(Bytes(orig), &io_expected,
                            /*pool=*/nullptr));
@@ -291,36 +311,43 @@ TEST(SplinesTest, Drawing) {
   std::vector<QuantizedSpline> quantized_splines;
   std::vector<Spline::Point> starting_points;
   for (const Spline& spline : spline_data) {
-    quantized_splines.emplace_back(spline, kQuantizationAdjustment, kYToX,
-                                   kYToB);
+    JXL_ASSIGN_OR_QUIT(
+        QuantizedSpline qspline,
+        QuantizedSpline::Create(spline, kQuantizationAdjustment, kYToX, kYToB),
+        "Failed to create QuantizedSpline.");
+    quantized_splines.emplace_back(std::move(qspline));
     starting_points.push_back(spline.control_points.front());
   }
   Splines splines(kQuantizationAdjustment, std::move(quantized_splines),
                   std::move(starting_points));
 
-  JXL_ASSIGN_OR_DIE(Image3F image, Image3F::Create(320, 320));
+  JXL_TEST_ASSIGN_OR_DIE(Image3F image,
+                         Image3F::Create(memory_manager, 320, 320));
   ZeroFillImage(&image);
-  ASSERT_TRUE(splines.InitializeDrawCache(image.xsize(), image.ysize(), *cmap));
-  splines.AddTo(&image, Rect(image), Rect(image));
+  ASSERT_TRUE(splines.InitializeDrawCache(image.xsize(), image.ysize(),
+                                          color_correlation));
+  splines.AddTo(&image, Rect(image));
 
-  CodecInOut io_actual;
-  JXL_ASSIGN_OR_DIE(Image3F image2, Image3F::Create(320, 320));
-  CopyImageTo(image, &image2);
-  io_actual.SetFromImage(std::move(image2), ColorEncoding::SRGB());
+  CodecInOut io_actual{memory_manager};
+  JXL_TEST_ASSIGN_OR_DIE(Image3F image2,
+                         Image3F::Create(memory_manager, 320, 320));
+  ASSERT_TRUE(CopyImageTo(image, &image2));
+  ASSERT_TRUE(io_actual.SetFromImage(std::move(image2), ColorEncoding::SRGB()));
   ASSERT_TRUE(io_actual.frames[0].TransformTo(io_expected.Main().c_current(),
                                               *JxlGetDefaultCms()));
 
-  JXL_ASSERT_OK(VerifyRelativeError(
+  JXL_TEST_ASSERT_OK(VerifyRelativeError(
       *io_expected.Main().color(), *io_actual.Main().color(), 1e-2f, 1e-1f, _));
 }
 
 TEST(SplinesTest, ClearedEveryFrame) {
-  CodecInOut io_expected;
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
+  CodecInOut io_expected{memory_manager};
   const std::vector<uint8_t> bytes_expected =
       ReadTestData("jxl/spline_on_first_frame.png");
   ASSERT_TRUE(SetFromBytes(Bytes(bytes_expected), &io_expected,
                            /*pool=*/nullptr));
-  CodecInOut io_actual;
+  CodecInOut io_actual{memory_manager};
   const std::vector<uint8_t> bytes_actual =
       ReadTestData("jxl/spline_on_first_frame.jxl");
   ASSERT_TRUE(test::DecodeFile({}, Bytes(bytes_actual), &io_actual));
@@ -335,7 +362,7 @@ TEST(SplinesTest, ClearedEveryFrame) {
       }
     }
   }
-  JXL_ASSERT_OK(VerifyRelativeError(
+  JXL_TEST_ASSERT_OK(VerifyRelativeError(
       *io_expected.Main().color(), *io_actual.Main().color(), 1e-2f, 1e-1f, _));
 }
 

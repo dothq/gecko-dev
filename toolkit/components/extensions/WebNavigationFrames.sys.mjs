@@ -45,7 +45,7 @@ function getParentFrameId(bc) {
 /**
  * Convert a BrowsingContext into internal FrameDetail json.
  *
- * @param {BrowsingContext} bc
+ * @param {CanonicalBrowsingContext} bc
  * @returns {FrameDetail}
  */
 function getFrameDetail(bc) {
@@ -61,7 +61,7 @@ export var WebNavigationFrames = {
     // frameId 0 means the top-level frame; anything else is a child frame.
     let frame = BrowsingContext.get(frameId || bc.id);
     if (frame && frame.top === bc) {
-      return getFrameDetail(frame);
+      return getFrameDetail(/** @type {CanonicalBrowsingContext} */ (frame));
     }
     return null;
   },

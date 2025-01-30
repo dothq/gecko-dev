@@ -12,10 +12,12 @@
 #include "TextEvents.h"
 #include "TouchEvents.h"
 
+#include "mozilla/EventForwards.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_mousewheel.h"
 #include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/WritingModes.h"
@@ -26,6 +28,7 @@
 #include "nsContentUtils.h"
 #include "nsIContent.h"
 #include "nsIDragSession.h"
+#include "nsMathUtils.h"
 #include "nsPrintfCString.h"
 
 #if defined(XP_WIN)
@@ -56,6 +59,120 @@ const char* ToChar(EventMessage aEventMessage) {
 #undef NS_EVENT_MESSAGE
     default:
       return "illegal event message";
+  }
+}
+
+bool IsPointerEventMessage(EventMessage aMessage) {
+  switch (aMessage) {
+    case ePointerDown:
+    case ePointerMove:
+    case ePointerUp:
+    case ePointerCancel:
+    case ePointerOver:
+    case ePointerOut:
+    case ePointerEnter:
+    case ePointerLeave:
+    case ePointerGotCapture:
+    case ePointerLostCapture:
+    case ePointerClick:
+    case ePointerAuxClick:
+    case eContextMenu:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsPointerEventMessageOriginallyMouseEventMessage(EventMessage aMessage) {
+  return aMessage == ePointerClick || aMessage == ePointerAuxClick ||
+         aMessage == eContextMenu;
+}
+
+bool IsForbiddenDispatchingToNonElementContent(EventMessage aMessage) {
+  switch (aMessage) {
+    // Keyboard event target should be an Element node
+    case eKeyDown:
+    case eKeyUp:
+    case eKeyPress:
+    // Mouse event target should be an Element node
+    case eMouseMove:
+    case eMouseUp:
+    case eMouseDown:
+    case eMouseEnterIntoWidget:
+    case eMouseExitFromWidget:
+    case eMouseDoubleClick:
+    case eMouseActivate:
+    case eMouseOver:
+    case eMouseOut:
+    case eMouseHitTest:
+    case eMouseEnter:
+    case eMouseLeave:
+    case eMouseTouchDrag:
+    case eMouseLongTap:
+    case eMouseExploreByTouch:
+    // Pointer event target should be an Element node
+    case ePointerClick:
+    case ePointerAuxClick:
+    case ePointerMove:
+    case ePointerUp:
+    case ePointerDown:
+    case ePointerOver:
+    case ePointerOut:
+    case ePointerEnter:
+    case ePointerLeave:
+    case ePointerCancel:
+    case ePointerGotCapture:
+    case ePointerLostCapture:
+    case eContextMenu:
+    // Drag event target should be an Element node
+    case eDragEnter:
+    case eDragOver:
+    case eDragExit:
+    case eDrag:
+    case eDragEnd:
+    case eDragStart:
+    case eDrop:
+    case eDragLeave:
+    case eQueryDropTargetHittest:
+    // case mouse wheel related message target should be an Element node
+    case eLegacyMouseLineOrPageScroll:
+    case eLegacyMousePixelScroll:
+    case eWheel:
+    // Composition event message target should be an Element node
+    case eCompositionStart:
+    case eCompositionEnd:
+    case eCompositionUpdate:
+    case eCompositionChange:
+    case eCompositionCommitAsIs:
+    case eCompositionCommit:
+    case eCompositionCommitRequestHandled:
+    // Gesture event target should be an Element node
+    case eSwipeGestureMayStart:
+    case eSwipeGestureStart:
+    case eSwipeGestureUpdate:
+    case eSwipeGestureEnd:
+    case eSwipeGesture:
+    case eMagnifyGestureStart:
+    case eMagnifyGestureUpdate:
+    case eMagnifyGesture:
+    case eRotateGestureStart:
+    case eRotateGestureUpdate:
+    case eRotateGesture:
+    case eTapGesture:
+    case ePressTapGesture:
+    case eEdgeUIStarted:
+    case eEdgeUICanceled:
+    case eEdgeUICompleted:
+    // Touch event target should be an Element node
+    case eTouchStart:
+    case eTouchMove:
+    case eTouchEnd:
+    case eTouchCancel:
+    case eTouchPointerCancel:
+      return true;
+
+    default:
+      return false;
   }
 }
 
@@ -137,64 +254,6 @@ const nsCString GetDOMKeyCodeName(uint32_t aKeyCode) {
 
     default:
       return nsPrintfCString("Invalid DOM keyCode (0x%08X)", aKeyCode);
-  }
-}
-
-bool IsValidRawTextRangeValue(RawTextRangeType aRawTextRangeType) {
-  switch (static_cast<TextRangeType>(aRawTextRangeType)) {
-    case TextRangeType::eUninitialized:
-    case TextRangeType::eCaret:
-    case TextRangeType::eRawClause:
-    case TextRangeType::eSelectedRawClause:
-    case TextRangeType::eConvertedClause:
-    case TextRangeType::eSelectedClause:
-      return true;
-    default:
-      return false;
-  }
-}
-
-RawTextRangeType ToRawTextRangeType(TextRangeType aTextRangeType) {
-  return static_cast<RawTextRangeType>(aTextRangeType);
-}
-
-TextRangeType ToTextRangeType(RawTextRangeType aRawTextRangeType) {
-  MOZ_ASSERT(IsValidRawTextRangeValue(aRawTextRangeType));
-  return static_cast<TextRangeType>(aRawTextRangeType);
-}
-
-const char* ToChar(TextRangeType aTextRangeType) {
-  switch (aTextRangeType) {
-    case TextRangeType::eUninitialized:
-      return "TextRangeType::eUninitialized";
-    case TextRangeType::eCaret:
-      return "TextRangeType::eCaret";
-    case TextRangeType::eRawClause:
-      return "TextRangeType::eRawClause";
-    case TextRangeType::eSelectedRawClause:
-      return "TextRangeType::eSelectedRawClause";
-    case TextRangeType::eConvertedClause:
-      return "TextRangeType::eConvertedClause";
-    case TextRangeType::eSelectedClause:
-      return "TextRangeType::eSelectedClause";
-    default:
-      return "Invalid TextRangeType";
-  }
-}
-
-SelectionType ToSelectionType(TextRangeType aTextRangeType) {
-  switch (aTextRangeType) {
-    case TextRangeType::eRawClause:
-      return SelectionType::eIMERawClause;
-    case TextRangeType::eSelectedRawClause:
-      return SelectionType::eIMESelectedRawClause;
-    case TextRangeType::eConvertedClause:
-      return SelectionType::eIMEConvertedClause;
-    case TextRangeType::eSelectedClause:
-      return SelectionType::eIMESelectedClause;
-    default:
-      MOZ_CRASH("TextRangeType is invalid");
-      return SelectionType::eNormal;
   }
 }
 
@@ -314,9 +373,7 @@ bool WidgetEvent::HasMouseEventMessage() const {
   switch (mMessage) {
     case eMouseDown:
     case eMouseUp:
-    case eMouseClick:
     case eMouseDoubleClick:
-    case eMouseAuxClick:
     case eMouseEnterIntoWidget:
     case eMouseExitFromWidget:
     case eMouseActivate:
@@ -325,9 +382,18 @@ bool WidgetEvent::HasMouseEventMessage() const {
     case eMouseHitTest:
     case eMouseMove:
       return true;
+    // TODO: Perhaps, we should rename this method.
+    case ePointerClick:
+    case ePointerAuxClick:
+      return true;
     default:
       return false;
   }
+}
+
+bool WidgetEvent::IsMouseEventClassOrHasClickRelatedPointerEvent() const {
+  return mClass == eMouseEventClass ||
+         IsPointerEventMessageOriginallyMouseEventMessage(mMessage);
 }
 
 bool WidgetEvent::HasDragEventMessage() const {
@@ -429,7 +495,9 @@ bool WidgetEvent::WillBeSentToRemoteProcess() const {
 }
 
 bool WidgetEvent::IsIMERelatedEvent() const {
-  return HasIMEEventMessage() || IsQueryContentEvent() || IsSelectionEvent();
+  return HasIMEEventMessage() ||
+         (IsQueryContentEvent() && mMessage != eQueryDropTargetHittest) ||
+         IsSelectionEvent();
 }
 
 bool WidgetEvent::IsUsingCoordinates() const {
@@ -497,7 +565,8 @@ bool WidgetEvent::IsAllowedToDispatchInSystemGroup() const {
   // We don't expect to implement default behaviors with pointer events because
   // if we do, prevent default on mouse events can't prevent default behaviors
   // anymore.
-  return mClass != ePointerEventClass;
+  return mClass != ePointerEventClass ||
+         IsPointerEventMessageOriginallyMouseEventMessage(mMessage);
 }
 
 bool WidgetEvent::IsBlockedForFingerprintingResistance() const {
@@ -511,6 +580,14 @@ bool WidgetEvent::IsBlockedForFingerprintingResistance() const {
               keyboardEvent->mKeyNameIndex == KEY_NAME_INDEX_AltGraph);
     }
     case ePointerEventClass: {
+      if (IsPointerEventMessageOriginallyMouseEventMessage(mMessage)) {
+        return false;
+      }
+
+      if (SPOOFED_MAX_TOUCH_POINTS > 0) {
+        return false;
+      }
+
       const WidgetPointerEvent* pointerEvent = AsPointerEvent();
 
       // We suppress the pointer events if it is not primary for fingerprinting
@@ -533,6 +610,17 @@ bool WidgetEvent::AllowFlushingPendingNotifications() const {
   // flush pending things only when the dispatcher requires the latest content
   // layout.
   return AsQueryContentEvent()->mNeedsToFlushLayout;
+}
+
+bool WidgetEvent::ShouldIgnoreCapturingContent() const {
+  MOZ_ASSERT(IsUsingCoordinates());
+
+  if (MOZ_UNLIKELY(!IsTrusted())) {
+    return false;
+  }
+  return mClass == eMouseEventClass || mClass == ePointerEventClass
+             ? AsMouseEvent()->mIgnoreCapturingContent
+             : false;
 }
 
 /******************************************************************************
@@ -649,6 +737,151 @@ Modifier WidgetInputEvent::AccelModifier() {
 }
 
 /******************************************************************************
+ * mozilla::WidgetPointerHelper (MouseEvents.h)
+ ******************************************************************************/
+
+// static
+int32_t WidgetPointerHelper::GetValidTiltValue(int32_t aTilt) {
+  if (MOZ_LIKELY(aTilt >= -90 && aTilt <= 90)) {
+    return aTilt;
+  }
+  while (aTilt > 90) {
+    aTilt -= 180;
+  }
+  while (aTilt < -90) {
+    aTilt += 180;
+  }
+  MOZ_ASSERT(aTilt >= -90 && aTilt <= 90);
+  return aTilt;
+}
+
+// static
+double WidgetPointerHelper::GetValidAltitudeAngle(double aAltitudeAngle) {
+  if (MOZ_LIKELY(aAltitudeAngle >= 0.0 && aAltitudeAngle <= kHalfPi)) {
+    return aAltitudeAngle;
+  }
+  while (aAltitudeAngle > kHalfPi) {
+    aAltitudeAngle -= kHalfPi;
+  }
+  while (aAltitudeAngle < 0.0) {
+    aAltitudeAngle += kHalfPi;
+  }
+  MOZ_ASSERT(aAltitudeAngle >= 0.0 && aAltitudeAngle <= kHalfPi);
+  return aAltitudeAngle;
+}
+
+// static
+double WidgetPointerHelper::GetValidAzimuthAngle(double aAzimuthAngle) {
+  if (MOZ_LIKELY(aAzimuthAngle >= 0.0 && aAzimuthAngle <= kDoublePi)) {
+    return aAzimuthAngle;
+  }
+  while (aAzimuthAngle > kDoublePi) {
+    aAzimuthAngle -= kDoublePi;
+  }
+  while (aAzimuthAngle < 0.0) {
+    aAzimuthAngle += kDoublePi;
+  }
+  MOZ_ASSERT(aAzimuthAngle >= 0.0 && aAzimuthAngle <= kDoublePi);
+  return aAzimuthAngle;
+}
+
+// static
+double WidgetPointerHelper::ComputeAltitudeAngle(int32_t aTiltX,
+                                                 int32_t aTiltY) {
+  // https://w3c.github.io/pointerevents/#converting-between-tiltx-tilty-and-altitudeangle-azimuthangle
+  aTiltX = GetValidTiltValue(aTiltX);
+  aTiltY = GetValidTiltValue(aTiltY);
+  if (std::abs(aTiltX) == 90 || std::abs(aTiltY) == 90) {
+    return 0.0;
+  }
+  const double tiltXRadians = kPi / 180.0 * aTiltX;
+  const double tiltYRadians = kPi / 180.0 * aTiltY;
+  if (!aTiltX) {
+    return kHalfPi - std::abs(tiltYRadians);
+  }
+  if (!aTiltY) {
+    return kHalfPi - std::abs(tiltXRadians);
+  }
+  return std::atan(1.0 /
+                   NS_hypot(std::tan(tiltXRadians), std::tan(tiltYRadians)));
+}
+
+// static
+double WidgetPointerHelper::ComputeAzimuthAngle(int32_t aTiltX,
+                                                int32_t aTiltY) {
+  // https://w3c.github.io/pointerevents/#converting-between-tiltx-tilty-and-altitudeangle-azimuthangle
+  aTiltX = GetValidTiltValue(aTiltX);
+  aTiltY = GetValidTiltValue(aTiltY);
+  if (!aTiltX) {
+    if (aTiltY > 0) {
+      return kHalfPi;
+    }
+    return aTiltY < 0 ? 3.0 * kHalfPi : 0.0;
+  }
+
+  if (!aTiltY) {
+    return aTiltX < 0 ? kPi : 0.0;
+  }
+
+  if (std::abs(aTiltX) == 90 || std::abs(aTiltY) == 90) {
+    return 0.0;
+  }
+
+  const double tiltXRadians = kPi / 180.0 * aTiltX;
+  const double tiltYRadians = kPi / 180.0 * aTiltY;
+  const double azimuthAngle =
+      std::atan2(std::tan(tiltYRadians), std::tan(tiltXRadians));
+  return azimuthAngle < 0 ? azimuthAngle + kDoublePi : azimuthAngle;
+}
+
+// static
+double WidgetPointerHelper::ComputeTiltX(double aAltitudeAngle,
+                                         double aAzimuthAngle) {
+  // https://w3c.github.io/pointerevents/#converting-between-tiltx-tilty-and-altitudeangle-azimuthangle
+  aAltitudeAngle = GetValidAltitudeAngle(aAltitudeAngle);
+  aAzimuthAngle = GetValidAzimuthAngle(aAzimuthAngle);
+  if (aAltitudeAngle == 0.0) {
+    if ((aAzimuthAngle >= 0.0 && aAzimuthAngle < kHalfPi) ||
+        (aAzimuthAngle > 3 * kHalfPi && aAzimuthAngle <= kDoublePi)) {
+      return 90;  // pi / 2 * 180 / pi
+    }
+    if (aAzimuthAngle > kHalfPi && aAzimuthAngle < 3 * kHalfPi) {
+      return -90;  // -1 * pi / 2 * 180 / pi
+    }
+    MOZ_ASSERT(aAzimuthAngle == kHalfPi || aAzimuthAngle == 3 * kHalfPi);
+    return 0.0;
+  }
+
+  constexpr double radToDeg = 180.0 / kPi;
+  return std::floor(
+      std::atan(std::cos(aAzimuthAngle) / std::tan(aAltitudeAngle)) * radToDeg +
+      0.5);
+}
+
+// static
+double WidgetPointerHelper::ComputeTiltY(double aAltitudeAngle,
+                                         double aAzimuthAngle) {
+  // https://w3c.github.io/pointerevents/#converting-between-tiltx-tilty-and-altitudeangle-azimuthangle
+  aAltitudeAngle = GetValidAltitudeAngle(aAltitudeAngle);
+  aAzimuthAngle = GetValidAzimuthAngle(aAzimuthAngle);
+  if (aAltitudeAngle == 0.0) {
+    if (aAzimuthAngle > 0.0 && aAzimuthAngle < kPi) {
+      return 90;  // pi / 2 * 180 / pi
+    }
+    if (aAzimuthAngle > kPi && aAzimuthAngle < kDoublePi) {
+      return -90;  // -1 * pi / 2 * 180 / pi
+    }
+    MOZ_ASSERT(aAzimuthAngle == 0.0 || aAzimuthAngle == kPi ||
+               aAzimuthAngle == kDoublePi);
+    return 0.0;
+  }
+  constexpr double radToDeg = 180.0 / kPi;
+  return std::floor(
+      std::atan(std::sin(aAzimuthAngle) / std::tan(aAltitudeAngle)) * radToDeg +
+      0.5);
+}
+
+/******************************************************************************
  * mozilla::WidgetMouseEventBase (MouseEvents.h)
  ******************************************************************************/
 
@@ -667,6 +900,36 @@ bool WidgetMouseEventBase::InputSourceSupportsHover() const {
   }
 }
 
+bool WidgetMouseEventBase::DOMEventShouldUseFractionalCoords() const {
+  if (!StaticPrefs::dom_event_pointer_fractional_coordinates_enabled()) {
+    return false;  // We completely don't support fractional coordinates
+  }
+  // If we support fractional coordinates only for PointerEvent, the spec
+  // recommend that `click`, `auxclick` and `contextmenu` keep using integer
+  // coordinates.
+  // https://w3c.github.io/pointerevents/#event-coordinates
+  if (mClass == ePointerEventClass && mMessage != ePointerClick &&
+      mMessage != ePointerAuxClick && mMessage != eContextMenu) {
+    return true;
+  }
+  // Untrusted events can be initialized with double values.  However, Chrome
+  // returns integer coordinates for non-PointerEvent instances, `click`,
+  // `auxclick` and `contextmenu`.  Therefore, it may be risky to allow
+  // fractional coordinates for all untrusted events right now because web apps
+  // may initialize untrusted events with quotients.
+  // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/events/pointer_event.h;l=59-91;drc=80c2637874588837a2d656dbd79ad8f227dc67e8
+  // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/events/pointer_event.cc;l=110-117;drc=8e948282d37c0e119e3102236878d6f4d5052c16
+  if (!IsTrusted()) {
+    return StaticPrefs::
+        dom_event_mouse_fractional_coordinates_untrusted_enabled();
+  }
+  // CSSOM suggested that MouseEvent interface can treat fractional values in
+  // all instances.  However, it's risky for backward compatibility.  Therefore,
+  // we don't have a plan to enable it for now.
+  return MOZ_UNLIKELY(
+      StaticPrefs::dom_event_mouse_fractional_coordinates_trusted_enabled());
+}
+
 /******************************************************************************
  * mozilla::WidgetMouseEvent (MouseEvents.h)
  ******************************************************************************/
@@ -682,7 +945,11 @@ void WidgetMouseEvent::AssertContextMenuEventButtonConsistency() const {
     return;
   }
 
-  if (mContextMenuTrigger == eNormal) {
+  if (mInputSource == dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH) {
+    NS_WARNING_ASSERTION(mButton == MouseButton::ePrimary,
+                         "eContextMenu events by touch trigger should use "
+                         "primary mouse button / touch contact");
+  } else if (mContextMenuTrigger == eNormal) {
     NS_WARNING_ASSERTION(mButton == MouseButton::eSecondary,
                          "eContextMenu events with eNormal trigger should use "
                          "secondary mouse button");
@@ -706,8 +973,9 @@ void WidgetMouseEvent::AssertContextMenuEventButtonConsistency() const {
 
 void WidgetDragEvent::InitDropEffectForTests() {
   MOZ_ASSERT(mFlags.mIsSynthesizedForTests);
+  MOZ_ASSERT(mWidget);
 
-  nsCOMPtr<nsIDragSession> session = nsContentUtils::GetDragSession();
+  nsCOMPtr<nsIDragSession> session = nsContentUtils::GetDragSession(mWidget);
   if (NS_WARN_IF(!session)) {
     return;
   }
@@ -1205,9 +1473,8 @@ void WidgetKeyboardEvent::GetDOMKeyName(KeyNameIndex aKeyNameIndex,
     return;
   }
 
-  MOZ_RELEASE_ASSERT(
-      static_cast<size_t>(aKeyNameIndex) < ArrayLength(kKeyNames),
-      "Illegal key enumeration value");
+  MOZ_RELEASE_ASSERT(static_cast<size_t>(aKeyNameIndex) < std::size(kKeyNames),
+                     "Illegal key enumeration value");
   aKeyName = kKeyNames[aKeyNameIndex];
 }
 
@@ -1220,7 +1487,7 @@ void WidgetKeyboardEvent::GetDOMCodeName(CodeNameIndex aCodeNameIndex,
   }
 
   MOZ_RELEASE_ASSERT(
-      static_cast<size_t>(aCodeNameIndex) < ArrayLength(kCodeNames),
+      static_cast<size_t>(aCodeNameIndex) < std::size(kCodeNames),
       "Illegal physical code enumeration value");
 
   // Generate some continuous runs of codes, rather than looking them up.
@@ -1259,8 +1526,8 @@ void WidgetKeyboardEvent::GetDOMCodeName(CodeNameIndex aCodeNameIndex,
 /* static */
 KeyNameIndex WidgetKeyboardEvent::GetKeyNameIndex(const nsAString& aKeyValue) {
   if (!sKeyNameIndexHashtable) {
-    sKeyNameIndexHashtable = new KeyNameIndexHashtable(ArrayLength(kKeyNames));
-    for (size_t i = 0; i < ArrayLength(kKeyNames); i++) {
+    sKeyNameIndexHashtable = new KeyNameIndexHashtable(std::size(kKeyNames));
+    for (size_t i = 0; i < std::size(kKeyNames); i++) {
       sKeyNameIndexHashtable->InsertOrUpdate(nsDependentString(kKeyNames[i]),
                                              static_cast<KeyNameIndex>(i));
     }
@@ -1273,9 +1540,8 @@ KeyNameIndex WidgetKeyboardEvent::GetKeyNameIndex(const nsAString& aKeyValue) {
 CodeNameIndex WidgetKeyboardEvent::GetCodeNameIndex(
     const nsAString& aCodeValue) {
   if (!sCodeNameIndexHashtable) {
-    sCodeNameIndexHashtable =
-        new CodeNameIndexHashtable(ArrayLength(kCodeNames));
-    for (size_t i = 0; i < ArrayLength(kCodeNames); i++) {
+    sCodeNameIndexHashtable = new CodeNameIndexHashtable(std::size(kCodeNames));
+    for (size_t i = 0; i < std::size(kCodeNames); i++) {
       sCodeNameIndexHashtable->InsertOrUpdate(nsDependentString(kCodeNames[i]),
                                               static_cast<CodeNameIndex>(i));
     }
@@ -1331,7 +1597,7 @@ uint32_t WidgetKeyboardEvent::GetFallbackKeyCodeOfPunctuationKey(
 #undef NS_DEFINE_COMMAND_WITH_PARAM
 #undef NS_DEFINE_COMMAND_NO_EXEC_COMMAND
 
-  MOZ_RELEASE_ASSERT(static_cast<size_t>(aCommand) < ArrayLength(kCommands),
+  MOZ_RELEASE_ASSERT(static_cast<size_t>(aCommand) < std::size(kCommands),
                      "Illegal command enumeration value");
   return kCommands[static_cast<CommandInt>(aCommand)];
 }
@@ -1944,7 +2210,7 @@ void InternalEditorInputEvent::GetDOMInputTypeName(EditorInputType aInputType,
   }
 
   MOZ_RELEASE_ASSERT(
-      static_cast<size_t>(aInputType) < ArrayLength(kInputTypeNames),
+      static_cast<size_t>(aInputType) < std::size(kInputTypeNames),
       "Illegal input type enumeration value");
   aInputTypeName.Assign(kInputTypeNames[static_cast<size_t>(aInputType)]);
 }
@@ -1957,8 +2223,8 @@ EditorInputType InternalEditorInputEvent::GetEditorInputType(
   }
 
   if (!sInputTypeHashtable) {
-    sInputTypeHashtable = new InputTypeHashtable(ArrayLength(kInputTypeNames));
-    for (size_t i = 0; i < ArrayLength(kInputTypeNames); i++) {
+    sInputTypeHashtable = new InputTypeHashtable(std::size(kInputTypeNames));
+    for (size_t i = 0; i < std::size(kInputTypeNames); i++) {
       sInputTypeHashtable->InsertOrUpdate(nsDependentString(kInputTypeNames[i]),
                                           static_cast<EditorInputType>(i));
     }

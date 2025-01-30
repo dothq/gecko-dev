@@ -130,7 +130,8 @@ float SVGSVGElement::CurrentScale() const { return mCurrentScale; }
 
 void SVGSVGElement::SetCurrentScale(float aCurrentScale) {
   // Prevent bizarre behaviour and maxing out of CPU and memory by clamping
-  aCurrentScale = clamped(aCurrentScale, CURRENT_SCALE_MIN, CURRENT_SCALE_MAX);
+  aCurrentScale =
+      std::clamp(aCurrentScale, CURRENT_SCALE_MIN, CURRENT_SCALE_MAX);
 
   if (aCurrentScale == mCurrentScale) {
     return;
@@ -193,23 +194,30 @@ float SVGSVGElement::GetCurrentTimeAsFloat() {
 }
 
 void SVGSVGElement::SetCurrentTime(float seconds) {
-  if (mTimedDocumentRoot) {
-    // Make sure the timegraph is up-to-date
-    FlushAnimations();
-    double fMilliseconds = double(seconds) * PR_MSEC_PER_SEC;
-    // Round to nearest whole number before converting, to avoid precision
-    // errors
-    SMILTime lMilliseconds = SVGUtils::ClampToInt64(NS_round(fMilliseconds));
-    mTimedDocumentRoot->SetCurrentTime(lMilliseconds);
-    AnimationNeedsResample();
-    // Trigger synchronous sample now, to:
-    //  - Make sure we get an up-to-date paint after this method
-    //  - re-enable event firing (it got disabled during seeking, and it
-    //  doesn't get re-enabled until the first sample after the seek -- so
-    //  let's make that happen now.)
-    FlushAnimations();
+  if (!mTimedDocumentRoot) {
+    // we're not the outermost <svg> or not bound to a tree, so silently fail
+    return;
   }
-  // else we're not the outermost <svg> or not bound to a tree, so silently fail
+  // Make sure the timegraph is up-to-date
+  if (auto* currentDoc = GetComposedDoc()) {
+    currentDoc->FlushPendingNotifications(FlushType::Style);
+  }
+  if (!mTimedDocumentRoot) {
+    return;
+  }
+  FlushAnimations();
+  double fMilliseconds = double(seconds) * PR_MSEC_PER_SEC;
+  // Round to nearest whole number before converting, to avoid precision
+  // errors
+  SMILTime lMilliseconds = SVGUtils::ClampToInt64(NS_round(fMilliseconds));
+  mTimedDocumentRoot->SetCurrentTime(lMilliseconds);
+  AnimationNeedsResample();
+  // Trigger synchronous sample now, to:
+  //  - Make sure we get an up-to-date paint after this method
+  //  - re-enable event firing (it got disabled during seeking, and it
+  //  doesn't get re-enabled until the first sample after the seek -- so
+  //  let's make that happen now.)
+  FlushAnimations();
 }
 
 void SVGSVGElement::DeselectAll() {
@@ -389,7 +397,7 @@ LengthPercentage SVGSVGElement::GetIntrinsicWidthOrHeight(int aAttr) {
   // that uses the passed argument as the context, but that's fine since we
   // know the length isn't a percentage so the context won't be used (and we
   // need to pass the element to be able to resolve em/ex units).
-  float rawSize = mLengthAttributes[aAttr].GetAnimValue(this);
+  float rawSize = mLengthAttributes[aAttr].GetAnimValueWithZoom(this);
   return LengthPercentage::FromPixels(rawSize);
 }
 
@@ -434,17 +442,26 @@ bool SVGSVGElement::WillBeOutermostSVG(nsINode& aParent) const {
   return true;
 }
 
+void SVGSVGElement::DidChangeSVGView() {
+  InvalidateTransformNotifyFrame();
+  // We map the SVGView transform as the transform css property, so need to
+  // schedule attribute mapping.
+  if (!IsPendingMappedAttributeEvaluation() &&
+      mAttrs.MarkAsPendingPresAttributeEvaluation()) {
+    OwnerDoc()->ScheduleForPresAttrEvaluation(this);
+  }
+}
+
 void SVGSVGElement::InvalidateTransformNotifyFrame() {
-  ISVGSVGFrame* svgframe = do_QueryFrame(GetPrimaryFrame());
   // might fail this check if we've failed conditional processing
-  if (svgframe) {
+  if (ISVGSVGFrame* svgframe = do_QueryFrame(GetPrimaryFrame())) {
     svgframe->NotifyViewportOrTransformChanged(
         ISVGDisplayableFrame::TRANSFORM_CHANGED);
   }
 }
 
 SVGElement::EnumAttributesInfo SVGSVGElement::GetEnumInfo() {
-  return EnumAttributesInfo(mEnumAttributes, sEnumInfo, ArrayLength(sEnumInfo));
+  return EnumAttributesInfo(mEnumAttributes, sEnumInfo, std::size(sEnumInfo));
 }
 
 void SVGSVGElement::SetImageOverridePreserveAspectRatio(
@@ -575,11 +592,6 @@ const SVGAnimatedViewBox& SVGSVGElement::GetViewBoxInternal() const {
   }
 
   return mViewBox;
-}
-
-SVGAnimatedTransformList* SVGSVGElement::GetTransformInternal() const {
-  return (mSVGView && mSVGView->mTransforms) ? mSVGView->mTransforms.get()
-                                             : mTransforms.get();
 }
 
 }  // namespace mozilla::dom

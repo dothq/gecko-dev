@@ -14,7 +14,7 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
 
-class nsIAsyncGetClipboardData;
+class nsIClipboardDataSnapshot;
 
 namespace mozilla::dom {
 
@@ -51,6 +51,8 @@ class Clipboard : public DOMEventTargetHelper {
   // testing purposes.
   static bool ReadTextEnabled(JSContext* aCx, JSObject* aGlobal);
 
+  static Span<const nsLiteralCString> MandatoryDataTypes();
+
   virtual JSObject* WrapObject(JSContext* aCx,
                                JS::Handle<JSObject*> aGivenProto) override;
 
@@ -79,7 +81,7 @@ class Clipboard : public DOMEventTargetHelper {
 
   void RequestRead(Promise& aPromise, const ReadRequestType& aType,
                    nsPIDOMWindowInner& aOwner, nsIPrincipal& aSubjectPrincipal,
-                   nsIAsyncGetClipboardData& aRequest);
+                   nsIClipboardDataSnapshot& aRequest);
 };
 
 }  // namespace mozilla::dom

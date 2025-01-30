@@ -20,11 +20,11 @@ origin:
 
   # Human-readable identifier for this version/release
   # Generally "version NNN", "tag SSS", "bookmark SSS"
-  release: 4796b59fc0a459588183dc2ea199ba1074befc67 (2024-02-18T15:37:04.000+01:00).
+  release: f8d2620d82dc769833cf3e708b806ec35529b168 (2024-11-21T09:05:33.000+00:00).
 
   # Revision to pull in
   # Must be a long or short commit SHA (long preferred)
-  revision: 4796b59fc0a459588183dc2ea199ba1074befc67
+  revision: f8d2620d82dc769833cf3e708b806ec35529b168
 
   # The package's license, where possible using the mnemonic from
   # https://spdx.org/licenses/
@@ -57,7 +57,6 @@ vendoring:
 
   generated:
     - '{yaml_dir}/vcs_version.h'
-    - '{yaml_dir}/version.h'
 
   update-actions:
     - action: copy-file
@@ -67,7 +66,6 @@ vendoring:
       pattern: '@VCS_TAG@'
       with: '{revision}'
       file: '{yaml_dir}/vcs_version.h'
-    - action: run-script
-      script: '{yaml_dir}/update-version.sh'
-      cwd: '{vendor_dir}'
-      args: ['{yaml_dir}/version.h']
+    - action: copy-file
+      from: include/dav1d/version.h
+      to: '{yaml_dir}/version.h'

@@ -7,7 +7,7 @@ use interrupt_support::Interrupted;
 use std::fmt;
 
 /// Result enum used by all implementation functions in this crate.
-/// These wll be automagically turned into `WebExtStorageApiError` at the
+/// These will be automagically turned into `WebExtStorageApiError` at the
 /// FFI layer.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -139,6 +139,14 @@ impl From<rusqlite::Error> for WebExtStorageApiError {
 impl From<serde_json::Error> for WebExtStorageApiError {
     fn from(value: serde_json::Error) -> Self {
         WebExtStorageApiError::JsonError {
+            reason: value.to_string(),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WebExtStorageApiError {
+    fn from(value: anyhow::Error) -> Self {
+        WebExtStorageApiError::UnexpectedError {
             reason: value.to_string(),
         }
     }

@@ -1,4 +1,5 @@
 // META: script=/resources/testdriver.js
+// META: script=/resources/testdriver-vendor.js
 // META: script=/common/utils.js
 // META: script=resources/fledge-util.sub.js
 // META: script=/common/subset-tests.js
@@ -259,7 +260,7 @@ subsetTest(promise_test, async test => {
     // reportResultSuccessCondition:
     `browserSignals.interestGroupName === undefined`,
     // reportWinSuccessCondition:
-    `browserSignals.interestGroupName === ''`
+    `browserSignals.interestGroupName === 'default name'`
   );
 }, 'browserSignals.interestGroupName test.');
 
@@ -303,3 +304,53 @@ await runReportArgumentValidationTest(
     uuid
   );
 }, 'browserSignals.madeHighestScoringOtherBid with other bid.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  await runReportTest(
+      test, uuid,
+      { reportResultSuccessCondition:
+          `browserSignals.reportingTimeout === undefined`,
+        reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');`,
+        reportWinSuccessCondition:
+          'browserSignals.reportingTimeout === 100',
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
+      // expectedReportURLs:
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)],
+      // renderURLOverride
+      null,
+      // auctionConfigOverrides
+      {reportingTimeout: 100});
+}, 'browserSignals.reportingTimeout with custom value from auction config.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  await runReportTest(
+      test, uuid,
+      { reportResultSuccessCondition:
+          `browserSignals.reportingTimeout === undefined`,
+        reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');`,
+        reportWinSuccessCondition:
+          'browserSignals.reportingTimeout === 5000',
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
+      // expectedReportURLs:
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)],
+      // renderURLOverride
+      null,
+      // auctionConfigOverrides
+      {reportingTimeout: 1234567890});
+}, 'browserSignals.reportingTimeout above the cap value.');
+
+subsetTest(promise_test, async test => {
+  await runReportArgumentValidationTest(
+    test,
+    // reportResultSuccessCondition:
+    `browserSignals.reportingTimeout === undefined`,
+    // reportWinSuccessCondition:
+    `browserSignals.reportingTimeout === 50`
+  );
+}, 'browserSignals.reportingTimeout default value.');

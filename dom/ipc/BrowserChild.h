@@ -12,7 +12,6 @@
 #include "nsIWebNavigation.h"
 #include "nsCOMPtr.h"
 #include "nsIWebBrowserChrome.h"
-#include "nsIWebBrowserChromeFocus.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIWindowProvider.h"
 #include "nsIDocShell.h"
@@ -86,6 +85,13 @@ class SessionStoreChild;
 class RequestData;
 class WebProgressData;
 
+#define DOM_BROWSERCHILD_IID                         \
+  {                                                  \
+    0x58a5775d, 0xba05, 0x45bf, {                    \
+      0xbd, 0xb8, 0xd7, 0x61, 0xf9, 0x01, 0x01, 0x31 \
+    }                                                \
+  }
+
 class BrowserChildMessageManager : public ContentFrameMessageManager,
                                    public nsIMessageSender,
                                    public nsSupportsWeakReference {
@@ -128,7 +134,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                            public ipc::MessageManagerCallback,
                            public PBrowserChild,
                            public nsIWebBrowserChrome,
-                           public nsIWebBrowserChromeFocus,
                            public nsIInterfaceRequestor,
                            public nsIWindowProvider,
                            public nsSupportsWeakReference,
@@ -183,9 +188,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
     return mUniqueId;
   }
 
+  NS_DECLARE_STATIC_IID_ACCESSOR(DOM_BROWSERCHILD_IID)
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIWEBBROWSERCHROME
-  NS_DECL_NSIWEBBROWSERCHROMEFOCUS
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIWINDOWPROVIDER
   NS_DECL_NSIBROWSERCHILD
@@ -279,6 +284,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvDynamicToolbarOffsetChanged(
       const mozilla::ScreenIntCoord& aOffset);
 
+  mozilla::ipc::IPCResult RecvKeyboardHeightChanged(
+      const mozilla::ScreenIntCoord& aHeight);
+
   mozilla::ipc::IPCResult RecvActivate(uint64_t aActionId);
 
   mozilla::ipc::IPCResult RecvDeactivate(uint64_t aActionId);
@@ -309,6 +317,13 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvNormalPriorityRealMouseButtonEvent(
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
       const uint64_t& aInputBlockId);
+
+  mozilla::ipc::IPCResult RecvRealPointerButtonEvent(
+      const mozilla::WidgetPointerEvent& aEvent,
+      const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId);
+  mozilla::ipc::IPCResult RecvNormalPriorityRealPointerButtonEvent(
+      const mozilla::WidgetPointerEvent& aEvent,
+      const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId);
 
   mozilla::ipc::IPCResult RecvRealMouseEnterExitWidgetEvent(
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
@@ -385,6 +400,12 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvNormalPrioritySelectionEvent(
       const mozilla::WidgetSelectionEvent& aEvent);
 
+  mozilla::ipc::IPCResult RecvSimpleContentCommandEvent(
+      const mozilla::EventMessage& aMessage);
+
+  mozilla::ipc::IPCResult RecvNormalPrioritySimpleContentCommandEvent(
+      const mozilla::EventMessage& aMessage);
+
   mozilla::ipc::IPCResult RecvInsertText(const nsAString& aStringToInsert);
 
   mozilla::ipc::IPCResult RecvUpdateRemoteStyle(
@@ -392,6 +413,15 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvNormalPriorityInsertText(
       const nsAString& aStringToInsert);
+
+  mozilla::ipc::IPCResult RecvReplaceText(const nsString& aReplaceSrcString,
+                                          const nsString& aStringToInsert,
+                                          uint32_t aOffset,
+                                          bool aPreventSetSelection);
+
+  mozilla::ipc::IPCResult RecvNormalPriorityReplaceText(
+      const nsString& aReplaceSrcString, const nsString& aStringToInsert,
+      uint32_t aOffset, bool aPreventSetSelection);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvPasteTransferable(
@@ -406,7 +436,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const IPCTabContext& aContext);
 
   mozilla::ipc::IPCResult RecvSafeAreaInsetsChanged(
-      const mozilla::ScreenIntMargin& aSafeAreaInsets);
+      const mozilla::LayoutDeviceIntMargin& aSafeAreaInsets);
 
 #ifdef ACCESSIBILITY
   PDocAccessibleChild* AllocPDocAccessibleChild(
@@ -507,7 +537,15 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvExitPrintPreview();
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY mozilla::ipc::IPCResult RecvPrint(
-      const MaybeDiscardedBrowsingContext&, const PrintData&);
+      const MaybeDiscardedBrowsingContext&, const PrintData&, bool,
+      PrintResolver&&);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY mozilla::ipc::IPCResult RecvPrintClonedPage(
+      const MaybeDiscardedBrowsingContext&, const PrintData&,
+      const MaybeDiscardedBrowsingContext&);
+
+  mozilla::ipc::IPCResult RecvDestroyPrintClone(
+      const MaybeDiscardedBrowsingContext&);
 
   mozilla::ipc::IPCResult RecvUpdateNativeWindowHandle(
       const uintptr_t& aNewHandle);
@@ -523,13 +561,14 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   ScreenIntCoord GetDynamicToolbarMaxHeight() const {
     return mDynamicToolbarMaxHeight;
   };
+  mozilla::ScreenIntCoord GetKeyboardHeight() const { return mKeyboardHeight; }
 
   bool IPCOpen() const { return mIPCOpen; }
 
   const mozilla::layers::CompositorOptions& GetCompositorOptions() const;
   bool AsyncPanZoomEnabled() const;
 
-  ScreenIntSize GetInnerSize();
+  LayoutDeviceIntSize GetInnerSize();
   CSSSize GetUnscaledInnerSize() { return mUnscaledInnerSize; }
 
   Maybe<nsRect> GetVisibleRect() const;
@@ -645,6 +684,34 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
           aCanvasFingerprinter,
       const Maybe<bool> aCanvasFingerprinterKnownText);
 
+  already_AddRefed<nsIDragSession> GetDragSession();
+  void SetDragSession(nsIDragSession* aSession);
+
+  mozilla::ipc::IPCResult RecvInvokeChildDragSession(
+      const MaybeDiscarded<WindowContext>& aSourceWindowContext,
+      const MaybeDiscarded<WindowContext>& aSourceTopWindowContext,
+      nsIPrincipal* aPrincipal, nsTArray<IPCTransferableData>&& aTransferables,
+      const uint32_t& aAction);
+
+  mozilla::ipc::IPCResult RecvUpdateDragSession(
+      nsIPrincipal* aPrincipal, nsTArray<IPCTransferableData>&& aTransferables,
+      EventMessage aEventMessage);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  mozilla::ipc::IPCResult RecvEndDragSession(
+      const bool& aDoneDrag, const bool& aUserCancelled,
+      const mozilla::LayoutDeviceIntPoint& aEndDragPoint,
+      const uint32_t& aKeyModifiers, const uint32_t& aDropEffect);
+
+  mozilla::ipc::IPCResult RecvStoreDropTargetAndDelayEndDragSession(
+      const LayoutDeviceIntPoint& aPt, uint32_t aDropEffect,
+      uint32_t aDragAction, nsIPrincipal* aPrincipal,
+      nsIContentSecurityPolicy* aCsp);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  mozilla::ipc::IPCResult RecvDispatchToDropTargetAndResumeEndDragSession(
+      bool aShouldDrop);
+
  protected:
   virtual ~BrowserChild();
 
@@ -668,6 +735,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvReleaseAllPointerCapture();
 
+  mozilla::ipc::IPCResult RecvReleasePointerLock();
+
  private:
   void HandleDoubleTap(const CSSPoint& aPoint, const Modifiers& aModifiers,
                        const ScrollableLayerGuid& aGuid,
@@ -689,7 +758,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   bool HasValidInnerSize();
 
-  ScreenIntRect GetOuterRect();
+  LayoutDeviceIntRect GetOuterRect();
 
   void SetUnscaledInnerSize(const CSSSize& aSize) {
     mUnscaledInnerSize = aSize;
@@ -712,6 +781,11 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   void InternalSetDocShellIsActive(bool aIsActive);
 
+  MOZ_CAN_RUN_SCRIPT
+  mozilla::ipc::IPCResult CommonPrint(
+      const MaybeDiscardedBrowsingContext& aBc, const PrintData& aPrintData,
+      RefPtr<BrowsingContext>* aCachedBrowsingContext);
+
   bool CreateRemoteLayerManager(
       mozilla::layers::PCompositorBridgeChild* aCompositorChild);
 
@@ -729,6 +803,10 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const MaybeDiscarded<BrowsingContext>& aSourceBC,
       const embedding::PrintData& aPrintData);
 
+  already_AddRefed<DataTransfer> ConvertToDataTransfer(
+      nsIPrincipal* aPrincipal, nsTArray<IPCTransferableData>&& aTransferables,
+      EventMessage aMessage);
+
   class DelayedDeleteRunnable;
 
   RefPtr<BrowserChildMessageManager> mBrowserChildMessageManager;
@@ -740,6 +818,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   RefPtr<ContentChild> mManager;
   RefPtr<BrowsingContext> mBrowsingContext;
   RefPtr<nsBrowserStatusFilter> mStatusFilter;
+  RefPtr<nsIDragSession> mDragSession;
+
+  Maybe<CodeNameIndex> mPreviousConsumedKeyDownCode;
   uint32_t mChromeFlags;
   uint32_t mMaxTouchPoints;
   layers::LayersId mLayersId;
@@ -747,8 +828,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   Maybe<bool> mLayersConnected;
   Maybe<bool> mLayersConnectRequested;
   EffectsInfo mEffectsInfo;
-
-  RefPtr<VsyncMainChild> mVsyncChild;
 
   RefPtr<APZEventState> mAPZEventState;
 
@@ -758,11 +837,15 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   // NOTE: This value is valuable only for the top level browser.
   LayoutDeviceIntPoint mChromeOffset;
   ScreenIntCoord mDynamicToolbarMaxHeight;
+  // The software keyboard height.
+  ScreenIntCoord mKeyboardHeight;
   TabId mUniqueId;
+
+  // Position of a delayed drop event.
+  LayoutDeviceIntPoint mDelayedDropPoint;
 
   bool mDidFakeShow : 1;
   bool mTriedBrowserInit : 1;
-  bool mIgnoreKeyPressEvent : 1;
   bool mHasValidInnerSize : 1;
   bool mDestroyed : 1;
 
@@ -843,6 +926,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   DISALLOW_EVIL_CONSTRUCTORS(BrowserChild);
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(BrowserChild, DOM_BROWSERCHILD_IID)
 
 }  // namespace dom
 }  // namespace mozilla

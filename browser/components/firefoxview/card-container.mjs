@@ -91,15 +91,11 @@ class CardContainer extends MozLitElement {
     }
 
     // Record telemetry
-    Services.telemetry.recordEvent(
-      "firefoxview_next",
-      this.isExpanded ? "card_expanded" : "card_collapsed",
-      "card_container",
-      null,
-      {
-        data_type: this.shortPageName,
-      }
-    );
+    Glean.firefoxviewNext[
+      `card${this.isExpanded ? "Expanded" : "Collapsed"}CardContainer`
+    ].record({
+      data_type: this.shortPageName,
+    });
   }
 
   viewAllClicked() {
@@ -118,7 +114,9 @@ class CardContainer extends MozLitElement {
   }
 
   updateTabLists() {
-    let tabLists = this.querySelectorAll("fxview-tab-list");
+    let tabLists = this.querySelectorAll(
+      "fxview-tab-list, opentabs-tab-list, syncedtabs-tab-list"
+    );
     if (tabLists) {
       tabLists.forEach(tabList => {
         tabList.updatesPaused = !this.visible || !this.isExpanded;
@@ -132,13 +130,10 @@ class CardContainer extends MozLitElement {
         rel="stylesheet"
         href="chrome://browser/content/firefoxview/card-container.css"
       />
-      <section
-        aria-labelledby="header"
-        aria-label=${ifDefined(this.sectionLabel)}
-      >
-        ${when(
-          this.toggleDisabled,
-          () => html`<div
+      ${when(
+        this.toggleDisabled,
+        () =>
+          html`<div
             class=${classMap({
               "card-container": true,
               inner: this.isInnerCard,
@@ -165,7 +160,8 @@ class CardContainer extends MozLitElement {
             <slot name="main"></slot>
             <slot name="footer" class="card-container-footer"></slot>
           </div>`,
-          () => html`<details
+        () =>
+          html`<details
             class=${classMap({
               "card-container": true,
               inner: this.isInnerCard,
@@ -174,16 +170,16 @@ class CardContainer extends MozLitElement {
             ?open=${this.isExpanded}
             ?isOpenTabsView=${this.removeBlockEndMargin}
             @toggle=${this.onToggleContainer}
+            role=${this.isInnerCard ? "presentation" : "group"}
           >
             <summary
-              id="header"
               class="card-container-header"
               ?hidden=${ifDefined(this.hideHeader)}
               ?withViewAll=${this.showViewAll}
             >
               <span
                 class="icon chevron-icon"
-                aria-role="presentation"
+                role="presentation"
                 data-l10n-id="firefoxview-collapse-button-${this.isExpanded
                   ? "hide"
                   : "show"}"
@@ -200,8 +196,7 @@ class CardContainer extends MozLitElement {
             <slot name="main"></slot>
             <slot name="footer" class="card-container-footer"></slot>
           </details>`
-        )}
-      </section>
+      )}
     `;
   }
 }

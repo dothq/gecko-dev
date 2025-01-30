@@ -12,7 +12,6 @@ var { UrlbarMuxer, UrlbarProvider, UrlbarQueryContext, UrlbarUtils } =
   ChromeUtils.importESModule("resource:///modules/UrlbarUtils.sys.mjs");
 
 ChromeUtils.defineESModuleGetters(this, {
-  AddonTestUtils: "resource://testing-common/AddonTestUtils.sys.mjs",
   HttpServer: "resource://testing-common/httpd.sys.mjs",
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
@@ -58,14 +57,10 @@ ChromeUtils.defineLazyGetter(this, "PlacesFrecencyRecalculator", () => {
   ).wrappedJSObject;
 });
 
+// Most tests need a profile to be setup, so do that here.
+do_get_profile();
+
 SearchTestUtils.init(this);
-AddonTestUtils.init(this, false);
-AddonTestUtils.createAppInfo(
-  "xpcshell@tests.mozilla.org",
-  "XPCShell",
-  "42",
-  "42"
-);
 
 const SUGGESTIONS_ENGINE_NAME = "Suggestions";
 const TAIL_SUGGESTIONS_ENGINE_NAME = "Tail Suggestions";
@@ -164,35 +159,6 @@ function promiseControllerNotification(
   });
 }
 
-/**
- * A basic test provider, returning all the provided matches.
- */
-class TestProvider extends UrlbarTestUtils.TestProvider {
-  isActive(context) {
-    Assert.ok(context, "context is passed-in");
-    return true;
-  }
-  getPriority(context) {
-    Assert.ok(context, "context is passed-in");
-    return 0;
-  }
-  async startQuery(context, add) {
-    Assert.ok(context, "context is passed-in");
-    Assert.equal(typeof add, "function", "add is a callback");
-    this._context = context;
-    for (const result of this.results) {
-      add(this, result);
-    }
-  }
-  cancelQuery(context) {
-    // If the query was created but didn't run, this._context will be undefined.
-    if (this._context) {
-      Assert.equal(this._context, context, "cancelQuery: context is the same");
-    }
-    this._onCancel?.();
-  }
-}
-
 function convertToUtf8(str) {
   return String.fromCharCode(...new TextEncoder().encode(str));
 }
@@ -210,7 +176,12 @@ function convertToUtf8(str) {
  * @returns {UrlbarProvider} The provider
  */
 function registerBasicTestProvider(results = [], onCancel, type, name) {
-  let provider = new TestProvider({ results, onCancel, type, name });
+  let provider = new UrlbarTestUtils.TestProvider({
+    results,
+    onCancel,
+    type,
+    name,
+  });
   UrlbarProvidersManager.registerProvider(provider);
   registerCleanupFunction(() =>
     UrlbarProvidersManager.unregisterProvider(provider)
@@ -260,8 +231,6 @@ async function addTestSuggestionsEngine(
     search_url: `http://localhost:${server.identity.primaryPort}/search`,
     suggest_url: `http://localhost:${server.identity.primaryPort}/suggest`,
     suggest_url_get_params: "?q={searchTerms}",
-    // test_search_suggestions_aliases.js uses the search form.
-    search_form: `http://localhost:${server.identity.primaryPort}/search?q={searchTerms}`,
   });
   let engine = Services.search.getEngineByName(name);
   return engine;
@@ -392,6 +361,7 @@ function testEngine_setup() {
 
     registerCleanupFunction(async () => {
       Services.prefs.clearUserPref("browser.urlbar.suggest.searches");
+      Services.prefs.clearUserPref("browser.urlbar.contextualSearch.enabled");
       Services.prefs.clearUserPref(
         "browser.search.separatePrivateDefault.ui.enabled"
       );
@@ -410,6 +380,10 @@ function testEngine_setup() {
       false
     );
     Services.prefs.setBoolPref("browser.urlbar.suggest.searches", false);
+    Services.prefs.setBoolPref(
+      "browser.urlbar.scotchBonnet.enableOverride",
+      false
+    );
   });
 }
 
@@ -718,6 +692,9 @@ function makeRemoteTabResult(
  *   If the window to test is a private window.
  * @param {boolean} [options.isPrivateEngine]
  *   If the engine is a private engine.
+ * @param {string} [options.searchUrlDomainWithoutSuffix]
+ *   For tab-to-search results, the search engine domain without the public
+ *   suffix.
  * @param {number} [options.type]
  *   The type of the search result. Defaults to UrlbarUtils.RESULT_TYPE.SEARCH.
  * @param {number} [options.source]
@@ -746,6 +723,7 @@ function makeSearchResult(
     providerName,
     inPrivateWindow,
     isPrivateEngine,
+    searchUrlDomainWithoutSuffix,
     heuristic = false,
     trending = false,
     isRichSuggestion = false,
@@ -793,11 +771,16 @@ function makeSearchResult(
     payload.url = uri;
   }
   if (providerName == "TabToSearch") {
-    payload.satisfiesAutofillThreshold = satisfiesAutofillThreshold;
-    if (payload.url.startsWith("www.")) {
-      payload.url = payload.url.substring(4);
+    if (searchUrlDomainWithoutSuffix.startsWith("www.")) {
+      searchUrlDomainWithoutSuffix = searchUrlDomainWithoutSuffix.substring(4);
     }
+    payload.searchUrlDomainWithoutSuffix = searchUrlDomainWithoutSuffix;
+    payload.satisfiesAutofillThreshold = satisfiesAutofillThreshold;
     payload.isGeneralPurposeEngine = false;
+  }
+
+  if (providerName == "TokenAliasEngines") {
+    payload.keywords = alias?.toLowerCase();
   }
 
   let result = new UrlbarResult(
@@ -1014,15 +997,20 @@ async function check_results({
     "Found the expected number of results."
   );
 
-  function getPayload(result) {
-    let payload = {};
-    for (let [key, value] of Object.entries(result.payload)) {
-      if (value !== undefined) {
-        payload[key] = value;
-      }
-    }
-    return payload;
-  }
+  let propertiesToCheck = {
+    type: {},
+    source: {},
+    heuristic: {},
+    isBestMatch: { map: v => !!v },
+    providerName: { optional: true },
+    suggestedIndex: { optional: true },
+    isSuggestedIndexRelativeToGroup: { optional: true, map: v => !!v },
+    exposureTelemetry: { optional: true },
+    isRichSuggestion: { optional: true },
+    richSuggestionIconVariation: { optional: true },
+  };
+
+  let optionalPayloadProperties = new Set(["lastVisit"]);
 
   for (let i = 0; i < matches.length; i++) {
     let actual = context.results[i];
@@ -1034,54 +1022,31 @@ async function check_results({
         " expected=" +
         JSON.stringify(expected)
     );
-    Assert.equal(
-      actual.type,
-      expected.type,
-      `result.type at result index ${i}`
-    );
-    Assert.equal(
-      actual.source,
-      expected.source,
-      `result.source at result index ${i}`
-    );
-    Assert.equal(
-      actual.heuristic,
-      expected.heuristic,
-      `result.heuristic at result index ${i}`
-    );
-    Assert.equal(
-      !!actual.isBestMatch,
-      !!expected.isBestMatch,
-      `result.isBestMatch at result index ${i}`
-    );
-    if (expected.providerName) {
-      Assert.equal(
-        actual.providerName,
-        expected.providerName,
-        `result.providerName at result index ${i}`
-      );
-    }
-    if (expected.hasOwnProperty("suggestedIndex")) {
-      Assert.equal(
-        actual.suggestedIndex,
-        expected.suggestedIndex,
-        `result.suggestedIndex at result index ${i}`
-      );
-    }
-    if (expected.hasOwnProperty("isSuggestedIndexRelativeToGroup")) {
-      Assert.equal(
-        !!actual.isSuggestedIndexRelativeToGroup,
-        expected.isSuggestedIndexRelativeToGroup,
-        `result.isSuggestedIndexRelativeToGroup at result index ${i}`
-      );
+
+    for (let [key, { optional, map }] of Object.entries(propertiesToCheck)) {
+      if (!optional || expected.hasOwnProperty(key)) {
+        map ??= v => v;
+        Assert.equal(
+          map(actual[key]),
+          map(expected[key]),
+          `result.${key} at result index ${i}`
+        );
+      }
     }
 
     if (expected.payload) {
-      Assert.deepEqual(
-        getPayload(actual),
-        getPayload(expected),
-        `result.payload at result index ${i}`
+      let expectedEntries = new Set(Object.keys(expected.payload));
+      let actualEntries = new Set(Object.keys(actual.payload)).difference(
+        optionalPayloadProperties
       );
+
+      for (let key of actualEntries.union(expectedEntries)) {
+        Assert.deepEqual(
+          actual.payload[key],
+          expected.payload[key],
+          `result.payload.${key} at result index ${i}`
+        );
+      }
     }
   }
 }

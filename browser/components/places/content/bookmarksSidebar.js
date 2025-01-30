@@ -36,6 +36,14 @@ function init() {
 
   document.getElementById("bookmarks-view").place =
     "place:type=" + Ci.nsINavHistoryQueryOptions.RESULTS_AS_ROOTS_QUERY;
+
+  let bhTooltip = document.getElementById("bhTooltip");
+  bhTooltip.addEventListener("popupshowing", event => {
+    window.top.BookmarksEventHandler.fillInBHTooltip(bhTooltip, event);
+  });
+  bhTooltip.addEventListener("popuphiding", () =>
+    bhTooltip.removeAttribute("position")
+  );
 }
 
 function searchBookmarks(aSearchString) {
@@ -44,7 +52,7 @@ function searchBookmarks(aSearchString) {
     // eslint-disable-next-line no-self-assign
     tree.place = tree.place;
   } else {
-    Services.telemetry.keyedScalarAdd("sidebar.search", "bookmarks", 1);
+    Glean.sidebar.search.bookmarks.add(1);
     gCumulativeSearches++;
     tree.applyFilter(aSearchString, PlacesUtils.bookmarks.userContentRoots);
   }
@@ -57,11 +65,7 @@ function updateTelemetry(urlsOpened = []) {
   searchesHistogram.add(gCumulativeSearches);
   clearCumulativeCounter();
 
-  Services.telemetry.keyedScalarAdd(
-    "sidebar.link",
-    "bookmarks",
-    urlsOpened.length
-  );
+  Glean.sidebar.link.bookmarks.add(urlsOpened.length);
 }
 
 function clearCumulativeCounter() {

@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "PlatformEncoderModule.h"
+#include "H264.h"
 #include "nsPrintfCString.h"
 #include "mozilla/ToString.h"
 
@@ -32,6 +33,15 @@ const char* GetCodecTypeString(const CodecType& aCodecType) {
       return "_EndVideo_/_BeginAudio_";
     case CodecType::Opus:
       return "Opus";
+    case CodecType::Vorbis:
+      return "Vorbis";
+    case CodecType::Flac:
+      return "Flac";
+    case CodecType::AAC:
+      return "AAC";
+    case CodecType::PCM:
+      return "PCM";
+      break;
     case CodecType::G722:
       return "G722";
     case CodecType::_EndAudio_:
@@ -100,21 +110,27 @@ struct ConfigurationChangeToString {
     return nsPrintfCString("Framerate: %lfHz", aFramerateChange.get().value());
   }
   nsCString operator()(const BitrateModeChange& aBitrateModeChange) {
-    return nsPrintfCString(
-        "Bitrate mode: %s",
-        aBitrateModeChange.get() == MediaDataEncoder::BitrateMode::Constant
-            ? "Constant"
-            : "Variable");
+    return nsPrintfCString("Bitrate mode: %s",
+                           aBitrateModeChange.get() == BitrateMode::Constant
+                               ? "Constant"
+                               : "Variable");
   }
   nsCString operator()(const UsageChange& aUsageChange) {
     return nsPrintfCString(
         "Usage mode: %s",
-        aUsageChange.get() == MediaDataEncoder::Usage::Realtime ? "Realtime"
-                                                                : "Recoding");
+        aUsageChange.get() == Usage::Realtime ? "Realtime" : "Recoding");
   }
   nsCString operator()(const ContentHintChange& aContentHintChange) {
     return nsPrintfCString("Content hint: %s",
                            MaybeToString(aContentHintChange.get()).get());
+  }
+  nsCString operator()(const SampleRateChange& aSampleRateChange) {
+    return nsPrintfCString("Sample rate %" PRIu32 "Hz",
+                           aSampleRateChange.get());
+  }
+  nsCString operator()(const NumberOfChannelsChange& aNumberOfChannelsChange) {
+    return nsPrintfCString("Channels: %" PRIu32 "Hz",
+                           aNumberOfChannelsChange.get());
   }
 };
 
@@ -132,7 +148,9 @@ bool CanLikelyEncode(const EncoderConfig& aConfig) {
   if (aConfig.mCodec == CodecType::H264) {
     if (!aConfig.mCodecSpecific ||
         !aConfig.mCodecSpecific->is<H264Specific>()) {
-      LOGD("Error: asking for support codec for h264 without h264 specific config.");
+      LOGD(
+          "Error: asking for support codec for h264 without h264 specific "
+          "config.");
       return false;
     }
     H264Specific specific = aConfig.mCodecSpecific->as<H264Specific>();
@@ -152,7 +170,16 @@ bool CanLikelyEncode(const EncoderConfig& aConfig) {
       LOGD("Invalid profile of %x for h264", specific.mProfile);
       return false;
     }
-    if (width > 4096 || height > 4096) {
+    // x264 (Linux software) and some Windows configuration (e.g. some nvidia
+    // hardware) support level 62 which supports 8k
+    if ((specific.mLevel >= H264_LEVEL::H264_LEVEL_6) &&
+        (width > 2 * 4096 || height > 2 * 4096)) {
+      LOGD("Invalid size of %dx%d for h264", width, height);
+      return false;
+    }
+    // Levels strictly below 6 are limited to 4096x4096px
+    if (specific.mLevel < H264_LEVEL::H264_LEVEL_6 &&
+        (width > 4096 || height > 4096)) {
       LOGD("Invalid size of %dx%d for h264", width, height);
       return false;
     }

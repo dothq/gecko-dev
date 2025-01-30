@@ -153,6 +153,20 @@ class ArrayBufferDataStream {
       this.pos += size;
       return value;
     }
+
+    readBytes() {
+      const size = this.readInt32();
+      const bytes = new Uint8Array(this.dataView.buffer, this.pos, size);
+      this.pos += size;
+      return bytes
+    }
+
+    writeBytes(uint8Array) {
+      this.writeUint32(uint8Array.length);
+      value.forEach((elt) => {
+        dataStream.writeUint8(elt);
+      })
+    }
 }
 
 function handleRustResult(result, liftCallback, liftErrCallback) {
@@ -164,9 +178,8 @@ function handleRustResult(result, liftCallback, liftErrCallback) {
             throw liftErrCallback(result.data);
 
         case "internal-error":
-            let message = result.internalErrorMessage;
-            if (message) {
-                throw new UniFFIInternalError(message);
+            if (result.data) {
+                throw new UniFFIInternalError(FfiConverterString.lift(result.data));
             } else {
                 throw new UniFFIInternalError("Unknown error");
             }
@@ -308,9 +321,15 @@ export class FfiConverterString extends FfiConverter {
 
 
 
+/**
+ * ArithmeticError
+ */
 export class ArithmeticError extends Error {}
 
 
+/**
+ * INTEGER_OVERFLOW
+ */
 export class IntegerOverflow extends ArithmeticError {
 
     constructor(message, ...params) {
@@ -329,7 +348,7 @@ export class FfiConverterTypeArithmeticError extends FfiConverterArrayBuffer {
             case 1:
                 return new IntegerOverflow(FfiConverterString.read(dataStream));
             default:
-                throw new Error("Unknown ArithmeticError variant");
+                throw new UniFFITypeError("Unknown ArithmeticError variant");
         }
     }
     static computeSize(value) {
@@ -338,14 +357,14 @@ export class FfiConverterTypeArithmeticError extends FfiConverterArrayBuffer {
         if (value instanceof IntegerOverflow) {
             return totalSize;
         }
-        throw new Error("Unknown ArithmeticError variant");
+        throw new UniFFITypeError("Unknown ArithmeticError variant");
     }
     static write(dataStream, value) {
         if (value instanceof IntegerOverflow) {
             dataStream.writeInt32(1);
             return;
         }
-        throw new Error("Unknown ArithmeticError variant");
+        throw new UniFFITypeError("Unknown ArithmeticError variant");
     }
 
     static errorClass = ArithmeticError;
@@ -355,6 +374,10 @@ export class FfiConverterTypeArithmeticError extends FfiConverterArrayBuffer {
 
 
 
+/**
+ * add
+ * @returns {number}
+ */
 export function add(a,b) {
 
         const liftResult = (result) => FfiConverterU64.lift(result);
@@ -376,8 +399,8 @@ export function add(a,b) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                35, // arithmetic:uniffi_arithmetical_fn_func_add
+            return UniFFIScaffolding.callAsyncWrapper(
+                91, // arithmetic:uniffi_arithmetical_fn_func_add
                 FfiConverterU64.lower(a),
                 FfiConverterU64.lower(b),
             )
@@ -389,6 +412,10 @@ export function add(a,b) {
         }
 }
 
+/**
+ * div
+ * @returns {number}
+ */
 export function div(dividend,divisor) {
 
         const liftResult = (result) => FfiConverterU64.lift(result);
@@ -410,8 +437,8 @@ export function div(dividend,divisor) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                36, // arithmetic:uniffi_arithmetical_fn_func_div
+            return UniFFIScaffolding.callAsyncWrapper(
+                92, // arithmetic:uniffi_arithmetical_fn_func_div
                 FfiConverterU64.lower(dividend),
                 FfiConverterU64.lower(divisor),
             )
@@ -423,6 +450,10 @@ export function div(dividend,divisor) {
         }
 }
 
+/**
+ * equal
+ * @returns {Boolean}
+ */
 export function equal(a,b) {
 
         const liftResult = (result) => FfiConverterBool.lift(result);
@@ -444,8 +475,8 @@ export function equal(a,b) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                37, // arithmetic:uniffi_arithmetical_fn_func_equal
+            return UniFFIScaffolding.callAsyncWrapper(
+                93, // arithmetic:uniffi_arithmetical_fn_func_equal
                 FfiConverterU64.lower(a),
                 FfiConverterU64.lower(b),
             )
@@ -457,6 +488,10 @@ export function equal(a,b) {
         }
 }
 
+/**
+ * sub
+ * @returns {number}
+ */
 export function sub(a,b) {
 
         const liftResult = (result) => FfiConverterU64.lift(result);
@@ -478,8 +513,8 @@ export function sub(a,b) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                38, // arithmetic:uniffi_arithmetical_fn_func_sub
+            return UniFFIScaffolding.callAsyncWrapper(
+                94, // arithmetic:uniffi_arithmetical_fn_func_sub
                 FfiConverterU64.lower(a),
                 FfiConverterU64.lower(b),
             )

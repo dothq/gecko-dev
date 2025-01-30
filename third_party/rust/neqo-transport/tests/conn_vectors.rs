@@ -6,7 +6,7 @@
 
 // Tests with the test vectors from the spec.
 
-#![cfg(not(feature = "fuzzing"))]
+#![cfg(not(feature = "disable-encryption"))]
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -265,7 +265,7 @@ fn process_client_initial(v: Version, packet: &[u8]) {
 
     let dgram = datagram(packet.to_vec());
     assert_eq!(*server.state(), State::Init);
-    let out = server.process(Some(&dgram), now());
+    let out = server.process(Some(dgram), now());
     assert_eq!(*server.state(), State::Handshaking);
     assert!(out.dgram().is_some());
 }

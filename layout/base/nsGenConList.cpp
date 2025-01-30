@@ -12,12 +12,13 @@
 #include "nsIFrame.h"
 
 void nsGenConNode::CheckFrameAssertions() {
-  NS_ASSERTION(
-      mContentIndex < int32_t(mPseudoFrame->StyleContent()->ContentCount()) ||
-          // Special-case for the USE node created for the legacy markers,
-          // which don't use the content property.
-          mContentIndex == 0,
-      "index out of range");
+  NS_ASSERTION(mContentIndex < int32_t(mPseudoFrame->StyleContent()
+                                           ->NonAltContentItems()
+                                           .Length()) ||
+                   // Special-case for the USE node created for the legacy
+                   // markers, which don't use the content property.
+                   mContentIndex == 0,
+               "index out of range");
   // We allow negative values of mContentIndex for 'counter-reset' and
   // 'counter-increment'.
 
@@ -143,9 +144,13 @@ nsGenConNode* nsGenConList::BinarySearch(
   while (first != last) {
     uint32_t test = first + (last - first) / 2;
     if (last == curIndex) {
-      for (; curIndex != test; --curIndex) curNode = Prev(curNode);
+      for (; curIndex != test; --curIndex) {
+        curNode = Prev(curNode);
+      }
     } else {
-      for (; curIndex != test; ++curIndex) curNode = Next(curNode);
+      for (; curIndex != test; ++curIndex) {
+        curNode = Next(curNode);
+      }
     }
 
     if (aIsAfter(curNode)) {

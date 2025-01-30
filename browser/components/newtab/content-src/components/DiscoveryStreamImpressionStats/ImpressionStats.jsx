@@ -2,10 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import { TOP_SITES_SOURCE } from "../TopSites/TopSitesConstants";
 import React from "react";
 
@@ -22,7 +19,7 @@ export const INTERSECTION_RATIO = 0.5;
 /**
  * Impression wrapper for Discovery Stream related React components.
  *
- * It makses use of the Intersection Observer API to detect the visibility,
+ * It makes use of the Intersection Observer API to detect the visibility,
  * and relies on page visibility to ensure the impression is reported
  * only when the component is visible on the page.
  *
@@ -57,6 +54,7 @@ export class ImpressionStats extends React.PureComponent {
 
   _dispatchImpressionStats() {
     const { props } = this;
+    const { isFakespot } = props;
     const cards = props.rows;
 
     if (this.props.flightId) {
@@ -89,21 +87,52 @@ export class ImpressionStats extends React.PureComponent {
     }
 
     if (this._needsImpressionStats(cards)) {
-      props.dispatch(
-        ac.DiscoveryStreamImpressionStats({
-          source: props.source.toUpperCase(),
-          window_inner_width: window.innerWidth,
-          window_inner_height: window.innerHeight,
-          tiles: cards.map(link => ({
-            id: link.id,
-            pos: link.pos,
-            type: this.props.flightId ? "spoc" : "organic",
-            ...(link.shim ? { shim: link.shim } : {}),
-            recommendation_id: link.recommendation_id,
-          })),
-        })
-      );
-      this.impressionCardGuids = cards.map(link => link.id);
+      if (isFakespot) {
+        props.dispatch(
+          ac.DiscoveryStreamImpressionStats({
+            source: props.source.toUpperCase(),
+            window_inner_width: window.innerWidth,
+            window_inner_height: window.innerHeight,
+            tiles: cards.map(link => ({
+              id: link.id,
+              type: "fakespot",
+              category: link.category,
+            })),
+          })
+        );
+      } else {
+        props.dispatch(
+          ac.DiscoveryStreamImpressionStats({
+            source: props.source.toUpperCase(),
+            window_inner_width: window.innerWidth,
+            window_inner_height: window.innerHeight,
+            tiles: cards.map(link => ({
+              id: link.id,
+              pos: link.pos,
+              type: this.props.flightId ? "spoc" : "organic",
+              ...(link.shim ? { shim: link.shim } : {}),
+              recommendation_id: link.recommendation_id,
+              fetchTimestamp: link.fetchTimestamp,
+              corpus_item_id: link.corpus_item_id,
+              scheduled_corpus_item_id: link.scheduled_corpus_item_id,
+              recommended_at: link.recommended_at,
+              received_rank: link.received_rank,
+              topic: link.topic,
+              is_list_card: link.is_list_card,
+              ...(link.format ? { format: link.format } : {}),
+              ...(link.section
+                ? {
+                    section: link.section,
+                    section_position: link.section_position,
+                    is_secton_followed: link.is_secton_followed,
+                  }
+                : {}),
+            })),
+            firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+          })
+        );
+        this.impressionCardGuids = cards.map(link => link.id);
+      }
     }
   }
 
@@ -244,8 +273,8 @@ export class ImpressionStats extends React.PureComponent {
 }
 
 ImpressionStats.defaultProps = {
-  IntersectionObserver: global.IntersectionObserver,
-  document: global.document,
+  IntersectionObserver: globalThis.IntersectionObserver,
+  document: globalThis.document,
   rows: [],
   source: "",
 };

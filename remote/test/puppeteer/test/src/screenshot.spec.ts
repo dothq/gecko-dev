@@ -168,6 +168,47 @@ describe('Screenshots', function () {
         'screenshot-sanity.png'
       );
     });
+
+    it('should take fullPage screenshots when defaultViewport is null', async () => {
+      const {server, context, close} = await launch({
+        defaultViewport: null,
+      });
+      try {
+        const page = await context.newPage();
+        await page.goto(server.PREFIX + '/grid.html');
+        const screenshot = await page.screenshot({
+          fullPage: true,
+        });
+        expect(screenshot).toBeInstanceOf(Uint8Array);
+      } finally {
+        await close();
+      }
+    });
+
+    it('should restore to original viewport size after taking fullPage screenshots when defaultViewport is null', async () => {
+      const {server, context, close} = await launch({
+        defaultViewport: null,
+      });
+      try {
+        const page = await context.newPage();
+        const originalSize = await page.evaluate(() => {
+          return {width: window.innerWidth, height: window.innerHeight};
+        });
+        await page.goto(server.PREFIX + '/scrollbar.html');
+        await page.screenshot({
+          fullPage: true,
+          captureBeyondViewport: false,
+        });
+        const size = await page.evaluate(() => {
+          return {width: window.innerWidth, height: window.innerHeight};
+        });
+        expect(page.viewport()).toBe(null);
+        expect(size.width).toBe(originalSize.width);
+        expect(size.height).toBe(originalSize.height);
+      } finally {
+        await close();
+      }
+    });
   });
 
   describe('ElementHandle.screenshot', function () {
@@ -290,7 +331,8 @@ describe('Screenshots', function () {
       const {page} = await getTestState();
 
       await page.setViewport({width: 500, height: 500});
-      await page.setContent(`<div style="position:absolute;
+      await page.setContent(`<!DOCTYPE html>
+                             <div style="position:absolute;
                                         top: 100px;
                                         left: 100px;
                                         width: 100px;
@@ -306,14 +348,15 @@ describe('Screenshots', function () {
 
       await page.setContent('<h1>remove this</h1>');
       using elementHandle = (await page.$('h1'))!;
-      await page.evaluate((element: HTMLElement) => {
+      await page.evaluate(element => {
         return element.remove();
       }, elementHandle);
       const screenshotError = await elementHandle.screenshot().catch(error => {
         return error;
       });
-      expect(screenshotError.message).toBe(
-        'Node is either not visible or not an HTMLElement'
+      expect(screenshotError).toBeInstanceOf(Error);
+      expect(screenshotError.message).toMatch(
+        /Node is either not visible or not an HTMLElement|Node is detached from document/
       );
     });
     it('should not hang with zero width/height element', async () => {
@@ -340,7 +383,7 @@ describe('Screenshots', function () {
       const {page} = await getTestState();
 
       await page.setContent(
-        '<div style="position:absolute; top: 10.3px; left: 20.4px;width:50.3px;height:20.2px;border:1px solid black;"></div>'
+        '<!DOCTYPE html><div style="position:absolute; top: 10.3px; left: 20.4px;width:50.3px;height:20.2px;border:1px solid black;"></div>'
       );
       using elementHandle = (await page.$('div'))!;
       const screenshot = await elementHandle.screenshot();
@@ -355,7 +398,7 @@ describe('Screenshots', function () {
         type: 'webp',
       });
 
-      expect(screenshot).toBeInstanceOf(Buffer);
+      expect(screenshot).toBeInstanceOf(Uint8Array);
     });
 
     it('should run in parallel in multiple pages', async () => {
@@ -392,6 +435,58 @@ describe('Screenshots', function () {
       );
 
       await context.close();
+    });
+
+    it('should run in parallel with page.close()', async () => {
+      const {browser} = await getTestState();
+
+      using context = await browser.createBrowserContext();
+
+      const page1 = await context.newPage();
+      const page2 = await context.newPage();
+
+      const screen1 = page1.screenshot();
+      const screen2 = page2.screenshot();
+
+      const close1 = screen1.then(() => {
+        return page1.close();
+      });
+      const close2 = screen2.then(() => {
+        return page2.close();
+      });
+      await screen1;
+      const page3 = await browser.newPage();
+      await page3.screenshot();
+      const close3 = page3.close();
+
+      await Promise.all([close1, close2, close3]);
+    });
+
+    it('should use element clip', async () => {
+      const {page} = await getTestState();
+
+      await page.setViewport({width: 500, height: 500});
+      await page.setContent(`
+        something above
+        <style>div {
+          border: 2px solid blue;
+          background: green;
+          width: 50px;
+          height: 50px;
+        }
+        </style>
+        <div></div>
+      `);
+      using elementHandle = (await page.$('div'))!;
+      const screenshot = await elementHandle.screenshot({
+        clip: {
+          x: 10,
+          y: 10,
+          width: 20,
+          height: 20,
+        },
+      });
+      expect(screenshot).toBeGolden('screenshot-element-clip.png');
     });
   });
 

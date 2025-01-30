@@ -100,7 +100,7 @@ describe("Filtering", () => {
       expect(messages.length).toEqual(numUnfilterableMessages + 5);
     });
 
-    it("filters css messages", () => {
+    it("filters css messages", async () => {
       const message = stubPreparedMessages.get(
         "Unknown property ‘such-unknown-property’.  Declaration dropped."
       );
@@ -109,7 +109,7 @@ describe("Filtering", () => {
       let messages = getVisibleMessages(store.getState());
       expect(messages.length).toEqual(numUnfilterableMessages);
 
-      store.dispatch(actions.filterToggle("css"));
+      await store.dispatch(actions.filterToggle("css"));
       messages = getVisibleMessages(store.getState());
       expect(messages.length).toEqual(numUnfilterableMessages + 1);
     });
@@ -165,11 +165,11 @@ describe("Filtering", () => {
 
     it("matches locations", () => {
       // Add a message with a different filename.
-      const locationMsg = Object.assign(
+      let locationMsg = Object.assign(
         {},
         stubPackets.get("console.log('foobar', 'test')")
       );
-      locationMsg.message = Object.assign({}, locationMsg.message, {
+      locationMsg = Object.assign({}, locationMsg, {
         filename: "search-location-test.js",
       });
       store.dispatch(messagesAdd([locationMsg]));
@@ -191,8 +191,8 @@ describe("Filtering", () => {
     });
 
     it("matches stacktrace location", () => {
-      const traceMessage = stubPackets.get("console.trace()");
-      traceMessage.message = Object.assign({}, traceMessage.message, {
+      let traceMessage = stubPackets.get("console.trace()");
+      traceMessage = Object.assign({}, traceMessage, {
         filename: "search-location-test.js",
         lineNumber: 85,
         columnNumber: 13,
@@ -251,12 +251,12 @@ describe("Filtering", () => {
 });
 
 describe("Clear filters", () => {
-  it("clears all filters", () => {
+  it("clears all filters", async () => {
     const store = setupStore();
 
     // Setup test case
     store.dispatch(actions.filterToggle(FILTERS.ERROR));
-    store.dispatch(actions.filterToggle(FILTERS.CSS));
+    await store.dispatch(actions.filterToggle(FILTERS.CSS));
     store.dispatch(actions.filterToggle(FILTERS.NET));
     store.dispatch(actions.filterToggle(FILTERS.NETXHR));
     store.dispatch(actions.filterTextSet("foobar"));

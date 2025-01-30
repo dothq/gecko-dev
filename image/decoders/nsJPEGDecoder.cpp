@@ -275,6 +275,9 @@ LexerTransition<nsJPEGDecoder::State> nsJPEGDecoder::ReadJPEGData(
       EXIFData exif = ReadExifData();
       PostSize(mInfo.image_width, mInfo.image_height, exif.orientation,
                exif.resolution);
+      if (WantsFrameCount()) {
+        PostFrameCount(/* aFrameCount */ 1);
+      }
       if (HasError()) {
         // Setting the size led to an error.
         mState = JPEG_ERROR;
@@ -398,7 +401,7 @@ LexerTransition<nsJPEGDecoder::State> nsJPEGDecoder::ReadJPEGData(
 
       Maybe<SurfacePipe> pipe = SurfacePipeFactory::CreateReorientSurfacePipe(
           this, Size(), OutputSize(), SurfaceFormat::OS_RGBX, pipeTransform,
-          GetOrientation());
+          GetOrientation(), SurfacePipeFlags());
       if (!pipe) {
         mState = JPEG_ERROR;
         MOZ_LOG(sJPEGDecoderAccountingLog, LogLevel::Debug,

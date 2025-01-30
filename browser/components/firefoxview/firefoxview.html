@@ -2,7 +2,7 @@
    - License, v. 2.0. If a copy of the MPL was not distributed with this
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -13,8 +13,9 @@
     <meta name="color-scheme" content="light dark" />
     <title data-l10n-id="firefoxview-page-title"></title>
     <link rel="localization" href="branding/brand.ftl" />
-    <link rel="localization" href="toolkit/branding/accounts.ftl" />
     <link rel="localization" href="browser/firefoxView.ftl" />
+    <link rel="localization" href="browser/sidebar.ftl" />
+    <link rel="localization" href="toolkit/global/textActions.ftl" />
     <link rel="localization" href="toolkit/branding/brandings.ftl" />
     <link rel="localization" href="browser/migrationWizard.ftl" />
     <link
@@ -49,10 +50,7 @@
   </head>
 
   <body>
-    <moz-page-nav
-      data-l10n-id="firefoxview-page-heading"
-      data-l10n-attrs="heading"
-    >
+    <moz-page-nav data-l10n-id="firefoxview-page-heading">
       <moz-page-nav-button
         view="recentbrowsing"
         data-l10n-id="firefoxview-overview-nav"
@@ -72,6 +70,7 @@
       >
       </moz-page-nav-button>
       <moz-page-nav-button
+        class="sync-ui-item"
         view="syncedtabs"
         data-l10n-id="firefoxview-synced-tabs-nav"
         iconSrc="chrome://browser/content/firefoxview/view-syncedtabs.svg"
@@ -95,7 +94,10 @@
               <view-recentlyclosed slot="recentlyclosed"></view-recentlyclosed>
             </div>
             <div>
-              <view-syncedtabs slot="syncedtabs"></view-syncedtabs>
+              <view-syncedtabs
+                class="sync-ui-item"
+                slot="syncedtabs"
+              ></view-syncedtabs>
             </div>
           </view-recentbrowsing>
           <view-history name="history" type="page"></view-history>
@@ -104,7 +106,11 @@
             name="recentlyclosed"
             type="page"
           ></view-recentlyclosed>
-          <view-syncedtabs name="syncedtabs" type="page"></view-syncedtabs>
+          <view-syncedtabs
+            class="sync-ui-item"
+            name="syncedtabs"
+            type="page"
+          ></view-syncedtabs>
         </named-deck>
       </div>
     </main>

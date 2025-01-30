@@ -66,6 +66,7 @@ included_inclnames_to_ignore = set(
         "jit/ABIFunctionTypeGenerated.h",  # generated in $OBJDIR"
         "jit/AtomicOperationsGenerated.h",  # generated in $OBJDIR
         "jit/CacheIROpsGenerated.h",  # generated in $OBJDIR
+        "jit/CacheIRAOTGenerated.h",  # generated in $OBJDIR
         "jit/LIROpsGenerated.h",  # generated in $OBJDIR
         "jit/MIROpsGenerated.h",  # generated in $OBJDIR
         "js/PrefsGenerated.h",  # generated in $OBJDIR
@@ -76,10 +77,21 @@ included_inclnames_to_ignore = set(
         "fdlibm.h",  # fdlibm
         "FuzzerDefs.h",  # included without a path
         "FuzzingInterface.h",  # included without a path
+        "diplomat_runtime.h",  # ICU4X
+        "ICU4XAnyCalendarKind.h",  # ICU4X
+        "ICU4XCalendar.h",  # ICU4X
+        "ICU4XDate.h",  # ICU4X
+        "ICU4XError.h",  # ICU4X
         "ICU4XGraphemeClusterSegmenter.h",  # ICU4X
+        "ICU4XIsoDate.h",  # ICU4X
+        "ICU4XIsoWeekday.h",  # ICU4X
         "ICU4XSentenceSegmenter.h",  # ICU4X
+        "ICU4XWeekCalculator.h",  # ICU4X
+        "ICU4XWeekOf.h",  # ICU4X
+        "ICU4XWeekRelativeUnit.h",  # ICU4X
         "ICU4XWordSegmenter.h",  # ICU4X
         "mozmemory.h",  # included without a path
+        "mozmemory_utils.h",  # included without a path
         "pratom.h",  # NSPR
         "prcvar.h",  # NSPR
         "prerror.h",  # NSPR

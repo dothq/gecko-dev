@@ -57,7 +57,7 @@ UntypedManagedEndpoint::~UntypedManagedEndpoint() {
 }
 
 bool UntypedManagedEndpoint::BindCommon(IProtocol* aActor,
-                                        IProtocol* aManager) {
+                                        IRefCountedProtocol* aManager) {
   MOZ_ASSERT(aManager);
   if (!mInner) {
     NS_WARNING("Cannot bind to invalid endpoint");
@@ -88,7 +88,7 @@ bool UntypedManagedEndpoint::BindCommon(IProtocol* aActor,
   mInner.reset();
 
   // Our typed caller will insert the actor into the managed container.
-  aActor->SetManagerAndRegister(aManager, id);
+  MOZ_ALWAYS_TRUE(aActor->SetManagerAndRegister(aManager, id));
 
   aManager->GetIPCChannel()->Send(
       MakeUnique<IPC::Message>(id, MANAGED_ENDPOINT_BOUND_MESSAGE_TYPE));
@@ -152,16 +152,16 @@ void ParamTraits<mozilla::ipc::UntypedEndpoint>::Write(MessageWriter* aWriter,
                                                        paramType&& aParam) {
   IPC::WriteParam(aWriter, std::move(aParam.mPort));
   IPC::WriteParam(aWriter, aParam.mMessageChannelId);
-  IPC::WriteParam(aWriter, aParam.mMyPid);
-  IPC::WriteParam(aWriter, aParam.mOtherPid);
+  IPC::WriteParam(aWriter, aParam.mMyProcInfo);
+  IPC::WriteParam(aWriter, aParam.mOtherProcInfo);
 }
 
 bool ParamTraits<mozilla::ipc::UntypedEndpoint>::Read(MessageReader* aReader,
                                                       paramType* aResult) {
   return IPC::ReadParam(aReader, &aResult->mPort) &&
          IPC::ReadParam(aReader, &aResult->mMessageChannelId) &&
-         IPC::ReadParam(aReader, &aResult->mMyPid) &&
-         IPC::ReadParam(aReader, &aResult->mOtherPid);
+         IPC::ReadParam(aReader, &aResult->mMyProcInfo) &&
+         IPC::ReadParam(aReader, &aResult->mOtherProcInfo);
 }
 
 }  // namespace IPC

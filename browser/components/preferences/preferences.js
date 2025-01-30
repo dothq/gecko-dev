@@ -43,10 +43,6 @@ var { Weave } = ChromeUtils.importESModule(
   "resource://services-sync/main.sys.mjs"
 );
 
-var { FirefoxRelayTelemetry } = ChromeUtils.importESModule(
-  "resource://gre/modules/FirefoxRelayTelemetry.mjs"
-);
-
 var { FxAccounts, getFxAccountsSingleton } = ChromeUtils.importESModule(
   "resource://gre/modules/FxAccounts.sys.mjs"
 );
@@ -108,8 +104,6 @@ ChromeUtils.defineESModuleGetters(this, {
   UIState: "resource://services-sync/UIState.sys.mjs",
   UpdateUtils: "resource://gre/modules/UpdateUtils.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
-  UrlbarProviderQuickActions:
-    "resource:///modules/UrlbarProviderQuickActions.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
 });
 
@@ -197,7 +191,6 @@ function init_all() {
   // Asks Preferences to queue an update of the attribute values of
   // the entire document.
   Preferences.queueUpdateOfAllElements();
-  Services.telemetry.setEventRecordingEnabled("aboutpreferences", true);
 
   register_module("paneGeneral", gMainPane);
   register_module("paneHome", gHomePane);
@@ -264,7 +257,7 @@ function init_all() {
         return;
       }
       let mainWindow = window.browsingContext.topChromeWindow;
-      mainWindow.BrowserOpenAddonsMgr();
+      mainWindow.BrowserAddonUI.openAddonsMgr();
     });
 
     document.dispatchEvent(
@@ -276,29 +269,13 @@ function init_all() {
   });
 }
 
-function telemetryBucketForCategory(category) {
-  category = category.toLowerCase();
-  switch (category) {
-    case "containers":
-    case "general":
-    case "home":
-    case "privacy":
-    case "search":
-    case "sync":
-    case "searchresults":
-      return category;
-    default:
-      return "unknown";
-  }
-}
-
 function onHashChange() {
-  gotoPref(null, "hash");
+  gotoPref(null, "Hash");
 }
 
 async function gotoPref(
   aCategory,
-  aShowReason = aCategory ? "click" : "initial"
+  aShowReason = aCategory ? "Click" : "Initial"
 ) {
   let categories = document.getElementById("categories");
   const kDefaultCategoryInternalName = "paneGeneral";
@@ -398,7 +375,7 @@ async function gotoPref(
 
   search(category, "data-category");
 
-  if (aShowReason != "initial") {
+  if (aShowReason != "Initial") {
     document.querySelector(".main-content").scrollTop = 0;
   }
 
@@ -412,12 +389,7 @@ async function gotoPref(
   }
 
   // Record which category is shown
-  Services.telemetry.recordEvent(
-    "aboutpreferences",
-    "show",
-    aShowReason,
-    category
-  );
+  Glean.aboutpreferences["show" + aShowReason].record({ value: category });
 
   document.dispatchEvent(
     new CustomEvent("paneshown", {
@@ -453,16 +425,6 @@ function search(aQuery, aAttribute) {
       element.hidden = true;
     }
     element.classList.remove("visually-hidden");
-  }
-
-  let keysets = mainPrefPane.getElementsByTagName("keyset");
-  for (let element of keysets) {
-    let attributeValue = element.getAttribute(aAttribute);
-    if (attributeValue == aQuery) {
-      element.removeAttribute("disabled");
-    } else {
-      element.setAttribute("disabled", true);
-    }
   }
 }
 
@@ -601,8 +563,9 @@ async function confirmRestartPrompt(
       break;
   }
 
-  let buttonIndex = Services.prompt.confirmEx(
-    window,
+  let button = await Services.prompt.asyncConfirmEx(
+    window.browsingContext,
+    Ci.nsIPrompt.MODAL_TYPE_CONTENT,
     title,
     msg,
     buttonFlags,
@@ -612,6 +575,8 @@ async function confirmRestartPrompt(
     null,
     {}
   );
+
+  let buttonIndex = button.get("buttonNumClicked");
 
   // If we have the second confirmation dialog for restart, see if the user
   // cancels out at that point.

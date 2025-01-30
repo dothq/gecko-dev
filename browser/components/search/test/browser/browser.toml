@@ -13,8 +13,10 @@ support-files = [
   "testEngine_mozsearch.xml",
   "tooManyEnginesOffered.html",
 ]
+tags = "searchnontelem"
 
 ["browser_426329.js"]
+support-files = ["test.html", "discovery.html", "426329.xml"]
 
 ["browser_addKeywordSearch.js"]
 
@@ -45,10 +47,6 @@ support-files = [
 ["browser_contextmenu_whereToOpenLink.js"]
 
 ["browser_defaultPrivate_nimbus.js"]
-support-files = [
-  "search-engines/basic/manifest.json",
-  "search-engines/private/manifest.json",
-]
 
 ["browser_google_behavior.js"]
 
@@ -56,16 +54,22 @@ support-files = [
 
 ["browser_ime_composition.js"]
 
+["browser_oneOff.js"]
+
 ["browser_oneOffContextMenu.js"]
 
 ["browser_oneOffContextMenu_setDefault.js"]
 
 ["browser_private_search_perwindowpb.js"]
 
+["browser_remote_override.js"]
+
 ["browser_rich_suggestions.js"]
 support-files = ["trendingSuggestionEngine.sjs"]
 
 ["browser_searchEngine_behaviors.js"]
+
+["browser_searchPanelHeader.js"]
 
 ["browser_search_annotation.js"]
 

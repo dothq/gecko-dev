@@ -11,7 +11,6 @@
 #include "nsIFrameInlines.h"
 #include "nsContainerFrame.h"
 #include "nsPresContextInlines.h"
-#include "nsIFormControlFrame.h"
 #include "nsPresContext.h"
 #include "nsLayoutUtils.h"
 #include "nsGkAtoms.h"
@@ -51,7 +50,7 @@ void nsHTMLButtonControlFrame::Init(nsIContent* aContent,
 }
 
 NS_QUERYFRAME_HEAD(nsHTMLButtonControlFrame)
-  NS_QUERYFRAME_ENTRY(nsIFormControlFrame)
+  NS_QUERYFRAME_ENTRY(nsHTMLButtonControlFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 #ifdef ACCESSIBILITY
@@ -59,8 +58,6 @@ a11y::AccType nsHTMLButtonControlFrame::AccessibleType() {
   return a11y::eHTMLButtonType;
 }
 #endif
-
-void nsHTMLButtonControlFrame::SetFocus(bool aOn, bool aRepaint) {}
 
 nsresult nsHTMLButtonControlFrame::HandleEvent(nsPresContext* aPresContext,
                                                WidgetGUIEvent* aEvent,
@@ -88,7 +85,8 @@ class nsDisplayButtonForeground final : public nsPaintedDisplayItem {
       : nsPaintedDisplayItem(aBuilder, aFrame) {
     MOZ_COUNT_CTOR(nsDisplayButtonForeground);
   }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayButtonForeground)
+
+  MOZ_COUNTED_DTOR_FINAL(nsDisplayButtonForeground)
 
   void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
   bool CreateWebRenderCommands(
@@ -237,30 +235,14 @@ void nsHTMLButtonControlFrame::BuildDisplayList(
   DisplaySelectionOverlay(aBuilder, aLists.Content());
 }
 
-nscoord nsHTMLButtonControlFrame::GetMinISize(gfxContext* aRenderingContext) {
-  nscoord result;
-  DISPLAY_MIN_INLINE_SIZE(this, result);
+nscoord nsHTMLButtonControlFrame::IntrinsicISize(
+    const IntrinsicSizeInput& aInput, IntrinsicISizeType aType) {
   if (Maybe<nscoord> containISize = ContainIntrinsicISize()) {
-    result = *containISize;
-  } else {
-    nsIFrame* kid = mFrames.FirstChild();
-    result = nsLayoutUtils::IntrinsicForContainer(aRenderingContext, kid,
-                                                  IntrinsicISizeType::MinISize);
+    return *containISize;
   }
-  return result;
-}
-
-nscoord nsHTMLButtonControlFrame::GetPrefISize(gfxContext* aRenderingContext) {
-  nscoord result;
-  DISPLAY_PREF_INLINE_SIZE(this, result);
-  if (Maybe<nscoord> containISize = ContainIntrinsicISize()) {
-    result = *containISize;
-  } else {
-    nsIFrame* kid = mFrames.FirstChild();
-    result = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, kid, IntrinsicISizeType::PrefISize);
-  }
-  return result;
+  return nsLayoutUtils::IntrinsicForContainer(
+      aInput.mContext, mFrames.FirstChild(), aType,
+      aInput.mPercentageBasisForChildren);
 }
 
 void nsHTMLButtonControlFrame::Reflow(nsPresContext* aPresContext,
@@ -269,7 +251,6 @@ void nsHTMLButtonControlFrame::Reflow(nsPresContext* aPresContext,
                                       nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsHTMLButtonControlFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Reflow the child
@@ -466,15 +447,6 @@ BaselineSharingGroup nsHTMLButtonControlFrame::GetDefaultBaselineSharingGroup()
 nscoord nsHTMLButtonControlFrame::SynthesizeFallbackBaseline(
     mozilla::WritingMode aWM, BaselineSharingGroup aBaselineGroup) const {
   return Baseline::SynthesizeBOffsetFromMarginBox(this, aWM, aBaselineGroup);
-}
-
-nsresult nsHTMLButtonControlFrame::SetFormProperty(nsAtom* aName,
-                                                   const nsAString& aValue) {
-  if (nsGkAtoms::value == aName) {
-    return mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::value,
-                                          aValue, true);
-  }
-  return NS_OK;
 }
 
 ComputedStyle* nsHTMLButtonControlFrame::GetAdditionalComputedStyle(

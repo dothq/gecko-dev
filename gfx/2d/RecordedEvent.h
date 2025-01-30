@@ -102,6 +102,12 @@ class Translator {
   virtual already_AddRefed<SourceSurface> LookupExternalSurface(uint64_t aKey) {
     return nullptr;
   }
+  virtual already_AddRefed<SourceSurface>
+  LookupSourceSurfaceFromSurfaceDescriptor(
+      const layers::SurfaceDescriptor& aDesc) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return nullptr;
+  }
   void DrawDependentSurface(uint64_t aKey, const Rect& aRect);
   virtual void AddDrawTarget(ReferencePtr aRefPtr, DrawTarget* aDT) = 0;
   virtual void RemoveDrawTarget(ReferencePtr aRefPtr) = 0;
@@ -149,7 +155,9 @@ class Translator {
     mDependentSurfaces = aDependentSurfaces;
   }
 
-  DrawTarget* GetCurrentDrawTarget() const { return mCurrentDT; }
+  DrawTarget* GetCurrentDrawTarget() const {
+    return mCurrentDT && mCurrentDT->IsValid() ? mCurrentDT : nullptr;
+  }
 
   nsRefPtrHashtable<nsUint64HashKey, RecordedDependentSurface>*
       mDependentSurfaces = nullptr;
@@ -382,6 +390,7 @@ class RecordedEvent {
     PUSHCLIP,
     PUSHCLIPRECT,
     POPCLIP,
+    REMOVEALLCLIPS,
     FILL,
     FILLCIRCLE,
     FILLGLYPHS,
@@ -389,6 +398,7 @@ class RecordedEvent {
     MASK,
     STROKE,
     DRAWSURFACE,
+    DRAWSURFACEDESCRIPTOR,
     DRAWDEPENDENTSURFACE,
     DRAWSURFACEWITHSHADOW,
     DRAWSHADOW,

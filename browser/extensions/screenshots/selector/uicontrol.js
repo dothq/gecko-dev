@@ -181,7 +181,6 @@ this.uicontrol = (function () {
       exports.deactivate();
     },
     onClickVisible: () => {
-      callBackground("captureTelemetry", "visible");
       sendEvent("capture-visible", "selection-button");
       selectedPos = new Selection(
         window.scrollX,
@@ -193,7 +192,6 @@ this.uicontrol = (function () {
       setState("previewing");
     },
     onClickFullPage: () => {
-      callBackground("captureTelemetry", "full_page");
       sendEvent("capture-full-page", "selection-button");
       captureType = "fullPage";
       const width = getDocumentWidth();
@@ -445,7 +443,7 @@ this.uicontrol = (function () {
     },
 
     /** When we find an element, maybe there's one that's just a little bit better... */
-    evenBetterElement(node, origRect) {
+    evenBetterElement(node) {
       let el = node.parentNode;
       const ELEMENT_NODE = document.ELEMENT_NODE;
       while (el && el.nodeType === ELEMENT_NODE) {
@@ -541,7 +539,7 @@ this.uicontrol = (function () {
       }
     },
 
-    mouseup(event) {
+    mouseup() {
       // If we don't get into "dragging" then we attempt an autoselect
       if (mouseupNoAutoselect) {
         sendEvent("cancel-selection", "selection-background-mousedown");
@@ -565,7 +563,6 @@ this.uicontrol = (function () {
         );
         setState("selected");
         sendEvent("autoselect");
-        callBackground("captureTelemetry", "element");
       } else {
         sendEvent("no-selection", "no-element-found");
         setState("crosshairs");
@@ -650,7 +647,6 @@ this.uicontrol = (function () {
         })
       );
       setState("selected");
-      callBackground("captureTelemetry", "custom");
     },
 
     end() {
@@ -742,7 +738,6 @@ this.uicontrol = (function () {
         sendEvent("keep-move-selection", "mouseup");
       }
       setState("selected");
-      callBackground("captureTelemetry", "custom");
     },
 
     _resize(event) {

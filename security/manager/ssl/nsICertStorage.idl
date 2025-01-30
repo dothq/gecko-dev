@@ -152,7 +152,7 @@ interface nsICertStorage : nsISupports {
    * `base64(sha256(subject DN || subject SPKI))` for each enrolled issuer, and
    * the filter's timestamp coverage, replaces any existing filter with the new
    * one. Also clears any previously-set incremental revocation updates
-   * ("stashes").
+   * ("stashes" or "deltas").
    */
   [must_use]
   void setFullCRLiteFilter(in Array<octet> filter,
@@ -174,7 +174,7 @@ interface nsICertStorage : nsISupports {
    *    - STATE_NO_FILTER if there is no (usable) CRLite filter.
    * No lookup is performed in the STATE_NOT_ENROLLED and STATE_NOT_COVERED cases.
    */
-  [must_use]
+  [must_use, noscript]
   short getCRLiteRevocationState(in Array<octet> issuer,
                                  in Array<octet> issuerSPKI,
                                  in Array<octet> serialNumber,
@@ -198,13 +198,23 @@ interface nsICertStorage : nsISupports {
   void addCRLiteStash(in Array<octet> stash, in nsICertStorageCallback callback);
 
   /**
+   * Add a new CRLite filter for consideration in revocation checks. This
+   * filter is treated as a delta update to the current full filter. Calling
+   * this function will not remove the existing full filter, stashes, or delta
+   * updates. A copy of the new filter will be written to the user's
+   * security_state directory with the given filename.
+   */
+  [must_use]
+  void addCRLiteDelta(in Array<octet> delta, in ACString filename, in nsICertStorageCallback callback);
+
+  /**
    * Given a DER-encoded issuer subject public key info and the bytes of the value of the serial
    * number (so, not including the DER tag and length), determines if the certificate identified by
    * this issuer SPKI and serial number is revoked according to the current set of stashed CRLite
    * revocation information.
    */
-  [must_use]
-  bool isCertRevokedByStash(in Array<octet> issuerSPKI, in Array<octet> serialNumber);
+  [must_use, noscript]
+  boolean isCertRevokedByStash(in Array<octet> issuerSPKI, in Array<octet> serialNumber);
 
   /**
    * Trust flags to use when adding a adding a certificate.

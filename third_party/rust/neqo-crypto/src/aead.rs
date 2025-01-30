@@ -63,20 +63,13 @@ impl RealAead {
     /// # Errors
     ///
     /// Returns `Error` when the supporting NSS functions fail.
-    pub fn new(
-        _fuzzing: bool,
-        version: Version,
-        cipher: Cipher,
-        secret: &SymKey,
-        prefix: &str,
-    ) -> Res<Self> {
+    pub fn new(version: Version, cipher: Cipher, secret: &SymKey, prefix: &str) -> Res<Self> {
         let s: *mut PK11SymKey = **secret;
         unsafe { Self::from_raw(version, cipher, s, prefix) }
     }
 
     #[must_use]
-    #[allow(clippy::unused_self)]
-    pub fn expansion(&self) -> usize {
+    pub const fn expansion(&self) -> usize {
         16
     }
 

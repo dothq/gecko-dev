@@ -250,9 +250,8 @@ export class StyleEditorUI extends EventEmitter {
       el.addEventListener(
         "click",
         async () => {
-          const stylesheetsFront = await this.currentTarget.getFront(
-            "stylesheets"
-          );
+          const stylesheetsFront =
+            await this.currentTarget.getFront("stylesheets");
           stylesheetsFront.addStyleSheet(null);
           this.#clearFilterInput();
         },
@@ -567,9 +566,8 @@ export class StyleEditorUI extends EventEmitter {
       const promise = (async () => {
         // When the StyleSheet is mapped to one or many original sources,
         // do not create an editor for the minified StyleSheet.
-        const hasValidOriginalSource = await this.#tryAddingOriginalStyleSheets(
-          resource
-        );
+        const hasValidOriginalSource =
+          await this.#tryAddingOriginalStyleSheets(resource);
         if (hasValidOriginalSource) {
           return null;
         }
@@ -764,9 +762,8 @@ export class StyleEditorUI extends EventEmitter {
           );
           stream.close();
 
-          const stylesheetsFront = await this.currentTarget.getFront(
-            "stylesheets"
-          );
+          const stylesheetsFront =
+            await this.currentTarget.getFront("stylesheets");
           stylesheetsFront.addStyleSheet(source, selectedFile.path);
         }
       );
@@ -1400,6 +1397,10 @@ export class StyleEditorUI extends EventEmitter {
         type.append(this.#panelDoc.createTextNode(`@${rule.type}\u00A0`));
         if (rule.type == "layer" && rule.layerName) {
           type.append(this.#panelDoc.createTextNode(`${rule.layerName}\u00A0`));
+        } else if (rule.type === "property") {
+          type.append(
+            this.#panelDoc.createTextNode(`${rule.propertyName}\u00A0`)
+          );
         }
 
         const cond = this.#panelDoc.createElementNS(HTML_NS, "span");
@@ -1549,6 +1550,7 @@ export class StyleEditorUI extends EventEmitter {
 
     this.#loadingStyleSheets = null;
     this.#root.classList.remove("loading");
+    this.emit("reloaded");
   }
 
   async #handleStyleSheetResource(resource) {
@@ -1621,6 +1623,11 @@ export class StyleEditorUI extends EventEmitter {
   };
 
   #onResourceUpdated = async updates => {
+    // The editors are instantiated asynchronously from onResourceAvailable,
+    // but we may receive updates right after due to throttling.
+    // Ensure waiting for this async work before trying to update the related editors.
+    await this.#waitForLoadingStyleSheets();
+
     for (const { resource, update } of updates) {
       if (
         update.resourceType === this.#toolbox.resourceCommand.TYPES.STYLESHEET
@@ -1628,6 +1635,13 @@ export class StyleEditorUI extends EventEmitter {
         const editor = this.editors.find(
           e => e.resourceId === update.resourceId
         );
+
+        if (!editor) {
+          console.warn(
+            "Could not find StyleEditor to apply STYLESHEET resource update"
+          );
+          continue;
+        }
 
         switch (update.updateType) {
           case "style-applied": {

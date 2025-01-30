@@ -21,7 +21,6 @@
 class nsIConsoleReportCollector;
 class nsICookieJarSettings;
 class nsIEffectiveTLDService;
-class nsIIDNService;
 class nsIURI;
 class nsIChannel;
 class mozIThirdPartyUtil;
@@ -66,12 +65,6 @@ class CookieService final : public nsICookieService,
    * app.
    */
 
-  static bool CanSetCookie(nsIURI* aHostURI, const nsACString& aBaseDomain,
-                           CookieStruct& aCookieData, bool aRequireHostMatch,
-                           CookieStatus aStatus, nsCString& aCookieHeader,
-                           bool aFromHttp, bool aIsForeignAndNotAddon,
-                           bool aPartitionedOnly,
-                           nsIConsoleReportCollector* aCRC, bool& aSetCookie);
   static CookieStatus CheckPrefs(
       nsIConsoleReportCollector* aCRC, nsICookieJarSettings* aCookieJarSettings,
       nsIURI* aHostURI, bool aIsForeign, bool aIsThirdPartyTrackingResource,
@@ -89,18 +82,20 @@ class CookieService final : public nsICookieService,
                         bool aHttpBound,
                         bool aAllowSecureCookiesToInsecureOrigin,
                         const nsTArray<OriginAttributes>& aOriginAttrsList,
-                        nsTArray<Cookie*>& aCookieList);
+                        nsTArray<RefPtr<Cookie>>& aCookieList);
 
   /**
    * This method is a helper that allows calling nsICookieManager::Remove()
    * with OriginAttributes parameter.
    */
   nsresult Remove(const nsACString& aHost, const OriginAttributes& aAttrs,
-                  const nsACString& aName, const nsACString& aPath);
+                  const nsACString& aName, const nsACString& aPath,
+                  const nsID* aOperationID);
 
   bool SetCookiesFromIPC(const nsACString& aBaseDomain,
                          const OriginAttributes& aAttrs, nsIURI* aHostURI,
-                         bool aFromHttp, const nsTArray<CookieStruct>& aCookies,
+                         bool aFromHttp, bool aIsThirdParty,
+                         const nsTArray<CookieStruct>& aCookies,
                          dom::BrowsingContext* aBrowsingContext);
 
  protected:
@@ -112,30 +107,11 @@ class CookieService final : public nsICookieService,
   void CloseCookieStorages();
 
   nsresult NormalizeHost(nsCString& aHost);
-  static bool GetTokenValue(nsACString::const_char_iterator& aIter,
-                            nsACString::const_char_iterator& aEndIter,
-                            nsDependentCSubstring& aTokenString,
-                            nsDependentCSubstring& aTokenValue,
-                            bool& aEqualsFound);
-  static bool ParseAttributes(nsIConsoleReportCollector* aCRC, nsIURI* aHostURI,
-                              nsCString& aCookieHeader,
-                              CookieStruct& aCookieData, nsACString& aExpires,
-                              nsACString& aMaxage, bool& aAcceptedByParser);
-  static bool CheckDomain(CookieStruct& aCookieData, nsIURI* aHostURI,
-                          const nsACString& aBaseDomain,
-                          bool aRequireHostMatch);
-  static bool CheckHiddenPrefix(CookieStruct& aCookieData);
-  static bool CheckPath(CookieStruct& aCookieData,
-                        nsIConsoleReportCollector* aCRC, nsIURI* aHostURI);
-  static bool CheckPrefixes(CookieStruct& aCookieData, bool aSecureRequest);
-  static bool GetExpiry(CookieStruct& aCookieData, const nsACString& aExpires,
-                        const nsACString& aMaxage, int64_t aCurrentTime,
-                        bool aFromHttp);
   void NotifyAccepted(nsIChannel* aChannel);
 
   nsresult GetCookiesWithOriginAttributes(
       const OriginAttributesPattern& aPattern, const nsCString& aBaseDomain,
-      nsTArray<RefPtr<nsICookie>>& aResult);
+      bool aSorted, nsTArray<RefPtr<nsICookie>>& aResult);
   nsresult RemoveCookiesWithOriginAttributes(
       const OriginAttributesPattern& aPattern, const nsCString& aBaseDomain);
 
@@ -149,7 +125,6 @@ class CookieService final : public nsICookieService,
   // cached members.
   nsCOMPtr<mozIThirdPartyUtil> mThirdPartyUtil;
   nsCOMPtr<nsIEffectiveTLDService> mTLDService;
-  nsCOMPtr<nsIIDNService> mIDNService;
 
   // we have two separate Cookie Storages: one for normal browsing and one for
   // private browsing.

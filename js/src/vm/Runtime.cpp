@@ -42,6 +42,7 @@
 #include "vm/PromiseObject.h"  // js::PromiseObject
 #include "vm/SharedImmutableStringsCache.h"
 #include "vm/Warnings.h"  // js::WarnNumberUC
+#include "wasm/WasmPI.h"
 #include "wasm/WasmSignalHandlers.h"
 
 #include "debugger/DebugAPI-inl.h"
@@ -53,8 +54,6 @@ using namespace js;
 
 using mozilla::Atomic;
 using mozilla::DebugOnly;
-using mozilla::NegativeInfinity;
-using mozilla::PositiveInfinity;
 
 /* static */ MOZ_THREAD_LOCAL(JSContext*) js::TlsContext;
 /* static */
@@ -216,10 +215,6 @@ void JSRuntime::destroyRuntime() {
 
   watchtowerTestingLog.ref().reset();
 
-  // Caches might hold on ScriptData which are saved in the ScriptDataTable.
-  // Clear all stencils from caches to remove ScriptDataTable entries.
-  caches().purgeStencils();
-
   if (gc.wasInitialized()) {
     /*
      * Finish any in-progress GCs first.
@@ -294,6 +289,8 @@ void JSRuntime::setTelemetryCallback(
 
 void JSRuntime::setUseCounter(JSObject* obj, JSUseCounter counter) {
   if (useCounterCallback) {
+    // A use counter callback cannot GC.
+    JS::AutoSuppressGCAnalysis suppress;
     (*useCounterCallback)(obj, counter);
   }
 }
@@ -332,7 +329,7 @@ void JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
   rtSizes->uncompressedSourceCache +=
       caches().uncompressedSourceCache.sizeOfExcludingThis(mallocSizeOf);
 
-  rtSizes->gc.nurseryCommitted += gc.nursery().committed();
+  rtSizes->gc.nurseryCommitted += gc.nursery().totalCommitted();
   rtSizes->gc.nurseryMallocedBuffers +=
       gc.nursery().sizeOfMallocedBuffers(mallocSizeOf);
   gc.storeBuffer().addSizeOfExcludingThis(mallocSizeOf, &rtSizes->gc);
@@ -389,6 +386,16 @@ void JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
       wasmInstances.lock()->sizeOfExcludingThis(mallocSizeOf);
 }
 
+static bool InvokeInterruptCallbacks(JSContext* cx) {
+  bool stop = false;
+  for (JSInterruptCallback cb : cx->interruptCallbacks()) {
+    if (!cb(cx)) {
+      stop = true;
+    }
+  }
+  return stop;
+}
+
 static bool HandleInterrupt(JSContext* cx, bool invokeCallback) {
   MOZ_ASSERT(!cx->zone()->isAtomsZone());
 
@@ -410,11 +417,16 @@ static bool HandleInterrupt(JSContext* cx, bool invokeCallback) {
     return true;
   }
 
-  bool stop = false;
-  for (JSInterruptCallback cb : cx->interruptCallbacks()) {
-    if (!cb(cx)) {
-      stop = true;
-    }
+  bool stop;
+#ifdef ENABLE_WASM_JSPI
+  if (IsSuspendableStackActive(cx)) {
+    stop = wasm::CallOnMainStack(
+        cx, reinterpret_cast<wasm::CallOnMainStackFn>(InvokeInterruptCallbacks),
+        (void*)cx);
+  } else
+#endif
+  {
+    stop = InvokeInterruptCallbacks(cx);
   }
 
   if (!stop) {
@@ -452,6 +464,7 @@ static bool HandleInterrupt(JSContext* cx, bool invokeCallback) {
     chars = u"(stack not available)";
   }
   WarnNumberUC(cx, JSMSG_TERMINATED, chars);
+  cx->reportUncatchableException();
   return false;
 }
 
@@ -556,22 +569,16 @@ SharedScriptDataTableHolder& JSRuntime::scriptDataTableHolder() {
   return scriptDataTableHolder_;
 }
 
-GlobalObject* JSRuntime::getIncumbentGlobal(JSContext* cx) {
+bool JSRuntime::getHostDefinedData(JSContext* cx,
+                                   JS::MutableHandle<JSObject*> data) const {
   MOZ_ASSERT(cx->jobQueue);
 
-  JSObject* obj = cx->jobQueue->getIncumbentGlobal(cx);
-  if (!obj) {
-    return nullptr;
-  }
-
-  MOZ_ASSERT(obj->is<GlobalObject>(),
-             "getIncumbentGlobalCallback must return a global!");
-  return &obj->as<GlobalObject>();
+  return cx->jobQueue->getHostDefinedData(cx, data);
 }
 
 bool JSRuntime::enqueuePromiseJob(JSContext* cx, HandleFunction job,
                                   HandleObject promise,
-                                  Handle<GlobalObject*> incumbentGlobal) {
+                                  HandleObject hostDefinedData) {
   MOZ_ASSERT(cx->jobQueue,
              "Must select a JobQueue implementation using JS::JobQueue "
              "or js::UseInternalJobQueues before using Promises");
@@ -594,7 +601,7 @@ bool JSRuntime::enqueuePromiseJob(JSContext* cx, HandleFunction job,
     }
   }
   return cx->jobQueue->enqueuePromiseJob(cx, promise, job, allocationSite,
-                                         incumbentGlobal);
+                                         hostDefinedData);
 }
 
 void JSRuntime::addUnhandledRejectedPromise(JSContext* cx,
@@ -798,8 +805,8 @@ JS_PUBLIC_API void JS::DisableRecordingAllocations(JSContext* cx) {
   cx->runtime()->stopRecordingAllocations();
 }
 
-JS_PUBLIC_API void js::gc::RegisterWeakCache(JSRuntime* rt,
-                                             gc::WeakCacheBase* cachep) {
+JS_PUBLIC_API void JS::shadow::RegisterWeakCache(
+    JSRuntime* rt, detail::WeakCacheBase* cachep) {
   rt->registerWeakCache(cachep);
 }
 
@@ -843,4 +850,10 @@ void JSRuntime::ensureRealmIsRecordingAllocations(
     // debuggers and runtime profiling.
     global->realm()->chooseAllocationSamplingProbability();
   }
+}
+
+void js::HasSeenObjectEmulateUndefinedFuse::popFuse(JSContext* cx) {
+  js::InvalidatingRuntimeFuse::popFuse(cx);
+  MOZ_ASSERT(cx->global());
+  cx->runtime()->setUseCounter(cx->global(), JSUseCounter::ISHTMLDDA_FUSE);
 }

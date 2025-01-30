@@ -213,13 +213,6 @@ export class AboutReaderParent extends JSWindowActorParent {
     AboutReaderParent.updateReaderButton(browser);
   }
 
-  static buttonClick(event) {
-    if (event.button != 0) {
-      return;
-    }
-    AboutReaderParent.toggleReaderMode(event);
-  }
-
   static toggleReaderMode(event) {
     let win = event.target.ownerGlobal;
     if (win.gBrowser) {
@@ -281,7 +274,7 @@ export class AboutReaderParent extends JSWindowActorParent {
    * @return {Promise}
    * @resolves JS object representing the article, or null if no article is found.
    */
-  async _getArticle(url, browser) {
+  async _getArticle(url) {
     return lazy.ReaderMode.downloadAndParseDocument(url).catch(e => {
       if (e && e.newURL) {
         // Pass up the error so we can navigate the browser in question to the new URL:

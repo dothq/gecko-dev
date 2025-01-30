@@ -154,11 +154,11 @@ impl NonTSPseudoClass {
     /// Returns whether the pseudo-class is enabled in content sheets.
     #[inline]
     fn is_enabled_in_content(&self) -> bool {
-        if matches!(*self, Self::PopoverOpen) {
-            return static_prefs::pref!("dom.element.popover.enabled");
-        }
         if matches!(*self, Self::CustomState(_)) {
             return static_prefs::pref!("dom.element.customstateset.enabled");
+        }
+        if matches!(*self, Self::HasSlotted) {
+            return static_prefs::pref!("layout.css.has-slotted-selector.enabled");
         }
         !self.has_any_flag(NonTSPseudoClassFlag::PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME)
     }
@@ -196,7 +196,6 @@ impl NonTSPseudoClass {
                 None => DocumentState::empty(),
             },
             NonTSPseudoClass::MozWindowInactive => DocumentState::WINDOW_INACTIVE,
-            NonTSPseudoClass::MozLWTheme => DocumentState::LWTHEME,
             _ => DocumentState::empty(),
         }
     }
@@ -214,11 +213,10 @@ impl NonTSPseudoClass {
                       NonTSPseudoClass::MozNativeAnonymous |
                       // :-moz-placeholder is parsed but never matches.
                       NonTSPseudoClass::MozPlaceholder |
-                      // :-moz-is-html, :-moz-lwtheme, :-moz-locale-dir and :-moz-window-inactive
+                      // :-moz-is-html, :-moz-locale-dir and :-moz-window-inactive
                       // depend only on the state of the document, which is invariant across all
                       // elements involved in a given style cache.
                       NonTSPseudoClass::MozIsHTML |
-                      NonTSPseudoClass::MozLWTheme |
                       NonTSPseudoClass::MozLocaleDir(_) |
                       NonTSPseudoClass::MozWindowInactive
             )
@@ -476,12 +474,43 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
                     return Ok(pseudo);
                 }
             }
-        } else if name.eq_ignore_ascii_case("highlight") {
-            let pseudo = PseudoElement::Highlight(AtomIdent::from(parser.expect_ident()?.as_ref()));
+        } else {
+            // <pt-name-selector> = '*' | <custom-ident>
+            // https://drafts.csswg.org/css-view-transitions-1/#named-view-transition-pseudo
+            let parse_pt_name = |input: &mut Parser<'i, '_>| {
+                use crate::values::CustomIdent;
+                if input.try_parse(|i| i.expect_delim('*')).is_ok() {
+                    Ok(AtomIdent::new(atom!("*")))
+                } else {
+                    CustomIdent::parse(input, &[]).map(|c| AtomIdent::new(c.0))
+                }
+            };
+
+            let pseudo = match_ignore_ascii_case! { &name,
+                "highlight" => {
+                    PseudoElement::Highlight(AtomIdent::from(parser.expect_ident()?.as_ref()))
+                },
+                "view-transition-group" => {
+                    PseudoElement::ViewTransitionGroup(parse_pt_name(parser)?)
+                },
+                "view-transition-image-pair" => {
+                    PseudoElement::ViewTransitionImagePair(parse_pt_name(parser)?)
+                },
+                "view-transition-old" => {
+                    PseudoElement::ViewTransitionOld(parse_pt_name(parser)?)
+                },
+                "view-transition-new" => {
+                    PseudoElement::ViewTransitionNew(parse_pt_name(parser)?)
+                },
+                _ => return Err(parser.new_custom_error(
+                    SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name)
+                ))
+            };
             if self.is_pseudo_element_enabled(&pseudo) {
                 return Ok(pseudo);
             }
         }
+
         Err(
             parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
                 name,

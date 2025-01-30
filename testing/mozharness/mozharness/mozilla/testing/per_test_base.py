@@ -1,9 +1,7 @@
 #!/usr/bin/env python
-# ***** BEGIN LICENSE BLOCK *****
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-# ***** END LICENSE BLOCK *****
 
 import itertools
 import json
@@ -228,6 +226,11 @@ class SingleTestMixin(object):
                 ): "mochitest-browser-media",
                 (
                     "mochitest-browser-chrome",
+                    "translations",
+                    None,
+                ): "mochitest-browser-translations",
+                (
+                    "mochitest-browser-chrome",
                     "devtools",
                     None,
                 ): "mochitest-devtools-chrome",
@@ -283,7 +286,13 @@ class SingleTestMixin(object):
             repo_tests_path = os.path.join("testing", "web-platform", extra, "tests")
             tests_path = os.path.join("tests", "web-platform", extra, "tests")
             for type, path, test in man:
-                if type not in ["testharness", "reftest", "wdspec"]:
+                if type not in [
+                    "testharness",
+                    "reftest",
+                    "wdspec",
+                    "crashtest",
+                    "print-reftest",
+                ]:
                     continue
                 repo_path = os.path.join(repo_tests_path, path)
                 # manifest paths use os.sep (like backslash on Windows) but

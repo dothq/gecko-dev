@@ -1,8 +1,10 @@
-import sys
 import inspect
 import logging
-import distutils.log
+import sys
+
 from . import monkey
+
+import distutils.log
 
 
 def _not_warning(record):
@@ -22,7 +24,8 @@ def configure():
     out_handler.addFilter(_not_warning)
     handlers = err_handler, out_handler
     logging.basicConfig(
-        format="{message}", style='{', handlers=handlers, level=logging.DEBUG)
+        format="{message}", style='{', handlers=handlers, level=logging.DEBUG
+    )
     if inspect.ismodule(distutils.dist.log):
         monkey.patch_func(set_threshold, distutils.log, 'set_threshold')
         # For some reason `distutils.log` module is getting cached in `distutils.dist`
@@ -33,5 +36,5 @@ def configure():
 
 
 def set_threshold(level):
-    logging.root.setLevel(level*10)
+    logging.root.setLevel(level * 10)
     return set_threshold.unpatched(level)

@@ -19,6 +19,7 @@
 #include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
+#include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/FormData.h"
 #include "mozilla/dom/FragmentOrElement.h"
 #include "mozilla/dom/HTMLElement.h"
@@ -33,6 +34,7 @@
 #include "mozilla/dom/SessionStoreUtils.h"
 #include "mozilla/dom/SessionStoreUtilsBinding.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/dom/TrustedHTML.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/sessionstore/SessionStoreTypes.h"
 #include "mozilla/dom/txIXPathContext.h"
@@ -53,7 +55,6 @@
 #include "nsIContentInlines.h"
 #include "nsIDocShell.h"
 #include "nsIFormControl.h"
-#include "nsIScrollableFrame.h"
 #include "nsISHistory.h"
 #include "nsIXULRuntime.h"
 #include "nsPresContext.h"
@@ -659,9 +660,8 @@ static uint32_t CollectInputElement(Document* aDocument,
   uint32_t length = inputlist->Length();
   for (uint32_t i = 0; i < length; ++i) {
     MOZ_ASSERT(inputlist->Item(i), "null item in node list!");
-    nsCOMPtr<nsIFormControl> formControl =
-        do_QueryInterface(inputlist->Item(i));
-    if (formControl) {
+    if (const auto* formControl =
+            nsIFormControl::FromNodeOrNull(inputlist->Item(i))) {
       auto controlType = formControl->ControlType();
       if (controlType == FormControlType::InputPassword ||
           controlType == FormControlType::InputHidden ||
@@ -917,9 +917,8 @@ void SessionStoreUtils::CollectFromInputElement(Document& aDocument,
   uint32_t length = inputlist->Length(true);
   for (uint32_t i = 0; i < length; ++i) {
     MOZ_ASSERT(inputlist->Item(i), "null item in node list!");
-    nsCOMPtr<nsIFormControl> formControl =
-        do_QueryInterface(inputlist->Item(i));
-    if (formControl) {
+    if (const auto* formControl =
+            nsIFormControl::FromNodeOrNull(inputlist->Item(i))) {
       auto controlType = formControl->ControlType();
       if (controlType == FormControlType::InputPassword ||
           controlType == FormControlType::InputHidden ||
@@ -1300,12 +1299,12 @@ static void SetSessionData(JSContext* aCx, Element* aElement,
   }
 }
 
-MOZ_CAN_RUN_SCRIPT
-static void SetInnerHTML(Document& aDocument, const nsString& aInnerHTML) {
+MOZ_CAN_RUN_SCRIPT static void SetInnerHTML(Document& aDocument,
+                                            const nsAString& aInnerHTML) {
   RefPtr<Element> bodyElement = aDocument.GetBody();
   if (bodyElement && bodyElement->IsInDesignMode()) {
     IgnoredErrorResult rv;
-    bodyElement->SetInnerHTML(aInnerHTML, aDocument.NodePrincipal(), rv);
+    bodyElement->SetInnerHTMLTrusted(aInnerHTML, aDocument.NodePrincipal(), rv);
     if (!rv.Failed()) {
       nsContentUtils::DispatchInputEvent(bodyElement);
     }
@@ -1317,14 +1316,13 @@ class FormDataParseContext : public txIParseContext {
   explicit FormDataParseContext(bool aCaseInsensitive)
       : mIsCaseInsensitive(aCaseInsensitive) {}
 
-  nsresult resolveNamespacePrefix(nsAtom* aPrefix, int32_t& aID) override {
+  int32_t resolveNamespacePrefix(nsAtom* aPrefix) override {
     if (aPrefix == nsGkAtoms::xul) {
-      aID = kNameSpaceID_XUL;
-    } else {
-      MOZ_ASSERT(nsDependentAtomString(aPrefix).EqualsLiteral("xhtml"));
-      aID = kNameSpaceID_XHTML;
+      return kNameSpaceID_XUL;
     }
-    return NS_OK;
+
+    MOZ_ASSERT(nsDependentAtomString(aPrefix).EqualsLiteral("xhtml"));
+    return kNameSpaceID_XHTML;
   }
 
   nsresult resolveFunctionCall(nsAtom* aName, int32_t aID,

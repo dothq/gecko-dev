@@ -115,7 +115,7 @@ add_task(async function test_updateRecipes() {
   sinon.spy(loader, "updateRecipes");
 
   sinon
-    .stub(loader.remoteSettingsClient, "get")
+    .stub(loader.remoteSettingsClients.experiments, "get")
     .resolves([PASS_FILTER_RECIPE, FAIL_FILTER_RECIPE]);
   sinon.stub(loader.manager, "onRecipe").resolves();
   sinon.stub(loader.manager, "onFinalize");
@@ -125,11 +125,15 @@ add_task(async function test_updateRecipes() {
   ok(loader.updateRecipes.calledOnce, "should call .updateRecipes");
   equal(
     loader.manager.onRecipe.callCount,
-    1,
-    "should call .onRecipe only for recipes that pass"
+    2,
+    "should call .onRecipe only for all recipes"
   );
   ok(
-    loader.manager.onRecipe.calledWith(PASS_FILTER_RECIPE, "rs-loader"),
+    loader.manager.onRecipe.calledWith(PASS_FILTER_RECIPE, "rs-loader", true),
+    "should call .onRecipe with argument data"
+  );
+  ok(
+    loader.manager.onRecipe.calledWith(FAIL_FILTER_RECIPE, "rs-loader", false),
     "should call .onRecipe with argument data"
   );
 });
@@ -147,7 +151,7 @@ add_task(async function test_updateRecipes_someMismatch() {
   sinon.spy(loader, "updateRecipes");
 
   sinon
-    .stub(loader.remoteSettingsClient, "get")
+    .stub(loader.remoteSettingsClients.experiments, "get")
     .resolves([PASS_FILTER_RECIPE, FAIL_FILTER_RECIPE]);
   sinon.stub(loader.manager, "onRecipe").resolves();
   sinon.stub(loader.manager, "onFinalize");
@@ -157,8 +161,8 @@ add_task(async function test_updateRecipes_someMismatch() {
   ok(loader.updateRecipes.calledOnce, "should call .updateRecipes");
   equal(
     loader.manager.onRecipe.callCount,
-    1,
-    "should call .onRecipe only for recipes that pass"
+    2,
+    "should call .onRecipe only for all recipes"
   );
   ok(loader.manager.onFinalize.calledOnce, "Should call onFinalize.");
   ok(
@@ -181,7 +185,9 @@ add_task(async function test_updateRecipes_forFirstStartup() {
   const PASS_FILTER_RECIPE = ExperimentFakes.recipe("foo", {
     targeting: "isFirstStartup",
   });
-  sinon.stub(loader.remoteSettingsClient, "get").resolves([PASS_FILTER_RECIPE]);
+  sinon
+    .stub(loader.remoteSettingsClients.experiments, "get")
+    .resolves([PASS_FILTER_RECIPE]);
   sinon.stub(loader.manager, "onRecipe").resolves();
   sinon.stub(loader.manager, "onFinalize");
   sinon
@@ -199,7 +205,9 @@ add_task(async function test_updateRecipes_forNoneFirstStartup() {
   const PASS_FILTER_RECIPE = ExperimentFakes.recipe("foo", {
     targeting: "isFirstStartup",
   });
-  sinon.stub(loader.remoteSettingsClient, "get").resolves([PASS_FILTER_RECIPE]);
+  sinon
+    .stub(loader.remoteSettingsClients.experiments, "get")
+    .resolves([PASS_FILTER_RECIPE]);
   sinon.stub(loader.manager, "onRecipe").resolves();
   sinon.stub(loader.manager, "onFinalize");
   sinon
@@ -209,7 +217,10 @@ add_task(async function test_updateRecipes_forNoneFirstStartup() {
   Services.prefs.setBoolPref(ENABLED_PREF, true);
   await loader.init({ isFirstStartup: true });
 
-  ok(loader.manager.onRecipe.notCalled, "should not pass the targeting filter");
+  ok(
+    loader.manager.onRecipe.calledOnce,
+    "should call onRecipe once regardless of targetting match"
+  );
 });
 
 add_task(async function test_checkTargeting() {
@@ -270,7 +281,9 @@ add_task(async function test_optIn_debug_disabled() {
   sinon.stub(loader, "updateRecipes").resolves();
 
   const recipe = ExperimentFakes.recipe("foo");
-  sinon.stub(loader.remoteSettingsClient, "get").resolves([recipe]);
+  sinon
+    .stub(loader.remoteSettingsClients.experiments, "get")
+    .resolves([recipe]);
 
   Services.prefs.setBoolPref(DEBUG_PREF, false);
   Services.prefs.setBoolPref(UPLOAD_PREF, true);
@@ -301,7 +314,9 @@ add_task(async function test_optIn_studies_disabled() {
   sinon.stub(loader, "updateRecipes").resolves();
 
   const recipe = ExperimentFakes.recipe("foo");
-  sinon.stub(loader.remoteSettingsClient, "get").resolves([recipe]);
+  sinon
+    .stub(loader.remoteSettingsClients.experiments, "get")
+    .resolves([recipe]);
 
   Services.prefs.setBoolPref(DEBUG_PREF, true);
 
@@ -336,7 +351,9 @@ add_task(async function test_enrollment_changed_notification() {
   const enrollmentChanged = TestUtils.topicObserved(
     "nimbus:enrollments-updated"
   );
-  sinon.stub(loader.remoteSettingsClient, "get").resolves([PASS_FILTER_RECIPE]);
+  sinon
+    .stub(loader.remoteSettingsClients.experiments, "get")
+    .resolves([PASS_FILTER_RECIPE]);
   sinon.stub(loader.manager, "onRecipe").resolves();
   sinon.stub(loader.manager, "onFinalize");
 

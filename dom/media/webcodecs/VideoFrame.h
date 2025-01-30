@@ -15,7 +15,6 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/dom/VideoColorSpaceBinding.h"
-#include "mozilla/dom/WorkerRef.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/media/MediaUtils.h"
@@ -46,10 +45,11 @@ class SVGImageElement;
 class StructuredCloneHolder;
 class VideoColorSpace;
 class VideoFrame;
+enum class PredefinedColorSpace : uint8_t;
 enum class VideoPixelFormat : uint8_t;
 struct VideoFrameBufferInit;
-struct VideoFrameInit;
 struct VideoFrameCopyToOptions;
+struct VideoFrameInit;
 
 }  // namespace dom
 }  // namespace mozilla
@@ -79,7 +79,9 @@ struct VideoFrameSerializedData : VideoFrameData {
   const gfx::IntSize mCodedSize;
 };
 
-class VideoFrame final : public nsISupports, public nsWrapperCache {
+class VideoFrame final : public nsISupports,
+                         public nsWrapperCache,
+                         public media::ShutdownConsumer {
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(VideoFrame)
@@ -101,6 +103,8 @@ class VideoFrame final : public nsISupports, public nsWrapperCache {
 
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
+
+  static bool PrefEnabled(JSContext* aCx = nullptr, JSObject* aObj = nullptr);
 
   static already_AddRefed<VideoFrame> Constructor(
       const GlobalObject& aGlobal, HTMLImageElement& aImageElement,
@@ -163,6 +167,7 @@ class VideoFrame final : public nsISupports, public nsWrapperCache {
 
   void Close();
   bool IsClosed() const;
+  void OnShutdown() override;
 
   // [Serializable] implementations: {Read, Write}StructuredClone
   static JSObject* ReadStructuredClone(JSContext* aCx, nsIGlobalObject* aGlobal,
@@ -206,7 +211,7 @@ class VideoFrame final : public nsISupports, public nsWrapperCache {
     uint32_t SampleBytes(const Plane& aPlane) const;
     gfx::IntSize SampleSize(const Plane& aPlane) const;
     bool IsValidSize(const gfx::IntSize& aSize) const;
-    size_t SampleCount(const gfx::IntSize& aSize) const;
+    size_t ByteCount(const gfx::IntSize& aSize) const;
 
    private:
     bool IsYUV() const;
@@ -216,6 +221,9 @@ class VideoFrame final : public nsISupports, public nsWrapperCache {
  private:
   // VideoFrame can run on either main thread or worker thread.
   void AssertIsOnOwningThread() const { NS_ASSERT_OWNINGTHREAD(VideoFrame); }
+
+  already_AddRefed<VideoFrame> ConvertToRGBFrame(
+      const VideoPixelFormat& aFormat, const PredefinedColorSpace& aColorSpace);
 
   VideoFrameData GetVideoFrameData() const;
 
@@ -257,8 +265,7 @@ class VideoFrame final : public nsISupports, public nsWrapperCache {
   VideoColorSpaceInit mColorSpace;
 
   // The following are used to help monitoring mResource release.
-  UniquePtr<media::ShutdownBlockingTicket> mShutdownBlocker = nullptr;
-  RefPtr<WeakWorkerRef> mWorkerRef = nullptr;
+  RefPtr<media::ShutdownWatcher> mShutdownWatcher = nullptr;
 };
 
 }  // namespace mozilla::dom

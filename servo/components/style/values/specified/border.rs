@@ -6,11 +6,10 @@
 
 use crate::parser::{Parse, ParserContext};
 use crate::values::computed::{Context, ToComputedValue};
-use crate::values::generics::border::BorderCornerRadius as GenericBorderCornerRadius;
-use crate::values::generics::border::BorderImageSideWidth as GenericBorderImageSideWidth;
-use crate::values::generics::border::BorderImageSlice as GenericBorderImageSlice;
-use crate::values::generics::border::BorderRadius as GenericBorderRadius;
-use crate::values::generics::border::BorderSpacing as GenericBorderSpacing;
+use crate::values::generics::border::{
+    GenericBorderCornerRadius, GenericBorderImageSideWidth, GenericBorderImageSlice,
+    GenericBorderRadius, GenericBorderSpacing,
+};
 use crate::values::generics::rect::Rect;
 use crate::values::generics::size::Size2D;
 use crate::values::specified::length::{Length, NonNegativeLength, NonNegativeLengthPercentage};
@@ -306,6 +305,7 @@ impl Parse for BorderSpacing {
     ToResolvedValue,
     ToShmem,
 )]
+#[repr(u8)]
 pub enum BorderImageRepeatKeyword {
     Stretch,
     Repeat,
@@ -327,6 +327,7 @@ pub enum BorderImageRepeatKeyword {
     ToResolvedValue,
     ToShmem,
 )]
+#[repr(C)]
 pub struct BorderImageRepeat(pub BorderImageRepeatKeyword, pub BorderImageRepeatKeyword);
 
 impl ToCss for BorderImageRepeat {

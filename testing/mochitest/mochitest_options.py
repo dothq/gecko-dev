@@ -8,16 +8,14 @@ import sys
 import tempfile
 from abc import ABCMeta, abstractmethod, abstractproperty
 from argparse import SUPPRESS, ArgumentParser
-from distutils import spawn
-from distutils.util import strtobool
 from itertools import chain
+from shutil import which
+from urllib.parse import urlparse
 
 import mozinfo
 import mozlog
 import moznetwork
-import six
 from mozprofile import DEFAULT_PORTS
-from six.moves.urllib.parse import urlparse
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -73,6 +71,22 @@ SUPPORTED_FLAVORS = list(
 CANONICAL_FLAVORS = sorted([f["aliases"][0] for f in ALL_FLAVORS.values()])
 
 
+def strtobool(value: str):
+    # Copied from `mach.util` since `mach.util` is not guaranteed to be available
+    # Reimplementation of distutils.util.strtobool
+    # https://docs.python.org/3.9/distutils/apiref.html#distutils.util.strtobool
+    true_vals = ("y", "yes", "t", "true", "on", "1")
+    false_vals = ("n", "no", "f", "false", "off", "0")
+
+    value = value.lower()
+    if value in true_vals:
+        return 1
+    if value in false_vals:
+        return 0
+
+    raise ValueError(f'Expected one of: {", ".join(true_vals + false_vals)}')
+
+
 def get_default_valgrind_suppression_files():
     # We are trying to locate files in the source tree.  So if we
     # don't know where the source tree is, we must give up.
@@ -106,8 +120,7 @@ def get_default_valgrind_suppression_files():
     return rv
 
 
-@six.add_metaclass(ABCMeta)
-class ArgumentContainer:
+class ArgumentContainer(metaclass=ABCMeta):
     @abstractproperty
     def args(self):
         pass
@@ -940,9 +953,18 @@ class MochitestArguments(ArgumentContainer):
         [
             ["--restart-after-failure"],
             {
+                "action": "store_true",
                 "dest": "restartAfterFailure",
                 "default": False,
                 "help": "Terminate the session on first failure and restart where you left off.",
+            },
+        ],
+        [
+            ["--variant"],
+            {
+                "dest": "variant",
+                "default": "",
+                "help": "use specified variant for any harness level changes.",
             },
         ],
     ]
@@ -1173,10 +1195,10 @@ class MochitestArguments(ArgumentContainer):
                     "--use-test-media-devices is only supported on Linux currently"
                 )
 
-            gst01 = spawn.find_executable("gst-launch-0.1")
-            gst010 = spawn.find_executable("gst-launch-0.10")
-            gst10 = spawn.find_executable("gst-launch-1.0")
-            pactl = spawn.find_executable("pactl")
+            gst01 = which("gst-launch-0.1")
+            gst010 = which("gst-launch-0.10")
+            gst10 = which("gst-launch-1.0")
+            pactl = which("pactl")
 
             if not (gst01 or gst10 or gst010):
                 parser.error(

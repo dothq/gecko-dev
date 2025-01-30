@@ -16,7 +16,7 @@ add_task(async function test_shopping_settings_fakespot_learn_more() {
       await SpecialPowers.spawn(
         browser,
         [MOCK_ANALYZED_PRODUCT_RESPONSE],
-        async mockData => {
+        async () => {
           let shoppingContainer =
             content.document.querySelector(
               "shopping-container"
@@ -55,7 +55,7 @@ add_task(async function test_shopping_settings_ads_learn_more() {
       await SpecialPowers.spawn(
         browser,
         [MOCK_ANALYZED_PRODUCT_RESPONSE],
-        async mockData => {
+        async () => {
           let shoppingContainer =
             content.document.querySelector(
               "shopping-container"
@@ -308,7 +308,10 @@ add_task(async function test_settings_toggle_ad_and_multiple_tabs() {
  */
 add_task(async function test_shopping_settings_experiment_auto_open_disabled() {
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.shopping.experience2023.autoOpen.enabled", false]],
+    set: [
+      ["browser.shopping.experience2023.autoOpen.enabled", false],
+      ["browser.shopping.experience2023.active", true],
+    ],
   });
 
   await BrowserTestUtils.withNewTab(
@@ -404,7 +407,7 @@ add_task(
         await SpecialPowers.spawn(
           sidebar.querySelector("browser"),
           [MOCK_ANALYZED_PRODUCT_RESPONSE],
-          async mockData => {
+          async () => {
             let shoppingContainer =
               content.document.querySelector(
                 "shopping-container"
@@ -419,11 +422,6 @@ add_task(
                 "shopping-settings-auto-open-ui-enabled"
               ),
               "Settings card should have a special classname with autoOpen pref enabled"
-            );
-            is(
-              shoppingSettings.shoppingCardEl?.type,
-              "",
-              "shopping-card type should be default"
             );
 
             ok(
@@ -441,10 +439,6 @@ add_task(
               "There should be a description for the auto-open toggle"
             );
             ok(shoppingSettings.dividerEl, "There should be a divider");
-            ok(
-              shoppingSettings.sidebarEnabledStateEl,
-              "There should be a message about the sidebar active state"
-            );
 
             ok(
               shoppingSettings.optOutButtonEl,
@@ -490,7 +484,7 @@ add_task(
         await SpecialPowers.spawn(
           sidebar.querySelector("browser"),
           [MOCK_ANALYZED_PRODUCT_RESPONSE],
-          async mockData => {
+          async () => {
             let shoppingContainer =
               content.document.querySelector(
                 "shopping-container"
@@ -505,11 +499,6 @@ add_task(
                 "shopping-settings-auto-open-ui-enabled"
               ),
               "Settings card should have a special classname with autoOpen pref enabled"
-            );
-            is(
-              shoppingSettings.shoppingCardEl?.type,
-              "",
-              "shopping-card type should be default"
             );
 
             ok(
@@ -527,10 +516,6 @@ add_task(
               "There should be a description for the auto-open toggle"
             );
             ok(shoppingSettings.dividerEl, "There should be a divider");
-            ok(
-              shoppingSettings.sidebarEnabledStateEl,
-              "There should be a message about the sidebar active state"
-            );
 
             ok(
               shoppingSettings.optOutButtonEl,
@@ -595,10 +580,23 @@ add_task(async function test_settings_auto_open_toggle() {
       let toggleStateChangePromise = ContentTaskUtils.waitForCondition(() => {
         return !autoOpenToggle.hasAttribute("pressed");
       }, "Waiting for auto-open toggle state to be disabled");
+      let autoOpenUserEnabledPromise = ContentTaskUtils.waitForEvent(
+        content.document,
+        "autoOpenEnabledByUserChanged"
+      );
+      let activePrefChange = ContentTaskUtils.waitForCondition(
+        () =>
+          !SpecialPowers.getBoolPref("browser.shopping.experience2023.active"),
+        "Sidebar active pref should be false, but isn't"
+      );
 
       autoOpenToggle.click();
 
-      await toggleStateChangePromise;
+      Promise.all([
+        await toggleStateChangePromise,
+        await autoOpenUserEnabledPromise,
+        await activePrefChange,
+      ]);
 
       ok(
         !SpecialPowers.getBoolPref(

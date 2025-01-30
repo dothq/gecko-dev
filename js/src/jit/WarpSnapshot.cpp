@@ -26,9 +26,11 @@ static_assert(!std::is_polymorphic_v<WarpOpSnapshot>,
 
 WarpSnapshot::WarpSnapshot(JSContext* cx, TempAllocator& alloc,
                            WarpScriptSnapshotList&& scriptSnapshots,
+                           const WarpZoneStubsSnapshot& zoneStubs,
                            const WarpBailoutInfo& bailoutInfo,
                            bool needsFinalWarmUpCount)
     : scriptSnapshots_(std::move(scriptSnapshots)),
+      zoneStubs_(zoneStubs),
       globalLexicalEnv_(&cx->global()->lexicalEnvironment()),
       globalLexicalEnvThis_(globalLexicalEnv_->thisObject()),
       bailoutInfo_(bailoutInfo),
@@ -61,6 +63,13 @@ void WarpSnapshot::dump(GenericPrinter& out) const {
   out.printf("globalLexicalEnvThis: 0x%p\n", globalLexicalEnvThis());
   out.printf("failedBoundsCheck: %u\n", bailoutInfo().failedBoundsCheck());
   out.printf("failedLexicalCheck: %u\n", bailoutInfo().failedLexicalCheck());
+  out.printf("\n");
+
+  out.printf("JitZone stubs:\n");
+  for (const auto& stub : zoneStubs_) {
+    unsigned index = &stub - zoneStubs_.begin();
+    out.printf("Stub %u: 0x%p\n", index, stub);
+  }
   out.printf("\n");
 
   out.printf("Nursery objects (%u):\n", unsigned(nurseryObjects_.length()));
@@ -153,7 +162,7 @@ void WarpRest::dumpData(GenericPrinter& out) const {
   out.printf("    shape: 0x%p\n", shape());
 }
 
-void WarpBindGName::dumpData(GenericPrinter& out) const {
+void WarpBindUnqualifiedGName::dumpData(GenericPrinter& out) const {
   out.printf("    globalEnv: 0x%p\n", globalEnv());
 }
 
@@ -223,6 +232,12 @@ void WarpSnapshot::trace(JSTracer* trc) {
   for (auto* script : scriptSnapshots_) {
     script->trace(trc);
   }
+  for (JitCode* stub : zoneStubs_) {
+    if (stub) {
+      WarpGCPtr<JitCode*> ptr(stub);
+      TraceWarpGCPtr(trc, ptr, "warp-zone-stub");
+    }
+  }
   TraceWarpGCPtr(trc, globalLexicalEnv_, "warp-lexical");
   TraceWarpGCPtr(trc, globalLexicalEnvThis_, "warp-lexicalthis");
 }
@@ -291,8 +306,8 @@ void WarpRest::traceData(JSTracer* trc) {
   TraceWarpGCPtr(trc, shape_, "warp-rest-shape");
 }
 
-void WarpBindGName::traceData(JSTracer* trc) {
-  TraceWarpGCPtr(trc, globalEnv_, "warp-bindgname-globalenv");
+void WarpBindUnqualifiedGName::traceData(JSTracer* trc) {
+  TraceWarpGCPtr(trc, globalEnv_, "warp-bindunqualifiedgname-globalenv");
 }
 
 void WarpVarEnvironment::traceData(JSTracer* trc) {

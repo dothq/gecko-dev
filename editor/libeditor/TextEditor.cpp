@@ -46,7 +46,6 @@
 #include "nsError.h"
 #include "nsFocusManager.h"
 #include "nsGkAtoms.h"
-#include "nsIClipboard.h"
 #include "nsIContent.h"
 #include "nsINode.h"
 #include "nsIPrincipal.h"
@@ -565,20 +564,12 @@ bool TextEditor::IsCopyToClipboardAllowedInternal() const {
 }
 
 nsresult TextEditor::HandlePasteAsQuotation(
-    AutoEditActionDataSetter& aEditActionData, int32_t aClipboardType) {
+    AutoEditActionDataSetter& aEditActionData,
+    nsIClipboard::ClipboardType aClipboardType, DataTransfer* aDataTransfer) {
   MOZ_ASSERT(aClipboardType == nsIClipboard::kGlobalClipboard ||
              aClipboardType == nsIClipboard::kSelectionClipboard);
   if (NS_WARN_IF(!GetDocument())) {
     return NS_OK;
-  }
-
-  // Get Clipboard Service
-  nsresult rv;
-  nsCOMPtr<nsIClipboard> clipboard =
-      do_GetService("@mozilla.org/widget/clipboard;1", &rv);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to get nsIClipboard service");
-    return rv;
   }
 
   // XXX Why don't we dispatch ePaste event here?
@@ -598,13 +589,9 @@ nsresult TextEditor::HandlePasteAsQuotation(
     return NS_OK;
   }
 
-  auto* windowContext = GetDocument()->GetWindowContext();
-  if (!windowContext) {
-    NS_WARNING("Editor didn't have document window context");
-    return NS_ERROR_FAILURE;
-  }
   // Get the Data from the clipboard
-  rv = clipboard->GetData(trans, aClipboardType, windowContext);
+  nsresult rv =
+      GetDataFromDataTransferOrClipboard(aDataTransfer, trans, aClipboardType);
 
   // Now we ask the transferable for the data
   // it still owns the data, we just have a pointer to it.
@@ -772,15 +759,10 @@ nsresult TextEditor::OnFocus(const nsINode& aOriginalEventTargetNode) {
 
 nsresult TextEditor::OnBlur(const EventTarget* aEventTarget) {
   // check if something else is focused. If another element is focused, then
-  // we should not change the selection.
-  nsFocusManager* focusManager = nsFocusManager::GetFocusManager();
-  if (MOZ_UNLIKELY(!focusManager)) {
-    return NS_OK;
-  }
-
-  // If another element already has focus, we should not maintain the selection
-  // because we may not have the rights doing it.
-  if (focusManager->GetFocusedElement()) {
+  // we should not change the selection.  If another element already has focus,
+  // we should not maintain the selection because we may not have the rights
+  // doing it.
+  if (nsFocusManager::GetFocusedElementStatic()) {
     return NS_OK;
   }
 

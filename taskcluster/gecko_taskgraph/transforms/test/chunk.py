@@ -7,17 +7,19 @@ import json
 import taskgraph
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.attributes import keymatch
+from taskgraph.util.copy import deepcopy
 from taskgraph.util.treeherder import join_symbol, split_symbol
 
 from gecko_taskgraph.util.attributes import is_try
 from gecko_taskgraph.util.chunking import (
+    WPT_SUBSUITES,
     DefaultLoader,
     chunk_manifests,
     get_manifest_loader,
     get_runtimes,
+    get_test_tags,
     guess_mozinfo_from_task,
 )
-from gecko_taskgraph.util.copy_task import copy_task
 from gecko_taskgraph.util.perfile import perfile_number_of_chunks
 
 DYNAMIC_CHUNK_DURATION = 20 * 60  # seconds
@@ -44,8 +46,7 @@ def set_test_verify_chunks(config, tasks):
             task["chunks"] = perfile_number_of_chunks(
                 is_try(config.params),
                 env.get("MOZHARNESS_TEST_PATHS", ""),
-                config.params.get("head_repository", ""),
-                config.params.get("head_rev", ""),
+                frozenset(config.params["files_changed"]),
                 task["test-name"],
             )
 
@@ -92,7 +93,10 @@ def set_test_manifests(config, tasks):
             continue
 
         mozinfo = guess_mozinfo_from_task(
-            task, config.params.get("head_repository", "")
+            task,
+            config.params.get("head_repository", ""),
+            config.params.get("app_version", ""),
+            get_test_tags(config, task.get("worker", {}).get("env", {})),
         )
 
         loader_name = task.pop(
@@ -116,16 +120,29 @@ def set_test_manifests(config, tasks):
                 config.params["try_task_config"]["env"]["MOZHARNESS_TEST_PATHS"]
             )
 
-        if task["attributes"]["unittest_suite"] in mh_test_paths.keys():
+        if (
+            mh_test_paths
+            and task["attributes"]["unittest_suite"] in mh_test_paths.keys()
+        ):
             input_paths = mh_test_paths[task["attributes"]["unittest_suite"]]
             remaining_manifests = []
 
             # if we have web-platform tests incoming, just yield task
             for m in input_paths:
                 if m.startswith("testing/web-platform/tests/"):
-                    if not isinstance(loader, DefaultLoader):
-                        task["chunks"] = "dynamic"
-                    yield task
+                    found_subsuite = [
+                        key for key in WPT_SUBSUITES if key in task["test-name"]
+                    ]
+                    if found_subsuite:
+                        if any(
+                            test_subsuite in m
+                            for test_subsuite in WPT_SUBSUITES[found_subsuite[0]]
+                        ):
+                            yield task
+                    else:
+                        if not isinstance(loader, DefaultLoader):
+                            task["chunks"] = "dynamic"
+                        yield task
                     break
 
             # input paths can exist in other directories (i.e. [../../dir/test.js])
@@ -151,6 +168,18 @@ def set_test_manifests(config, tasks):
 
             if remaining_manifests == []:
                 continue
+
+        elif mh_test_paths:
+            # we have test paths and they are not related to the test suite
+            # this could be the test suite doesn't support test paths
+            continue
+        elif (
+            get_test_tags(config, task.get("worker", {}).get("env", {}))
+            and not task["test-manifests"]["active"]
+            and not task["test-manifests"]["other_dirs"]
+        ):
+            # no MH_TEST_PATHS, but MH_TEST_TAG or other filters
+            continue
 
         # The default loader loads all manifests. If we use a non-default
         # loader, we'll only run some subset of manifests and the hardcoded
@@ -247,14 +276,20 @@ def split_chunks(config, tasks):
             # so they still show up in the logs. They won't impact runtime much
             # and this way tools like ActiveData are still aware that they
             # exist.
-            if config.params["backstop"] and manifests["active"]:
-                chunked_manifests[0].extend(manifests["skipped"])
+            if (
+                config.params["backstop"]
+                and manifests["active"]
+                and "skipped" in manifests
+            ):
+                chunked_manifests[0].extend(
+                    [m for m in manifests["skipped"] if not m.endswith(".list")]
+                )
 
         for i in range(task["chunks"]):
             this_chunk = i + 1
 
             # copy the test and update with the chunk number
-            chunked = copy_task(task)
+            chunked = deepcopy(task)
             chunked["this-chunk"] = this_chunk
 
             if chunked_manifests is not None:

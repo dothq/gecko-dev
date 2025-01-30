@@ -6,26 +6,23 @@
 "use strict";
 
 ChromeUtils.defineESModuleGetters(this, {
-  UrlbarProviderQuickActions:
-    "resource:///modules/UrlbarProviderQuickActions.sys.mjs",
+  ActionsProviderQuickActions:
+    "resource:///modules/ActionsProviderQuickActions.sys.mjs",
   UrlbarTestUtils: "resource://testing-common/UrlbarTestUtils.sys.mjs",
 });
 
 add_setup(async function setup() {
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.urlbar.suggest.quickactions", true],
-      ["browser.urlbar.quickactions.enabled", true],
-    ],
+    set: [["browser.urlbar.secondaryActions.featureGate", true]],
   });
 
-  UrlbarProviderQuickActions.addAction("testaction", {
+  ActionsProviderQuickActions.addAction("testaction", {
     commands: ["testaction"],
     label: "quickactions-downloads2",
   });
 
   registerCleanupFunction(() => {
-    UrlbarProviderQuickActions.removeAction("testaction");
+    ActionsProviderQuickActions.removeAction("testaction");
   });
 });
 
@@ -38,6 +35,10 @@ async function isGroupHidden(tab) {
 }
 
 add_task(async function test_show_prefs() {
+  Services.prefs.setBoolPref(
+    "browser.urlbar.scotchBonnet.enableOverride",
+    false
+  );
   Services.prefs.setBoolPref("browser.urlbar.quickactions.showPrefs", false);
 
   let tab = await BrowserTestUtils.openNewForegroundTab(
@@ -57,19 +58,28 @@ add_task(async function test_show_prefs() {
     "The preferences are shown when pref enabled"
   );
 
+  Services.prefs.clearUserPref("browser.urlbar.scotchBonnet.enableOverride");
   Services.prefs.clearUserPref("browser.urlbar.quickactions.showPrefs");
   await BrowserTestUtils.removeTab(tab);
 });
 
-async function testActionIsShown(window) {
+async function testActionIsShown(window, name) {
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     window,
     value: "testact",
     waitForFocus: SimpleTest.waitForFocus,
   });
   try {
-    let { result } = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
-    return result.providerName == "quickactions";
+    await BrowserTestUtils.waitForMutationCondition(
+      window.document,
+      {},
+      () =>
+        !!window.document.querySelector(
+          `.urlbarView-action-btn[data-action=${name}]`
+        )
+    );
+    Assert.ok(true, `We found action "${name}"`);
+    return true;
   } catch (e) {
     return false;
   }
@@ -100,7 +110,7 @@ add_task(async function test_prefs() {
   });
 
   Assert.ok(
-    await testActionIsShown(window),
+    await testActionIsShown(window, "testaction"),
     "Actions are shown after user clicks checkbox"
   );
 

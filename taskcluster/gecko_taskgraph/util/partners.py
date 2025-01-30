@@ -7,15 +7,15 @@ import json
 import logging
 import os
 import xml.etree.ElementTree as ET
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
 import yaml
 from redo import retry
+from taskgraph.util.copy import deepcopy
 from taskgraph.util.schema import resolve_keyed_by
 
 from gecko_taskgraph.util.attributes import release_level
-from gecko_taskgraph.util.copy_task import copy_task
 
 # Suppress chatty requests logging
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -391,7 +391,7 @@ def get_partner_config_by_kind(config, kind):
         elif kind.startswith("release-partner-attribution") and isinstance(
             kind_config, dict
         ):
-            all_configs = copy_task(kind_config.get("configs", []))
+            all_configs = deepcopy(kind_config.get("configs", []))
             kind_config["configs"] = []
             for this_config in all_configs:
                 if this_config["campaign"] in partner_subset:
@@ -400,7 +400,7 @@ def get_partner_config_by_kind(config, kind):
 
 
 def _fix_subpartner_locales(orig_config, all_locales):
-    subpartner_config = copy_task(orig_config)
+    subpartner_config = deepcopy(orig_config)
     # Get an ordered list of subpartner locales that is a subset of all_locales
     subpartner_config["locales"] = sorted(
         list(set(orig_config["locales"]) & set(all_locales))
@@ -432,9 +432,9 @@ def fix_partner_config(orig_config):
                     if not subpartner_config:
                         continue
                     # Make sure our locale list is a subset of all_locales
-                    pc.setdefault(kind, {}).setdefault(partner, {})[
-                        subpartner
-                    ] = _fix_subpartner_locales(subpartner_config, all_locales)
+                    pc.setdefault(kind, {}).setdefault(partner, {})[subpartner] = (
+                        _fix_subpartner_locales(subpartner_config, all_locales)
+                    )
     return pc
 
 
@@ -465,7 +465,7 @@ def locales_per_build_platform(build_platform, locales):
 
 
 def get_partner_url_config(parameters, graph_config):
-    partner_url_config = copy_task(graph_config["partner-urls"])
+    partner_url_config = deepcopy(graph_config["partner-urls"])
     substitutions = {
         "release-product": parameters["release_product"],
         "release-level": release_level(parameters["project"]),
@@ -508,13 +508,31 @@ def get_repack_ids_by_platform(config, build_platform):
 
 
 def get_partners_to_be_published(config):
-    # hardcoded kind because release-bouncer-aliases doesn't match otherwise
-    partner_config = get_partner_config_by_kind(config, "release-partner-repack")
+    return _get_repack_partners(config) + _get_attribution_partners(config)
+
+
+def _get_repack_partners(config):
+    repack_partner_config = get_partner_config_by_kind(config, "release-partner-repack")
     partners = []
-    for partner, subconfigs in partner_config.items():
+
+    for partner, subconfigs in repack_partner_config.items():
         for sub_config_name, sub_config in subconfigs.items():
             if sub_config.get("publish_to_releases"):
                 partners.append((partner, sub_config_name, sub_config["platforms"]))
+
+    return partners
+
+
+def _get_attribution_partners(config):
+    attribution_partner_config = get_partner_config_by_kind(
+        config, "release-partner-attribution"
+    )
+    partners = []
+
+    for entry in attribution_partner_config.get("configs", []):
+        if entry.get("publish_to_releases"):
+            partners.append((entry["campaign"], entry["content"], entry["platforms"]))
+
     return partners
 
 
@@ -523,7 +541,7 @@ def apply_partner_priority(config, jobs):
     # Reduce the priority of the partner repack jobs because they don't block QE. Meanwhile
     # leave EME-free jobs alone because they do, and they'll get the branch priority like the rest
     # of the release. Only bother with this in production, not on staging releases on try.
-    # medium is the same as mozilla-central, see taskcluster/ci/config.yml. ie higher than
+    # medium is the same as mozilla-central, see taskcluster/config.yml. ie higher than
     # integration branches because we don't want to wait a lot for the graph to be done, but
     # for multiple releases the partner tasks always wait for non-partner.
     if (
@@ -553,3 +571,48 @@ def generate_attribution_code(defaults, partner):
 
     code = urlencode(params)
     return code
+
+
+MACOS_ATTRIBUTION_SENTINEL = "__MOZCUSTOM__"
+
+
+def build_macos_attribution_dmg_command(dmg_app_path, attributions):
+    command = []
+    for a in attributions:
+        output_dir = os.path.dirname(os.path.abspath(a["output"]))
+        create_dir_command = "mkdir -p {}".format(output_dir)
+        if create_dir_command not in command:
+            command.append(create_dir_command)
+
+        command.append(
+            " ".join(
+                [
+                    dmg_app_path,
+                    "attribute",
+                    a["input"],
+                    a["output"],
+                    MACOS_ATTRIBUTION_SENTINEL,
+                    _build_macos_attribution_string(attribution_code=a["attribution"]),
+                ]
+            )
+        )
+    return " && ".join(command)
+
+
+def _build_macos_attribution_string(attribution_code):
+    quoted_attribution_code = quote(attribution_code)
+    attribution_string = "{}{}".format(
+        MACOS_ATTRIBUTION_SENTINEL, quoted_attribution_code
+    )
+    # Padding must happen after string is URL-quoted, otherwise the tabs themselves
+    # are quoted as well.
+    padded_attribution_string = _pad_macos_attribution_code(attribution_string)
+    return "'{}'".format(padded_attribution_string)
+
+
+def _pad_macos_attribution_code(attribution_string):
+    # Attribution length should be aligned with ATTR_CODE_MAX_LENGTH
+    #   from browser/components/attribution/AttributionCode.sys
+    while len(attribution_string) < 1010:
+        attribution_string += "\t"
+    return attribution_string

@@ -167,9 +167,6 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
   ElementState elementState = GetContentState(aFrame, aAppearance);
   if (aState) {
     memset(aState, 0, sizeof(GtkWidgetState));
-
-    // For XUL checkboxes and radio buttons, the state of the parent
-    // determines our state.
     if (aWidgetFlags) {
       if (elementState.HasState(ElementState::CHECKED)) {
         *aWidgetFlags |= MOZ_GTK_WIDGET_CHECKED;
@@ -198,14 +195,6 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
         aAppearance == StyleAppearance::Menulist ||
         aAppearance == StyleAppearance::MenulistButton) {
       aState->active &= aState->inHover;
-    } else if (aAppearance == StyleAppearance::Treetwisty ||
-               aAppearance == StyleAppearance::Treetwistyopen) {
-      if (nsTreeBodyFrame* treeBodyFrame = do_QueryFrame(aFrame)) {
-        const mozilla::AtomArray& atoms =
-            treeBodyFrame->GetPropertyArrayForCurrentDrawingItem();
-        aState->selected = atoms.Contains(nsGkAtoms::selected);
-        aState->inHover = atoms.Contains(nsGkAtoms::hover);
-      }
     }
 
     if (IsFrameContentNodeInNamespace(aFrame, kNameSpaceID_XUL)) {
@@ -241,7 +230,8 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
         aAppearance == StyleAppearance::MozWindowButtonMinimize ||
         aAppearance == StyleAppearance::MozWindowButtonMaximize ||
         aAppearance == StyleAppearance::MozWindowButtonRestore) {
-      aState->backdrop = !nsWindow::GetTopLevelWindowActiveState(aFrame);
+      aState->backdrop = aFrame->PresContext()->Document()->State().HasState(
+          dom::DocumentState::WINDOW_INACTIVE);
     }
   }
 
@@ -294,6 +284,7 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
       break;
     }
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
       aGtkWidgetType = MOZ_GTK_ENTRY;
       break;
@@ -301,16 +292,7 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
       aGtkWidgetType = MOZ_GTK_TEXT_VIEW;
       break;
     case StyleAppearance::Listbox:
-    case StyleAppearance::Treeview:
       aGtkWidgetType = MOZ_GTK_TREEVIEW;
-      break;
-    case StyleAppearance::Treetwisty:
-      aGtkWidgetType = MOZ_GTK_TREEVIEW_EXPANDER;
-      if (aWidgetFlags) *aWidgetFlags = GTK_EXPANDER_COLLAPSED;
-      break;
-    case StyleAppearance::Treetwistyopen:
-      aGtkWidgetType = MOZ_GTK_TREEVIEW_EXPANDER;
-      if (aWidgetFlags) *aWidgetFlags = GTK_EXPANDER_EXPANDED;
       break;
     case StyleAppearance::MenulistButton:
     case StyleAppearance::Menulist:
@@ -884,11 +866,6 @@ LayoutDeviceIntMargin nsNativeThemeGTK::GetWidgetBorder(
   CSSIntMargin result;
   GtkTextDirection direction = GetTextDirection(aFrame);
   switch (aAppearance) {
-    case StyleAppearance::Toolbox:
-      // gtk has no toolbox equivalent.  So, although we map toolbox to
-      // gtk's 'toolbar' for purposes of painting the widget background,
-      // we don't use the toolbar border for toolbox.
-      break;
     case StyleAppearance::Dualbutton:
       // TOOLBAR_DUAL_BUTTON is an interesting case.  We want a border to draw
       // around the entire button + dropdown, and also an inner border if you're
@@ -970,9 +947,8 @@ bool nsNativeThemeGTK::GetWidgetOverflow(nsDeviceContext* aContext,
   return true;
 }
 
-auto nsNativeThemeGTK::IsWidgetNonNative(nsIFrame* aFrame,
-                                         StyleAppearance aAppearance)
-    -> NonNative {
+auto nsNativeThemeGTK::IsWidgetNonNative(
+    nsIFrame* aFrame, StyleAppearance aAppearance) -> NonNative {
   if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
     return NonNative::Always;
   }
@@ -1098,6 +1074,7 @@ LayoutDeviceIntSize nsNativeThemeGTK::GetMinimumWidgetSize(
       result.height += border.TopBottom();
     } break;
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield: {
       gint contentHeight = 0;
       gint borderPaddingHeight = 0;
@@ -1142,12 +1119,6 @@ LayoutDeviceIntSize nsNativeThemeGTK::GetMinimumWidgetSize(
       result.width = 14;
       result.height = 13;
       break;
-    case StyleAppearance::Treetwisty:
-    case StyleAppearance::Treetwistyopen: {
-      gint expander_size;
-      moz_gtk_get_treeview_expander_size(&expander_size);
-      result.width = result.height = expander_size;
-    } break;
     default:
       break;
   }
@@ -1156,60 +1127,16 @@ LayoutDeviceIntSize nsNativeThemeGTK::GetMinimumWidgetSize(
                                     GetWidgetScaleFactor(aFrame));
 }
 
-NS_IMETHODIMP
-nsNativeThemeGTK::WidgetStateChanged(nsIFrame* aFrame,
-                                     StyleAppearance aAppearance,
-                                     nsAtom* aAttribute, bool* aShouldRepaint,
-                                     const nsAttrValue* aOldValue) {
-  *aShouldRepaint = false;
-
-  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
-    return Theme::WidgetStateChanged(aFrame, aAppearance, aAttribute,
-                                     aShouldRepaint, aOldValue);
-  }
-
+bool nsNativeThemeGTK::WidgetAttributeChangeRequiresRepaint(
+    StyleAppearance aAppearance, nsAtom* aAttribute) {
   // Some widget types just never change state.
-  if (aAppearance == StyleAppearance::Toolbox ||
-      aAppearance == StyleAppearance::Toolbar ||
-      aAppearance == StyleAppearance::Progresschunk ||
+  if (aAppearance == StyleAppearance::Progresschunk ||
       aAppearance == StyleAppearance::ProgressBar ||
       aAppearance == StyleAppearance::Tooltip ||
       aAppearance == StyleAppearance::MozWindowDecorations) {
-    return NS_OK;
+    return false;
   }
-
-  if (aAppearance == StyleAppearance::MozWindowTitlebar ||
-      aAppearance == StyleAppearance::MozWindowTitlebarMaximized ||
-      aAppearance == StyleAppearance::MozWindowButtonClose ||
-      aAppearance == StyleAppearance::MozWindowButtonMinimize ||
-      aAppearance == StyleAppearance::MozWindowButtonMaximize ||
-      aAppearance == StyleAppearance::MozWindowButtonRestore) {
-    *aShouldRepaint = true;
-    return NS_OK;
-  }
-
-  // XXXdwh Not sure what can really be done here.  Can at least guess for
-  // specific widgets that they're highly unlikely to have certain states.
-  // For example, a toolbar doesn't care about any states.
-  if (!aAttribute) {
-    // Hover/focus/active changed.  Always repaint.
-    *aShouldRepaint = true;
-    return NS_OK;
-  }
-
-  // Check the attribute to see if it's relevant.
-  // disabled, checked, dlgtype, default, etc.
-  *aShouldRepaint = false;
-  if (aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::checked ||
-      aAttribute == nsGkAtoms::selected ||
-      aAttribute == nsGkAtoms::visuallyselected ||
-      aAttribute == nsGkAtoms::focused || aAttribute == nsGkAtoms::readonly ||
-      aAttribute == nsGkAtoms::_default ||
-      aAttribute == nsGkAtoms::menuactive || aAttribute == nsGkAtoms::open) {
-    *aShouldRepaint = true;
-    return NS_OK;
-  }
-  return NS_OK;
+  return Theme::WidgetAttributeChangeRequiresRepaint(aAppearance, aAttribute);
 }
 
 NS_IMETHODIMP
@@ -1244,7 +1171,6 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::Button:
     case StyleAppearance::Radio:
     case StyleAppearance::Checkbox:
-    case StyleAppearance::Toolbox:  // N/A
     case StyleAppearance::Toolbarbutton:
     case StyleAppearance::Dualbutton:  // so we can override the border with 0
     case StyleAppearance::ToolbarbuttonDropdown:
@@ -1253,12 +1179,6 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::ButtonArrowNext:
     case StyleAppearance::ButtonArrowPrevious:
     case StyleAppearance::Listbox:
-    case StyleAppearance::Treeview:
-      // case StyleAppearance::Treeitem:
-    case StyleAppearance::Treetwisty:
-      // case StyleAppearance::Treeline:
-      // case StyleAppearance::Treeheader:
-    case StyleAppearance::Treetwistyopen:
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Progresschunk:
     case StyleAppearance::Tab:
@@ -1272,6 +1192,7 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::SpinnerTextfield:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Range:
@@ -1325,6 +1246,7 @@ bool nsNativeThemeGTK::ThemeDrawsFocusForWidget(nsIFrame* aFrame,
     case StyleAppearance::Textarea:
     case StyleAppearance::Textfield:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
       return true;
     default:
       return false;

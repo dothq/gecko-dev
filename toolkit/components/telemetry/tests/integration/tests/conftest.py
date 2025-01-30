@@ -10,7 +10,7 @@ import time
 
 import mozinstall
 import pytest
-from marionette_driver import By, keys
+from marionette_driver import keys
 from marionette_driver.addons import Addons
 from marionette_driver.errors import MarionetteException
 from marionette_driver.marionette import Marionette
@@ -19,6 +19,7 @@ from six import reraise
 from telemetry_harness.ping_server import PingServer
 
 CANARY_CLIENT_ID = "c0ffeec0-ffee-c0ff-eec0-ffeec0ffeec0"
+CANARY_PROFILE_GROUP_ID = "decafdec-afde-cafd-ecaf-decafdecafde"
 SERVER_ROOT = "toolkit/components/telemetry/tests/marionette/harness/www"
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -84,7 +85,9 @@ def fixture_marionette(binary, ping_server):
 @pytest.fixture(name="ping_server")
 def fixture_ping_server():
     """Run a ping server on localhost on a free port assigned by the OS"""
-    server = PingServer(SERVER_ROOT, "http://localhost:0")
+    server = PingServer(
+        os.path.join(build.topsrcdir, SERVER_ROOT), "http://localhost:0"
+    )
     server.start()
     yield server
     server.stop()
@@ -102,20 +105,6 @@ class Browser(object):
         )
         self.marionette.set_pref("datareporting.healthreport.uploadEnabled", False)
 
-    def enable_search_events(self):
-        """
-        Event Telemetry categories are disabled by default.
-        Search events are in the "navigation" category and are not enabled by
-        default in builds of Firefox, so we enable them here.
-        """
-
-        script = """\
-        Services.telemetry.setEventRecordingEnabled("navigation", true);
-        """
-
-        with self.marionette.using_context(self.marionette.CONTEXT_CHROME):
-            self.marionette.execute_script(textwrap.dedent(script))
-
     def enable_telemetry(self):
         self.marionette.instance.profile.set_persistent_preferences(
             {"datareporting.healthreport.uploadEnabled": True}
@@ -131,6 +120,18 @@ class Browser(object):
                   "resource://gre/modules/ClientID.sys.mjs"
                 );
                 return ClientID.getCachedClientID();
+            """
+            )
+
+    def get_profile_group_id(self):
+        """Return the group ID of the current client."""
+        with self.marionette.using_context(self.marionette.CONTEXT_CHROME):
+            return self.marionette.execute_script(
+                """\
+                const { ClientID } = ChromeUtils.importESModule(
+                  "resource://gre/modules/ClientID.sys.mjs"
+                );
+                return ClientID.getCachedProfileGroupID();
             """
             )
 
@@ -233,7 +234,7 @@ class Browser(object):
 
         with self.marionette.using_context(self.marionette.CONTEXT_CHROME):
             self.marionette.execute_script("gURLBar.select();")
-            urlbar = self.marionette.find_element(By.ID, "urlbar-input")
+            urlbar = self.marionette.execute_script("return gURLBar.inputField")
             urlbar.send_keys(keys.Keys.DELETE)
             urlbar.send_keys(text + keys.Keys.ENTER)
 
@@ -281,6 +282,7 @@ class Helpers(object):
         assert value is not None
         assert value != ""
         assert value != CANARY_CLIENT_ID
+        assert value != CANARY_PROFILE_GROUP_ID
         assert re.match(UUID_PATTERN, value) is not None
 
     def wait_for_ping(self, action_func, ping_filter):

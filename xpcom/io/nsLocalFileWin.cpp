@@ -108,8 +108,7 @@ static HWND GetMostRecentNavigatorHWND() {
   }
 
   nsCOMPtr<mozIDOMWindowProxy> navWin;
-  rv = winMediator->GetMostRecentWindow(u"navigator:browser",
-                                        getter_AddRefs(navWin));
+  rv = winMediator->GetMostRecentBrowserWindow(getter_AddRefs(navWin));
   if (NS_FAILED(rv) || !navWin) {
     return nullptr;
   }
@@ -140,7 +139,7 @@ nsresult nsLocalFile::RevealFile(const nsString& aResolvedPath) {
     }
 
     LPCITEMIDLIST selection[] = {dir};
-    UINT count = ArrayLength(selection);
+    UINT count = std::size(selection);
 
     // Perform the open of the directory.
     hr = SHOpenFolderAndSelectItems(dir, count, selection, 0);
@@ -170,7 +169,7 @@ nsresult nsLocalFile::RevealFile(const nsString& aResolvedPath) {
     }
 
     LPCITEMIDLIST selection[] = {item};
-    UINT count = ArrayLength(selection);
+    UINT count = std::size(selection);
 
     // Perform the selection of the file.
     hr = SHOpenFolderAndSelectItems(dir, count, selection, 0);
@@ -325,6 +324,8 @@ static nsresult ConvertWinError(DWORD aWinErr) {
     case ERROR_DEVICE_NOT_CONNECTED:
       [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
     case ERROR_DEV_NOT_EXIST:
+      [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
+    case ERROR_INVALID_FUNCTION:
       [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
     case ERROR_IO_DEVICE:
       rv = NS_ERROR_FILE_DEVICE_FAILURE;
@@ -633,6 +634,9 @@ static nsresult GetFileInfo(const nsString& aName,
   aInfo->size = fileData.nFileSizeHigh;
   aInfo->size = (aInfo->size << 32) + fileData.nFileSizeLow;
 
+  // modifyTime must be initialized before creationTime refers it.
+  FileTimeToPRTime(&fileData.ftLastWriteTime, &aInfo->modifyTime);
+
   if (0 == fileData.ftCreationTime.dwLowDateTime &&
       0 == fileData.ftCreationTime.dwHighDateTime) {
     aInfo->creationTime = aInfo->modifyTime;
@@ -641,7 +645,6 @@ static nsresult GetFileInfo(const nsString& aName,
   }
 
   FileTimeToPRTime(&fileData.ftLastAccessTime, &aInfo->accessTime);
-  FileTimeToPRTime(&fileData.ftLastWriteTime, &aInfo->modifyTime);
 
   return NS_OK;
 }
@@ -671,10 +674,12 @@ static nsresult OpenDir(const nsString& aName, nsDir** aDir) {
 
   filename.ReplaceChar(L'/', L'\\');
 
-  // FindFirstFileW Will have a last error of ERROR_DIRECTORY if
+  // FindFirstFileExW Will have a last error of ERROR_DIRECTORY if
   // <file_path>\* is passed in.  If <unknown_path>\* is passed in then
   // ERROR_PATH_NOT_FOUND will be the last error.
-  d->handle = ::FindFirstFileW(filename.get(), &(d->data));
+  d->handle = ::FindFirstFileExW(filename.get(), FindExInfoBasic, &(d->data),
+                                 FindExSearchNameMatch, nullptr,
+                                 FIND_FIRST_EX_LARGE_FETCH);
 
   if (d->handle == INVALID_HANDLE_VALUE) {
     delete d;
@@ -873,11 +878,6 @@ NS_IMPL_ISUPPORTS_INHERITED(nsDirEnumerator, nsSimpleEnumerator,
 
 nsLocalFile::nsLocalFile()
     : mDirty(true), mResolveDirty(true), mUseDOSDevicePathSyntax(false) {}
-
-nsLocalFile::nsLocalFile(const nsAString& aFilePath)
-    : mUseDOSDevicePathSyntax(false) {
-  InitWithPath(aFilePath);
-}
 
 nsresult nsLocalFile::nsLocalFileConstructor(const nsIID& aIID,
                                              void** aInstancePtr) {
@@ -2147,22 +2147,17 @@ nsresult nsLocalFile::CopyMove(nsIFile* aParentDir, const nsAString& aNewName,
     MakeDirty();
 
     nsAutoString newParentPath;
-    newParentDir->GetPath(newParentPath);
+    MOZ_ALWAYS_SUCCEEDS(newParentDir->GetPath(newParentPath));
 
-    if (newParentPath.IsEmpty()) {
-      return NS_ERROR_FAILURE;
-    }
-
+    nsAutoString newLeafName;
     if (aNewName.IsEmpty()) {
-      nsAutoString aFileName;
-      GetLeafName(aFileName);
-
-      InitWithPath(newParentPath);
-      Append(aFileName);
+      MOZ_ALWAYS_SUCCEEDS(GetLeafName(newLeafName));
     } else {
-      InitWithPath(newParentPath);
-      Append(aNewName);
+      newLeafName = aNewName;
     }
+
+    MOZ_ALWAYS_SUCCEEDS(InitWithPath(newParentPath));
+    MOZ_ALWAYS_SUCCEEDS(Append(newLeafName));
   }
 
   return NS_OK;
@@ -2386,17 +2381,11 @@ nsresult nsLocalFile::GetDateImpl(PRTime* aTime,
   FileInfo* pInfo;
 
   if (aFollowLinks) {
-    if (nsresult rv = GetFileInfo(mWorkingPath, &symlinkInfo); NS_FAILED(rv)) {
-      return rv;
-    }
-
-    pInfo = &symlinkInfo;
-  } else {
-    if (nsresult rv = ResolveAndStat(); NS_FAILED(rv)) {
-      return rv;
-    }
-
+    MOZ_TRY(ResolveAndStat());
     pInfo = &mFileInfo;
+  } else {
+    MOZ_TRY(GetFileInfo(mWorkingPath, &symlinkInfo));
+    pInfo = &symlinkInfo;
   }
 
   switch (aTimeField) {
@@ -2550,6 +2539,10 @@ nsresult nsLocalFile::SetDateImpl(PRTime aTime,
   }
 
   CloseHandle(file);
+
+  if (NS_SUCCEEDED(rv)) {
+    MakeDirty();
+  }
 
   return rv;
 }
@@ -2771,11 +2764,12 @@ nsLocalFile::GetDiskSpaceAvailable(int64_t* aDiskSpaceAvailable) {
   }
 
   if (mFileInfo.type == PR_FILE_FILE) {
-    // Since GetDiskFreeSpaceExW works only on directories, use the parent.
+    // Since GetDiskFreeSpaceExW works only on directories, use the parent
+    // which must exist if we are a file.
     nsCOMPtr<nsIFile> parent;
-    if (NS_SUCCEEDED(GetParent(getter_AddRefs(parent))) && parent) {
-      return parent->GetDiskSpaceAvailable(aDiskSpaceAvailable);
-    }
+    rv = GetParent(getter_AddRefs(parent));
+    NS_ENSURE_SUCCESS(rv, rv);
+    return parent->GetDiskSpaceAvailable(aDiskSpaceAvailable);
   }
 
   int64_t dummy = 0;
@@ -3014,7 +3008,7 @@ nsresult nsLocalFile::LookupExtensionIn(const char* const* aExtensionsArray,
 
 NS_IMETHODIMP
 nsLocalFile::IsExecutable(bool* aResult) {
-  return LookupExtensionIn(sExecutableExts, ArrayLength(sExecutableExts),
+  return LookupExtensionIn(sExecutableExts, std::size(sExecutableExts),
                            aResult);
 }
 
@@ -3411,7 +3405,7 @@ nsLocalFile::Launch() {
   static const char* const onlyExeExt[] = {".exe"};
   bool isExecutable;
   nsresult rv =
-      LookupExtensionIn(onlyExeExt, ArrayLength(onlyExeExt), &isExecutable);
+      LookupExtensionIn(onlyExeExt, std::size(onlyExeExt), &isExecutable);
   if (NS_FAILED(rv)) {
     isExecutable = false;
   }
@@ -3444,8 +3438,7 @@ nsLocalFile::Launch() {
   return NS_OK;
 }
 
-nsresult NS_NewLocalFile(const nsAString& aPath, bool aFollowLinks,
-                         nsIFile** aResult) {
+nsresult NS_NewLocalFile(const nsAString& aPath, nsIFile** aResult) {
   RefPtr<nsLocalFile> file = new nsLocalFile();
 
   if (!aPath.IsEmpty()) {
@@ -3457,6 +3450,15 @@ nsresult NS_NewLocalFile(const nsAString& aPath, bool aFollowLinks,
 
   file.forget(aResult);
   return NS_OK;
+}
+
+nsresult NS_NewUTF8LocalFile(const nsACString& aPath, nsIFile** aResult) {
+  return NS_NewLocalFile(NS_ConvertUTF8toUTF16(aPath), aResult);
+}
+
+nsresult NS_NewPathStringLocalFile(const PathSubstring& aPath,
+                                   nsIFile** aResult) {
+  return NS_NewLocalFile(aPath, aResult);
 }
 
 //-----------------------------------------------------------------------------
@@ -3516,6 +3518,11 @@ nsLocalFile::SetNativeLeafName(const nsACString& aLeafName) {
   }
 
   return rv;
+}
+
+NS_IMETHODIMP
+nsLocalFile::HostPath(JSContext* aCx, dom::Promise** aPromise) {
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 nsString nsLocalFile::NativePath() { return mWorkingPath; }
@@ -3613,15 +3620,14 @@ nsLocalFile::GetNativeTarget(nsACString& aResult) {
   return rv;
 }
 
-nsresult NS_NewNativeLocalFile(const nsACString& aPath, bool aFollowLinks,
-                               nsIFile** aResult) {
+nsresult NS_NewNativeLocalFile(const nsACString& aPath, nsIFile** aResult) {
   nsAutoString buf;
   nsresult rv = NS_CopyNativeToUnicode(aPath, buf);
   if (NS_FAILED(rv)) {
     *aResult = nullptr;
     return rv;
   }
-  return NS_NewLocalFile(buf, aFollowLinks, aResult);
+  return NS_NewLocalFile(buf, aResult);
 }
 
 void nsLocalFile::EnsureShortPath() {
@@ -3630,12 +3636,12 @@ void nsLocalFile::EnsureShortPath() {
   }
 
   WCHAR shortPath[MAX_PATH + 1];
-  DWORD lengthNeeded = ::GetShortPathNameW(mWorkingPath.get(), shortPath,
-                                           ArrayLength(shortPath));
+  DWORD lengthNeeded =
+      ::GetShortPathNameW(mWorkingPath.get(), shortPath, std::size(shortPath));
   // If an error occurred then lengthNeeded is set to 0 or the length of the
   // needed buffer including null termination.  If it succeeds the number of
   // wide characters not including null termination is returned.
-  if (lengthNeeded != 0 && lengthNeeded < ArrayLength(shortPath)) {
+  if (lengthNeeded != 0 && lengthNeeded < std::size(shortPath)) {
     mShortWorkingPath.Assign(shortPath);
   } else {
     mShortWorkingPath.Assign(mWorkingPath);

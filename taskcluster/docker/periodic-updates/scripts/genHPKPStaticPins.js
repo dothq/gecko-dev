@@ -5,10 +5,9 @@
 // How to run this file:
 // 1. [obtain firefox source code]
 // 2. [build/obtain firefox binaries]
-// 3. run `[path to]/run-mozilla.sh [path to]/xpcshell \
-//                                  [path to]/genHPKPStaticpins.js \
-//                                  [absolute path to]/PreloadedHPKPins.json \
-//                                  [absolute path to]/StaticHPKPins.h
+// 3. run `[path to]/firefox -xpcshell [path to]/genHPKPStaticpins.js \
+//                                     [absolute path to]/PreloadedHPKPins.json \
+//                                     [absolute path to]/StaticHPKPins.h
 "use strict";
 
 if (arguments.length != 2) {
@@ -18,6 +17,8 @@ if (arguments.length != 2) {
       "<absolute path to StaticHPKPins.h>"
   );
 }
+
+Services.prefs.setBoolPref("security.osclientcerts.autoload", false);
 
 var { NetUtil } = ChromeUtils.importESModule(
   "resource://gre/modules/NetUtil.sys.mjs"

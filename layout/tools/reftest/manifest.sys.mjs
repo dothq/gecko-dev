@@ -31,9 +31,6 @@ const {
 import { NetUtil } from "resource://gre/modules/NetUtil.sys.mjs";
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
-const NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX =
-  "@mozilla.org/network/protocol;1?name=";
-
 const RE_PROTOCOL = /^\w+:/;
 const RE_PREF_ITEM = /^(|test-|ref-)pref\((.+?),(.*)\)$/;
 
@@ -49,6 +46,7 @@ export function ReadTopManifest(aFileURL, aFilter, aManifestID) {
 
 // Note: If you materially change the reftest manifest parsing,
 // please keep the parser in layout/tools/reftest/__init__.py in sync.
+// (in particular keep CONDITIONS_JS_TO_MP in sync)
 // eslint-disable-next-line complexity
 function ReadManifest(aURL, aFilter, aManifestID) {
   // Ensure each manifest is only read once. This assumes that manifests that
@@ -90,6 +88,9 @@ function ReadManifest(aURL, aFilter, aManifestID) {
     return sandbox;
   }
 
+  var mozharness_test_paths = Services.prefs.getBoolPref(
+    "reftest.mozharness_test_paths"
+  );
   var lineNo = 0;
   var urlprefix = "";
   var defaults = [];
@@ -155,6 +156,7 @@ function ReadManifest(aURL, aFilter, aManifestID) {
 
     var origLength = items.length;
     items = defaults.concat(items);
+    var modifiers = [...items];
     while (
       items[0].match(
         /^(fails|needs-focus|random|skip|asserts|slow|require-or|silentfail|pref|test-pref|ref-pref|fuzzy|chaos-mode|wr-capture|wr-capture-ref|noautofuzz)/
@@ -444,7 +446,14 @@ function ReadManifest(aURL, aFilter, aManifestID) {
             newManifestID = included;
           }
         }
-        ReadManifest(incURI, aFilter, newManifestID);
+        if (mozharness_test_paths) {
+          g.logger.info(
+            "Not recursively reading when MOZHARNESS_TEST_PATHS is set: " +
+              items[1]
+          );
+        } else {
+          ReadManifest(incURI, aFilter, newManifestID);
+        }
       }
     } else if (items[0] == TYPE_LOAD || items[0] == TYPE_SCRIPT) {
       let type = items[0];
@@ -492,6 +501,7 @@ function ReadManifest(aURL, aFilter, aManifestID) {
           chaosMode,
           wrCapture,
           noAutoFuzz,
+          modifiers,
         },
         aFilter,
         aManifestID
@@ -572,6 +582,7 @@ function ReadManifest(aURL, aFilter, aManifestID) {
           chaosMode,
           wrCapture,
           noAutoFuzz,
+          modifiers,
         },
         aFilter,
         aManifestID
@@ -609,25 +620,50 @@ function getStreamContent(inputStream) {
 // Build the sandbox for fails-if(), etc., condition evaluation.
 function BuildConditionSandbox(aURL) {
   var sandbox = new Cu.Sandbox(aURL.spec);
-  sandbox.isDebugBuild = g.debug.isDebugBuild;
-  sandbox.isCoverageBuild = g.isCoverageBuild;
+  sandbox.mozinfo = Services.prefs.getStringPref("sandbox.mozinfo", {});
+  let mozinfo = JSON.parse(sandbox.mozinfo);
 
-  sandbox.xulRuntime = Cu.cloneInto(
-    {
-      widgetToolkit: Services.appinfo.widgetToolkit,
-      OS: Services.appinfo.OS,
-      XPCOMABI: Services.appinfo.XPCOMABI,
-    },
-    sandbox
-  );
+  // Shortcuts for widget toolkits.
+  sandbox.Android = mozinfo.os == "android";
+  sandbox.cocoaWidget = mozinfo.toolkit == "cocoa";
+  sandbox.gtkWidget = mozinfo.toolkit == "gtk";
+  sandbox.winWidget = mozinfo.toolkit == "windows";
 
-  sandbox.smallScreen = false;
-  if (
-    g.containingWindow.innerWidth < 800 ||
-    g.containingWindow.innerHeight < 1000
-  ) {
-    sandbox.smallScreen = true;
-  }
+  // arch
+  sandbox.is64Bit = mozinfo.bits == "64"; // to be replaced by x86_64 or aarch64
+  sandbox.x86 = mozinfo.processor == "x86";
+  sandbox.x86_64 = mozinfo.processor == "x86_64";
+  sandbox.aarch64 = mozinfo.processor == "aarch64";
+
+  // build type
+  sandbox.isDebugBuild = mozinfo.debug;
+  sandbox.isCoverageBuild = mozinfo.ccov;
+  sandbox.AddressSanitizer = mozinfo.asan;
+  sandbox.ThreadSanitizer = mozinfo.tsan;
+  sandbox.optimized =
+    !sandbox.isDebugBuild &&
+    !sandbox.isCoverageBuild &&
+    !sandbox.AddressSanitizer &&
+    !sandbox.ThreadSanitizer;
+
+  sandbox.release_or_beta = mozinfo.release_or_beta;
+
+  // config specific prefs
+  sandbox.appleSilicon = mozinfo.apple_silicon;
+  sandbox.os_version = mozinfo.os_version;
+  sandbox.wayland = mozinfo.display == "wayland";
+
+  // data not using mozinfo
+  sandbox.xulRuntime = {};
+
+  // Do we *not* have a dedicated gpu process.
+  sandbox.nogpu =
+    sandbox.wayland ||
+    sandbox.cocoaWidget ||
+    !(
+      Services.prefs.getBoolPref("layers.gpu-process.enabled") &&
+      Services.prefs.getBoolPref("layers.gpu-process.force-enabled")
+    );
 
   var gfxInfo =
     NS_GFXINFO_CONTRACTID in Cc &&
@@ -639,85 +675,50 @@ function BuildConditionSandbox(aURL) {
     return obj[key];
   };
 
-  try {
-    sandbox.d2d = readGfxInfo(gfxInfo, "D2DEnabled");
-    sandbox.dwrite = readGfxInfo(gfxInfo, "DWriteEnabled");
-    sandbox.embeddedInFirefoxReality = readGfxInfo(
-      gfxInfo,
-      "EmbeddedInFirefoxReality"
-    );
-  } catch (e) {
-    sandbox.d2d = false;
-    sandbox.dwrite = false;
-    sandbox.embeddedInFirefoxReality = false;
-  }
-
-  var canvasBackend = readGfxInfo(gfxInfo, "AzureCanvasBackend");
-  var contentBackend = readGfxInfo(gfxInfo, "AzureContentBackend");
-
-  sandbox.gpuProcess = gfxInfo.usingGPUProcess;
-  sandbox.azureCairo = canvasBackend == "cairo";
-  sandbox.azureSkia = canvasBackend == "skia";
-  sandbox.skiaContent = contentBackend == "skia";
-  sandbox.azureSkiaGL = false;
-  // true if we are using the same Azure backend for rendering canvas and content
-  sandbox.contentSameGfxBackendAsCanvas =
-    contentBackend == canvasBackend ||
-    (contentBackend == "none" && canvasBackend == "cairo");
-
-  try {
-    var windowProtocol = readGfxInfo(gfxInfo, "windowProtocol");
-    sandbox.wayland = windowProtocol == "wayland";
-  } catch (e) {
-    sandbox.wayland = false;
-  }
-
-  sandbox.remoteCanvas =
-    Services.prefs.getBoolPref("gfx.canvas.remote") &&
-    sandbox.d2d &&
-    sandbox.gpuProcess;
-
-  sandbox.layersGPUAccelerated = g.windowUtils.layerManagerType != "Basic";
-  sandbox.d3d11 = g.windowUtils.layerManagerType == "Direct3D 11";
-  sandbox.d3d9 = g.windowUtils.layerManagerType == "Direct3D 9";
-  sandbox.layersOpenGL = g.windowUtils.layerManagerType == "OpenGL";
   sandbox.swgl = g.windowUtils.layerManagerType.startsWith(
     "WebRender (Software"
   );
-  sandbox.layersOMTC = !!g.windowUtils.layerManagerRemote;
-
-  // Shortcuts for widget toolkits.
-  sandbox.Android = Services.appinfo.OS == "Android";
-  sandbox.cocoaWidget = Services.appinfo.widgetToolkit == "cocoa";
-  sandbox.gtkWidget = Services.appinfo.widgetToolkit == "gtk";
-  sandbox.qtWidget = Services.appinfo.widgetToolkit == "qt";
-  sandbox.winWidget = Services.appinfo.widgetToolkit == "windows";
-
-  sandbox.is64Bit = Services.appinfo.is64Bit;
+  // These detect if each SVG filter primitive is enabled in WebRender
+  sandbox.gfxSVGFE =
+    Services.prefs.getBoolPref("gfx.webrender.svg-filter-effects") &&
+    !g.useDrawSnapshot;
+  sandbox.gfxSVGFEBlend =
+    Services.prefs.getBoolPref("gfx.webrender.svg-filter-effects.feblend") &&
+    sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEColorMatrix =
+    Services.prefs.getBoolPref(
+      "gfx.webrender.svg-filter-effects.fecolormatrix"
+    ) && sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEComponentTransfer =
+    Services.prefs.getBoolPref(
+      "gfx.webrender.svg-filter-effects.fecomponenttransfer"
+    ) && sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEComposite =
+    Services.prefs.getBoolPref(
+      "gfx.webrender.svg-filter-effects.fecomposite"
+    ) && sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEDropShadow =
+    Services.prefs.getBoolPref(
+      "gfx.webrender.svg-filter-effects.fedropshadow"
+    ) && sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEFlood =
+    Services.prefs.getBoolPref("gfx.webrender.svg-filter-effects.feflood") &&
+    sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEGaussianBlur =
+    Services.prefs.getBoolPref(
+      "gfx.webrender.svg-filter-effects.fegaussianblur"
+    ) && sandbox.gfxSVGFE;
+  sandbox.gfxSVGFEOffset =
+    Services.prefs.getBoolPref("gfx.webrender.svg-filter-effects.feoffset") &&
+    sandbox.gfxSVGFE;
 
   // Use this to annotate reftests that fail in drawSnapshot, but
   // the reason hasn't been investigated (or fixed) yet.
   sandbox.useDrawSnapshot = g.useDrawSnapshot;
-  // Use this to annotate reftests that use functionality
-  // that isn't available to drawSnapshot (like any sort of
-  // compositor feature such as async scrolling).
-  sandbox.unsupportedWithDrawSnapshot = g.useDrawSnapshot;
-
-  sandbox.retainedDisplayList =
-    Services.prefs.getBoolPref("layout.display-list.retain") &&
-    !sandbox.useDrawSnapshot;
-
-  // Needed to specifically test the new and old behavior. This will eventually be removed.
-  sandbox.retainedDisplayListNew =
-    sandbox.retainedDisplayList &&
-    Services.prefs.getBoolPref("layout.display-list.retain.sc");
 
   // GeckoView is currently uniquely identified by "android + e10s" but
   // we might want to make this condition more precise in the future.
   sandbox.geckoview = sandbox.Android && g.browserIsRemote;
-
-  // Scrollbars that are semi-transparent. See bug 1169666.
-  sandbox.transparentScrollbars = Services.appinfo.widgetToolkit == "gtk";
 
   if (sandbox.Android) {
     sandbox.AndroidVersion = Services.sysinfo.getPropertyAsInt32("version");
@@ -731,55 +732,8 @@ function BuildConditionSandbox(aURL) {
   // Some reftests need extra fuzz on the Android 13 Pixel 5 devices.
   sandbox.Android13 = sandbox.AndroidVersion == "33";
 
-  sandbox.MinGW =
-    sandbox.winWidget && Services.sysinfo.getPropertyAsBool("isMinGW");
-
-  sandbox.AddressSanitizer = AppConstants.ASAN;
-  sandbox.ThreadSanitizer = AppConstants.TSAN;
+  // always true except for windows mingwclang builds
   sandbox.webrtc = AppConstants.MOZ_WEBRTC;
-  sandbox.jxl = AppConstants.MOZ_JXL;
-
-  sandbox.compareRetainedDisplayLists = g.compareRetainedDisplayLists;
-
-  sandbox.release_or_beta = AppConstants.RELEASE_OR_BETA;
-
-  var hh = Cc[NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX + "http"].getService(
-    Ci.nsIHttpProtocolHandler
-  );
-  var httpProps = [
-    "userAgent",
-    "appName",
-    "appVersion",
-    "vendor",
-    "vendorSub",
-    "product",
-    "productSub",
-    "oscpu",
-    "language",
-    "misc",
-  ];
-  sandbox.http = new sandbox.Object();
-  httpProps.forEach(x => (sandbox.http[x] = hh[x]));
-
-  // Set OSX to be the Mac OS X version, as an integer, or undefined
-  // for other platforms.  The integer is formed by 100 times the
-  // major version plus the minor version, so 1006 for 10.6, 1010 for
-  // 10.10, etc.
-  var osxmatch = /Mac OS X (\d+).(\d+)$/.exec(hh.oscpu);
-  sandbox.OSX = osxmatch
-    ? parseInt(osxmatch[1]) * 100 + parseInt(osxmatch[2])
-    : undefined;
-
-  // config specific prefs
-  sandbox.appleSilicon = Services.prefs.getBoolPref(
-    "sandbox.apple_silicon",
-    false
-  );
-
-  sandbox.gpuProcessForceEnabled = Services.prefs.getBoolPref(
-    "layers.gpu-process.force-enabled",
-    false
-  );
 
   sandbox.prefs = Cu.cloneInto(
     {
@@ -794,28 +748,8 @@ function BuildConditionSandbox(aURL) {
     { cloneFunctions: true }
   );
 
-  // Tests shouldn't care about this except for when they need to
-  // crash the content process
-  sandbox.browserIsRemote = g.browserIsRemote;
-  sandbox.browserIsFission = g.browserIsFission;
-
-  try {
-    sandbox.asyncPan =
-      g.containingWindow.docShell.asyncPanZoomEnabled &&
-      !sandbox.useDrawSnapshot;
-  } catch (e) {
-    sandbox.asyncPan = false;
-  }
-
-  // Graphics features
-  sandbox.usesRepeatResampling = sandbox.d2d;
-
-  // Running in a test-verify session?
-  sandbox.verify = Services.prefs.getBoolPref("reftest.verify", false);
-
   // Running with a variant enabled?
   sandbox.fission = Services.appinfo.fissionAutostart;
-  sandbox.serviceWorkerE10s = true;
 
   if (!g.dumpedConditionSandbox) {
     g.logger.info(

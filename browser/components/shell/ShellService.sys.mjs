@@ -9,6 +9,7 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
+  ASRouter: "resource:///modules/asrouter/ASRouter.sys.mjs",
 });
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -16,6 +17,13 @@ XPCOMUtils.defineLazyServiceGetter(
   "XreDirProvider",
   "@mozilla.org/xre/directory-provider;1",
   "nsIXREDirProvider"
+);
+
+XPCOMUtils.defineLazyServiceGetter(
+  lazy,
+  "BackgroundTasks",
+  "@mozilla.org/backgroundtasks;1",
+  "nsIBackgroundTasks"
 );
 
 ChromeUtils.defineLazyGetter(lazy, "log", () => {
@@ -31,6 +39,9 @@ ChromeUtils.defineLazyGetter(lazy, "log", () => {
   };
   return new ConsoleAPI(consoleOptions);
 });
+
+const MSIX_PREVIOUSLY_PINNED_PREF =
+  "browser.startMenu.msixPinnedWhenLastChecked";
 
 /**
  * Internal functionality to save and restore the docShell.allow* properties.
@@ -110,10 +121,13 @@ let ShellServiceInternal = {
    * is possible.
    */
   _userChoiceImpossibleTelemetryResult() {
-    if (!ShellService.checkAllProgIDsExist()) {
+    let winShellService = this.shellService.QueryInterface(
+      Ci.nsIWindowsShellService
+    );
+    if (!winShellService.checkAllProgIDsExist()) {
       return "ErrProgID";
     }
-    if (!ShellService.checkBrowserUserChoiceHashes()) {
+    if (!winShellService.checkBrowserUserChoiceHashes()) {
       return "ErrHash";
     }
     return null;
@@ -314,14 +328,29 @@ let ShellServiceInternal = {
     }
   },
 
+  async _maybeShowSetDefaultGuidanceNotification() {
+    if (
+      lazy.NimbusFeatures.shellService.getVariable(
+        "setDefaultGuidanceNotifications"
+      ) &&
+      // Disable showing toast notification from Firefox Background Tasks.
+      !lazy.BackgroundTasks?.isBackgroundTaskMode
+    ) {
+      await lazy.ASRouter.waitForInitialized;
+      const win = Services.wm.getMostRecentBrowserWindow() ?? null;
+      lazy.ASRouter.sendTriggerMessage({
+        browser: win,
+        id: "deeplinkedToWindowsSettingsUI",
+      });
+    }
+  },
+
   // override nsIShellService.setDefaultBrowser() on the ShellService proxy.
   async setDefaultBrowser(forAllUsers) {
     // On Windows, our best chance is to set UserChoice, so try that first.
     if (
       AppConstants.platform == "win" &&
-      lazy.NimbusFeatures.shellService.getVariable(
-        "setDefaultBrowserUserChoice"
-      )
+      Services.prefs.getBoolPref("browser.shell.setDefaultBrowserUserChoice")
     ) {
       try {
         await this.setAsDefaultUserChoice();
@@ -337,6 +366,7 @@ let ShellServiceInternal = {
     }
 
     this.shellService.setDefaultBrowser(forAllUsers);
+    this._maybeShowSetDefaultGuidanceNotification();
   },
 
   async setAsDefault() {
@@ -404,6 +434,16 @@ let ShellServiceInternal = {
       return false;
     }
 
+    // Bug 1758770: Pinning private browsing on MSIX is currently
+    // not possible.
+    if (
+      privateBrowsing &&
+      AppConstants.platform === "win" &&
+      Services.sysinfo.getProperty("hasWinPackageId")
+    ) {
+      return false;
+    }
+
     // Currently this only works on certain Windows versions.
     try {
       // First check if we can even pin the app where an exception means no.
@@ -450,6 +490,84 @@ let ShellServiceInternal = {
     }
   },
 
+  /**
+   * On MSIX builds, pins Firefox to the Windows Start Menu
+   *
+   * On non-MSIX builds, this function is a no-op and always returns false.
+   *
+   * @returns {boolean} true if we successfully pin and false otherwise.
+   */
+  async pinToStartMenu() {
+    if (await this.doesAppNeedStartMenuPin()) {
+      try {
+        let pinSuccess =
+          await this.shellService.pinCurrentAppToStartMenuAsync(false);
+        Services.prefs.setBoolPref(MSIX_PREVIOUSLY_PINNED_PREF, pinSuccess);
+        return pinSuccess;
+      } catch (err) {
+        lazy.log.warn("Error thrown during pinCurrentAppToStartMenuAsync", err);
+        Services.prefs.setBoolPref(MSIX_PREVIOUSLY_PINNED_PREF, false);
+      }
+    }
+    return false;
+  },
+
+  /**
+   * On MSIX builds, checks if Firefox app can be and is not
+   * pinned to the Windows Start Menu.
+   *
+   * On non-MSIX builds, this function is a no-op and always returns false.
+   *
+   * @returns {boolean} true if this is an MSIX install and we are not yet
+   *                    pinned to the Start Menu.
+   *
+   * @throws if not called from main process.
+   */
+  async doesAppNeedStartMenuPin() {
+    if (
+      Services.appinfo.processType !== Services.appinfo.PROCESS_TYPE_DEFAULT
+    ) {
+      throw new Components.Exception(
+        "Can't determine pinned from child process",
+        Cr.NS_ERROR_NOT_AVAILABLE
+      );
+    }
+    if (
+      Services.prefs.getBoolPref("browser.shell.disableStartMenuPin", false)
+    ) {
+      return false;
+    }
+    try {
+      return (
+        AppConstants.platform === "win" &&
+        Services.sysinfo.getProperty("hasWinPackageId") &&
+        !(await this.shellService.isCurrentAppPinnedToStartMenuAsync())
+      );
+    } catch (ex) {}
+    return false;
+  },
+
+  /**
+   * On MSIX builds, checks if Firefox is no longer pinned to
+   * the Windows Start Menu when it previously was and records
+   * a Glean event if so.
+   *
+   * On non-MSIX builds, this function is a no-op.
+   */
+  async recordWasPreviouslyPinnedToStartMenu() {
+    if (!Services.sysinfo.getProperty("hasWinPackageId")) {
+      return;
+    }
+    let isPinned = await this.shellService.isCurrentAppPinnedToStartMenuAsync();
+    if (
+      !isPinned &&
+      Services.prefs.getBoolPref(MSIX_PREVIOUSLY_PINNED_PREF, false)
+    ) {
+      Services.prefs.setBoolPref(MSIX_PREVIOUSLY_PINNED_PREF, isPinned);
+      Glean.startMenu.manuallyUnpinnedSinceLastLaunch.record();
+    }
+  },
+
   _handleWDBAResult(exitCode) {
     if (exitCode != Cr.NS_OK) {
       const telemetryResult =
@@ -465,9 +583,33 @@ let ShellServiceInternal = {
   },
 };
 
+// Functions may be present or absent dependent on whether the `nsIShellService`
+// has been queried for the interface implementing it, as querying the interface
+// adds it's functions to the queried JS object. Coincidental querying is more
+// likely to occur for Firefox Desktop than a Firefox Background Task. To force
+// consistent behavior, we query the native shell interface inheriting from
+// `nsIShellService` on setup.
+let shellInterface;
+switch (AppConstants.platform) {
+  case "win":
+    shellInterface = "nsIWindowsShellService";
+    break;
+  case "macosx":
+    shellInterface = "nsIMacShellService";
+    break;
+  case "linux":
+    shellInterface = "nsIGNOMEShellService";
+    break;
+  default:
+    lazy.log.warn(
+      `No platform native shell service interface for ${AppConstants.platform} queried, add for new platforms.`
+    );
+    shellInterface = "nsIShellService";
+}
+
 XPCOMUtils.defineLazyServiceGetters(ShellServiceInternal, {
   defaultAgent: ["@mozilla.org/default-agent;1", "nsIDefaultAgent"],
-  shellService: ["@mozilla.org/browser/shell-service;1", "nsIShellService"],
+  shellService: ["@mozilla.org/browser/shell-service;1", shellInterface],
   macDockSupport: ["@mozilla.org/widget/macdocksupport;1", "nsIMacDockSupport"],
 });
 
@@ -479,11 +621,13 @@ export var ShellService = new Proxy(ShellServiceInternal, {
     if (name in target) {
       return target[name];
     }
-    if (target.shellService) {
+    // n.b. If a native shell interface member is not present on `shellService`,
+    // it may be necessary to query the native interface.
+    if (target.shellService && name in target.shellService) {
       return target.shellService[name];
     }
-    Services.console.logStringMessage(
-      `${name} not found in ShellService: ${target.shellService}`
+    lazy.log.warn(
+      `${name.toString()} not found in ShellService: ${target.shellService}`
     );
     return undefined;
   },

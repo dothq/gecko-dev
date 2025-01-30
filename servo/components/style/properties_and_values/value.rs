@@ -90,7 +90,9 @@ impl<L, N, P, LP, C, Image, U, Integer, A, T, R, Transform>
 }
 
 /// A generic enum used for both specified value components and computed value components.
-#[derive(Animate, Clone, ToCss, ToComputedValue, Debug, MallocSizeOf, PartialEq)]
+#[derive(
+    Animate, Clone, ToCss, ToComputedValue, ToResolvedValue, Debug, MallocSizeOf, PartialEq, ToShmem
+)]
 #[animation(no_bound(Image, Url))]
 pub enum GenericValueComponent<
     Length,
@@ -145,7 +147,7 @@ pub enum GenericValueComponent<
 }
 
 /// A list of component values, including the list's multiplier.
-#[derive(Clone, ToComputedValue, Debug, MallocSizeOf, PartialEq)]
+#[derive(Clone, ToComputedValue, ToResolvedValue, Debug, MallocSizeOf, PartialEq, ToShmem)]
 pub struct ComponentList<Component> {
     /// Multiplier
     pub multiplier: Multiplier,
@@ -198,7 +200,7 @@ impl<Component: ToCss> ToCss for ComponentList<Component> {
 
 /// A struct for a single specified registered custom property value that includes its original URL
 // data so the value can be uncomputed later.
-#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToCss)]
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToCss, ToComputedValue, ToResolvedValue, ToShmem)]
 pub struct Value<Component> {
     /// The registered custom property value.
     pub(crate) v: ValueInner<Component>,
@@ -233,7 +235,9 @@ impl<Component> Value<Component> {
 }
 
 /// A specified registered custom property value.
-#[derive(Animate, ToComputedValue, ToCss, Clone, Debug, MallocSizeOf, PartialEq)]
+#[derive(
+    Animate, ToComputedValue, ToResolvedValue, ToCss, Clone, Debug, MallocSizeOf, PartialEq, ToShmem,
+)]
 pub enum ValueInner<Component> {
     /// A single specified component value whose syntax descriptor component did not have a
     /// multiplier.
@@ -247,24 +251,6 @@ pub enum ValueInner<Component> {
 
 /// Specified custom property value.
 pub type SpecifiedValue = Value<SpecifiedValueComponent>;
-
-impl ToComputedValue for SpecifiedValue {
-    type ComputedValue = ComputedValue;
-
-    fn to_computed_value(&self, context: &computed::Context) -> Self::ComputedValue {
-        Self::ComputedValue {
-            v: self.v.to_computed_value(context),
-            url_data: self.url_data.clone(),
-        }
-    }
-
-    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-        Self {
-            v: ToComputedValue::from_computed_value(&computed.v),
-            url_data: computed.url_data.clone(),
-        }
-    }
-}
 
 /// Computed custom property value.
 pub type ComputedValue = Value<ComputedValueComponent>;
@@ -341,11 +327,11 @@ impl ComputedValue {
         }
     }
 
-    fn to_declared_value(&self) -> Arc<ComputedPropertyValue> {
+    fn to_declared_value(&self) -> properties::CustomDeclarationValue {
         if let ValueInner::Universal(ref var) = self.v {
-            return Arc::clone(var);
+            return properties::CustomDeclarationValue::Unparsed(Arc::clone(var));
         }
-        Arc::new(self.to_variable_value())
+        properties::CustomDeclarationValue::Parsed(Arc::new(ToComputedValue::from_computed_value(self)))
     }
 
     /// Returns the contained variable value if it exists, otherwise `None`.
@@ -418,7 +404,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), StyleParseError<'i>> {
         use self::AllowComputationallyDependent::*;
         let parsing_mode = match allow_computationally_dependent {
-            No => ParsingMode::DISALLOW_FONT_RELATIVE,
+            No => ParsingMode::DISALLOW_COMPUTATIONALLY_DEPENDENT,
             Yes => ParsingMode::DEFAULT,
         };
         let ref context = ParserContext::new(
@@ -631,53 +617,55 @@ impl CustomAnimatedValue {
         context: &mut computed::Context,
         _initial: &properties::ComputedValues,
     ) -> Option<Self> {
-        let value = match declaration.value {
-            properties::CustomDeclarationValue::Value(ref v) => v,
+        let computed_value = match declaration.value {
+            properties::CustomDeclarationValue::Unparsed(ref value) => {
+                debug_assert!(
+                    context.builder.stylist.is_some(),
+                    "Need a Stylist to get property registration!"
+                );
+                let registration = context
+                    .builder
+                    .stylist
+                    .unwrap()
+                    .get_custom_property_registration(&declaration.name);
+                if registration.syntax.is_universal() {
+                    // FIXME: Do we need to perform substitution here somehow?
+                    ComputedValue {
+                        v: ValueInner::Universal(Arc::clone(value)),
+                        url_data: value.url_data.clone(),
+                    }
+                } else {
+                    let mut input = cssparser::ParserInput::new(&value.css);
+                    let mut input = CSSParser::new(&mut input);
+                    SpecifiedValue::compute(
+                        &mut input,
+                        registration,
+                        &value.url_data,
+                        context,
+                        AllowComputationallyDependent::Yes,
+                    ).unwrap_or_else(|_| {
+                        ComputedValue {
+                            v: ValueInner::Universal(Arc::clone(value)),
+                            url_data: value.url_data.clone(),
+                        }
+                    })
+                }
+            }
+            properties::CustomDeclarationValue::Parsed(ref v) => v.to_computed_value(context),
             // FIXME: This should be made to work to the extent possible like for non-custom
             // properties (using `initial` at least to handle unset / inherit).
             properties::CustomDeclarationValue::CSSWideKeyword(..) => return None,
         };
-
-        debug_assert!(
-            context.builder.stylist.is_some(),
-            "Need a Stylist to get property registration!"
-        );
-        let registration = context
-            .builder
-            .stylist
-            .unwrap()
-            .get_custom_property_registration(&declaration.name);
-
-        // FIXME: Do we need to perform substitution here somehow?
-        let computed_value = if registration.syntax.is_universal() {
-            None
-        } else {
-            let mut input = cssparser::ParserInput::new(&value.css);
-            let mut input = CSSParser::new(&mut input);
-            SpecifiedValue::compute(
-                &mut input,
-                registration,
-                &value.url_data,
-                context,
-                AllowComputationallyDependent::Yes,
-            )
-            .ok()
-        };
-
-        let value = computed_value.unwrap_or_else(|| ComputedValue {
-            v: ValueInner::Universal(Arc::clone(value)),
-            url_data: value.url_data.clone(),
-        });
         Some(Self {
             name: declaration.name.clone(),
-            value,
+            value: computed_value,
         })
     }
 
     pub(crate) fn to_declaration(&self) -> properties::PropertyDeclaration {
         properties::PropertyDeclaration::Custom(properties::CustomDeclaration {
             name: self.name.clone(),
-            value: properties::CustomDeclarationValue::Value(self.value.to_declared_value()),
+            value: self.value.to_declared_value(),
         })
     }
 }

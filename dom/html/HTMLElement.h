@@ -21,6 +21,9 @@ class HTMLElement final : public nsGenericHTMLFormElement {
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLElement,
                                            nsGenericHTMLFormElement)
 
+  [[nodiscard]] nsIFormControl* GetAsFormControl() final;
+  [[nodiscard]] const nsIFormControl* GetAsFormControl() const final;
+
   // EventTarget
   void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
 
@@ -75,7 +78,6 @@ class HTMLElement final : public nsGenericHTMLFormElement {
   void SetFieldSetInternal(HTMLFieldSetElement* aFieldset) override;
   HTMLFieldSetElement* GetFieldSetInternal() const override;
   bool CanBeDisabled() const override;
-  bool DoesReadOnlyApply() const override;
   void UpdateDisabledState(bool aNotify) override;
   void UpdateFormOwner(bool aBindToTree, Element* aFormIdElement) override;
 

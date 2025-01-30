@@ -225,7 +225,7 @@ describe('waittask specs', function () {
           return (resolved = true);
         });
       expect(resolved).toBe(false);
-      await page.evaluate((element: HTMLElement) => {
+      await page.evaluate(element => {
         return element.remove();
       }, div);
       await waitForFunction;
@@ -404,6 +404,19 @@ describe('waittask specs', function () {
         return (document.querySelector('span')!.innerHTML =
           '<h3><div></div></h3>');
       });
+      await watchdog;
+    });
+
+    it('should work for selector with a pseudo class', async () => {
+      const {page, server} = await getTestState();
+
+      await page.goto(server.EMPTY_PAGE);
+      const watchdog = page.waitForSelector('input:focus');
+      await expect(
+        Promise.race([watchdog, createTimeout(40)])
+      ).resolves.toBeFalsy();
+      await page.setContent(`<input></input>`);
+      await page.click('input');
       await watchdog;
     });
 

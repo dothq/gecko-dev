@@ -21,7 +21,6 @@ class nsDocShell;
 namespace mozilla::dom {
 
 class BrowsingContext;
-class FeaturePolicy;
 class WindowContext;
 class WindowGlobalParent;
 class JSWindowActorChild;
@@ -144,10 +143,6 @@ class WindowGlobalChild final : public WindowGlobalActor,
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
 
-  dom::FeaturePolicy* GetContainerFeaturePolicy() const {
-    return mContainerFeaturePolicy;
-  }
-
   void UnblockBFCacheFor(BFCacheStatus aStatus);
   void BlockBFCacheFor(BFCacheStatus aStatus);
 
@@ -164,10 +159,12 @@ class WindowGlobalChild final : public WindowGlobalActor,
       const JSActorMessageMeta& aMeta, const Maybe<ClonedMessageData>& aData,
       const Maybe<ClonedMessageData>& aStack);
 
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvMakeFrameLocal(
       const MaybeDiscarded<dom::BrowsingContext>& aFrameContext,
       uint64_t aPendingSwitchId);
 
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvMakeFrameRemote(
       const MaybeDiscarded<dom::BrowsingContext>& aFrameContext,
       ManagedEndpoint<PBrowserBridgeChild>&& aEndpoint, const TabId& aTabId,
@@ -189,9 +186,6 @@ class WindowGlobalChild final : public WindowGlobalActor,
 
   mozilla::ipc::IPCResult RecvResetScalingZoom();
 
-  mozilla::ipc::IPCResult RecvSetContainerFeaturePolicy(
-      dom::FeaturePolicy* aContainerFeaturePolicy);
-
   mozilla::ipc::IPCResult RecvRestoreDocShellState(
       const dom::sessionstore::DocShellRestoreState& aState,
       RestoreDocShellStateResolver&& aResolve);
@@ -203,6 +197,9 @@ class WindowGlobalChild final : public WindowGlobalActor,
 
   mozilla::ipc::IPCResult RecvNotifyPermissionChange(const nsCString& aType,
                                                      uint32_t aPermission);
+
+  mozilla::ipc::IPCResult RecvNavigateForIdentityCredentialDiscovery(
+      const nsCString& aURI, const IdentityLoginTargetType& aType);
 
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 

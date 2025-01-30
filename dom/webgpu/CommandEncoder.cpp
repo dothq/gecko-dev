@@ -23,8 +23,8 @@ GPU_IMPL_CYCLE_COLLECTION(CommandEncoder, mParent, mBridge)
 GPU_IMPL_JS_WRAP(CommandEncoder)
 
 void CommandEncoder::ConvertTextureDataLayoutToFFI(
-    const dom::GPUImageDataLayout& aLayout,
-    ffi::WGPUImageDataLayout* aLayoutFFI) {
+    const dom::GPUTexelCopyBufferLayout& aLayout,
+    ffi::WGPUTexelCopyBufferLayout* aLayoutFFI) {
   *aLayoutFFI = {};
   aLayoutFFI->offset = aLayout.mOffset;
 
@@ -42,32 +42,30 @@ void CommandEncoder::ConvertTextureDataLayoutToFFI(
 }
 
 void CommandEncoder::ConvertTextureCopyViewToFFI(
-    const dom::GPUImageCopyTexture& aCopy,
-    ffi::WGPUImageCopyTexture* aViewFFI) {
+    const dom::GPUTexelCopyTextureInfo& aCopy,
+    ffi::WGPUTexelCopyTextureInfo* aViewFFI) {
   *aViewFFI = {};
   aViewFFI->texture = aCopy.mTexture->mId;
   aViewFFI->mip_level = aCopy.mMipLevel;
-  if (aCopy.mOrigin.WasPassed()) {
-    const auto& origin = aCopy.mOrigin.Value();
-    if (origin.IsRangeEnforcedUnsignedLongSequence()) {
-      const auto& seq = origin.GetAsRangeEnforcedUnsignedLongSequence();
-      aViewFFI->origin.x = seq.Length() > 0 ? seq[0] : 0;
-      aViewFFI->origin.y = seq.Length() > 1 ? seq[1] : 0;
-      aViewFFI->origin.z = seq.Length() > 2 ? seq[2] : 0;
-    } else if (origin.IsGPUOrigin3DDict()) {
-      const auto& dict = origin.GetAsGPUOrigin3DDict();
-      aViewFFI->origin.x = dict.mX;
-      aViewFFI->origin.y = dict.mY;
-      aViewFFI->origin.z = dict.mZ;
-    } else {
-      MOZ_CRASH("Unexpected origin type");
-    }
+  const auto& origin = aCopy.mOrigin;
+  if (origin.IsRangeEnforcedUnsignedLongSequence()) {
+    const auto& seq = origin.GetAsRangeEnforcedUnsignedLongSequence();
+    aViewFFI->origin.x = seq.Length() > 0 ? seq[0] : 0;
+    aViewFFI->origin.y = seq.Length() > 1 ? seq[1] : 0;
+    aViewFFI->origin.z = seq.Length() > 2 ? seq[2] : 0;
+  } else if (origin.IsGPUOrigin3DDict()) {
+    const auto& dict = origin.GetAsGPUOrigin3DDict();
+    aViewFFI->origin.x = dict.mX;
+    aViewFFI->origin.y = dict.mY;
+    aViewFFI->origin.z = dict.mZ;
+  } else {
+    MOZ_CRASH("Unexpected origin type");
   }
 }
 
-static ffi::WGPUImageCopyTexture ConvertTextureCopyView(
-    const dom::GPUImageCopyTexture& aCopy) {
-  ffi::WGPUImageCopyTexture view = {};
+static ffi::WGPUTexelCopyTextureInfo ConvertTextureCopyView(
+    const dom::GPUTexelCopyTextureInfo& aCopy) {
+  ffi::WGPUTexelCopyTextureInfo view = {};
   CommandEncoder::ConvertTextureCopyViewToFFI(aCopy, &view);
   return view;
 }
@@ -85,16 +83,21 @@ void CommandEncoder::Cleanup() {
     return;
   }
   mValid = false;
-  if (mBridge->IsOpen()) {
+
+  if (!mBridge) {
+    return;
+  }
+
+  if (mBridge->CanSend()) {
     mBridge->SendCommandEncoderDrop(mId);
   }
+
+  wgpu_client_free_command_encoder_id(mBridge->GetClient(), mId);
 }
 
 void CommandEncoder::TrackPresentationContext(CanvasContext* aTargetContext) {
   if (aTargetContext) {
-    if (!aTargetContext->IsOffscreenCanvas()) {
-      mPresentationContexts.AppendElement(aTargetContext);
-    }
+    mPresentationContexts.AppendElement(aTargetContext);
   }
 }
 
@@ -103,7 +106,7 @@ void CommandEncoder::CopyBufferToBuffer(const Buffer& aSource,
                                         const Buffer& aDestination,
                                         BufferAddress aDestinationOffset,
                                         BufferAddress aSize) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
@@ -115,15 +118,15 @@ void CommandEncoder::CopyBufferToBuffer(const Buffer& aSource,
 }
 
 void CommandEncoder::CopyBufferToTexture(
-    const dom::GPUImageCopyBuffer& aSource,
-    const dom::GPUImageCopyTexture& aDestination,
+    const dom::GPUTexelCopyBufferInfo& aSource,
+    const dom::GPUTexelCopyTextureInfo& aDestination,
     const dom::GPUExtent3D& aCopySize) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
   ipc::ByteBuf bb;
-  ffi::WGPUImageDataLayout src_layout = {};
+  ffi::WGPUTexelCopyBufferLayout src_layout = {};
   CommandEncoder::ConvertTextureDataLayoutToFFI(aSource, &src_layout);
   ffi::wgpu_command_encoder_copy_buffer_to_texture(
       aSource.mBuffer->mId, &src_layout, ConvertTextureCopyView(aDestination),
@@ -133,15 +136,15 @@ void CommandEncoder::CopyBufferToTexture(
   TrackPresentationContext(aDestination.mTexture->mTargetContext);
 }
 void CommandEncoder::CopyTextureToBuffer(
-    const dom::GPUImageCopyTexture& aSource,
-    const dom::GPUImageCopyBuffer& aDestination,
+    const dom::GPUTexelCopyTextureInfo& aSource,
+    const dom::GPUTexelCopyBufferInfo& aDestination,
     const dom::GPUExtent3D& aCopySize) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
   ipc::ByteBuf bb;
-  ffi::WGPUImageDataLayout dstLayout = {};
+  ffi::WGPUTexelCopyBufferLayout dstLayout = {};
   CommandEncoder::ConvertTextureDataLayoutToFFI(aDestination, &dstLayout);
   ffi::wgpu_command_encoder_copy_texture_to_buffer(
       ConvertTextureCopyView(aSource), aDestination.mBuffer->mId, &dstLayout,
@@ -149,10 +152,10 @@ void CommandEncoder::CopyTextureToBuffer(
   mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
 }
 void CommandEncoder::CopyTextureToTexture(
-    const dom::GPUImageCopyTexture& aSource,
-    const dom::GPUImageCopyTexture& aDestination,
+    const dom::GPUTexelCopyTextureInfo& aSource,
+    const dom::GPUTexelCopyTextureInfo& aDestination,
     const dom::GPUExtent3D& aCopySize) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
@@ -181,7 +184,7 @@ void CommandEncoder::ClearBuffer(const Buffer& aBuffer, const uint64_t aOffset,
 }
 
 void CommandEncoder::PushDebugGroup(const nsAString& aString) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
@@ -191,7 +194,7 @@ void CommandEncoder::PushDebugGroup(const nsAString& aString) {
   mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
 }
 void CommandEncoder::PopDebugGroup() {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
@@ -200,7 +203,7 @@ void CommandEncoder::PopDebugGroup() {
   mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
 }
 void CommandEncoder::InsertDebugMarker(const nsAString& aString) {
-  if (!mBridge->IsOpen()) {
+  if (!mBridge->CanSend()) {
     return;
   }
 
@@ -229,8 +232,25 @@ already_AddRefed<RenderPassEncoder> CommandEncoder::BeginRenderPass(
   return pass.forget();
 }
 
+void CommandEncoder::ResolveQuerySet(QuerySet& aQuerySet, uint32_t aFirstQuery,
+                                     uint32_t aQueryCount,
+                                     webgpu::Buffer& aDestination,
+                                     uint64_t aDestinationOffset) {
+  if (!mBridge->CanSend()) {
+    return;
+  }
+
+  ipc::ByteBuf bb;
+  ffi::wgpu_command_encoder_resolve_query_set(aQuerySet.mId, aFirstQuery,
+                                              aQueryCount, aDestination.mId,
+                                              aDestinationOffset, ToFFI(&bb));
+  mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
+}
+
 void CommandEncoder::EndComputePass(ffi::WGPURecordedComputePass& aPass) {
-  if (!mBridge->IsOpen()) {
+  // Because this can be called during child Cleanup, we need to check
+  // that the bridge is still alive.
+  if (!mBridge || !mBridge->CanSend()) {
     return;
   }
 
@@ -240,7 +260,9 @@ void CommandEncoder::EndComputePass(ffi::WGPURecordedComputePass& aPass) {
 }
 
 void CommandEncoder::EndRenderPass(ffi::WGPURecordedRenderPass& aPass) {
-  if (!mBridge->IsOpen()) {
+  // Because this can be called during child Cleanup, we need to check
+  // that the bridge is still alive.
+  if (!mBridge || !mBridge->CanSend()) {
     return;
   }
 

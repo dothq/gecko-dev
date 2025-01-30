@@ -20,7 +20,7 @@ class Foo : public RefCounted<Foo> {
   static int sNumDestroyed;
 
   ~Foo() {
-    MOZ_ASSERT(!mDead);
+    MOZ_RELEASE_ASSERT(!mDead);
     mDead = true;
     sNumDestroyed++;
   }
@@ -118,6 +118,13 @@ int main() {
     MOZ_RELEASE_ASSERT(11 == Foo::sNumDestroyed);
   }
   MOZ_RELEASE_ASSERT(11 == Foo::sNumDestroyed);
+
+  {
+    RefPtr<Foo> f = new Foo();
+    f = std::move(static_cast<RefPtr<Foo>&>(f));
+    MOZ_RELEASE_ASSERT(11 == Foo::sNumDestroyed);
+  }
+  MOZ_RELEASE_ASSERT(12 == Foo::sNumDestroyed);
 
   {
     bool condition = true;

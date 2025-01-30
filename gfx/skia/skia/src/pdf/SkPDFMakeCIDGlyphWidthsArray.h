@@ -7,16 +7,18 @@
 #ifndef SkPDFMakeCIDGlyphWidthsArray_DEFINED
 #define SkPDFMakeCIDGlyphWidthsArray_DEFINED
 
-#include "src/pdf/SkPDFTypes.h"
+#include <cstdint>
+#include <memory>
 
+class SkPDFArray;
 class SkPDFGlyphUse;
-class SkTypeface;
+class SkPDFStrikeSpec;
 
 /* PDF 32000-1:2008, page 270: "The array's elements have a variable
    format that can specify individual widths for consecutive CIDs or
    one width for a range of CIDs". */
-std::unique_ptr<SkPDFArray> SkPDFMakeCIDGlyphWidthsArray(const SkTypeface& typeface,
+std::unique_ptr<SkPDFArray> SkPDFMakeCIDGlyphWidthsArray(const SkPDFStrikeSpec& strikeSpec,
                                                          const SkPDFGlyphUse& subset,
-                                                         SkScalar* defaultAdvance);
+                                                         int32_t* defaultAdvance);
 
 #endif  // SkPDFMakeCIDGlyphWidthsArray_DEFINED

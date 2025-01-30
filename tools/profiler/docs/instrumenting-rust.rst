@@ -34,6 +34,9 @@ To be able to include it, a new dependency entry needs to be added to the projec
 Note that the relative path needs to be updated depending on the project's location
 in mozilla-central.
 
+After updating ``Cargo.toml``, ``cargo update -p gkrust-shared`` needs to be
+executed to update the ``Cargo.lock`` file.
+
 Registering Threads
 -------------------
 
@@ -124,8 +127,9 @@ and an optional payload of a specific type (containing arbitrary data relevant t
 
 .. note::
     This guide explains Rust markers in depth. To learn more about how to add a
-    marker in C++ or JavaScript, please take a look at their documentation
-    in :doc:`markers-guide` or :doc:`instrumenting-javascript` respectively.
+    marker in C++, JavaScript or JVM, please take a look at their documentation
+    in :doc:`markers-guide` or :doc:`instrumenting-javascript`,
+    :doc:`instrumenting-android` respectively.
 
 Examples
 ^^^^^^^^

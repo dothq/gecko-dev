@@ -34,6 +34,7 @@
 #include "nsDOMAttributeMap.h"
 #include "nsAtom.h"
 #include "mozilla/dom/NodeInfo.h"
+#include "mozilla/dom/CloseWatcher.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/CustomElementRegistry.h"
@@ -73,7 +74,6 @@
 #include "nsGenericHTMLElement.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsView.h"
-#include "nsIScrollableFrame.h"
 #include "ChildIterator.h"
 #include "mozilla/dom/NodeListBinding.h"
 #include "mozilla/dom/MutationObservers.h"
@@ -105,8 +105,6 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-int32_t nsIContent::sTabFocusModel = eTabFocus_any;
-bool nsIContent::sTabFocusModelAppliesToXUL = false;
 uint64_t nsMutationGuard::sGeneration = 0;
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsIContent)
@@ -188,7 +186,7 @@ HTMLSlotElement* nsIContent::GetAssignedSlotByMode() const {
 }
 
 nsIContent::IMEState nsIContent::GetDesiredIMEState() {
-  if (!IsEditable()) {
+  if (!IsEditable() || !IsInComposedDoc()) {
     // Check for the special case where we're dealing with elements which don't
     // have the editable flag set, but are readwrite (such as text controls).
     if (!IsElement() ||
@@ -240,6 +238,8 @@ dom::Element* nsIContent::GetEditingHost() {
 
   // If this is in designMode, we should return <body>
   if (IsInDesignMode() && !IsInShadowTree()) {
+    // FIXME: There may be no <body>.  In such case and aLimitInBodyElement is
+    // "No", we should use root element instead.
     return doc->GetBodyElement();
   }
 
@@ -423,51 +423,49 @@ int32_t nsAttrChildContentList::IndexOf(nsIContent* aContent) {
 
 //----------------------------------------------------------------------
 uint32_t nsParentNodeChildContentList::Length() {
-  if (!mIsCacheValid && !ValidateCache()) {
-    return 0;
-  }
-
-  MOZ_ASSERT(mIsCacheValid);
-
-  return mCachedChildArray.Length();
+  return mNode ? mNode->GetChildCount() : 0;
 }
 
 nsIContent* nsParentNodeChildContentList::Item(uint32_t aIndex) {
-  if (!mIsCacheValid && !ValidateCache()) {
-    return nullptr;
+  if (!mIsCacheValid) {
+    if (MOZ_UNLIKELY(!mNode)) {
+      return nullptr;
+    }
+    // Try to avoid the cache for some common cases, see bug 1917511.
+    if (aIndex == 0) {
+      return mNode->GetFirstChild();
+    }
+    uint32_t childCount = mNode->GetChildCount();
+    if (aIndex >= childCount) {
+      return nullptr;
+    }
+    if (aIndex + 1 == childCount) {
+      return mNode->GetLastChild();
+    }
+    ValidateCache();
+    MOZ_ASSERT(mIsCacheValid);
   }
-
-  MOZ_ASSERT(mIsCacheValid);
-
   return mCachedChildArray.SafeElementAt(aIndex, nullptr);
 }
 
 int32_t nsParentNodeChildContentList::IndexOf(nsIContent* aContent) {
-  if (!mIsCacheValid && !ValidateCache()) {
-    return -1;
-  }
-
-  MOZ_ASSERT(mIsCacheValid);
-
+  EnsureCacheValid();
   return mCachedChildArray.IndexOf(aContent);
 }
 
-bool nsParentNodeChildContentList::ValidateCache() {
+void nsParentNodeChildContentList::ValidateCache() {
   MOZ_ASSERT(!mIsCacheValid);
   MOZ_ASSERT(mCachedChildArray.IsEmpty());
 
-  nsINode* parent = GetParentObject();
-  if (!parent) {
-    return false;
+  if (MOZ_UNLIKELY(!mNode)) {
+    return;
   }
 
-  for (nsIContent* node = parent->GetFirstChild(); node;
+  for (nsIContent* node = mNode->GetFirstChild(); node;
        node = node->GetNextSibling()) {
     mCachedChildArray.AppendElement(node);
   }
   mIsCacheValid = true;
-
-  return true;
 }
 
 //----------------------------------------------------------------------
@@ -549,9 +547,7 @@ size_t nsIContent::nsExtendedContentSlots::SizeOfExcludingThis(
   return 0;
 }
 
-FragmentOrElement::nsDOMSlots::nsDOMSlots() : mDataset(nullptr) {
-  MOZ_COUNT_CTOR(nsDOMSlots);
-}
+FragmentOrElement::nsDOMSlots::nsDOMSlots() { MOZ_COUNT_CTOR(nsDOMSlots); }
 
 FragmentOrElement::nsDOMSlots::~nsDOMSlots() {
   MOZ_COUNT_DTOR(nsDOMSlots);
@@ -576,9 +572,6 @@ void FragmentOrElement::nsDOMSlots::Traverse(
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mSlots->mClassList");
   aCb.NoteXPCOMChild(mClassList.get());
-
-  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mSlots->mPart");
-  aCb.NoteXPCOMChild(mPart.get());
 }
 
 void FragmentOrElement::nsDOMSlots::Unlink(nsINode& aNode) {
@@ -590,7 +583,6 @@ void FragmentOrElement::nsDOMSlots::Unlink(nsINode& aNode) {
   }
   mChildrenList = nullptr;
   mClassList = nullptr;
-  mPart = nullptr;
 }
 
 size_t FragmentOrElement::nsDOMSlots::SizeOfIncludingThis(
@@ -618,7 +610,6 @@ size_t FragmentOrElement::nsDOMSlots::SizeOfIncludingThis(
   // worthwhile:
   // - Superclass members (nsINode::nsSlots)
   // - mStyle
-  // - mDataSet
   // - mClassList
 
   // The following member are not measured:
@@ -648,8 +639,10 @@ void FragmentOrElement::nsExtendedDOMSlots::UnlinkExtendedSlots(
     mAnimations = nullptr;
     aContent.ClearMayHaveAnimations();
   }
-  mExplicitlySetAttrElements.Clear();
+  mExplicitlySetAttrElementMap.Clear();
+  mAttrElementsMap.Clear();
   mRadioGroupContainer = nullptr;
+  mPart = nullptr;
 }
 
 void FragmentOrElement::nsExtendedDOMSlots::TraverseExtendedSlots(
@@ -667,6 +660,18 @@ void FragmentOrElement::nsExtendedDOMSlots::TraverseExtendedSlots(
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mExtendedSlots->mShadowRoot");
   aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIContent*, mShadowRoot));
+
+  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mSlots->mPart");
+  aCb.NoteXPCOMChild(mPart.get());
+
+  for (auto& tableEntry : mAttrElementsMap) {
+    auto& [explicitlySetElements, cachedAttrElements] =
+        *tableEntry.GetModifiableData();
+    if (cachedAttrElements) {
+      ImplCycleCollectionTraverse(aCb, *cachedAttrElements,
+                                  "cached attribute elements entry", 0);
+    }
+  }
 
   if (mCustomElementData) {
     mCustomElementData->Traverse(aCb);
@@ -1022,7 +1027,7 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
   }
 }
 
-Element* nsIContent::GetAutofocusDelegate(bool aWithMouse) const {
+Element* nsIContent::GetAutofocusDelegate(IsFocusableFlags aFlags) const {
   for (nsINode* node = GetFirstChild(); node; node = node->GetNextNode(this)) {
     auto* descendant = Element::FromNode(*node);
     if (!descendant || !descendant->GetBoolAttr(nsGkAtoms::autofocus)) {
@@ -1030,14 +1035,14 @@ Element* nsIContent::GetAutofocusDelegate(bool aWithMouse) const {
     }
 
     nsIFrame* frame = descendant->GetPrimaryFrame();
-    if (frame && frame->IsFocusable(aWithMouse)) {
+    if (frame && frame->IsFocusable(aFlags)) {
       return descendant;
     }
   }
   return nullptr;
 }
 
-Element* nsIContent::GetFocusDelegate(bool aWithMouse) const {
+Element* nsIContent::GetFocusDelegate(IsFocusableFlags aFlags) const {
   const nsIContent* whereToLook = this;
   if (ShadowRoot* root = GetShadowRoot()) {
     if (!root->DelegatesFocus()) {
@@ -1055,7 +1060,7 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse) const {
       return {};
     }
 
-    return frame->IsFocusable(aWithMouse);
+    return frame->IsFocusable(aFlags);
   };
 
   Element* potentialFocus = nullptr;
@@ -1097,7 +1102,7 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse) const {
 
     if (auto* shadow = el->GetShadowRoot()) {
       if (shadow->DelegatesFocus()) {
-        if (Element* delegatedFocus = shadow->GetFocusDelegate(aWithMouse)) {
+        if (Element* delegatedFocus = shadow->GetFocusDelegate(aFlags)) {
           if (autofocus) {
             // This element has autofocus and we found an focus delegates
             // in its descendants, so use the focus delegates
@@ -1114,7 +1119,7 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse) const {
   return potentialFocus;
 }
 
-Focusable nsIContent::IsFocusableWithoutStyle(bool aWithMouse) {
+Focusable nsIContent::IsFocusableWithoutStyle(IsFocusableFlags) {
   // Default, not tabbable
   return {};
 }
@@ -1204,7 +1209,7 @@ void FragmentOrElement::FireNodeInserted(
     Document* aDoc, nsINode* aParent,
     const nsTArray<nsCOMPtr<nsIContent>>& aNodes) {
   for (const nsCOMPtr<nsIContent>& childContent : aNodes) {
-    if (nsContentUtils::HasMutationListeners(
+    if (nsContentUtils::WantMutationEvents(
             childContent, NS_EVENT_BITS_MUTATION_NODEINSERTED, aParent)) {
       InternalMutationEvent mutation(true, eLegacyNodeInserted);
       mutation.mRelatedNode = aParent;
@@ -1321,13 +1326,6 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(FragmentOrElement)
 // We purposefully don't UNLINK_BEGIN_INHERITED here.
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
   nsIContent::Unlink(tmp);
-
-  if (tmp->HasProperties()) {
-    if (tmp->IsElement()) {
-      Element* elem = tmp->AsElement();
-      elem->UnlinkIntersectionObservers();
-    }
-  }
 
   // Unlink child content (and unbind our subtree).
   if (tmp->UnoptimizableCCNode() || !nsCCUncollectableMarker::sGeneration) {
@@ -1784,20 +1782,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
   if (!nsIContent::Traverse(tmp, cb)) {
     return NS_SUCCESS_INTERRUPTED_TRAVERSE;
   }
-
-  if (tmp->HasProperties()) {
-    if (tmp->IsElement()) {
-      Element* elem = tmp->AsElement();
-      IntersectionObserverList* observers =
-          static_cast<IntersectionObserverList*>(
-              elem->GetProperty(nsGkAtoms::intersectionobserverlist));
-      if (observers) {
-        for (DOMIntersectionObserver* observer : observers->Keys()) {
-          cb.NoteXPCOMChild(observer);
-        }
-      }
-    }
-  }
   if (tmp->IsElement()) {
     Element* element = tmp->AsElement();
     // Traverse attribute names.
@@ -1847,13 +1831,13 @@ static inline bool IsVoidTag(nsAtom* aTag) {
   static bool sInitialized = false;
   if (!sInitialized) {
     sInitialized = true;
-    for (uint32_t i = 0; i < ArrayLength(voidElements); ++i) {
+    for (uint32_t i = 0; i < std::size(voidElements); ++i) {
       sFilter.add(voidElements[i]);
     }
   }
 
   if (sFilter.mightContain(aTag)) {
-    for (uint32_t i = 0; i < ArrayLength(voidElements); ++i) {
+    for (uint32_t i = 0; i < std::size(voidElements); ++i) {
       if (aTag == voidElements[i]) {
         return true;
       }
@@ -1872,7 +1856,8 @@ void FragmentOrElement::GetMarkup(bool aIncludeSelf, nsAString& aMarkup) {
 
   Document* doc = OwnerDoc();
   if (IsInHTMLDocument()) {
-    nsContentUtils::SerializeNodeToMarkup(this, !aIncludeSelf, aMarkup);
+    nsContentUtils::SerializeNodeToMarkup(this, !aIncludeSelf, aMarkup, false,
+                                          {});
     return;
   }
 

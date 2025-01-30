@@ -17,11 +17,11 @@
 //! * **Debug tagging** - Adding the X-Debug-ID header to every ping request,
 //!         allowing these tagged pings to be sent to the ["Ping Debug Viewer"](https://mozilla.github.io/glean/book/dev/core/internal/debug-pings.html).
 //!         This may be set by calling glean.set_debug_view_tag(value: &str)
-//!         or by setting the environment variable GLEAN_DEBUG_VIEW_TAG=<some tag>;
+//!         or by setting the environment variable `GLEAN_DEBUG_VIEW_TAG=<some tag>`;
 //! * **Source tagging** - Adding the X-Source-Tags header to every ping request,
 //!         allowing pings to be tagged with custom labels.
-//!         This may be set by calling glean.set_source_tags(value: Vec<String>)
-//!         or by setting the environment variable GLEAN_SOURCE_TAGS=<some, tags>;
+//!         This may be set by calling `glean.set_source_tags(value: Vec<String>)`
+//!         or by setting the environment variable `GLEAN_SOURCE_TAGS=<some, tags>`;
 //!
 //! Bindings may implement other debugging features, e.g. sending pings on demand.
 
@@ -240,7 +240,6 @@ fn validate_source_tags(tags: &Vec<String>) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::env;
 
     #[test]
     fn debug_option_is_correctly_loaded_from_env() {

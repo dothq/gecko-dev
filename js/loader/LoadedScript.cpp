@@ -20,6 +20,8 @@ namespace JS::loader {
 // LoadedScript
 //////////////////////////////////////////////////////////////
 
+MOZ_DEFINE_MALLOC_SIZE_OF(LoadedScriptMallocSizeOf)
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(LoadedScript)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
@@ -52,7 +54,61 @@ LoadedScript::LoadedScript(ScriptKind aKind,
   MOZ_ASSERT(mURI);
 }
 
-LoadedScript::~LoadedScript() { mozilla::DropJSObjects(this); }
+LoadedScript::~LoadedScript() {
+  mozilla::UnregisterWeakMemoryReporter(this);
+  mozilla::DropJSObjects(this);
+}
+
+void LoadedScript::RegisterMemoryReport() {
+  mozilla::RegisterWeakMemoryReporter(this);
+}
+
+NS_IMETHODIMP
+LoadedScript::CollectReports(nsIHandleReportCallback* aHandleReport,
+                             nsISupports* aData, bool aAnonymize) {
+#define COLLECT_REPORT(path, kind)                                   \
+  MOZ_COLLECT_REPORT(path, KIND_HEAP, UNITS_BYTES,                   \
+                     SizeOfIncludingThis(LoadedScriptMallocSizeOf),  \
+                     "Memory used for LoadedScript to hold on " kind \
+                     " across documents")
+
+  switch (mKind) {
+    case ScriptKind::eClassic:
+      COLLECT_REPORT("explicit/js/script/loaded-script/classic", "scripts");
+      break;
+    case ScriptKind::eImportMap:
+      COLLECT_REPORT("explicit/js/script/loaded-script/import-map",
+                     "import-maps");
+      break;
+    case ScriptKind::eModule:
+      COLLECT_REPORT("explicit/js/script/loaded-script/module", "modules");
+      break;
+    case ScriptKind::eEvent:
+      COLLECT_REPORT("explicit/js/script/loaded-script/event", "event scripts");
+      break;
+  }
+
+#undef COLLECT_REPORT
+  return NS_OK;
+}
+
+size_t LoadedScript::SizeOfIncludingThis(
+    mozilla::MallocSizeOf aMallocSizeOf) const {
+  size_t bytes = aMallocSizeOf(this);
+
+  if (IsTextSource()) {
+    if (IsUTF16Text()) {
+      bytes += ScriptText<char16_t>().sizeOfExcludingThis(aMallocSizeOf);
+    } else {
+      bytes += ScriptText<Utf8Unit>().sizeOfExcludingThis(aMallocSizeOf);
+    }
+  }
+
+  bytes += mScriptBytecode.sizeOfExcludingThis(aMallocSizeOf);
+
+  // NOTE: Stencil is reported by SpiderMonkey.
+  return bytes;
+}
 
 void LoadedScript::AssociateWithScript(JSScript* aScript) {
   // Verify that the rewritten URL is available when manipulating LoadedScript.
@@ -75,7 +131,7 @@ nsresult LoadedScript::GetScriptSource(JSContext* aCx,
   if (isWindowContext && aMaybeLoadContext->AsWindowContext()->mIsInline) {
     nsAutoString inlineData;
     auto* scriptLoadContext = aMaybeLoadContext->AsWindowContext();
-    scriptLoadContext->GetScriptElement()->GetScriptText(inlineData);
+    scriptLoadContext->GetInlineScriptText(inlineData);
 
     size_t nbytes = inlineData.Length() * sizeof(char16_t);
     JS::UniqueTwoByteChars chars(
@@ -207,6 +263,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 ModuleScript::ModuleScript(mozilla::dom::ReferrerPolicy aReferrerPolicy,
                            ScriptFetchOptions* aFetchOptions, nsIURI* aURI)
     : LoadedScript(ScriptKind::eModule, aReferrerPolicy, aFetchOptions, aURI),
+      mHadImportMap(false),
       mDebuggerDataInitialized(false) {
   MOZ_ASSERT(!ModuleRecord());
   MOZ_ASSERT(!HasParseError());
@@ -225,14 +282,16 @@ void ModuleScript::UnlinkModuleRecord() {
   // Remove the module record's pointer to this object if present and decrement
   // our reference count. The reference is added by SetModuleRecord() below.
   //
-  // This takes care not to trigger gray unmarking because this takes a lot of
-  // time when we're tearing down the entire page. This is safe because we are
-  // only writing undefined into the module private, so it won't create any
-  // black-gray edges.
   if (mModuleRecord) {
+    // Take care not to trigger gray unmarking because this takes a lot of time
+    // when we're tearing down the entire page. This is safe because we are only
+    // writing undefined into the module private, so it won't create any
+    // black-gray edges.
     JSObject* module = mModuleRecord.unbarrieredGet();
-    MOZ_ASSERT(JS::GetModulePrivate(module).toPrivate() == this);
-    JS::ClearModulePrivate(module);
+    if (JS::IsCyclicModule(module)) {
+      MOZ_ASSERT(JS::GetModulePrivate(module).toPrivate() == this);
+      JS::ClearModulePrivate(module);
+    }
     mModuleRecord = nullptr;
   }
 }
@@ -249,12 +308,14 @@ void ModuleScript::SetModuleRecord(JS::Handle<JSObject*> aModuleRecord) {
 
   mModuleRecord = aModuleRecord;
 
-  // Make module's host defined field point to this object. The JS engine will
-  // increment our reference count by calling HostAddRefTopLevelScript(). This
-  // is decremented when the field is cleared in UnlinkModuleRecord() above or
-  // when the module record dies.
-  MOZ_ASSERT(JS::GetModulePrivate(mModuleRecord).isUndefined());
-  JS::SetModulePrivate(mModuleRecord, JS::PrivateValue(this));
+  if (JS::IsCyclicModule(mModuleRecord)) {
+    // Make module's host defined field point to this object. The JS engine will
+    // increment our reference count by calling HostAddRefTopLevelScript(). This
+    // is decremented when the field is cleared in UnlinkModuleRecord() above or
+    // when the module record dies.
+    MOZ_ASSERT(JS::GetModulePrivate(mModuleRecord).isUndefined());
+    JS::SetModulePrivate(mModuleRecord, JS::PrivateValue(this));
+  }
 
   mozilla::HoldJSObjects(this);
 }
@@ -278,6 +339,9 @@ void ModuleScript::SetErrorToRethrow(const JS::Value& aError) {
 
   mErrorToRethrow = aError;
 }
+
+void ModuleScript::SetForPreload(bool aValue) { mForPreload = aValue; }
+void ModuleScript::SetHadImportMap(bool aValue) { mHadImportMap = aValue; }
 
 void ModuleScript::SetDebuggerDataInitialized() {
   MOZ_ASSERT(ModuleRecord());

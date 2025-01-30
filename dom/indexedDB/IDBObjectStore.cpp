@@ -37,6 +37,8 @@
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/File.h"
+#include "mozilla/dom/FileList.h"
+#include "mozilla/dom/FileListBinding.h"
 #include "mozilla/dom/IDBObjectStoreBinding.h"
 #include "mozilla/dom/MemoryBlobImpl.h"
 #include "mozilla/dom/StreamBlobImpl.h"
@@ -46,6 +48,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "nsCOMPtr.h"
+#include "nsIGlobalObject.h"
 #include "nsStreamUtils.h"
 #include "nsStringStream.h"
 
@@ -144,6 +147,71 @@ MovingNotNull<RefPtr<IDBRequest>> GenerateRequest(
                             std::move(transaction));
 }
 
+bool WriteBlob(JSContext* aCx, JSStructuredCloneWriter* aWriter,
+               Blob* const aBlob,
+               IDBObjectStore::StructuredCloneWriteInfo* aCloneWriteInfo) {
+  MOZ_ASSERT(aCx);
+  MOZ_ASSERT(aWriter);
+  MOZ_ASSERT(aBlob);
+  MOZ_ASSERT(aCloneWriteInfo);
+
+  ErrorResult rv;
+  const uint64_t nativeEndianSize = aBlob->GetSize(rv);
+  MOZ_ASSERT(!rv.Failed());
+
+  const uint64_t size = NativeEndian::swapToLittleEndian(nativeEndianSize);
+
+  nsString type;
+  aBlob->GetType(type);
+
+  const NS_ConvertUTF16toUTF8 convType(type);
+  const uint32_t convTypeLength =
+      NativeEndian::swapToLittleEndian(convType.Length());
+
+  if (aCloneWriteInfo->mFiles.Length() > size_t(UINT32_MAX)) {
+    MOZ_ASSERT(false, "Fix the structured clone data to use a bigger type!");
+
+    return false;
+  }
+
+  const uint32_t index = aCloneWriteInfo->mFiles.Length();
+
+  if (!JS_WriteUint32Pair(
+          aWriter, aBlob->IsFile() ? SCTAG_DOM_FILE : SCTAG_DOM_BLOB, index) ||
+      !JS_WriteBytes(aWriter, &size, sizeof(size)) ||
+      !JS_WriteBytes(aWriter, &convTypeLength, sizeof(convTypeLength)) ||
+      !JS_WriteBytes(aWriter, convType.get(), convType.Length())) {
+    return false;
+  }
+
+  const RefPtr<File> file = aBlob->ToFile();
+  if (file) {
+    ErrorResult rv;
+    const int64_t nativeEndianLastModifiedDate = file->GetLastModified(rv);
+    MOZ_ALWAYS_TRUE(!rv.Failed());
+
+    const int64_t lastModifiedDate =
+        NativeEndian::swapToLittleEndian(nativeEndianLastModifiedDate);
+
+    nsString name;
+    file->GetName(name);
+
+    const NS_ConvertUTF16toUTF8 convName(name);
+    const uint32_t convNameLength =
+        NativeEndian::swapToLittleEndian(convName.Length());
+
+    if (!JS_WriteBytes(aWriter, &lastModifiedDate, sizeof(lastModifiedDate)) ||
+        !JS_WriteBytes(aWriter, &convNameLength, sizeof(convNameLength)) ||
+        !JS_WriteBytes(aWriter, convName.get(), convName.Length())) {
+      return false;
+    }
+  }
+
+  aCloneWriteInfo->mFiles.EmplaceBack(StructuredCloneFileBase::eBlob, aBlob);
+
+  return true;
+}
+
 bool StructuredCloneWriteCallback(JSContext* aCx,
                                   JSStructuredCloneWriter* aWriter,
                                   JS::Handle<JSObject*> aObj,
@@ -168,70 +236,66 @@ bool StructuredCloneWriteCallback(JSContext* aCx,
   JS::Rooted<JSObject*> obj(aCx, aObj);
 
   {
-    Blob* blob = nullptr;
-    if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &obj, blob))) {
-      ErrorResult rv;
-      const uint64_t nativeEndianSize = blob->GetSize(rv);
-      MOZ_ASSERT(!rv.Failed());
+    FileList* fileList = nullptr;
+    if (NS_SUCCEEDED(UNWRAP_OBJECT(FileList, &obj, fileList))) {
+      const auto fileListStartIndex = cloneWriteInfo->mFiles.Length();
+      const uint32_t fileListLength = fileList->Length();
 
-      const uint64_t size = NativeEndian::swapToLittleEndian(nativeEndianSize);
-
-      nsString type;
-      blob->GetType(type);
-
-      const NS_ConvertUTF16toUTF8 convType(type);
-      const uint32_t convTypeLength =
-          NativeEndian::swapToLittleEndian(convType.Length());
-
-      if (cloneWriteInfo->mFiles.Length() > size_t(UINT32_MAX)) {
+      if (size_t(fileListStartIndex) > size_t(UINT32_MAX) - fileListLength) {
         MOZ_ASSERT(false,
                    "Fix the structured clone data to use a bigger type!");
         return false;
       }
 
-      const uint32_t index = cloneWriteInfo->mFiles.Length();
-
-      if (!JS_WriteUint32Pair(aWriter,
-                              blob->IsFile() ? SCTAG_DOM_FILE : SCTAG_DOM_BLOB,
-                              index) ||
-          !JS_WriteBytes(aWriter, &size, sizeof(size)) ||
-          !JS_WriteBytes(aWriter, &convTypeLength, sizeof(convTypeLength)) ||
-          !JS_WriteBytes(aWriter, convType.get(), convType.Length())) {
+      if (!JS_WriteUint32Pair(aWriter, SCTAG_DOM_FILELIST, fileListLength)) {
         return false;
       }
 
-      const RefPtr<File> file = blob->ToFile();
-      if (file) {
-        ErrorResult rv;
-        const int64_t nativeEndianLastModifiedDate = file->GetLastModified(rv);
-        MOZ_ALWAYS_TRUE(!rv.Failed());
-
-        const int64_t lastModifiedDate =
-            NativeEndian::swapToLittleEndian(nativeEndianLastModifiedDate);
-
-        nsString name;
-        file->GetName(name);
-
-        const NS_ConvertUTF16toUTF8 convName(name);
-        const uint32_t convNameLength =
-            NativeEndian::swapToLittleEndian(convName.Length());
-
-        if (!JS_WriteBytes(aWriter, &lastModifiedDate,
-                           sizeof(lastModifiedDate)) ||
-            !JS_WriteBytes(aWriter, &convNameLength, sizeof(convNameLength)) ||
-            !JS_WriteBytes(aWriter, convName.get(), convName.Length())) {
-          return false;
+      for (uint32_t i = 0; i < fileListLength; ++i) {
+        File* file = fileList->Item(i);
+        if (!WriteBlob(aCx, aWriter, file, cloneWriteInfo)) {
+          return false;  // Everything should fail
         }
       }
-
-      cloneWriteInfo->mFiles.EmplaceBack(StructuredCloneFileBase::eBlob, blob);
 
       return true;
     }
   }
 
+  {
+    Blob* blob = nullptr;
+    if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &obj, blob))) {
+      return WriteBlob(aCx, aWriter, blob, cloneWriteInfo);
+    }
+  }
+
   return StructuredCloneHolder::WriteFullySerializableObjects(aCx, aWriter,
                                                               aObj);
+}
+
+bool CopyingWriteBlob(JSContext* aCx, JSStructuredCloneWriter* aWriter,
+                      Blob* const aBlob,
+                      IDBObjectStore::StructuredCloneInfo* aCloneInfo) {
+  MOZ_ASSERT(aCx);
+  MOZ_ASSERT(aWriter);
+  MOZ_ASSERT(aBlob);
+  MOZ_ASSERT(aCloneInfo);
+
+  if (aCloneInfo->mFiles.Length() > size_t(UINT32_MAX)) {
+    MOZ_ASSERT(false, "Fix the structured clone data to use a bigger type!");
+    return false;
+  }
+
+  const uint32_t index = aCloneInfo->mFiles.Length();
+
+  if (!JS_WriteUint32Pair(
+          aWriter, aBlob->IsFile() ? SCTAG_DOM_FILE : SCTAG_DOM_BLOB, index)) {
+    return false;
+  }
+
+  aCloneInfo->mFiles.EmplaceBack(StructuredCloneFileBase::eBlob, aBlob);
+
+  return true;
 }
 
 bool CopyingStructuredCloneWriteCallback(JSContext* aCx,
@@ -250,25 +314,36 @@ bool CopyingStructuredCloneWriteCallback(JSContext* aCx,
   JS::Rooted<JSObject*> obj(aCx, aObj);
 
   {
-    Blob* blob = nullptr;
-    if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &obj, blob))) {
-      if (cloneInfo->mFiles.Length() > size_t(UINT32_MAX)) {
+    FileList* fileList = nullptr;
+    if (NS_SUCCEEDED(UNWRAP_OBJECT(FileList, &obj, fileList))) {
+      const auto fileListStartIndex = cloneInfo->mFiles.Length();
+      const uint32_t fileListLength = fileList->Length();
+
+      if (size_t(fileListStartIndex) > size_t(UINT32_MAX) - fileListLength) {
         MOZ_ASSERT(false,
                    "Fix the structured clone data to use a bigger type!");
         return false;
       }
 
-      const uint32_t index = cloneInfo->mFiles.Length();
-
-      if (!JS_WriteUint32Pair(aWriter,
-                              blob->IsFile() ? SCTAG_DOM_FILE : SCTAG_DOM_BLOB,
-                              index)) {
+      if (!JS_WriteUint32Pair(aWriter, SCTAG_DOM_FILELIST, fileListLength)) {
         return false;
       }
 
-      cloneInfo->mFiles.EmplaceBack(StructuredCloneFileBase::eBlob, blob);
+      for (uint32_t i = 0; i < fileList->Length(); ++i) {
+        File* file = fileList->Item(i);
+        if (!CopyingWriteBlob(aCx, aWriter, file, cloneInfo)) {
+          return false;  // Everything should fail
+        }
+      }
 
       return true;
+    }
+  }
+
+  {
+    Blob* blob = nullptr;
+    if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &obj, blob))) {
+      return CopyingWriteBlob(aCx, aWriter, blob, cloneInfo);
     }
   }
 
@@ -276,12 +351,22 @@ bool CopyingStructuredCloneWriteCallback(JSContext* aCx,
                                                               aObj);
 }
 
+void StructuredCloneErrorCallback(JSContext* aCx, uint32_t aErrorId,
+                                  void* aClosure, const char* aErrorMessage) {
+  // This callback is only used to prevent the default cloning TypeErrors
+  // from being thrown, as we will throw DataCloneErrors instead per spec.
+}
+
 nsresult GetAddInfoCallback(JSContext* aCx, void* aClosure) {
   static const JSStructuredCloneCallbacks kStructuredCloneCallbacks = {
-      nullptr /* read */,          StructuredCloneWriteCallback /* write */,
-      nullptr /* reportError */,   nullptr /* readTransfer */,
-      nullptr /* writeTransfer */, nullptr /* freeTransfer */,
-      nullptr /* canTransfer */,   nullptr /* sabCloned */
+      nullptr /* read */,
+      StructuredCloneWriteCallback /* write */,
+      StructuredCloneErrorCallback /* reportError */,
+      nullptr /* readTransfer */,
+      nullptr /* writeTransfer */,
+      nullptr /* freeTransfer */,
+      nullptr /* canTransfer */,
+      nullptr /* sabCloned */
   };
 
   MOZ_ASSERT(aCx);
@@ -314,6 +399,82 @@ JSObject* CopyingStructuredCloneReadCallback(
     const JS::CloneDataPolicy& aCloneDataPolicy, uint32_t aTag, uint32_t aData,
     void* aClosure) {
   MOZ_ASSERT(aTag != SCTAG_DOM_FILE_WITHOUT_LASTMODIFIEDDATE);
+
+  if (aTag == SCTAG_DOM_FILELIST) {
+    auto* const cloneInfo =
+        static_cast<IDBObjectStore::StructuredCloneInfo*>(aClosure);
+
+    // For empty filelist, aData is not used but must remain within bounds.
+    const auto& files = cloneInfo->mFiles;
+    const uint32_t fileListLength = aData;
+
+    if (fileListLength > files.Length()) {
+      MOZ_ASSERT(false, "Bad file list length value!");
+
+      return nullptr;
+    }
+
+    // We need to ensure that all RAII smart pointers which may trigger GC are
+    // destroyed on return prior to this JS::Rooted being destroyed and
+    // unrooting the pointer. This scope helps make this intent more explicit.
+    JS::Rooted<JSObject*> obj(aCx);
+    {
+      nsCOMPtr<nsIGlobalObject> global = xpc::CurrentNativeGlobal(aCx);
+      if (!global) {
+        MOZ_ASSERT(false, "Could not access global!");
+
+        return nullptr;
+      }
+
+      RefPtr<FileList> fileList = new FileList(global);
+
+      for (uint32_t i = 0u; i < fileListLength; ++i) {
+        uint32_t tag = UINT32_MAX;
+        uint32_t index = UINT32_MAX;
+        if (!JS_ReadUint32Pair(aReader, &tag, &index)) {
+          return nullptr;
+        }
+
+        const bool hasFileTag = tag == SCTAG_DOM_FILE;
+        if (!hasFileTag) {
+          MOZ_ASSERT(false, "Unexpected tag!");
+
+          return nullptr;
+        }
+
+        if (uint64_t(index) >= cloneInfo->mFiles.Length()) {
+          MOZ_ASSERT(false, "Bad index!");
+
+          return nullptr;
+        }
+
+        StructuredCloneFileChild& fileChild = cloneInfo->mFiles[index];
+        MOZ_ASSERT(fileChild.Type() == StructuredCloneFileBase::eBlob);
+
+        RefPtr<Blob> blob = fileChild.BlobPtr();
+        MOZ_ASSERT(blob->IsFile());
+
+        RefPtr<File> file = blob->ToFile();
+        if (!file) {
+          MOZ_ASSERT(false, "Could not convert blob to file!");
+
+          return nullptr;
+        }
+
+        if (!fileList->Append(file)) {
+          MOZ_ASSERT(false, "Could not extend filelist!");
+
+          return nullptr;
+        }
+      }
+
+      if (!WrapAsJSObject(aCx, fileList, &obj)) {
+        return nullptr;
+      }
+    }
+
+    return obj;
+  }
 
   if (aTag == SCTAG_DOM_BLOB || aTag == SCTAG_DOM_FILE ||
       aTag == SCTAG_DOM_MUTABLEFILE) {
@@ -410,13 +571,20 @@ RefPtr<IDBObjectStore> IDBObjectStore::Create(
 void IDBObjectStore::AppendIndexUpdateInfo(
     const int64_t aIndexID, const KeyPath& aKeyPath, const bool aMultiEntry,
     const nsCString& aLocale, JSContext* const aCx, JS::Handle<JS::Value> aVal,
-    nsTArray<IndexUpdateInfo>* const aUpdateInfoArray, ErrorResult* const aRv) {
+    nsTArray<IndexUpdateInfo>* const aUpdateInfoArray,
+    const VoidOrObjectStoreKeyPathString& aAutoIncrementedObjectStoreKeyPath,
+    ErrorResult* const aRv) {
   // This precondition holds when `aVal` is the result of a structured clone.
   js::AutoAssertNoContentJS noContentJS(aCx);
 
+  static_assert(std::is_same_v<IDBObjectStore::VoidOrObjectStoreKeyPathString,
+                               KeyPath::VoidOrObjectStoreKeyPathString>,
+                "Inconsistent types");
+
   if (!aMultiEntry) {
     Key key;
-    *aRv = aKeyPath.ExtractKey(aCx, aVal, key);
+    *aRv =
+        aKeyPath.ExtractKey(aCx, aVal, key, aAutoIncrementedObjectStoreKeyPath);
 
     // If an index's keyPath doesn't match an object, we ignore that object.
     if (aRv->ErrorCodeIs(NS_ERROR_DOM_INDEXEDDB_DATA_ERR) || key.IsUnset()) {
@@ -548,7 +716,7 @@ bool IDBObjectStore::DeserializeValue(
   static const JSStructuredCloneCallbacks callbacks = {
       StructuredCloneReadCallback<StructuredCloneReadInfoChild>,
       nullptr,
-      nullptr,
+      StructuredCloneErrorCallback,
       nullptr,
       nullptr,
       nullptr,
@@ -625,6 +793,21 @@ void IDBObjectStore::GetAddInfo(JSContext* aCx, ValueWrapper& aValueWrapper,
     const nsTArray<IndexMetadata>& indexes = mSpec->indexes();
     const uint32_t idxCount = indexes.Length();
 
+    const auto& autoIncrementedObjectStoreKeyPath =
+        [this]() -> const nsAString& {
+      if (AutoIncrement() && GetKeyPath().IsValid()) {
+        // By https://w3c.github.io/IndexedDB/#database-interface ,
+        // createObjectStore algorithm, step 8, neither arrays nor empty paths
+        // are allowed for autoincremented object stores.
+        // See also KeyPath::IsAllowedForObjectStore.
+        MOZ_ASSERT(GetKeyPath().IsString());
+        MOZ_ASSERT(!GetKeyPath().IsEmpty());
+        return GetKeyPath().mStrings[0];
+      }
+
+      return VoidString();
+    }();
+
     aUpdateInfoArray.SetCapacity(idxCount);  // Pretty good estimate
 
     for (uint32_t idxIndex = 0; idxIndex < idxCount; idxIndex++) {
@@ -632,7 +815,8 @@ void IDBObjectStore::GetAddInfo(JSContext* aCx, ValueWrapper& aValueWrapper,
 
       AppendIndexUpdateInfo(metadata.id(), metadata.keyPath(),
                             metadata.multiEntry(), metadata.locale(), aCx,
-                            aValueWrapper.Value(), &aUpdateInfoArray, &aRv);
+                            aValueWrapper.Value(), &aUpdateInfoArray,
+                            autoIncrementedObjectStoreKeyPath, &aRv);
       if (NS_WARN_IF(aRv.Failed())) {
         return;
       }
@@ -750,7 +934,7 @@ RefPtr<IDBRequest> IDBObjectStore::AddOrPut(JSContext* aCx,
   commonParams.key() = key;
   commonParams.indexUpdateInfos() = std::move(updateInfos);
 
-  // Convert any blobs or mutable files into FileAddInfo.
+  // Convert any blobs or mutable files into FileAddInfos.
   QM_TRY_UNWRAP(
       commonParams.fileAddInfos(),
       TransformIntoNewArrayAbortOnErr(
@@ -1728,7 +1912,7 @@ bool IDBObjectStore::ValueWrapper::Clone(JSContext* aCx) {
   static const JSStructuredCloneCallbacks callbacks = {
       CopyingStructuredCloneReadCallback /* read */,
       CopyingStructuredCloneWriteCallback /* write */,
-      nullptr /* reportError */,
+      StructuredCloneErrorCallback /* reportError */,
       nullptr /* readTransfer */,
       nullptr /* writeTransfer */,
       nullptr /* freeTransfer */,

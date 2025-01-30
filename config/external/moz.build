@@ -27,7 +27,7 @@ DIRS += [
     "/third_party/sipcc",
 ]
 
-# There's no "native" brotli or woff2 yet, but probably in the future...
+# There's no "native" brotli, zstd or woff2 yet, but probably in the future...
 external_dirs += ["modules/brotli"]
 external_dirs += ["modules/woff2"]
 
@@ -60,7 +60,6 @@ external_dirs += [
     "media/libnestegg",
     "media/libogg",
     "media/libopus",
-    "media/libtheora",
     "media/libspeex_resampler",
     "media/libsoundtouch",
     "media/mp4parse-rust",

@@ -14,25 +14,27 @@
 #include "nsRemoteClient.h"
 #include "mozilla/DBusHelpers.h"
 #include "mozilla/RefPtr.h"
-#include "nsStringFwd.h"
+#include "nsString.h"
 #include "nscore.h"
 
 class nsDBusRemoteClient : public nsRemoteClient {
  public:
-  nsDBusRemoteClient();
+  explicit nsDBusRemoteClient(nsACString& aStartupToken);
   ~nsDBusRemoteClient();
 
   nsresult Init() override { return NS_OK; };
   nsresult SendCommandLine(const char* aProgram, const char* aProfile,
-                           int32_t argc, char** argv, const char* aStartupToken,
-                           char** aResponse, bool* aSucceeded) override;
+                           int32_t argc, const char** argv,
+                           bool aRaise) override;
   void Shutdown();
 
  private:
   bool GetRemoteDestinationName(const char* aProgram, const char* aProfile,
                                 nsCString& aDestinationName);
-  nsresult DoSendDBusCommandLine(const char* aProgram, const char* aProfile,
-                                 const char* aBuffer, int aLength);
+  nsresult DoSendDBusCommandLine(const char* aProfile, const char* aBuffer,
+                                 int aLength);
+
+  nsACString& mStartupToken;
 };
 
 #endif  // DBusRemoteClient_h__

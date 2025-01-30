@@ -25,9 +25,8 @@ add_task(async function () {
 async function testTabConsoleMessagesResources(executeInIframe) {
   const tab = await addTab(FISSION_TEST_URL);
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info(
     "Log some messages *before* calling ResourceCommand.watchResources in order to " +
@@ -50,12 +49,11 @@ async function testTabConsoleMessagesResources(executeInIframe) {
         resourceCommand.TYPES.CONSOLE_MESSAGE,
         "Received a message"
       );
-      ok(resource.message, "message is wrapped into a message attribute");
       const isCachedMessage = !!expectedExistingCalls.length;
       const expected = (
         isCachedMessage ? expectedExistingCalls : expectedRuntimeCalls
       ).shift();
-      checkConsoleAPICall(resource.message, expected);
+      checkConsoleAPICall(resource, expected);
       is(
         resource.isAlreadyExistingResource,
         isCachedMessage,
@@ -104,9 +102,8 @@ async function testTabConsoleMessagesResourcesWithIgnoreExistingResources(
   info("Test ignoreExistingResources option for console messages");
   const tab = await addTab(FISSION_TEST_URL);
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info(
     "Check whether onAvailable will not be called with existing console messages"
@@ -145,14 +142,13 @@ async function testTabConsoleMessagesResourcesWithIgnoreExistingResources(
       : targetCommand.targetFront;
   for (let i = 0; i < expectedRuntimeConsoleCalls.length; i++) {
     const resource = availableResources[i];
-    const { message, targetFront } = resource;
     is(
-      targetFront,
+      resource.targetFront,
       expectedTargetFront,
       "The targetFront property is the expected one"
     );
     const expected = expectedRuntimeConsoleCalls[i];
-    checkConsoleAPICall(message, expected);
+    checkConsoleAPICall(resource, expected);
     is(
       resource.isAlreadyExistingResource,
       false,

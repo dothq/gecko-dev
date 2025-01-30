@@ -9,13 +9,17 @@ http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
 
+const STATIC_SEARCH_URL_DATA = {
+  base: "https://www.example.com/search",
+  searchTermParamName: "q",
+};
+
 const CONFIG = [
   {
-    recordType: "engine",
     identifier: "engine-1",
-    base: {},
     urls: {
       search: {
+        ...STATIC_SEARCH_URL_DATA,
         params: [
           {
             name: "partner-code",
@@ -63,21 +67,11 @@ const CONFIG = [
       },
     ],
   },
-  {
-    recordType: "defaultEngines",
-    specificDefaults: [],
-  },
-  {
-    recordType: "engineOrders",
-    orders: [],
-  },
 ];
 
 const CONFIG_CLONE = structuredClone(CONFIG);
 
 const engineSelector = new SearchEngineSelector();
-let settings;
-let configStub;
 
 /**
  * This function asserts if the actual engines returned equals the expected
@@ -99,16 +93,19 @@ async function assertActualEnginesEqualsExpected(
   message
 ) {
   engineSelector._configuration = null;
-  configStub.returns(config);
-  let { engines } = await engineSelector.fetchEngineConfiguration(userEnv);
+  SearchTestUtils.setRemoteSettingsConfig(config);
 
-  Assert.deepEqual(engines, expectedEngines, message);
+  if (expectedEngines.length) {
+    let { engines } = await engineSelector.fetchEngineConfiguration(userEnv);
+    Assert.deepEqual(engines, expectedEngines, message);
+  } else {
+    await Assert.rejects(
+      engineSelector.fetchEngineConfiguration(userEnv),
+      /Could not find any engines in the filtered configuration/,
+      message
+    );
+  }
 }
-
-add_setup(async function () {
-  settings = await RemoteSettings(SearchUtils.NEW_SETTINGS_KEY);
-  configStub = sinon.stub(settings, "get");
-});
 
 add_task(async function test_no_variants_match() {
   await assertActualEnginesEqualsExpected(
@@ -122,7 +119,7 @@ add_task(async function test_no_variants_match() {
   );
 });
 
-add_task(async function test_match_and_apply_all_variants() {
+add_task(async function test_match_and_apply_last_variants() {
   await assertActualEnginesEqualsExpected(
     CONFIG,
     {
@@ -132,12 +129,18 @@ add_task(async function test_match_and_apply_all_variants() {
     [
       {
         identifier: "engine-1",
-        urls: { search: { params: [{ name: "partner-code", value: "foo" }] } },
-        telemetrySuffix: "telemetry",
+        name: "engine-1",
+        classification: "general",
+        urls: {
+          search: {
+            ...STATIC_SEARCH_URL_DATA,
+            params: [{ name: "partner-code", value: "foo" }],
+          },
+        },
         searchTermParamName: "search-param",
       },
     ],
-    "Should match all variants and apply each variant property cumulatively."
+    "Should match and apply last variant."
   );
 });
 
@@ -151,7 +154,14 @@ add_task(async function test_match_middle_variant() {
     [
       {
         identifier: "engine-1",
-        urls: { search: { params: [{ name: "partner-code", value: "bar" }] } },
+        name: "engine-1",
+        classification: "general",
+        urls: {
+          search: {
+            ...STATIC_SEARCH_URL_DATA,
+            params: [{ name: "partner-code", value: "bar" }],
+          },
+        },
         telemetrySuffix: "telemetry",
       },
     ],
@@ -169,7 +179,14 @@ add_task(async function test_match_first_and_last_variant() {
     [
       {
         identifier: "engine-1",
-        urls: { search: { params: [{ name: "partner-code", value: "foo" }] } },
+        name: "engine-1",
+        classification: "general",
+        urls: {
+          search: {
+            ...STATIC_SEARCH_URL_DATA,
+            params: [{ name: "partner-code", value: "foo" }],
+          },
+        },
         searchTermParamName: "search-param",
       },
     ],
@@ -187,7 +204,14 @@ add_task(async function test_match_variant_with_empty_params() {
     [
       {
         identifier: "engine-1",
-        urls: { search: { params: [] } },
+        name: "engine-1",
+        classification: "general",
+        urls: {
+          search: {
+            ...STATIC_SEARCH_URL_DATA,
+            params: [],
+          },
+        },
       },
     ],
     "Should match the first variant with empty params."

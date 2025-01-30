@@ -168,7 +168,8 @@ class nsTHashtableKeyRange {
 };
 
 template <typename EntryType>
-auto RangeSize(const ::detail::nsTHashtableKeyRange<EntryType>& aRange) {
+size_t RangeSizeEstimate(
+    const ::detail::nsTHashtableKeyRange<EntryType>& aRange) {
   return aRange.Count();
 }
 
@@ -429,8 +430,8 @@ class MOZ_NEEDS_NO_VTABLE_TYPE nsTHashtable {
   };
 
   template <class F>
-  auto WithEntryHandle(KeyType aKey, F&& aFunc)
-      -> std::invoke_result_t<F, EntryHandle&&> {
+  auto WithEntryHandle(KeyType aKey,
+                       F&& aFunc) -> std::invoke_result_t<F, EntryHandle&&> {
     return this->mTable.WithEntryHandle(
         EntryType::KeyToPointer(aKey),
         [&aKey, &aFunc](auto entryHandle) -> decltype(auto) {
@@ -730,9 +731,10 @@ inline void ImplCycleCollectionUnlink(nsTHashtable<EntryType>& aField) {
 template <class EntryType>
 inline void ImplCycleCollectionTraverse(
     nsCycleCollectionTraversalCallback& aCallback,
-    nsTHashtable<EntryType>& aField, const char* aName, uint32_t aFlags = 0) {
-  for (auto iter = aField.Iter(); !iter.Done(); iter.Next()) {
-    EntryType* entry = iter.Get();
+    const nsTHashtable<EntryType>& aField, const char* aName,
+    uint32_t aFlags = 0) {
+  for (auto iter = aField.ConstIter(); !iter.Done(); iter.Next()) {
+    const EntryType* entry = iter.Get();
     ImplCycleCollectionTraverse(aCallback, *entry, aName, aFlags);
   }
 }
@@ -874,8 +876,8 @@ class nsTHashtable<nsPtrHashKey<T>>
   };
 
   template <class F>
-  auto WithEntryHandle(KeyType aKey, F aFunc)
-      -> std::invoke_result_t<F, EntryHandle&&> {
+  auto WithEntryHandle(KeyType aKey,
+                       F aFunc) -> std::invoke_result_t<F, EntryHandle&&> {
     return Base::WithEntryHandle(aKey, [&aFunc](auto entryHandle) {
       return aFunc(EntryHandle{std::move(entryHandle)});
     });

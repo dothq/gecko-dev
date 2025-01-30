@@ -11,10 +11,10 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/ToString.h"
 #include "nsBlockFrame.h"
-#include "nsGfxScrollFrame.h"
 #include "nsIFrame.h"
 #include "nsIFrameInlines.h"
 #include "nsLayoutUtils.h"
@@ -45,12 +45,12 @@ static mozilla::LazyLogModule sAnchorLog("scrollanchor");
 
 namespace mozilla::layout {
 
-nsHTMLScrollFrame* ScrollAnchorContainer::Frame() const {
-  return reinterpret_cast<nsHTMLScrollFrame*>(
-      ((char*)this) - offsetof(nsHTMLScrollFrame, mAnchor));
+ScrollContainerFrame* ScrollAnchorContainer::Frame() const {
+  return reinterpret_cast<ScrollContainerFrame*>(
+      ((char*)this) - offsetof(ScrollContainerFrame, mAnchor));
 }
 
-ScrollAnchorContainer::ScrollAnchorContainer(nsHTMLScrollFrame* aScrollFrame)
+ScrollAnchorContainer::ScrollAnchorContainer(ScrollContainerFrame* aScrollFrame)
     : mDisabled(false),
       mAnchorMightBeSubOptimal(false),
       mAnchorNodeIsDirty(true),
@@ -66,7 +66,7 @@ ScrollAnchorContainer* ScrollAnchorContainer::FindFor(nsIFrame* aFrame) {
   if (!aFrame) {
     return nullptr;
   }
-  nsIScrollableFrame* nearest = nsLayoutUtils::GetNearestScrollableFrame(
+  ScrollContainerFrame* nearest = nsLayoutUtils::GetNearestScrollContainerFrame(
       aFrame, nsLayoutUtils::SCROLLABLE_SAME_DOC |
                   nsLayoutUtils::SCROLLABLE_INCLUDE_HIDDEN);
   if (nearest) {
@@ -75,7 +75,7 @@ ScrollAnchorContainer* ScrollAnchorContainer::FindFor(nsIFrame* aFrame) {
   return nullptr;
 }
 
-nsIScrollableFrame* ScrollAnchorContainer::ScrollableFrame() const {
+ScrollContainerFrame* ScrollAnchorContainer::ScrollContainer() const {
   return Frame()->GetScrollTargetFrame();
 }
 
@@ -178,15 +178,15 @@ static nsRect FindScrollAnchoringBoundingRect(const nsIFrame* aScrollFrame,
   // axis of the scroll frame
   WritingMode writingMode = aScrollFrame->GetWritingMode();
   switch (writingMode.GetBlockDir()) {
-    case WritingMode::eBlockTB: {
+    case WritingMode::BlockDir::TB: {
       overflowRect.SetBoxY(borderRect.Y(), overflowRect.YMost());
       break;
     }
-    case WritingMode::eBlockLR: {
+    case WritingMode::BlockDir::LR: {
       overflowRect.SetBoxX(borderRect.X(), overflowRect.XMost());
       break;
     }
-    case WritingMode::eBlockRL: {
+    case WritingMode::BlockDir::RL: {
       overflowRect.SetBoxX(overflowRect.X(), borderRect.XMost());
       break;
     }
@@ -199,16 +199,17 @@ static nsRect FindScrollAnchoringBoundingRect(const nsIFrame* aScrollFrame,
 
 /**
  * Compute the offset between the scrollable overflow rect start edge of
- * aCandidate and the scroll-port start edge of aScrollFrame, in the block axis
- * of aScrollFrame.
+ * aCandidate and the scroll-port start edge of aScrollContainerFrame, in the
+ * block axis of aScrollContainerFrame.
  */
 static nscoord FindScrollAnchoringBoundingOffset(
-    const nsHTMLScrollFrame* aScrollFrame, nsIFrame* aCandidate) {
-  WritingMode writingMode = aScrollFrame->GetWritingMode();
+    const ScrollContainerFrame* aScrollContainerFrame, nsIFrame* aCandidate) {
+  WritingMode writingMode = aScrollContainerFrame->GetWritingMode();
   nsRect physicalBounding =
-      FindScrollAnchoringBoundingRect(aScrollFrame, aCandidate);
-  LogicalRect logicalBounding(writingMode, physicalBounding,
-                              aScrollFrame->mScrolledFrame->GetSize());
+      FindScrollAnchoringBoundingRect(aScrollContainerFrame, aCandidate);
+  LogicalRect logicalBounding(
+      writingMode, physicalBounding,
+      aScrollContainerFrame->GetScrolledFrame()->GetSize());
   return logicalBounding.BStart(writingMode);
 }
 
@@ -229,11 +230,16 @@ bool ScrollAnchorContainer::CanMaintainAnchor() const {
     return false;
   }
 
-  // Or if the scroll frame has not been scrolled from the logical origin. This
-  // is not in the specification [1], but Blink does this.
+  // Or if the scroll frame has not been scrolled from the logical origin of the
+  // block axis. This is not in the specification [1], but Blink does this [2].
   //
   // [1] https://github.com/w3c/csswg-drafts/issues/3319
-  if (Frame()->GetLogicalScrollPosition() == nsPoint()) {
+  // [2]
+  // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/layout/scroll_anchor.cc;l=551;drc=f1eab630d343484302ee9bea91f515f1a1dd0891
+  const nsPoint pos = Frame()->GetLogicalScrollPosition();
+  const nscoord blockOffset =
+      Frame()->GetWritingMode().IsVertical() ? pos.x : pos.y;
+  if (blockOffset == 0) {
     return false;
   }
 
@@ -297,7 +303,8 @@ void ScrollAnchorContainer::SelectAnchor() {
   // Calculate the position to use for scroll adjustments
   if (mAnchorNode) {
     mLastAnchorOffset = FindScrollAnchoringBoundingOffset(Frame(), mAnchorNode);
-    ANCHOR_LOG("Using last anchor offset = %d.\n", mLastAnchorOffset);
+    ANCHOR_LOG("Using last anchor offset = %s.\n",
+               ToString(CSSPixel::FromAppUnits(mLastAnchorOffset)).c_str());
   } else {
     mLastAnchorOffset = 0;
   }
@@ -314,7 +321,7 @@ void ScrollAnchorContainer::UserScrolled() {
   if (!StaticPrefs::
           layout_css_scroll_anchoring_reset_heuristic_during_animation() &&
       Frame()->ScrollAnimationState().contains(
-          nsIScrollableFrame::AnimationState::APZInProgress)) {
+          ScrollContainerFrame::AnimationState::APZInProgress)) {
     // We'd want to skip resetting our heuristic while APZ is running an async
     // scroll because this UserScrolled function gets called on every refresh
     // driver's tick during running the async scroll, thus it will clobber the
@@ -465,7 +472,7 @@ void ScrollAnchorContainer::ApplyAdjustments() {
            layout_css_scroll_anchoring_reset_heuristic_during_animation() &&
        Frame()->IsProcessingScrollEvent()) ||
       Frame()->ScrollAnimationState().contains(
-          nsIScrollableFrame::AnimationState::TriggeredByScript) ||
+          ScrollContainerFrame::AnimationState::TriggeredByScript) ||
       Frame()->GetScrollPosition() == nsPoint()) {
     ANCHOR_LOG(
         "Ignoring post-reflow (anchor=%p, dirty=%d, disabled=%d, "
@@ -476,7 +483,7 @@ void ScrollAnchorContainer::ApplyAdjustments() {
         Frame()->HasPendingScrollRestoration(),
         Frame()->IsProcessingScrollEvent(),
         Frame()->ScrollAnimationState().contains(
-            nsIScrollableFrame::AnimationState::TriggeredByScript),
+            ScrollContainerFrame::AnimationState::TriggeredByScript),
         Frame()->GetScrollPosition() == nsPoint(), mSuppressAnchorAdjustment,
         this);
     if (mSuppressAnchorAdjustment) {
@@ -490,7 +497,9 @@ void ScrollAnchorContainer::ApplyAdjustments() {
   nscoord logicalAdjustment = current - mLastAnchorOffset;
   WritingMode writingMode = Frame()->GetWritingMode();
 
-  ANCHOR_LOG("Anchor has moved from %d to %d.\n", mLastAnchorOffset, current);
+  ANCHOR_LOG("Anchor has moved from %s to %s.\n",
+             ToString(CSSPixel::FromAppUnits(mLastAnchorOffset)).c_str(),
+             ToString(CSSPixel::FromAppUnits(current)).c_str());
 
   auto maybeInvalidate = MakeScopeExit([&] {
     if (mAnchorMightBeSubOptimal &&
@@ -515,22 +524,23 @@ void ScrollAnchorContainer::ApplyAdjustments() {
     return;
   }
 
-  ANCHOR_LOG("Applying anchor adjustment of %d in %s with anchor %p.\n",
-             logicalAdjustment, ToString(writingMode).c_str(), mAnchorNode);
+  ANCHOR_LOG("Applying anchor adjustment of %s in %s with anchor %p.\n",
+             ToString(CSSPixel::FromAppUnits(logicalAdjustment)).c_str(),
+             ToString(writingMode).c_str(), mAnchorNode);
 
   AdjustmentMade(logicalAdjustment);
 
   nsPoint physicalAdjustment;
   switch (writingMode.GetBlockDir()) {
-    case WritingMode::eBlockTB: {
+    case WritingMode::BlockDir::TB: {
       physicalAdjustment.y = logicalAdjustment;
       break;
     }
-    case WritingMode::eBlockLR: {
+    case WritingMode::BlockDir::LR: {
       physicalAdjustment.x = logicalAdjustment;
       break;
     }
-    case WritingMode::eBlockRL: {
+    case WritingMode::BlockDir::RL: {
       physicalAdjustment.x = -logicalAdjustment;
       break;
     }
@@ -610,11 +620,11 @@ ScrollAnchorContainer::ExamineAnchorCandidate(nsIFrame* aFrame) const {
 
   // See if this frame has or could maintain its own anchor node.
   const bool isScrollableWithAnchor = [&] {
-    nsIScrollableFrame* scrollable = do_QueryFrame(aFrame);
-    if (!scrollable) {
+    ScrollContainerFrame* scrollContainer = do_QueryFrame(aFrame);
+    if (!scrollContainer) {
       return false;
     }
-    auto* anchor = scrollable->Anchor();
+    auto* anchor = scrollContainer->Anchor();
     return anchor->AnchorNode() || anchor->CanMaintainAnchor();
   }();
 
@@ -650,8 +660,7 @@ ScrollAnchorContainer::ExamineAnchorCandidate(nsIFrame* aFrame) const {
 
   // Find the scroll anchoring bounding rect.
   nsRect rect = FindScrollAnchoringBoundingRect(Frame(), aFrame);
-  ANCHOR_LOG("\t\trect = [%d %d x %d %d].\n", rect.x, rect.y, rect.width,
-             rect.height);
+  ANCHOR_LOG("\t\trect = %s.\n", ToString(CSSRect::FromAppUnits(rect)).c_str());
 
   // Check if this frame is visible in the scroll port. This will exclude rects
   // with zero sized area. The specification is ambiguous about this [1], but

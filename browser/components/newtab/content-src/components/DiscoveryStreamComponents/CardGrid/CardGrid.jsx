@@ -6,16 +6,31 @@ import { DSCard, PlaceholderDSCard } from "../DSCard/DSCard.jsx";
 import { DSEmptyState } from "../DSEmptyState/DSEmptyState.jsx";
 import { DSDismiss } from "content-src/components/DiscoveryStreamComponents/DSDismiss/DSDismiss";
 import { TopicsWidget } from "../TopicsWidget/TopicsWidget.jsx";
+import { ListFeed } from "../ListFeed/ListFeed.jsx";
 import { SafeAnchor } from "../SafeAnchor/SafeAnchor";
+import { AdBanner } from "../AdBanner/AdBanner.jsx";
 import { FluentOrText } from "../../FluentOrText/FluentOrText.jsx";
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { connect, useSelector } from "react-redux";
 const PREF_ONBOARDING_EXPERIENCE_DISMISSED =
   "discoverystream.onboardingExperience.dismissed";
+const PREF_SECTIONS_CARDS_ENABLED = "discoverystream.sections.cards.enabled";
+const PREF_THUMBS_UP_DOWN_ENABLED = "discoverystream.thumbsUpDown.enabled";
+const PREF_TOPICS_ENABLED = "discoverystream.topicLabels.enabled";
+const PREF_TOPICS_SELECTED = "discoverystream.topicSelection.selectedTopics";
+const PREF_TOPICS_AVAILABLE = "discoverystream.topicSelection.topics";
+const PREF_SPOCS_STARTUPCACHE_ENABLED =
+  "discoverystream.spocs.startupCache.enabled";
+const PREF_LIST_FEED_ENABLED = "discoverystream.contextualContent.enabled";
+const PREF_LIST_FEED_SELECTED_FEED =
+  "discoverystream.contextualContent.selectedFeed";
+const PREF_FAKESPOT_ENABLED =
+  "discoverystream.contextualContent.fakespot.enabled";
+const PREF_BILLBOARD_ENABLED = "newtabAdSize.billboard";
+const PREF_LEADERBOARD_ENABLED = "newtabAdSize.leaderboard";
+const PREF_LEADERBOARD_POSITION = "newtabAdSize.leaderboard.position";
+const PREF_BILLBOARD_POSITION = "newtabAdSize.billboard.position";
 const INTERSECTION_RATIO = 0.5;
 const VISIBLE = "visible";
 const VISIBILITY_CHANGE_EVENT = "visibilitychange";
@@ -31,7 +46,7 @@ export function DSSubHeader({ children }) {
   );
 }
 
-export function OnboardingExperience({ dispatch, windowObj = global }) {
+export function OnboardingExperience({ dispatch, windowObj = globalThis }) {
   const [dismissed, setDismissed] = useState(false);
   const [maxHeight, setMaxHeight] = useState(null);
   const heightElement = useRef(null);
@@ -144,6 +159,7 @@ export function OnboardingExperience({ dispatch, windowObj = global }) {
   );
 }
 
+// eslint-disable-next-line no-shadow
 export function IntersectionObserver({
   children,
   windowObj = window,
@@ -313,14 +329,12 @@ export function RecentSavesContainer({
 }
 
 export class _CardGrid extends React.PureComponent {
+  // eslint-disable-next-line max-statements
   renderCards() {
     const prefs = this.props.Prefs.values;
     const {
       items,
-      hybridLayout,
-      hideCardBackground,
       fourCardLayout,
-      compactGrid,
       essentialReadsHeader,
       editorsPicksHeader,
       onboardingExperience,
@@ -329,23 +343,41 @@ export class _CardGrid extends React.PureComponent {
       spocMessageVariant,
       widgets,
       recentSavesEnabled,
-      hideDescriptions,
       DiscoveryStream,
     } = this.props;
-    const { saveToPocketCard } = DiscoveryStream;
+
+    const { saveToPocketCard, topicsLoading } = DiscoveryStream;
     const showRecentSaves = prefs.showRecentSaves && recentSavesEnabled;
     const isOnboardingExperienceDismissed =
       prefs[PREF_ONBOARDING_EXPERIENCE_DISMISSED];
-
-    const recs = this.props.data.recommendations.slice(0, items);
+    const mayHaveSectionsCards = prefs[PREF_SECTIONS_CARDS_ENABLED];
+    const mayHaveThumbsUpDown = prefs[PREF_THUMBS_UP_DOWN_ENABLED];
+    const showTopics = prefs[PREF_TOPICS_ENABLED];
+    const selectedTopics = prefs[PREF_TOPICS_SELECTED];
+    const availableTopics = prefs[PREF_TOPICS_AVAILABLE];
+    const spocsStartupCacheEnabled = prefs[PREF_SPOCS_STARTUPCACHE_ENABLED];
+    const listFeedEnabled = prefs[PREF_LIST_FEED_ENABLED];
+    const listFeedSelectedFeed = prefs[PREF_LIST_FEED_SELECTED_FEED];
+    const billboardEnabled = prefs[PREF_BILLBOARD_ENABLED];
+    const leaderboardEnabled = prefs[PREF_LEADERBOARD_ENABLED];
+    // filter out recs that should be in ListFeed
+    const recs = this.props.data.recommendations
+      .filter(item => !item.feedName)
+      .slice(0, items);
     const cards = [];
+
     let essentialReadsCards = [];
     let editorsPicksCards = [];
 
     for (let index = 0; index < items; index++) {
       const rec = recs[index];
       cards.push(
-        !rec || rec.placeholder ? (
+        topicsLoading ||
+          !rec ||
+          rec.placeholder ||
+          (rec.flight_id &&
+            !spocsStartupCacheEnabled &&
+            this.props.App.isForStartupCache) ? (
           <PlaceholderDSCard key={`dscard-${index}`} />
         ) : (
           <DSCard
@@ -357,10 +389,15 @@ export class _CardGrid extends React.PureComponent {
             word_count={rec.word_count}
             time_to_read={rec.time_to_read}
             title={rec.title}
+            topic={rec.topic}
+            showTopics={showTopics}
+            selectedTopics={selectedTopics}
+            availableTopics={availableTopics}
             excerpt={rec.excerpt}
             url={rec.url}
             id={rec.id}
             shim={rec.shim}
+            fetchTimestamp={rec.fetchTimestamp}
             type={this.props.type}
             context={rec.context}
             sponsor={rec.sponsor}
@@ -377,6 +414,15 @@ export class _CardGrid extends React.PureComponent {
             ctaButtonVariant={ctaButtonVariant}
             spocMessageVariant={spocMessageVariant}
             recommendation_id={rec.recommendation_id}
+            firstVisibleTimestamp={this.props.firstVisibleTimestamp}
+            mayHaveThumbsUpDown={mayHaveThumbsUpDown}
+            mayHaveSectionsCards={mayHaveSectionsCards}
+            corpus_item_id={rec.corpus_item_id}
+            scheduled_corpus_item_id={rec.scheduled_corpus_item_id}
+            recommended_at={rec.recommended_at}
+            received_rank={rec.received_rank}
+            format={rec.format}
+            alt_text={rec.alt_text}
           />
         )
       );
@@ -416,6 +462,82 @@ export class _CardGrid extends React.PureComponent {
         }
       }
     }
+    if (listFeedEnabled) {
+      const isFakespot = listFeedSelectedFeed === "fakespot";
+      const fakespotEnabled = prefs[PREF_FAKESPOT_ENABLED];
+      if (!isFakespot || (isFakespot && fakespotEnabled)) {
+        // Place the list feed as the 3rd element in the card grid
+        cards.splice(
+          2,
+          1,
+          this.renderListFeed(
+            this.props.data.recommendations,
+            listFeedSelectedFeed
+          )
+        );
+      }
+    }
+
+    // if a banner ad is enabled and we have any available, place them in the grid
+    const { spocs } = this.props.DiscoveryStream;
+    if ((billboardEnabled || leaderboardEnabled) && spocs.data.newtab_spocs) {
+      // Only render one AdBanner in the grid -
+      // Prioritize rendering a leaderboard if it exists,
+      // otherwise render a billboard
+      const spocToRender =
+        spocs.data.newtab_spocs.items.find(
+          ({ format }) => format === "leaderboard" && leaderboardEnabled
+        ) ||
+        spocs.data.newtab_spocs.items.find(
+          ({ format }) => format === "billboard" && billboardEnabled
+        );
+
+      if (spocToRender && !spocs.blocked.includes(spocToRender.url)) {
+        const row =
+          spocToRender.format === "leaderboard"
+            ? prefs[PREF_LEADERBOARD_POSITION]
+            : prefs[PREF_BILLBOARD_POSITION];
+
+        function displayCardsPerRow() {
+          // Determines the number of cards per row based on the window width:
+          // width <= 1122px: 2 cards per row
+          // width 1123px to 1697px: 3 cards per row
+          // width >= 1698px: 4 cards per row
+          if (window.innerWidth <= 1122) {
+            return 2;
+          } else if (window.innerWidth > 1122 && window.innerWidth < 1698) {
+            return 3;
+          }
+          return 4;
+        }
+
+        const injectAdBanner = bannerIndex => {
+          // .splice() inserts the AdBanner at the desired index, ensuring correct DOM order for accessibility and keyboard navigation.
+          // .push() would place it at the end, which is visually incorrect even if adjusted with CSS.
+          cards.splice(
+            bannerIndex,
+            0,
+            <AdBanner
+              spoc={spocToRender}
+              key={`dscard-${spocToRender.id}`}
+              dispatch={this.props.dispatch}
+              type={this.props.type}
+              firstVisibleTimestamp={this.props.firstVisibleTimestamp}
+              row={row}
+            />
+          );
+        };
+
+        const getBannerIndex = () => {
+          // Calculate the index for where the AdBanner should be added, depending on number of cards per row on the grid
+          const cardsPerRow = displayCardsPerRow();
+          let bannerIndex = (row - 1) * cardsPerRow;
+          return bannerIndex;
+        };
+
+        injectAdBanner(getBannerIndex());
+      }
+    }
 
     let moreRecsHeader = "";
     // For now this is English only.
@@ -435,21 +557,7 @@ export class _CardGrid extends React.PureComponent {
       }
     }
 
-    const hideCardBackgroundClass = hideCardBackground
-      ? `ds-card-grid-hide-background`
-      : ``;
-    const fourCardLayoutClass = fourCardLayout
-      ? `ds-card-grid-four-card-variant`
-      : ``;
-    const hideDescriptionsClassName = !hideDescriptions
-      ? `ds-card-grid-include-descriptions`
-      : ``;
-    const compactGridClassName = compactGrid ? `ds-card-grid-compact` : ``;
-    const hybridLayoutClassName = hybridLayout
-      ? `ds-card-grid-hybrid-layout`
-      : ``;
-
-    const gridClassName = `ds-card-grid ${hybridLayoutClassName} ${hideCardBackgroundClass} ${fourCardLayoutClass} ${hideDescriptionsClassName} ${compactGridClassName}`;
+    const gridClassName = this.renderGridClassName();
 
     return (
       <>
@@ -489,6 +597,65 @@ export class _CardGrid extends React.PureComponent {
         )}
       </>
     );
+  }
+
+  renderListFeed(recommendations, selectedFeed) {
+    const recs = recommendations.filter(item => item.feedName === selectedFeed);
+    const isFakespot = selectedFeed === "fakespot";
+    // remove duplicates from category list
+    const categories = [...new Set(recs.map(({ category }) => category))];
+    const listFeed = (
+      <ListFeed
+        // only display recs that match selectedFeed for ListFeed
+        recs={recs}
+        categories={isFakespot ? categories : []}
+        firstVisibleTimestamp={this.props.firstVisibleTimestamp}
+        type={this.props.type}
+        dispatch={this.props.dispatch}
+      />
+    );
+    return listFeed;
+  }
+
+  renderGridClassName() {
+    const prefs = this.props.Prefs.values;
+    const {
+      hybridLayout,
+      hideCardBackground,
+      fourCardLayout,
+      compactGrid,
+      hideDescriptions,
+    } = this.props;
+
+    const adSizingVariantAEnabled = prefs["newtabAdSize.variant-a"];
+    const adSizingVariantBEnabled = prefs["newtabAdSize.variant-b"];
+    const adSizingVariantEnabled =
+      adSizingVariantAEnabled || adSizingVariantBEnabled;
+
+    let adSizingVariantClassName = "";
+    if (adSizingVariantEnabled) {
+      // Ad sizing experiment variant, we want to ensure only 1 of these is ever enabled.
+      adSizingVariantClassName = adSizingVariantAEnabled
+        ? `ad-sizing-variant-a`
+        : `ad-sizing-variant-b`;
+    }
+
+    const hideCardBackgroundClass = hideCardBackground
+      ? `ds-card-grid-hide-background`
+      : ``;
+    const fourCardLayoutClass = fourCardLayout
+      ? `ds-card-grid-four-card-variant`
+      : ``;
+    const hideDescriptionsClassName = !hideDescriptions
+      ? `ds-card-grid-include-descriptions`
+      : ``;
+    const compactGridClassName = compactGrid ? `ds-card-grid-compact` : ``;
+    const hybridLayoutClassName = hybridLayout
+      ? `ds-card-grid-hybrid-layout`
+      : ``;
+
+    const gridClassName = `ds-card-grid ${hybridLayoutClassName} ${hideCardBackgroundClass} ${fourCardLayoutClass} ${hideDescriptionsClassName} ${compactGridClassName} ${adSizingVariantClassName}`;
+    return gridClassName;
   }
 
   render() {
@@ -536,5 +703,6 @@ _CardGrid.defaultProps = {
 
 export const CardGrid = connect(state => ({
   Prefs: state.Prefs,
+  App: state.App,
   DiscoveryStream: state.DiscoveryStream,
 }))(_CardGrid);

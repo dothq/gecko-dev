@@ -18,11 +18,29 @@ namespace jit {
 // ===============================================================
 // Move instructions
 
+void MacroAssembler::moveFloat16ToGPR(FloatRegister src, Register dest) {
+  vmovd(src, dest);
+
+  // Ensure the hi-word is zeroed.
+  movzwl(dest, dest);
+}
+
+void MacroAssembler::moveGPRToFloat16(Register src, FloatRegister dest) {
+  // Ensure the hi-word is zeroed.
+  movzwl(src, src);
+
+  vmovd(src, dest);
+}
+
 void MacroAssembler::moveFloat32ToGPR(FloatRegister src, Register dest) {
   vmovd(src, dest);
 }
 
 void MacroAssembler::moveGPRToFloat32(Register src, FloatRegister dest) {
+  vmovd(src, dest);
+}
+
+void MacroAssembler::moveLowDoubleToGPR(FloatRegister src, Register dest) {
   vmovd(src, dest);
 }
 
@@ -449,20 +467,23 @@ void MacroAssembler::rshift32Arithmetic(Imm32 shift, Register srcDest) {
 
 void MacroAssembler::cmp8Set(Condition cond, Address lhs, Imm32 rhs,
                              Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(lhs, rhs, dest);
   cmp8(lhs, rhs);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 void MacroAssembler::cmp16Set(Condition cond, Address lhs, Imm32 rhs,
                               Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(lhs, rhs, dest);
   cmp16(lhs, rhs);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 template <typename T1, typename T2>
 void MacroAssembler::cmp32Set(Condition cond, T1 lhs, T2 rhs, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(lhs, rhs, dest);
   cmp32(lhs, rhs);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 // ===============================================================
@@ -486,16 +507,14 @@ void MacroAssembler::branch16(Condition cond, const Address& lhs, Imm32 rhs,
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branch32(Condition cond, Register lhs, Register rhs,
-                              L label) {
+                              Label* label) {
   cmp32(lhs, rhs);
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branch32(Condition cond, Register lhs, Imm32 rhs,
-                              L label) {
+                              Label* label) {
   cmp32(lhs, rhs);
   j(cond, label);
 }
@@ -536,9 +555,8 @@ void MacroAssembler::branch32(Condition cond, const Operand& lhs, Imm32 rhs,
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branchPtr(Condition cond, Register lhs, Register rhs,
-                               L label) {
+                               Label* label) {
   cmpPtr(lhs, rhs);
   j(cond, label);
 }
@@ -563,9 +581,8 @@ void MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs,
   branchPtrImpl(cond, lhs, rhs, label);
 }
 
-template <class L>
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs,
-                               L label) {
+                               Label* label) {
   branchPtrImpl(cond, lhs, rhs, label);
 }
 
@@ -699,24 +716,28 @@ void MacroAssembler::branchMulPtr(Condition cond, Register src, Register dest,
   j(cond, label);
 }
 
+void MacroAssembler::branchNegPtr(Condition cond, Register reg, Label* label) {
+  MOZ_ASSERT(cond == Overflow);
+  negPtr(reg);
+  j(cond, label);
+}
+
 void MacroAssembler::decBranchPtr(Condition cond, Register lhs, Imm32 rhs,
                                   Label* label) {
   subPtr(rhs, lhs);
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branchTest32(Condition cond, Register lhs, Register rhs,
-                                  L label) {
+                                  Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
   test32(lhs, rhs);
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branchTest32(Condition cond, Register lhs, Imm32 rhs,
-                                  L label) {
+                                  Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
   test32(lhs, rhs);
@@ -731,9 +752,8 @@ void MacroAssembler::branchTest32(Condition cond, const Address& lhs, Imm32 rhs,
   j(cond, label);
 }
 
-template <class L>
 void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs,
-                                   L label) {
+                                   Label* label) {
   testPtr(lhs, rhs);
   j(cond, label);
 }
@@ -1096,9 +1116,8 @@ void MacroAssembler::branchTestMagic(Condition cond, const BaseIndex& address,
   branchTestMagicImpl(cond, address, label);
 }
 
-template <class L>
 void MacroAssembler::branchTestMagic(Condition cond, const ValueOperand& value,
-                                     L label) {
+                                     Label* label) {
   branchTestMagicImpl(cond, value, label);
 }
 
@@ -1111,36 +1130,41 @@ void MacroAssembler::branchTestMagicImpl(Condition cond, const T& t, L label) {
 template <typename T>
 void MacroAssembler::testNumberSet(Condition cond, const T& src,
                                    Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(src, dest);
   cond = testNumber(cond, src);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 template <typename T>
 void MacroAssembler::testBooleanSet(Condition cond, const T& src,
                                     Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(src, dest);
   cond = testBoolean(cond, src);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 template <typename T>
 void MacroAssembler::testStringSet(Condition cond, const T& src,
                                    Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(src, dest);
   cond = testString(cond, src);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 template <typename T>
 void MacroAssembler::testSymbolSet(Condition cond, const T& src,
                                    Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(src, dest);
   cond = testSymbol(cond, src);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 template <typename T>
 void MacroAssembler::testBigIntSet(Condition cond, const T& src,
                                    Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(src, dest);
   cond = testBigInt(cond, src);
-  emitSet(cond, dest);
+  emitSet(cond, dest, destIsZero);
 }
 
 void MacroAssembler::cmp32Move32(Condition cond, Register lhs, Imm32 rhs,
@@ -1243,6 +1267,23 @@ FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat32(
 
 template FaultingCodeOffset MacroAssembler::storeFloat32(FloatRegister src,
                                                          const Operand& dest);
+
+FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat16(
+    FloatRegister src, const Address& dest, Register scratch) {
+  vmovd(src, scratch);
+
+  FaultingCodeOffset fco = FaultingCodeOffset(currentOffset());
+  movw(scratch, Operand(dest));
+  return fco;
+}
+FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat16(
+    FloatRegister src, const BaseIndex& dest, Register scratch) {
+  vmovd(src, scratch);
+
+  FaultingCodeOffset fco = FaultingCodeOffset(currentOffset());
+  movw(scratch, Operand(dest));
+  return fco;
+}
 
 void MacroAssembler::memoryBarrier(MemoryBarrierBits barrier) {
   if (barrier & MembarStoreLoad) {
@@ -1582,13 +1623,17 @@ void MacroAssembler::reverseInt64x2(FloatRegister src, FloatRegister dest) {
 // Any lane true, ie any bit set
 
 void MacroAssembler::anyTrueSimd128(FloatRegister src, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(dest);
+
   vptest(src, src);
-  emitSetRegisterIf(Condition::NonZero, dest);
+  emitSet(Condition::NonZero, dest, destIsZero);
 }
 
 // All lanes true
 
 void MacroAssembler::allTrueInt8x16(FloatRegister src, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(dest);
+
   ScratchSimd128Scope xtmp(*this);
   // xtmp is all-00h
   vpxor(xtmp, xtmp, xtmp);
@@ -1597,10 +1642,12 @@ void MacroAssembler::allTrueInt8x16(FloatRegister src, Register dest) {
   vpcmpeqb(Operand(src), xtmp, xtmp);
   // Check if xtmp is 0.
   vptest(xtmp, xtmp);
-  emitSetRegisterIf(Condition::Zero, dest);
+  emitSet(Condition::Zero, dest, destIsZero);
 }
 
 void MacroAssembler::allTrueInt16x8(FloatRegister src, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(dest);
+
   ScratchSimd128Scope xtmp(*this);
   // xtmp is all-00h
   vpxor(xtmp, xtmp, xtmp);
@@ -1609,10 +1656,12 @@ void MacroAssembler::allTrueInt16x8(FloatRegister src, Register dest) {
   vpcmpeqw(Operand(src), xtmp, xtmp);
   // Check if xtmp is 0.
   vptest(xtmp, xtmp);
-  emitSetRegisterIf(Condition::Zero, dest);
+  emitSet(Condition::Zero, dest, destIsZero);
 }
 
 void MacroAssembler::allTrueInt32x4(FloatRegister src, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(dest);
+
   ScratchSimd128Scope xtmp(*this);
   // xtmp is all-00h
   vpxor(xtmp, xtmp, xtmp);
@@ -1621,10 +1670,12 @@ void MacroAssembler::allTrueInt32x4(FloatRegister src, Register dest) {
   vpcmpeqd(Operand(src), xtmp, xtmp);
   // Check if xtmp is 0.
   vptest(xtmp, xtmp);
-  emitSetRegisterIf(Condition::Zero, dest);
+  emitSet(Condition::Zero, dest, destIsZero);
 }
 
 void MacroAssembler::allTrueInt64x2(FloatRegister src, Register dest) {
+  bool destIsZero = maybeEmitSetZeroByteRegister(dest);
+
   ScratchSimd128Scope xtmp(*this);
   // xtmp is all-00h
   vpxor(xtmp, xtmp, xtmp);
@@ -1633,7 +1684,7 @@ void MacroAssembler::allTrueInt64x2(FloatRegister src, Register dest) {
   vpcmpeqq(Operand(src), xtmp, xtmp);
   // Check if xtmp is 0.
   vptest(xtmp, xtmp);
-  emitSetRegisterIf(Condition::Zero, dest);
+  emitSet(Condition::Zero, dest, destIsZero);
 }
 
 // Bitmask

@@ -27,6 +27,7 @@ union Utf8Unit;
 
 namespace JS {
 
+class JS_PUBLIC_API EnvironmentChain;
 class JS_PUBLIC_API InstantiateOptions;
 class JS_PUBLIC_API ReadOnlyCompileOptions;
 
@@ -45,8 +46,8 @@ class SourceText;
  * lines in a buffer until JS_Utf8BufferIsCompilableUnit is true, then pass it
  * to the compiler.
  *
- * The provided buffer is interpreted as UTF-8 data.  An error is reported if
- * a UTF-8 encoding error is encountered.
+ * The provided buffer is interpreted as UTF-8 data.  If a UTF-8 encoding error
+ * is encountered, reports an error to JSContext and returns *true*.
  */
 extern JS_PUBLIC_API bool JS_Utf8BufferIsCompilableUnit(
     JSContext* cx, JS::Handle<JSObject*> obj, const char* utf8, size_t length);
@@ -84,12 +85,12 @@ extern JS_PUBLIC_API bool JS_ExecuteScript(JSContext* cx,
  * objects that should end up on the script's scope chain.
  */
 extern JS_PUBLIC_API bool JS_ExecuteScript(JSContext* cx,
-                                           JS::HandleObjectVector envChain,
+                                           const JS::EnvironmentChain& envChain,
                                            JS::Handle<JSScript*> script,
                                            JS::MutableHandle<JS::Value> rval);
 
 extern JS_PUBLIC_API bool JS_ExecuteScript(JSContext* cx,
-                                           JS::HandleObjectVector envChain,
+                                           const JS::EnvironmentChain& envChain,
                                            JS::Handle<JSScript*> script);
 
 namespace JS {
@@ -108,7 +109,8 @@ extern JS_PUBLIC_API bool Evaluate(JSContext* cx,
  * the global object on it; that's implicit.  It needs to contain the other
  * objects that should end up on the script's scope chain.
  */
-extern JS_PUBLIC_API bool Evaluate(JSContext* cx, HandleObjectVector envChain,
+extern JS_PUBLIC_API bool Evaluate(JSContext* cx,
+                                   const JS::EnvironmentChain& envChain,
                                    const ReadOnlyCompileOptions& options,
                                    SourceText<char16_t>& srcBuf,
                                    MutableHandle<Value> rval);
@@ -173,7 +175,7 @@ extern JS_PUBLIC_API JSScript* CompileUtf8Path(
  * global must not be explicitly included in the scope chain.
  */
 extern JS_PUBLIC_API JSFunction* CompileFunction(
-    JSContext* cx, HandleObjectVector envChain,
+    JSContext* cx, const JS::EnvironmentChain& envChain,
     const ReadOnlyCompileOptions& options, const char* name, unsigned nargs,
     const char* const* argnames, SourceText<char16_t>& srcBuf);
 
@@ -185,7 +187,7 @@ extern JS_PUBLIC_API JSFunction* CompileFunction(
  * global must not be explicitly included in the scope chain.
  */
 extern JS_PUBLIC_API JSFunction* CompileFunction(
-    JSContext* cx, HandleObjectVector envChain,
+    JSContext* cx, const JS::EnvironmentChain& envChain,
     const ReadOnlyCompileOptions& options, const char* name, unsigned nargs,
     const char* const* argnames, SourceText<mozilla::Utf8Unit>& srcBuf);
 
@@ -194,7 +196,7 @@ extern JS_PUBLIC_API JSFunction* CompileFunction(
  * Rust-friendly ergonomics.
  */
 extern JS_PUBLIC_API JSFunction* CompileFunctionUtf8(
-    JSContext* cx, HandleObjectVector envChain,
+    JSContext* cx, const JS::EnvironmentChain& envChain,
     const ReadOnlyCompileOptions& options, const char* name, unsigned nargs,
     const char* const* argnames, const char* utf8, size_t length);
 

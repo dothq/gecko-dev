@@ -1,12 +1,9 @@
 // |reftest| skip-if(!this.hasOwnProperty('Iterator'))
-//
-
 /*---
 esid: pending
-description: %Iterator.prototype%.take length value and descriptor.
+description: "%Iterator.prototype%.take length value and descriptor."
 info: >
   17 ECMAScript Standard Built-in Objects
-includes: [propertyHelper.js]
 features: [Symbol.iterator]
 ---*/
 

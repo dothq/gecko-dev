@@ -28,7 +28,7 @@ class TaggedParserAtomIndex;
 }  // namespace frontend
 
 class GlobalObject;
-class StringBuffer;
+class StringBuilder;
 
 [[nodiscard]] extern bool InitRuntimeNumberState(JSRuntime* rt);
 
@@ -59,8 +59,9 @@ extern JSLinearString* Int32ToStringWithHeap(JSContext* cx, int32_t i,
 
 extern JSLinearString* Int32ToStringPure(JSContext* cx, int32_t i);
 
-extern JSString* Int32ToStringWithBase(JSContext* cx, int32_t i, int32_t base,
-                                       bool lowerCase);
+template <AllowGC allowGC>
+extern JSLinearString* Int32ToStringWithBase(JSContext* cx, int32_t i,
+                                             int32_t base, bool lowerCase);
 
 extern JSAtom* Int32ToAtom(JSContext* cx, int32_t si);
 
@@ -72,10 +73,10 @@ extern bool IsInteger(double d);
 
 /*
  * Convert an integer or double (contained in the given value) to a string and
- * append to the given buffer.
+ * append to the given string builder.
  */
-[[nodiscard]] extern bool NumberValueToStringBuffer(const Value& v,
-                                                    StringBuffer& sb);
+[[nodiscard]] extern bool NumberValueToStringBuilder(const Value& v,
+                                                     StringBuilder& sb);
 
 extern JSLinearString* IndexToString(JSContext* cx, uint32_t index);
 
@@ -226,7 +227,7 @@ double CharsToNumber(const CharT* chars, size_t length);
                                              double* result);
 
 // Infallible version of StringToNumber for linear strings.
-extern double LinearStringToNumber(JSLinearString* str);
+extern double LinearStringToNumber(const JSLinearString* str);
 
 // Parse the input string as if Number.parseInt had been called.
 extern bool NumberParseInt(JSContext* cx, JS::HandleString str, int32_t radix,

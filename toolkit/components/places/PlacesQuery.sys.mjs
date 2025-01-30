@@ -58,6 +58,16 @@ export class PlacesQuery {
   #historyListenerCallback = null;
   /** @type {DeferredTask} */
   #historyObserverTask = null;
+
+  /**
+   * Indicates whether this query is closed. When closed, caches should not be
+   * populated, and observers should not be instantiated. It can be reopened by
+   * calling `initializeCache()`.
+   *
+   * @type {boolean}
+   */
+  #isClosed = false;
+
   #searchInProgress = false;
 
   /**
@@ -85,7 +95,7 @@ export class PlacesQuery {
       this.initializeCache(options);
       await this.fetchHistory();
     }
-    if (!this.#historyListener) {
+    if (!this.#historyListener && !this.#isClosed) {
       this.#initHistoryListener();
     }
     return this.cachedHistory;
@@ -101,6 +111,7 @@ export class PlacesQuery {
     this.cachedHistory = new Map();
     this.cachedHistoryOptions = options;
     this.#cachedHistoryPerUrl = new Map();
+    this.#isClosed = false;
   }
 
   /**
@@ -118,21 +129,29 @@ export class PlacesQuery {
         groupBy = "url";
         break;
     }
+    const whereClause =
+      daysOld == Infinity
+        ? ""
+        : `WHERE visit_date >= (strftime('%s','now','localtime','start of day','-${Number(
+            daysOld
+          )} days','utc') * 1000000)`;
     const sql = `SELECT MAX(visit_date) as visit_date, title, url
       FROM moz_historyvisits v
       JOIN moz_places h
       ON v.place_id = h.id
-      WHERE visit_date >= (strftime('%s','now','localtime','start of day','-${Number(
-        daysOld
-      )} days','utc') * 1000000)
       AND hidden = 0
+      ${whereClause}
       GROUP BY ${groupBy}
       ORDER BY visit_date DESC
       LIMIT ${limit > 0 ? limit : -1}`;
     const rows = await db.executeCached(sql);
+    if (this.#isClosed) {
+      // Do not cache visits if this instance is closed already.
+      return;
+    }
     for (const row of rows) {
       const visit = this.formatRowAsVisit(row);
-      this.appendToCache(visit);
+      this.#appendToCache(visit);
     }
   }
 
@@ -191,7 +210,7 @@ export class PlacesQuery {
    * @param {HistoryVisit} visit
    *   The visit to append.
    */
-  appendToCache(visit) {
+  #appendToCache(visit) {
     this.#getContainerForVisit(visit).push(visit);
     this.#insertIntoCachedHistoryPerUrl(visit);
   }
@@ -204,7 +223,7 @@ export class PlacesQuery {
    * @param {HistoryVisit} visit
    *   The visit to insert.
    */
-  insertSortedIntoCache(visit) {
+  #insertSortedIntoCache(visit) {
     const container = this.#getContainerForVisit(visit);
     const existingVisitsForUrl = this.#cachedHistoryPerUrl.get(visit.url) ?? [];
     for (const existingVisit of existingVisitsForUrl) {
@@ -268,11 +287,12 @@ export class PlacesQuery {
     switch (this.cachedHistoryOptions.sortBy) {
       case "date":
         return this.getStartOfDayTimestamp(visit.date);
-      case "site":
+      case "site": {
         const { protocol } = new URL(visit.url);
         return protocol === "http:" || protocol === "https:"
           ? lazy.BrowserUtils.formatURIStringForDisplay(visit.url)
           : "";
+      }
     }
     return null;
   }
@@ -293,6 +313,7 @@ export class PlacesQuery {
    * Close this query. Caches are cleared and listeners are removed.
    */
   close() {
+    this.#isClosed = true;
     this.cachedHistory = null;
     this.cachedHistoryOptions = null;
     this.#cachedHistoryPerUrl = null;
@@ -309,7 +330,7 @@ export class PlacesQuery {
     }
     this.#historyListener = null;
     this.#historyListenerCallback = null;
-    if (!this.#historyObserverTask.isFinalized) {
+    if (this.#historyObserverTask && !this.#historyObserverTask.isFinalized) {
       this.#historyObserverTask.disarm();
       this.#historyObserverTask.finalize();
     }
@@ -374,7 +395,7 @@ export class PlacesQuery {
       return null;
     }
     const visit = this.formatEventAsVisit(event);
-    this.insertSortedIntoCache(visit);
+    this.#insertSortedIntoCache(visit);
     return visit;
   }
 

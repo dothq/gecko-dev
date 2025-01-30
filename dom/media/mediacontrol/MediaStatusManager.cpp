@@ -5,11 +5,11 @@
 #include "MediaStatusManager.h"
 
 #include "MediaControlService.h"
+#include "mozilla/StaticPrefs_media.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/MediaControlUtils.h"
 #include "mozilla/dom/WindowGlobalParent.h"
-#include "mozilla/StaticPrefs_media.h"
 #include "nsContentUtils.h"
 #include "nsIChromeRegistry.h"
 #include "nsIObserverService.h"
@@ -199,6 +199,7 @@ bool MediaStatusManager::IsSessionOwningAudioFocus(
 MediaMetadataBase MediaStatusManager::CreateDefaultMetadata() const {
   MediaMetadataBase metadata;
   metadata.mTitle = GetDefaultTitle();
+  metadata.mUrl = GetUrl();
   metadata.mArtwork.AppendElement()->mSrc = GetDefaultFaviconURL();
 
   LOG("Default media metadata, title=%s, album src=%s",
@@ -234,6 +235,32 @@ nsString MediaStatusManager::GetDefaultTitle() const {
     globalParent->GetDocumentTitle(documentTitle);
   }
   return documentTitle.IsEmpty() ? defaultTitle : documentTitle;
+}
+
+nsCString MediaStatusManager::GetUrl() const {
+  nsCString defaultUrl;
+
+  RefPtr<CanonicalBrowsingContext> bc =
+      CanonicalBrowsingContext::Get(mTopLevelBrowsingContextId);
+  if (!bc) {
+    return defaultUrl;
+  }
+
+  RefPtr<WindowGlobalParent> globalParent = bc->GetCurrentWindowGlobal();
+  if (!globalParent) {
+    return defaultUrl;
+  }
+
+  if (IsInPrivateBrowsing()) {
+    return defaultUrl;
+  }
+
+  nsIURI* documentURI = globalParent->GetDocumentURI();
+  if (!documentURI) {
+    return defaultUrl;
+  }
+
+  return documentURI->GetSpecOrDefault();
 }
 
 nsString MediaStatusManager::GetDefaultFaviconURL() const {
@@ -288,7 +315,7 @@ MediaSessionPlaybackState MediaStatusManager::GetCurrentDeclaredPlaybackState()
 void MediaStatusManager::NotifyMediaPlaybackChanged(uint64_t aBrowsingContextId,
                                                     MediaPlaybackState aState) {
   LOG("UpdateMediaPlaybackState %s for context %" PRIu64,
-      ToMediaPlaybackStateStr(aState), aBrowsingContextId);
+      EnumValueToString(aState), aBrowsingContextId);
   const bool oldPlaying = mPlaybackStatusDelegate.IsPlaying();
   mPlaybackStatusDelegate.UpdateMediaPlaybackState(aBrowsingContextId, aState);
 
@@ -338,10 +365,10 @@ void MediaStatusManager::EnableAction(uint64_t aBrowsingContextId,
   }
   if (info->IsActionSupported(aAction)) {
     LOG("Action '%s' has already been enabled for context %" PRIu64,
-        ToMediaSessionActionStr(aAction), aBrowsingContextId);
+        GetEnumString(aAction).get(), aBrowsingContextId);
     return;
   }
-  LOG("Enable action %s for context %" PRIu64, ToMediaSessionActionStr(aAction),
+  LOG("Enable action %s for context %" PRIu64, GetEnumString(aAction).get(),
       aBrowsingContextId);
   info->EnableAction(aAction);
   NotifySupportedKeysChangedIfNeeded(aBrowsingContextId);
@@ -355,11 +382,11 @@ void MediaStatusManager::DisableAction(uint64_t aBrowsingContextId,
   }
   if (!info->IsActionSupported(aAction)) {
     LOG("Action '%s' hasn't been enabled yet for context %" PRIu64,
-        ToMediaSessionActionStr(aAction), aBrowsingContextId);
+        GetEnumString(aAction).get(), aBrowsingContextId);
     return;
   }
-  LOG("Disable action %s for context %" PRIu64,
-      ToMediaSessionActionStr(aAction), aBrowsingContextId);
+  LOG("Disable action %s for context %" PRIu64, GetEnumString(aAction).get(),
+      aBrowsingContextId);
   info->DisableAction(aAction);
   NotifySupportedKeysChangedIfNeeded(aBrowsingContextId);
 }
@@ -378,6 +405,29 @@ void MediaStatusManager::UpdatePositionState(
     return;
   }
   mPositionStateChangedEvent.Notify(aState);
+}
+
+void MediaStatusManager::UpdateGuessedPositionState(
+    uint64_t aBrowsingContextId, const nsID& aMediaId,
+    const Maybe<PositionState>& aGuessedState) {
+  mPlaybackStatusDelegate.UpdateGuessedPositionState(aBrowsingContextId,
+                                                     aMediaId, aGuessedState);
+
+  // The position state comes from a non-active media session and
+  // there is another one active (with some metadata).
+  if (mActiveMediaSessionContextId &&
+      *mActiveMediaSessionContextId != aBrowsingContextId) {
+    return;
+  }
+
+  // media session is declared for the updated session, but there's no active
+  // session - it will get emitted once the session becomes active
+  if (mMediaSessionInfoMap.Contains(aBrowsingContextId) &&
+      !mActiveMediaSessionContextId) {
+    return;
+  }
+
+  mPositionStateChangedEvent.Notify(GetCurrentPositionState());
 }
 
 void MediaStatusManager::NotifySupportedKeysChangedIfNeeded(
@@ -423,6 +473,7 @@ MediaMetadataBase MediaStatusManager::GetCurrentMediaMetadata() const {
     }
     MediaMetadataBase& metadata = *(info.mMetadata);
     FillMissingTitleAndArtworkIfNeeded(metadata);
+    metadata.mUrl = GetUrl();
     return metadata;
   }
   return CreateDefaultMetadata();
@@ -431,11 +482,13 @@ MediaMetadataBase MediaStatusManager::GetCurrentMediaMetadata() const {
 Maybe<PositionState> MediaStatusManager::GetCurrentPositionState() const {
   if (mActiveMediaSessionContextId) {
     auto info = mMediaSessionInfoMap.Lookup(*mActiveMediaSessionContextId);
-    if (info) {
+    if (info && info->mPositionState) {
       return info->mPositionState;
     }
   }
-  return Nothing();
+
+  return mPlaybackStatusDelegate.GuessedMediaPositionState(
+      mActiveMediaSessionContextId);
 }
 
 void MediaStatusManager::FillMissingTitleAndArtworkIfNeeded(
@@ -461,7 +514,7 @@ bool MediaStatusManager::IsInPrivateBrowsing() const {
   if (!element) {
     return false;
   }
-  return nsContentUtils::IsInPrivateBrowsing(element->OwnerDoc());
+  return element->OwnerDoc()->IsInPrivateBrowsing();
 }
 
 MediaSessionPlaybackState MediaStatusManager::PlaybackState() const {

@@ -729,15 +729,6 @@ void gfxShapedText::SetupClusterBoundaries(uint32_t aOffset,
   // preceding letter by any letter-spacing or justification.
   const char16_t kBengaliVirama = 0x09CD;
   const char16_t kBengaliYa = 0x09AF;
-  // Characters treated as hyphens for the purpose of "emergency" breaking
-  // when the content would otherwise overflow.
-  auto isHyphen = [](char16_t c) {
-    return c == char16_t('-') ||  // HYPHEN-MINUS
-           c == 0x2010 ||         // HYPHEN
-           c == 0x2012 ||         // FIGURE DASH
-           c == 0x2013 ||         // EN DASH
-           c == 0x058A;           // ARMENIAN HYPHEN
-  };
   bool prevWasHyphen = false;
   while (pos < aLength) {
     const char16_t ch = aString[pos];
@@ -750,7 +741,7 @@ void gfxShapedText::SetupClusterBoundaries(uint32_t aOffset,
     }
     if (ch == char16_t(' ') || ch == kIdeographicSpace) {
       glyphs[pos].SetIsSpace();
-    } else if (isHyphen(ch) && pos &&
+    } else if (nsContentUtils::IsHyphen(ch) && pos &&
                nsContentUtils::IsAlphanumeric(aString[pos - 1])) {
       prevWasHyphen = true;
     } else if (ch == kBengaliYa) {
@@ -1006,6 +997,10 @@ gfxFont::gfxFont(const RefPtr<UnscaledFont>& aUnscaledFont,
   }
 
   mKerningSet = HasFeatureSet(HB_TAG('k', 'e', 'r', 'n'), mKerningEnabled);
+
+  // Ensure the gfxFontEntry's unitsPerEm and extents fields are initialized,
+  // so that GetFontExtents can use them without risk of races.
+  Unused << mFontEntry->UnitsPerEm();
 }
 
 gfxFont::~gfxFont() {
@@ -1141,14 +1136,14 @@ static void CollectLookupsByFeature(hb_face_t* aFace, hb_tag_t aTableTag,
 
   offset = 0;
   do {
-    len = ArrayLength(lookups);
+    len = std::size(lookups);
     hb_ot_layout_feature_get_lookups(aFace, aTableTag, aFeatureIndex, offset,
                                      &len, lookups);
     for (i = 0; i < len; i++) {
       hb_set_add(aLookups, lookups[i]);
     }
     offset += len;
-  } while (len == ArrayLength(lookups));
+  } while (len == std::size(lookups));
 }
 
 static void CollectLookupsByLanguage(
@@ -1167,7 +1162,7 @@ static void CollectLookupsByLanguage(
 
   offset = 0;
   do {
-    len = ArrayLength(featureIndexes);
+    len = std::size(featureIndexes);
     hb_ot_layout_language_get_feature_indexes(aFace, aTableTag, aScriptIndex,
                                               aLangIndex, offset, &len,
                                               featureIndexes);
@@ -1189,7 +1184,7 @@ static void CollectLookupsByLanguage(
       CollectLookupsByFeature(aFace, aTableTag, featureIndex, lookups);
     }
     offset += len;
-  } while (len == ArrayLength(featureIndexes));
+  } while (len == std::size(featureIndexes));
 }
 
 static bool HasLookupRuleWithGlyphByScript(
@@ -1394,7 +1389,7 @@ void gfxFont::CheckForFeaturesInvolvingSpace() const {
 
     // Set up the default-features hashset on first use.
     if (!sDefaultFeatures) {
-      uint32_t numDefaultFeatures = ArrayLength(defaultFeatures);
+      uint32_t numDefaultFeatures = std::size(defaultFeatures);
       auto* set = new nsTHashSet<uint32_t>(numDefaultFeatures);
       for (uint32_t i = 0; i < numDefaultFeatures; i++) {
         set->Insert(defaultFeatures[i]);
@@ -1409,7 +1404,7 @@ void gfxFont::CheckForFeaturesInvolvingSpace() const {
 
     uint32_t len, offset = 0;
     do {
-      len = ArrayLength(scriptTags);
+      len = std::size(scriptTags);
       hb_ot_layout_table_get_script_tags(face, HB_OT_TAG_GSUB, offset, &len,
                                          scriptTags);
       for (uint32_t i = 0; i < len; i++) {
@@ -1431,7 +1426,7 @@ void gfxFont::CheckForFeaturesInvolvingSpace() const {
         }
       }
       offset += len;
-    } while (len == ArrayLength(scriptTags));
+    } while (len == std::size(scriptTags));
   }
 
   // spaces in default features of default script?
@@ -2669,82 +2664,127 @@ bool gfxFont::RenderColorGlyph(DrawTarget* aDrawTarget, gfxContext* aContext,
   }
 
   auto* colr = GetFontEntry()->GetCOLR();
-  if (const auto* paintGraph = COLRFonts::GetGlyphPaintGraph(colr, aGlyphId)) {
-    const auto* hbShaper = GetHarfBuzzShaper();
-    if (hbShaper && hbShaper->IsInitialized()) {
-      if (aTextDrawer) {
-        aTextDrawer->FoundUnsupportedFeature();
-        return true;
+  const auto* paintGraph = COLRFonts::GetGlyphPaintGraph(colr, aGlyphId);
+  const gfxHarfBuzzShaper* hbShaper = nullptr;
+  if (paintGraph) {
+    // We need the hbShaper to get color glyph bounds, so check that it's
+    // usable.
+    hbShaper = GetHarfBuzzShaper();
+    if (!hbShaper && !hbShaper->IsInitialized()) {
+      return false;
+    }
+    if (aTextDrawer) {
+      aTextDrawer->FoundUnsupportedFeature();
+      return true;
+    }
+  }
+  const auto* layers =
+      paintGraph ? nullptr : COLRFonts::GetGlyphLayers(colr, aGlyphId);
+
+  if (!paintGraph && !layers) {
+    return false;
+  }
+
+  // For reasonable font sizes, use a cache of rasterized glyphs.
+  bool useCache = GetAdjustedSize() <= 256.0;
+
+  // If the composition op is not OVER, rasterize to a temporary surface
+  // and then composite to the destination, even if we're not caching.
+  // But we can't do this if the target is a TextDrawTarget, as it doesn't
+  // support DrawSurface.
+  RefPtr<SourceSurface> snapshot;
+  if ((useCache ||
+       aFontParams.drawOptions.mCompositionOp != CompositionOp::OP_OVER) &&
+      aDrawTarget->GetBackendType() != BackendType::WEBRENDER_TEXT) {
+    AutoWriteLock lock(mLock);
+    if (!mColorGlyphCache && useCache) {
+      mColorGlyphCache = MakeUnique<ColorGlyphCache>();
+    }
+
+    Rect bounds;
+    if (paintGraph) {
+      bounds = COLRFonts::GetColorGlyphBounds(
+          colr, hbShaper->GetHBFont(), aGlyphId, aDrawTarget,
+          aFontParams.scaledFont, mFUnitsConvFactor);
+    } else {
+      bounds = GetFontEntry()->GetFontExtents(mFUnitsConvFactor);
+    }
+    bounds.RoundOut();
+
+    // Tell the cache what colors we're using; if they have changed, it
+    // will discard any currently-cached entries.
+    HashMap<uint32_t, RefPtr<SourceSurface>>::AddPtr cached;
+    if (useCache) {
+      mColorGlyphCache->SetColors(aFontParams.currentColor,
+                                  aFontParams.palette);
+      cached = mColorGlyphCache->mCache.lookupForAdd(aGlyphId);
+      if (cached) {
+        snapshot = cached->value();
       }
+    }
 
-      // For reasonable font sizes, use a cache of rasterized glyphs.
-      if (GetAdjustedSize() <= 256.0) {
-        AutoWriteLock lock(mLock);
-        if (!mColorGlyphCache) {
-          mColorGlyphCache = MakeUnique<ColorGlyphCache>();
-        }
-
-        // Tell the cache what colors we're using; if they have changed, it will
-        // discard any currently-cached entries.
-        mColorGlyphCache->SetColors(aFontParams.currentColor,
-                                    aFontParams.palette);
-
+    if (!snapshot) {
+      // Create a temporary DrawTarget and render the glyph to it.
+      IntSize size(int(bounds.width), int(bounds.height));
+      SurfaceFormat format = SurfaceFormat::B8G8R8A8;
+      RefPtr target =
+          Factory::CreateDrawTarget(BackendType::SKIA, size, format);
+      if (target) {
+        // Use OP_OVER and opaque alpha to create the glyph snapshot.
+        DrawOptions drawOptions(aFontParams.drawOptions);
+        drawOptions.mCompositionOp = CompositionOp::OP_OVER;
+        drawOptions.mAlpha = 1.0f;
         bool ok = false;
-        auto cached = mColorGlyphCache->mCache.lookupForAdd(aGlyphId);
-        Rect bounds = COLRFonts::GetColorGlyphBounds(
-            colr, hbShaper->GetHBFont(), aGlyphId, aDrawTarget,
-            aFontParams.scaledFont, mFUnitsConvFactor);
-        bounds.RoundOut();
-
-        if (cached) {
-          ok = true;
+        if (paintGraph) {
+          ok = COLRFonts::PaintGlyphGraph(
+              colr, hbShaper->GetHBFont(), paintGraph, target, nullptr,
+              aFontParams.scaledFont, drawOptions, -bounds.TopLeft(),
+              aFontParams.currentColor, aFontParams.palette->Colors(), aGlyphId,
+              mFUnitsConvFactor);
         } else {
-          // Create a temporary DrawTarget, render the glyph, and save a
-          // snapshot of the rendering in the cache.
-          IntSize size(int(bounds.width), int(bounds.height));
-          SurfaceFormat format = SurfaceFormat::B8G8R8A8;
-          RefPtr target =
-              Factory::CreateDrawTarget(BackendType::SKIA, size, format);
-          if (target) {
-            ok = COLRFonts::PaintGlyphGraph(
-                GetFontEntry()->GetCOLR(), hbShaper->GetHBFont(), paintGraph,
-                target, nullptr, aFontParams.scaledFont,
-                aFontParams.drawOptions, -bounds.TopLeft(),
-                aFontParams.currentColor, aFontParams.palette->Colors(),
-                aGlyphId, mFUnitsConvFactor);
-            if (ok) {
-              RefPtr snapshot = target->Snapshot();
-              ok = mColorGlyphCache->mCache.add(cached, aGlyphId, snapshot);
-            }
-          }
+          auto face(GetFontEntry()->GetHBFace());
+          ok = COLRFonts::PaintGlyphLayers(
+              colr, face, layers, target, nullptr, aFontParams.scaledFont,
+              drawOptions, -bounds.TopLeft(), aFontParams.currentColor,
+              aFontParams.palette->Colors());
         }
         if (ok) {
-          // Paint the snapshot from cached->value(), and return.
-          aDrawTarget->DrawSurface(
-              cached->value(), Rect(aPoint + bounds.TopLeft(), bounds.Size()),
-              Rect(Point(), bounds.Size()));
-          return true;
+          snapshot = target->Snapshot();
+          if (useCache) {
+            // Save a snapshot of the rendering in the cache.
+            // (We ignore potential failure here, and just paint the snapshot
+            // without caching it.)
+            Unused << mColorGlyphCache->mCache.add(cached, aGlyphId, snapshot);
+          }
         }
       }
-
-      // If we failed to cache the glyph, or it was too large to even try,
-      // just paint directly to the target.
-      return COLRFonts::PaintGlyphGraph(
-          colr, hbShaper->GetHBFont(), paintGraph, aDrawTarget, aTextDrawer,
-          aFontParams.scaledFont, aFontParams.drawOptions, aPoint,
-          aFontParams.currentColor, aFontParams.palette->Colors(), aGlyphId,
-          mFUnitsConvFactor);
+    }
+    if (snapshot) {
+      // Paint the snapshot using the appropriate composition op.
+      aDrawTarget->DrawSurface(snapshot,
+                               Rect(aPoint + bounds.TopLeft(), bounds.Size()),
+                               Rect(Point(), bounds.Size()),
+                               DrawSurfaceOptions(), aFontParams.drawOptions);
+      return true;
     }
   }
 
-  if (const auto* layers =
-          COLRFonts::GetGlyphLayers(GetFontEntry()->GetCOLR(), aGlyphId)) {
+  // If we didn't paint from a cached or temporary snapshot, just render
+  // directly to the destination drawTarget.
+  if (paintGraph) {
+    return COLRFonts::PaintGlyphGraph(
+        colr, hbShaper->GetHBFont(), paintGraph, aDrawTarget, aTextDrawer,
+        aFontParams.scaledFont, aFontParams.drawOptions, aPoint,
+        aFontParams.currentColor, aFontParams.palette->Colors(), aGlyphId,
+        mFUnitsConvFactor);
+  }
+
+  if (layers) {
     auto face(GetFontEntry()->GetHBFace());
-    bool ok = COLRFonts::PaintGlyphLayers(
+    return COLRFonts::PaintGlyphLayers(
         colr, face, layers, aDrawTarget, aTextDrawer, aFontParams.scaledFont,
         aFontParams.drawOptions, aPoint, aFontParams.currentColor,
         aFontParams.palette->Colors());
-    return ok;
   }
 
   return false;
@@ -3386,9 +3426,7 @@ bool gfxFont::ShapeText(DrawTarget* aDrawTarget, const char16_t* aText,
       gfxGraphiteShaper* shaper = mGraphiteShaper;
       if (!shaper) {
         shaper = new gfxGraphiteShaper(this);
-        if (mGraphiteShaper.compareExchange(nullptr, shaper)) {
-          Telemetry::ScalarAdd(Telemetry::ScalarID::BROWSER_USAGE_GRAPHITE, 1);
-        } else {
+        if (!mGraphiteShaper.compareExchange(nullptr, shaper)) {
           delete shaper;
           shaper = mGraphiteShaper;
         }
@@ -3897,8 +3935,7 @@ bool gfxFont::InitFakeSmallCapsRun(
           AutoTArray<bool, 50> charsToMergeArray;
           AutoTArray<bool, 50> deletedCharsArray;
 
-          StyleTextTransform globalTransform{StyleTextTransformCase::Uppercase,
-                                             {}};
+          const auto globalTransform = StyleTextTransform::UPPERCASE;
           // No mask needed; we're doing case conversion, not password-hiding.
           const char16_t maskChar = 0;
           bool mergeNeeded = nsCaseTransformTextRunFactory::TransformString(
@@ -4706,7 +4743,7 @@ gfxFontStyle::gfxFontStyle()
     : size(DEFAULT_PIXEL_FONT_SIZE),
       sizeAdjust(0.0f),
       baselineOffset(0.0f),
-      languageOverride(NO_FONT_LANGUAGE_OVERRIDE),
+      languageOverride{0},
       weight(FontWeight::NORMAL),
       stretch(FontStretch::NORMAL),
       style(FontSlantStyle::NORMAL),
@@ -4715,21 +4752,29 @@ gfxFontStyle::gfxFontStyle()
       sizeAdjustBasis(uint8_t(FontSizeAdjust::Tag::None)),
       systemFont(true),
       printerFont(false),
+#ifdef XP_WIN
+      allowForceGDIClassic(true),
+#endif
       useGrayscaleAntialiasing(false),
       allowSyntheticWeight(true),
       allowSyntheticStyle(true),
       allowSyntheticSmallCaps(true),
       useSyntheticPosition(true),
-      noFallbackVariantFeatures(true) {}
+      noFallbackVariantFeatures(true) {
+}
 
 gfxFontStyle::gfxFontStyle(FontSlantStyle aStyle, FontWeight aWeight,
                            FontStretch aStretch, gfxFloat aSize,
                            const FontSizeAdjust& aSizeAdjust, bool aSystemFont,
-                           bool aPrinterFont, bool aAllowWeightSynthesis,
+                           bool aPrinterFont,
+#ifdef XP_WIN
+                           bool aAllowForceGDIClassic,
+#endif
+                           bool aAllowWeightSynthesis,
                            bool aAllowStyleSynthesis,
                            bool aAllowSmallCapsSynthesis,
                            bool aUsePositionSynthesis,
-                           uint32_t aLanguageOverride)
+                           StyleFontLanguageOverride aLanguageOverride)
     : size(aSize),
       baselineOffset(0.0f),
       languageOverride(aLanguageOverride),
@@ -4740,6 +4785,9 @@ gfxFontStyle::gfxFontStyle(FontSlantStyle aStyle, FontWeight aWeight,
       variantSubSuper(NS_FONT_VARIANT_POSITION_NORMAL),
       systemFont(aSystemFont),
       printerFont(aPrinterFont),
+#ifdef XP_WIN
+      allowForceGDIClassic(aAllowForceGDIClassic),
+#endif
       useGrayscaleAntialiasing(false),
       allowSyntheticWeight(aAllowWeightSynthesis),
       allowSyntheticStyle(aAllowStyleSynthesis),

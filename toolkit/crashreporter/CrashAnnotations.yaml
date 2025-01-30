@@ -476,6 +476,12 @@ IPCFatalErrorProtocol:
     Name of the protocol used by IPC when a fatal error occurred.
   type: string
 
+IPCMessageLargeBufferShmemFailureSize:
+  description: >
+    Size of failed shmem allocations which led to data being sent inline in the
+    IPC message that caused a crash because it was too large.
+  type: u32
+
 IPCMessageName:
   description: >
     Name of the IPC message that caused a crash because it was too large.
@@ -653,6 +659,13 @@ MainThreadRunnableName:
   type: string
   ping: true
 
+ModuleSignatureInfo:
+  description: >
+    A string holding a JSON object describing which entity signed the modules
+    present in the system. The format of this object is:
+    { "Vendor1": [ "Module1", "Module2", ...], "Vendor2": [ "Module3", ... ] }
+  type: string
+
 MozCrashReason:
   description: >
     Plaintext description of why Firefox crashed, this is usually set by
@@ -707,6 +720,11 @@ ProductID:
   type: string
   ping: true
 
+ProfileDirectory:
+  description: >
+    The directory of the active profile, if any.
+  type: string
+
 ProfilerChildShutdownPhase:
   description: >
     When a child process shuts down, this describes if the profiler is running,
@@ -753,6 +771,12 @@ QuotaManagerShutdownTimeout:
   type: string
   ping: true
 
+QuotaManagerStorageIsNetworkResource:
+  description: >
+    On Windows, this indicates if QM's base dir lives on a network resource.
+    It is the direct result of the Win32 API function PathIsNetworkPath.
+  type: boolean
+
 RDDProcessStatus:
   description: >
     Status of the RDD process, can be set to "Running" or "Destroyed"
@@ -797,7 +821,7 @@ ShutdownProgress:
 ShutdownReason:
   description: >
     One out of "Unknown", "AppClose", "AppRestart", "OSForceClose",
-    "OSSessionEnd", "OSShutdown" or "WinUnexpectedMozQuit".
+    "OSSessionEnd" or "OSShutdown".
   type: string
   ping: true
 
@@ -847,6 +871,11 @@ SystemMemoryUsePercentage:
 TelemetryClientId:
   description: >
     Telemetry client ID.
+  type: string
+
+TelemetryProfileGroupId:
+  description: >
+    Telemetry profile group ID.
   type: string
 
 TelemetryEnvironment:
@@ -976,6 +1005,7 @@ Version:
   description: >
     Product version.
   type: string
+  ping: true
 
 VRProcessStatus:
   description: >

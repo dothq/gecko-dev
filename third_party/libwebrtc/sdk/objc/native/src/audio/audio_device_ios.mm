@@ -13,6 +13,7 @@
 
 #include "audio_device_ios.h"
 
+#include <mach/mach_time.h>
 #include <cmath>
 
 #include "api/array_view.h"
@@ -90,8 +91,11 @@ static void LogDeviceInfo() {
 }
 #endif  // !defined(NDEBUG)
 
-AudioDeviceIOS::AudioDeviceIOS(bool bypass_voice_processing)
+AudioDeviceIOS::AudioDeviceIOS(
+    bool bypass_voice_processing,
+    AudioDeviceModule::MutedSpeechEventHandler muted_speech_event_handler)
     : bypass_voice_processing_(bypass_voice_processing),
+      muted_speech_event_handler_(muted_speech_event_handler),
       audio_device_buffer_(nullptr),
       audio_unit_(nullptr),
       recording_(0),
@@ -110,6 +114,9 @@ AudioDeviceIOS::AudioDeviceIOS(bool bypass_voice_processing)
   thread_ = rtc::Thread::Current();
 
   audio_session_observer_ = [[RTCNativeAudioSessionDelegateAdapter alloc] initWithObserver:this];
+  mach_timebase_info_data_t tinfo;
+  mach_timebase_info(&tinfo);
+  machTickUnitsToNanoseconds_ = (double)tinfo.numer / tinfo.denom;
 }
 
 AudioDeviceIOS::~AudioDeviceIOS() {
@@ -376,6 +383,11 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(AudioUnitRenderActionFlags* flags
   record_audio_buffer_.Clear();
   record_audio_buffer_.SetSize(num_frames);
 
+  // Get audio timestamp for the audio.
+  // The timestamp will not have NTP time epoch, but that will be addressed by
+  // the TimeStampAligner in AudioDeviceBuffer::SetRecordedBuffer().
+  SInt64 capture_timestamp_ns = time_stamp->mHostTime * machTickUnitsToNanoseconds_;
+
   // Allocate AudioBuffers to be used as storage for the received audio.
   // The AudioBufferList structure works as a placeholder for the
   // AudioBuffer structure, which holds a pointer to the actual data buffer
@@ -404,7 +416,8 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(AudioUnitRenderActionFlags* flags
   // Get a pointer to the recorded audio and send it to the WebRTC ADB.
   // Use the FineAudioBuffer instance to convert between native buffer size
   // and the 10ms buffer size used by WebRTC.
-  fine_audio_buffer_->DeliverRecordedData(record_audio_buffer_, kFixedRecordDelayEstimate);
+  fine_audio_buffer_->DeliverRecordedData(
+      record_audio_buffer_, kFixedRecordDelayEstimate, capture_timestamp_ns);
   return noErr;
 }
 
@@ -465,6 +478,17 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
       rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames),
       kFixedPlayoutDelayEstimate);
   return noErr;
+}
+
+void AudioDeviceIOS::OnReceivedMutedSpeechActivity(AUVoiceIOSpeechActivityEvent event) {
+  RTCLog(@"Received muted speech activity %d.", event);
+  if (muted_speech_event_handler_ != 0) {
+    if (event == kAUVoiceIOSpeechActivityHasStarted) {
+      muted_speech_event_handler_(AudioDeviceModule::kMutedSpeechStarted);
+    } else if (event == kAUVoiceIOSpeechActivityHasEnded) {
+      muted_speech_event_handler_(AudioDeviceModule::kMutedSpeechEnded);
+    }
+  }
 }
 
 void AudioDeviceIOS::HandleInterruptionBegin() {
@@ -703,8 +727,9 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
 
 bool AudioDeviceIOS::CreateAudioUnit() {
   RTC_DCHECK(!audio_unit_);
-
-  audio_unit_.reset(new VoiceProcessingAudioUnit(bypass_voice_processing_, this));
+  BOOL detect_mute_speech_ = (muted_speech_event_handler_ != 0);
+  audio_unit_.reset(
+      new VoiceProcessingAudioUnit(bypass_voice_processing_, detect_mute_speech_, this));
   if (!audio_unit_->Init()) {
     audio_unit_.reset();
     return false;
@@ -1020,13 +1045,20 @@ bool AudioDeviceIOS::MicrophoneIsInitialized() const {
 }
 
 int32_t AudioDeviceIOS::MicrophoneMuteIsAvailable(bool& available) {
-  available = false;
+  available = true;
   return 0;
 }
 
 int32_t AudioDeviceIOS::SetMicrophoneMute(bool enable) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
-  return -1;
+  // Set microphone mute only if the audio unit is started.
+  if (audio_unit_ && audio_unit_->GetState() == VoiceProcessingAudioUnit::kStarted) {
+    BOOL result = audio_unit_->SetMicrophoneMute(enable);
+    if (!result) {
+      RTCLogError(@"Set microphone %s failed.", enable ? "mute" : "unmute");
+      return -1;
+    }
+  }
+  return 0;
 }
 
 int32_t AudioDeviceIOS::MicrophoneMute(bool& enabled) const {

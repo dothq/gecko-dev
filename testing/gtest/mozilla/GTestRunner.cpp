@@ -138,8 +138,8 @@ int RunGTestFunc(int* argc, char** argv) {
       char* path = PR_GetEnv("MOZ_GTEST_MINIDUMPS_PATH");
       nsCOMPtr<nsIFile> file;
       if (path) {
-        nsresult rv = NS_NewLocalFile(NS_ConvertUTF8toUTF16(path), true,
-                                      getter_AddRefs(file));
+        nsresult rv =
+            NS_NewUTF8LocalFile(nsDependentCString(path), getter_AddRefs(file));
         if (NS_FAILED(rv)) {
           printf_stderr("Ignoring invalid MOZ_GTEST_MINIDUMPS_PATH\n");
         }
@@ -161,8 +161,13 @@ int RunGTestFunc(int* argc, char** argv) {
   // However, at init, Glean may decide to send a ping. So let's first tell FOG
   // that these pings shouldn't actually be uploaded.
   Preferences::SetInt("telemetry.fog.test.localhost_port", -1);
+  // Though the default user-activity limits ought to be longer than a test,
+  // ensure that they don't trigger unnecessary ping submission (which clears
+  // storage, making it hard to test instrumentation).
+  Preferences::SetInt("telemetry.fog.test.activity_limit", -1);
+  Preferences::SetInt("telemetry.fog.test.inactivity_limit", -1);
   const nsCString empty;
-  RefPtr<FOG>(FOG::GetSingleton())->InitializeFOG(empty, empty);
+  RefPtr<FOG>(FOG::GetSingleton())->InitializeFOG(empty, empty, false);
 
   return RUN_ALL_TESTS();
 }
@@ -171,7 +176,7 @@ int RunGTestFunc(int* argc, char** argv) {
 // RunGTest is initialized to nullptr but if GTest (this file)
 // is linked in then RunGTest will be set here indicating
 // GTest is supported.
-class _InitRunGTest {
+MOZ_RUNINIT class _InitRunGTest {
  public:
   _InitRunGTest() { RunGTest = RunGTestFunc; }
 } InitRunGTest;

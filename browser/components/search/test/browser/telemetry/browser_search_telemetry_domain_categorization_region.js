@@ -60,7 +60,6 @@ const TEST_PROVIDER_INFO = [
 ];
 
 const originalHomeRegion = Region.home;
-const originalCurrentRegion = Region.current;
 
 add_setup(async function () {
   SearchSERPTelemetry.overrideSearchTelemetryForTests(TEST_PROVIDER_INFO);
@@ -77,9 +76,22 @@ add_setup(async function () {
   Region._setHomeRegion("DE", false);
   Assert.equal(Region.home, "DE", "Region");
 
+  // Have some breathing room for child process to update. Useful for TV test.
+  await TestUtils.waitForTick();
+
   registerCleanupFunction(async () => {
+    // Manually unload the pref so that we can check if we should wait for the
+    // the categories map to be un-initialized.
+    await SpecialPowers.popPrefEnv();
+    if (
+      !Services.prefs.getBoolPref(
+        "browser.search.serpEventTelemetryCategorization.enabled"
+      )
+    ) {
+      await waitForDomainToCategoriesUninit();
+    }
+
     Region._setHomeRegion(originalHomeRegion);
-    Region._setCurrentRegion(originalCurrentRegion);
 
     SearchSERPTelemetry.overrideSearchTelemetryForTests();
     resetTelemetry();
@@ -113,7 +125,10 @@ add_task(async function test_categorize_page_with_different_region() {
       partner_code: "ff",
       provider: "example",
       tagged: "true",
+      is_shopping_page: "false",
       num_ads_clicked: "0",
+      num_ads_hidden: "0",
+      num_ads_loaded: "2",
       num_ads_visible: "2",
     },
   ]);

@@ -52,9 +52,43 @@ function countDifferencesInArrayBuffers(buffer1, buffer2) {
   return differences;
 }
 
+function isDataRandomizedFuzzy(name, data1, data2, isCompareOriginal) {
+  let diffCnt = countDifferencesInUint8Arrays(data1, data2);
+  info(`For ${name} there are ${diffCnt} bits are different.`);
+
+  // The Canvas randomization adds at most 512 bits noise to the image data.
+  // We compare the image data arrays to see if they are different and the
+  // difference is within the range.
+
+  // If we are compare two randomized arrays, the difference can be doubled.
+  let expected = isCompareOriginal
+    ? NUM_RANDOMIZED_CANVAS_BITS
+    : NUM_RANDOMIZED_CANVAS_BITS * 2;
+
+  // The number of difference bits should never bigger than the expected
+  // number. It could be zero if the randomization is disabled.
+  Assert.lessOrEqual(
+    diffCnt,
+    expected,
+    "The number of noise bits is expected."
+  );
+
+  return diffCnt <= expected && diffCnt > 0;
+}
+
+function isDataRandomizedNotEqual(name, data1, data2) {
+  return data1 !== data2;
+}
+
+function isDataRandomizedGreaterThanZero(name, data1, data2) {
+  let diffCnt = countDifferencesInArrayBuffers(data1, data2);
+  info(`For ${name} there are ${diffCnt} bits are different.`);
+  return diffCnt > 0;
+}
+
 function promiseObserver(topic) {
   return new Promise(resolve => {
-    let obs = (aSubject, aTopic, aData) => {
+    let obs = (aSubject, aTopic) => {
       Services.obs.removeObserver(obs, aTopic);
       resolve(aSubject);
     };
@@ -84,6 +118,40 @@ function runFunctionInWorker(browser, fn) {
 
       worker.postMessage({
         callback,
+      });
+    });
+  });
+}
+
+/**
+ *
+ * Spawns a service worker in the given browser and sends a callback function to it.
+ * The result of the callback function is returned as a Promise.
+ *
+ * @param {object} browser - The browser context to spawn the service worker in.
+ * @param {Function} fn - The callback function to send to the service worker.
+ * @returns {Promise} A Promise that resolves to the result of the callback function.
+ */
+function runFunctionInServiceWorker(browser, fn) {
+  return SpecialPowers.spawn(browser, [fn.toString()], async callback => {
+    // Create a service worker.
+    const sw = await content.navigator.serviceWorker.register(
+      "serviceWorkerTester.js",
+      {
+        scope: content.location.pathname,
+      }
+    );
+
+    return new content.Promise(resolve => {
+      content.navigator.serviceWorker.addEventListener("message", async e => {
+        await sw.unregister();
+        resolve(e.data.result);
+      });
+
+      content.navigator.serviceWorker.ready.then(registration => {
+        registration.active.postMessage({
+          callback,
+        });
       });
     });
   });

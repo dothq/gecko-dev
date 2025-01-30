@@ -1,3 +1,4 @@
+// |reftest| shell-option(--enable-float16array)
 // Copyright (C) 2015 André Bargull. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
@@ -16,8 +17,10 @@ features: [TypedArray]
 
 assert.sameValue(TypedArray.prototype.constructor, TypedArray);
 
-verifyNotEnumerable(TypedArray.prototype, "constructor");
-verifyWritable(TypedArray.prototype, "constructor");
-verifyConfigurable(TypedArray.prototype, "constructor");
+verifyProperty(TypedArray.prototype, "constructor", {
+  writable: true,
+  enumerable: false,
+  configurable: true,
+});
 
 reportCompare(0, 0);

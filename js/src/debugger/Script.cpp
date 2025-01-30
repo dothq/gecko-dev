@@ -50,6 +50,7 @@
 #include "wasm/WasmJS.h"              // for WasmInstanceObject
 #include "wasm/WasmTypeDecls.h"       // for Bytes
 
+#include "gc/Marking-inl.h"       // for MaybeForwardedObjectIs
 #include "vm/BytecodeUtil-inl.h"  // for BytecodeRangeWithPosition
 #include "vm/JSAtomUtils-inl.h"   // for PrimitiveValueToId
 #include "vm/JSObject-inl.h"  // for NewBuiltinClassInstance, NewObjectWithGivenProto, NewTenuredObjectWithGivenProto
@@ -76,7 +77,10 @@ const JSClassOps DebuggerScript::classOps_ = {
 };
 
 const JSClass DebuggerScript::class_ = {
-    "Script", JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS), &classOps_};
+    "Script",
+    JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS),
+    &classOps_,
+};
 
 void DebuggerScript::trace(JSTracer* trc) {
   // This comes from a private pointer, so no barrier needed.
@@ -94,7 +98,7 @@ void DebuggerScript::trace(JSTracer* trc) {
       TraceManuallyBarrieredCrossCompartmentEdge(
           trc, this, &wasm, "Debugger.Script wasm referent");
       if (wasm != cell->as<JSObject>()) {
-        MOZ_ASSERT(wasm->is<WasmInstanceObject>());
+        MOZ_ASSERT(gc::MaybeForwardedObjectIs<WasmInstanceObject>(wasm));
         setReservedSlotGCThingAsPrivateUnbarriered(SCRIPT_SLOT, wasm);
       }
     }
@@ -1477,6 +1481,9 @@ static bool BytecodeIsEffectful(JSScript* script, size_t offset) {
     case JSOp::Yield:
     case JSOp::Await:
     case JSOp::CanSkipAwait:
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    case JSOp::AddDisposable:
+#endif
       return true;
 
     case JSOp::Nop:
@@ -1496,6 +1503,10 @@ static bool BytecodeIsEffectful(JSScript* script, size_t offset) {
     case JSOp::Try:
     case JSOp::Throw:
     case JSOp::ThrowWithStack:
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    case JSOp::TakeDisposeCapability:
+    case JSOp::CreateSuppressedError:
+#endif
     case JSOp::Goto:
     case JSOp::TableSwitch:
     case JSOp::Case:
@@ -1591,8 +1602,9 @@ static bool BytecodeIsEffectful(JSScript* script, size_t offset) {
     case JSOp::GetName:
     case JSOp::GetIntrinsic:
     case JSOp::GetImport:
-    case JSOp::BindGName:
     case JSOp::BindName:
+    case JSOp::BindUnqualifiedName:
+    case JSOp::BindUnqualifiedGName:
     case JSOp::BindVar:
     case JSOp::Dup:
     case JSOp::Dup2:
@@ -1620,6 +1632,7 @@ static bool BytecodeIsEffectful(JSScript* script, size_t offset) {
     case JSOp::Object:
     case JSOp::Typeof:
     case JSOp::TypeofExpr:
+    case JSOp::TypeofEq:
     case JSOp::ToAsyncIter:
     case JSOp::ToPropertyKey:
     case JSOp::Lambda:
@@ -2474,7 +2487,8 @@ const JSPropertySpec DebuggerScript::properties_[] = {
     JS_DEBUG_PSG("mainOffset", getMainOffset),
     JS_DEBUG_PSG("global", getGlobal),
     JS_DEBUG_PSG("format", getFormat),
-    JS_PS_END};
+    JS_PS_END,
+};
 
 const JSFunctionSpec DebuggerScript::methods_[] = {
     JS_DEBUG_FN("getChildScripts", getChildScripts, 0),
@@ -2496,4 +2510,6 @@ const JSFunctionSpec DebuggerScript::methods_[] = {
     JS_DEBUG_FN("getAllOffsets", getAllOffsets, 0),
     JS_DEBUG_FN("getAllColumnOffsets", getAllColumnOffsets, 0),
     JS_DEBUG_FN("getLineOffsets", getLineOffsets, 1),
-    JS_DEBUG_FN("getOffsetLocation", getOffsetLocation, 0), JS_FS_END};
+    JS_DEBUG_FN("getOffsetLocation", getOffsetLocation, 0),
+    JS_FS_END,
+};

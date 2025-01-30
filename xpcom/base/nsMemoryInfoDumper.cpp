@@ -323,7 +323,7 @@ nsMemoryInfoDumper::DumpGCAndCCLogsToFile(
     for (uint32_t i = 0; i < children.Length(); i++) {
       ContentParent* cp = children[i];
       nsCOMPtr<nsICycleCollectorLogSink> logSink =
-          nsCycleCollector_createLogSink();
+          nsCycleCollector_createLogSink(/* aLogGC = */ true);
 
       logSink->SetFilenameIdentifier(identifier);
       logSink->SetProcessIdentifier(cp->Pid());
@@ -615,12 +615,7 @@ nsMemoryInfoDumper::DumpMemoryReportsToNamedFile(
   // Create the file.
 
   nsCOMPtr<nsIFile> reportsFile;
-  nsresult rv = NS_NewLocalFile(aFilename, false, getter_AddRefs(reportsFile));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  reportsFile->InitWithPath(aFilename);
+  nsresult rv = NS_NewLocalFile(aFilename, getter_AddRefs(reportsFile));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -690,7 +685,7 @@ nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
 }
 
 #ifdef MOZ_DMD
-dmd::DMDFuncs::Singleton dmd::DMDFuncs::sSingleton;
+MOZ_RUNINIT dmd::DMDFuncs::Singleton dmd::DMDFuncs::sSingleton;
 
 nsresult nsMemoryInfoDumper::OpenDMDFile(const nsAString& aIdentifier, int aPid,
                                          FILE** aOutFile) {

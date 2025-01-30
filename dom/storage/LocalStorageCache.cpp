@@ -37,8 +37,11 @@ inline uint32_t GetDataSetIndex(bool aPrivateBrowsing,
 }
 
 inline uint32_t GetDataSetIndex(const LocalStorage* aStorage) {
+  // A session only mode doesn't exist anymore, so having a separate data set
+  // for it here is basically useless. This code is only kept until we remove
+  // the old / legacy LocalStorage implementation.
   return GetDataSetIndex(aStorage->IsPrivateBrowsing(),
-                         aStorage->IsSessionScopedOrLess());
+                         aStorage->IsPrivateBrowsingOrLess());
 }
 
 }  // namespace
@@ -167,8 +170,8 @@ void LocalStorageCache::NotifyObservers(const LocalStorage* aStorage,
 }
 
 inline bool LocalStorageCache::Persist(const LocalStorage* aStorage) const {
-  return mPersistent &&
-         (aStorage->IsPrivateBrowsing() || !aStorage->IsSessionScopedOrLess());
+  return mPersistent && (aStorage->IsPrivateBrowsing() ||
+                         !aStorage->IsPrivateBrowsingOrLess());
 }
 
 const nsCString LocalStorageCache::Origin() const {
@@ -224,7 +227,7 @@ void LocalStorageCache::Preload() {
   storageChild->AsyncPreload(this);
 }
 
-void LocalStorageCache::WaitForPreload(Telemetry::HistogramID aTelemetryID) {
+void LocalStorageCache::WaitForPreload() {
   if (!mPersistent) {
     return;
   }
@@ -242,9 +245,6 @@ void LocalStorageCache::WaitForPreload(Telemetry::HistogramID aTelemetryID) {
     return;
   }
 
-  // Measure which operation blocks and for how long
-  Telemetry::RuntimeAutoTimer timer(aTelemetryID);
-
   // If preload already started (i.e. we got some first data, but not all)
   // SyncPreload will just wait for it to finish rather then synchronously
   // read from the database.  It seems to me more optimal.
@@ -260,7 +260,7 @@ void LocalStorageCache::WaitForPreload(Telemetry::HistogramID aTelemetryID) {
 nsresult LocalStorageCache::GetLength(const LocalStorage* aStorage,
                                       uint32_t* aRetval) {
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_GETLENGTH_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       return mLoadResult;
     }
@@ -277,7 +277,7 @@ nsresult LocalStorageCache::GetKey(const LocalStorage* aStorage,
   // maybe we need to have a lazily populated key array here or
   // something?
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_GETKEY_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       return mLoadResult;
     }
@@ -298,7 +298,7 @@ nsresult LocalStorageCache::GetKey(const LocalStorage* aStorage,
 void LocalStorageCache::GetKeys(const LocalStorage* aStorage,
                                 nsTArray<nsString>& aKeys) {
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_GETALLKEYS_BLOCKING_MS);
+    WaitForPreload();
   }
 
   if (NS_FAILED(mLoadResult)) {
@@ -311,7 +311,7 @@ void LocalStorageCache::GetKeys(const LocalStorage* aStorage,
 nsresult LocalStorageCache::GetItem(const LocalStorage* aStorage,
                                     const nsAString& aKey, nsAString& aRetval) {
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_GETVALUE_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       return mLoadResult;
     }
@@ -336,7 +336,7 @@ nsresult LocalStorageCache::SetItem(const LocalStorage* aStorage,
   int64_t delta = 0;
 
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_SETVALUE_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       return mLoadResult;
     }
@@ -394,7 +394,7 @@ nsresult LocalStorageCache::RemoveItem(const LocalStorage* aStorage,
                                        const nsAString& aKey, nsString& aOld,
                                        const MutationSource aSource) {
   if (Persist(aStorage)) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_REMOVEKEY_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       return mLoadResult;
     }
@@ -444,7 +444,7 @@ nsresult LocalStorageCache::Clear(const LocalStorage* aStorage,
     // XXX as in case of unload, this is not technically needed now, but
     // after super-scope quota introduction we have to do this.  Get telemetry
     // right now.
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_CLEAR_BLOCKING_MS);
+    WaitForPreload();
     if (NS_FAILED(mLoadResult)) {
       // When we failed to load data from the database, force delete of the
       // scope data and make use of the storage possible again.
@@ -498,7 +498,7 @@ void LocalStorageCache::UnloadItems(uint32_t aUnloadFlags) {
     // per-origin isolated quota handling, but when we introduce super-
     // -scope quotas, we have to do this.  Better to start getting
     // telemetry right now.
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_UNLOAD_BLOCKING_MS);
+    WaitForPreload();
 
     mData[kDefaultSet].mKeys.Clear();
     ProcessUsageDelta(kDefaultSet, -mData[kDefaultSet].mOriginQuotaUsage);
@@ -511,7 +511,7 @@ void LocalStorageCache::UnloadItems(uint32_t aUnloadFlags) {
 
 #ifdef DOM_STORAGE_TESTS
   if (aUnloadFlags & kTestReload) {
-    WaitForPreload(Telemetry::LOCALDOMSTORAGE_UNLOAD_BLOCKING_MS);
+    WaitForPreload();
 
     mData[kDefaultSet].mKeys.Clear();
     mLoaded = false;  // This is only used in testing code

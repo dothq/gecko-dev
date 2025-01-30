@@ -101,7 +101,7 @@ WorkerLoadInfoData::WorkerLoadInfoData()
       mUsingStorageAccess(false),
       mServiceWorkersTestingInWindow(false),
       mShouldResistFingerprinting(false),
-      mIsThirdPartyContextToTopWindow(true),
+      mIsThirdPartyContext(true),
       mSecureContext(eNotSet) {}
 
 nsresult WorkerLoadInfo::SetPrincipalsAndCSPOnMainThread(
@@ -330,20 +330,6 @@ bool WorkerLoadInfo::PrincipalURIMatchesScriptURL() {
   }
 
   if (mPrincipal->IsSameOrigin(mBaseURI)) {
-    return true;
-  }
-
-  // If strict file origin policy is in effect, local files will always fail
-  // IsSameOrigin unless they are identical. Explicitly check file origin
-  // policy, in that case.
-
-  bool allowsRelaxedOriginPolicy = false;
-  rv = mPrincipal->AllowsRelaxStrictFileOriginPolicy(
-      mBaseURI, &allowsRelaxedOriginPolicy);
-
-  if (nsScriptSecurityManager::GetStrictFileOriginPolicy() &&
-      NS_URIIsLocalFile(mBaseURI) &&
-      (NS_SUCCEEDED(rv) && allowsRelaxedOriginPolicy)) {
     return true;
   }
 

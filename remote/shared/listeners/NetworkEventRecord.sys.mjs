@@ -4,11 +4,16 @@
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
+  NetworkRequest: "chrome://remote/content/shared/NetworkRequest.sys.mjs",
+  NetworkResponse: "chrome://remote/content/shared/NetworkResponse.sys.mjs",
   NetworkUtils:
     "resource://devtools/shared/network-observer/NetworkUtils.sys.mjs",
 
-  TabManager: "chrome://remote/content/shared/TabManager.sys.mjs",
+  Log: "chrome://remote/content/shared/Log.sys.mjs",
+  truncate: "chrome://remote/content/shared/Format.sys.mjs",
 });
+
+ChromeUtils.defineLazyGetter(lazy, "logger", () => lazy.Log.get());
 
 /**
  * The NetworkEventRecord implements the interface expected from network event
@@ -18,16 +23,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
  * NetworkListener instance which created it.
  */
 export class NetworkEventRecord {
-  #contextId;
+  #decodedBodySizeMap;
   #fromCache;
-  #isMainDocumentChannel;
+  #networkEventsMap;
   #networkListener;
-  #redirectCount;
-  #requestChannel;
-  #requestData;
-  #requestId;
-  #responseChannel;
-  #responseData;
+  #request;
+  #response;
+  #responseStartOverride;
   #wrappedChannel;
 
   /**
@@ -39,55 +41,57 @@ export class NetworkEventRecord {
    *     The nsIChannel behind this network event.
    * @param {NetworkListener} networkListener
    *     The NetworkListener which created this NetworkEventRecord.
+   * @param {NetworkDecodedBodySizeMap} decodedBodySizeMap
+   *     Map from channelId to decoded body sizes. This information is read
+   *     from all processes and aggregated in the parent process.
+   * @param {NavigationManager} navigationManager
+   *     The NavigationManager which belongs to the same session as this
+   *     NetworkEventRecord.
+   * @param {Map<string, NetworkEventRecord>} networkEventsMap
+   *     The map between request id and NetworkEventRecord instance to complete
+   *     the previous event in case of redirect.
    */
-  constructor(networkEvent, channel, networkListener) {
-    this.#requestChannel = channel;
-    this.#responseChannel = null;
+  constructor(
+    networkEvent,
+    channel,
+    networkListener,
+    decodedBodySizeMap,
+    navigationManager,
+    networkEventsMap
+  ) {
+    this.#request = new lazy.NetworkRequest(channel, {
+      eventRecord: this,
+      navigationManager,
+      rawHeaders: networkEvent.rawHeaders,
+    });
+    this.#response = null;
+
+    if (channel instanceof Ci.nsIChannel) {
+      this.#wrappedChannel = ChannelWrapper.get(channel);
+      this.#wrappedChannel.addEventListener("error", this.#onChannelCompleted);
+      this.#wrappedChannel.addEventListener("stop", this.#onChannelCompleted);
+    }
 
     this.#fromCache = networkEvent.fromCache;
-    this.#isMainDocumentChannel = channel.isMainDocumentChannel;
 
-    this.#wrappedChannel = ChannelWrapper.get(channel);
-
+    this.#decodedBodySizeMap = decodedBodySizeMap;
     this.#networkListener = networkListener;
+    this.#networkEventsMap = networkEventsMap;
 
-    // The context ids computed by TabManager have the lifecycle of a navigable
-    // and can be reused for all the events emitted from this record.
-    this.#contextId = this.#getContextId();
+    if (this.#networkEventsMap.has(this.#requestId)) {
+      const previousEvent = this.#networkEventsMap.get(this.#requestId);
+      if (this.redirectCount != previousEvent.redirectCount) {
+        // If redirect count is set, this is a redirect from the previous request.
+        // notifyRedirect will complete the previous request.
+        previousEvent.notifyRedirect();
+      } else {
+        // Otherwise if there is no redirect count or if it is identical to the
+        // previously detected request, this is an authentication attempt.
+        previousEvent.notifyAuthenticationAttempt();
+      }
+    }
 
-    // The wrappedChannel id remains identical across redirects, whereas
-    // nsIChannel.channelId is different for each and every request.
-    this.#requestId = this.#wrappedChannel.id.toString();
-
-    const { cookies, headers } =
-      lazy.NetworkUtils.fetchRequestHeadersAndCookies(channel);
-
-    // See the RequestData type definition for the full list of properties that
-    // should be set on this object.
-    this.#requestData = {
-      bodySize: null,
-      cookies,
-      headers,
-      headersSize: networkEvent.rawHeaders ? networkEvent.rawHeaders.length : 0,
-      method: channel.requestMethod,
-      request: this.#requestId,
-      timings: {},
-      url: channel.URI.spec,
-    };
-
-    // See the ResponseData type definition for the full list of properties that
-    // should be set on this object.
-    this.#responseData = {
-      // encoded size (body)
-      bodySize: null,
-      content: {
-        // decoded size
-        size: null,
-      },
-      // encoded size (headers)
-      headersSize: null,
-      url: channel.URI.spec,
-    };
+    this.#networkEventsMap.set(this.#requestId, this);
 
     // NetworkObserver creates a network event when request headers have been
     // parsed.
@@ -104,51 +108,66 @@ export class NetworkEventRecord {
     }
   }
 
+  get #requestId() {
+    return this.#request.requestId;
+  }
+
+  get redirectCount() {
+    return this.#request.redirectCount;
+  }
+
+  /**
+   * Add network request cache details.
+   *
+   * Required API for a NetworkObserver event owner.
+   *
+   * @param {object} options
+   * @param {boolean} options.fromCache
+   */
+  addCacheDetails(options) {
+    const { fromCache } = options;
+    this.#fromCache = fromCache;
+  }
+
+  /**
+   * Add network request raw headers.
+   *
+   * Required API for a NetworkObserver event owner.
+   *
+   * @param {object} options
+   * @param {string} options.rawHeaders
+   */
+  addRawHeaders(options) {
+    const { rawHeaders } = options;
+    this.#request.addRawHeaders(rawHeaders);
+  }
+
   /**
    * Add network request POST data.
    *
    * Required API for a NetworkObserver event owner.
-   *
-   * @param {object} postData
-   *     The request POST data.
    */
-  addRequestPostData(postData) {
-    // Only the postData size is needed for RemoteAgent consumers.
-    this.#requestData.bodySize = postData.size;
-  }
+  addRequestPostData() {}
 
   /**
    * Add the initial network response information.
    *
    * Required API for a NetworkObserver event owner.
    *
-   *
    * @param {object} options
    * @param {nsIChannel} options.channel
    *     The channel.
    * @param {boolean} options.fromCache
+   * @param {boolean} options.fromServiceWorker
    * @param {string} options.rawHeaders
    */
   addResponseStart(options) {
-    const { channel, fromCache, rawHeaders = "" } = options;
-    this.#responseChannel = channel;
-
-    const { headers } =
-      lazy.NetworkUtils.fetchResponseHeadersAndCookies(channel);
-
-    const headersSize = rawHeaders.length;
-    this.#responseData = {
-      ...this.#responseData,
-      bodySize: 0,
-      bytesReceived: headersSize,
+    const { channel, fromCache, fromServiceWorker, rawHeaders } = options;
+    this.#response = new lazy.NetworkResponse(channel, {
       fromCache: this.#fromCache || !!fromCache,
-      headers,
-      headersSize,
-      mimeType: this.#getMimeType(),
-      protocol: lazy.NetworkUtils.getProtocol(channel),
-      status: channel.responseStatus,
-      statusText: channel.responseStatusText,
-    };
+      fromServiceWorker,
+      rawHeaders,
+    });
 
     // This should be triggered when all headers have been received, matching
     // the WebDriverBiDi response started trigger in `4.6. HTTP-network fetch`
@@ -189,27 +208,28 @@ export class NetworkEventRecord {
    *
    * Required API for a NetworkObserver event owner.
    *
-   * @param {object} response
+   * @param {object} responseContent
    *     An object which represents the response content.
    * @param {object} responseInfo
    *     Additional meta data about the response.
    */
-  addResponseContent(response, responseInfo) {
-    // Update content-related sizes with the latest data from addResponseContent.
-    this.#responseData = {
-      ...this.#responseData,
-      bodySize: response.bodySize,
-      bytesReceived: response.transferredSize,
-      content: {
-        size: response.decodedBodySize,
-      },
-    };
-
-    if (responseInfo.blockedReason) {
-      this.#emitFetchError();
-    } else {
-      this.#emitResponseCompleted();
+  addResponseContent(responseContent, responseInfo) {
+    if (
+      // Ignore already completed requests.
+      this.#request.alreadyCompleted ||
+      // Ignore HTTP channels which are not service worker requests, they will
+      // be handled via "error" and "stop" events, see #onChannelCompleted.
+      (this.#request.isHttpChannel && !this.#response?.fromServiceWorker)
+    ) {
+      return;
     }
+
+    const sizes = {
+      decodedBodySize: responseContent.decodedBodySize,
+      encodedBodySize: responseContent.bodySize,
+      totalTransmittedSize: responseContent.transferredSize,
+    };
+    this.#handleRequestEnd(responseInfo.blockedReason, sizes);
   }
 
   /**
@@ -230,205 +250,140 @@ export class NetworkEventRecord {
    */
   addServiceWorkerTimings() {}
 
+  /**
+   * Complete response in case of an authentication attempt.
+   *
+   * This method is required to be called on the previous event.
+   */
+  notifyAuthenticationAttempt() {
+    // TODO: Bug 1899604, behavior might change based on spec issue
+    // https://github.com/w3c/webdriver-bidi/issues/722
+
+    // For now, in case of authentication attempts, we mark the current event as
+    // completed and skip its responseCompleted event.
+    // This way, only the last successful/failed authentication attempt will
+    // emit a response completed event.
+    this.#markRequestComplete();
+  }
+
+  /**
+   * Complete response in case of redirect.
+   *
+   * This method is required to be called on the previous event.
+   */
+  notifyRedirect() {
+    this.#emitResponseCompleted();
+    this.#markRequestComplete();
+  }
+
   onAuthPrompt(authDetails, authCallbacks) {
     this.#emitAuthRequired(authCallbacks);
   }
 
-  /**
-   * Convert the provided request timing to a timing relative to the beginning
-   * of the request. All timings are numbers representing high definition
-   * timestamps.
-   *
-   * @param {number} timing
-   *     High definition timestamp for a request timing relative from the time
-   *     origin.
-   * @param {number} requestTime
-   *     High definition timestamp for the request start time relative from the
-   *     time origin.
-   * @returns {number}
-   *     High definition timestamp for the request timing relative to the start
-   *     time of the request, or 0 if the provided timing was 0.
-   */
-  #convertTimestamp(timing, requestTime) {
-    if (timing == 0) {
-      return 0;
-    }
-
-    return timing - requestTime;
+  prepareResponseStart(options) {
+    this.#responseStartOverride = options;
   }
 
   #emitAuthRequired(authCallbacks) {
-    this.#updateDataFromTimedChannel();
-
     this.#networkListener.emit("auth-required", {
       authCallbacks,
-      contextId: this.#contextId,
-      isNavigationRequest: this.#isMainDocumentChannel,
-      redirectCount: this.#redirectCount,
-      requestChannel: this.#requestChannel,
-      requestData: this.#requestData,
-      responseChannel: this.#responseChannel,
-      responseData: this.#responseData,
-      timestamp: Date.now(),
+      request: this.#request,
+      response: this.#response,
     });
   }
 
   #emitBeforeRequestSent() {
-    this.#updateDataFromTimedChannel();
-
     this.#networkListener.emit("before-request-sent", {
-      contextId: this.#contextId,
-      isNavigationRequest: this.#isMainDocumentChannel,
-      redirectCount: this.#redirectCount,
-      requestChannel: this.#requestChannel,
-      requestData: this.#requestData,
-      timestamp: Date.now(),
+      request: this.#request,
     });
   }
 
   #emitFetchError() {
-    this.#updateDataFromTimedChannel();
-
     this.#networkListener.emit("fetch-error", {
-      contextId: this.#contextId,
-      // TODO: Update with a proper error text. Bug 1873037.
-      errorText: ChromeUtils.getXPCOMErrorName(this.#requestChannel.status),
-      isNavigationRequest: this.#isMainDocumentChannel,
-      redirectCount: this.#redirectCount,
-      requestChannel: this.#requestChannel,
-      requestData: this.#requestData,
-      timestamp: Date.now(),
+      request: this.#request,
     });
   }
 
   #emitResponseCompleted() {
-    this.#updateDataFromTimedChannel();
-
     this.#networkListener.emit("response-completed", {
-      contextId: this.#contextId,
-      isNavigationRequest: this.#isMainDocumentChannel,
-      redirectCount: this.#redirectCount,
-      requestChannel: this.#requestChannel,
-      requestData: this.#requestData,
-      responseChannel: this.#responseChannel,
-      responseData: this.#responseData,
-      timestamp: Date.now(),
+      request: this.#request,
+      response: this.#response,
     });
   }
 
   #emitResponseStarted() {
-    this.#updateDataFromTimedChannel();
-
     this.#networkListener.emit("response-started", {
-      contextId: this.#contextId,
-      isNavigationRequest: this.#isMainDocumentChannel,
-      redirectCount: this.#redirectCount,
-      requestChannel: this.#requestChannel,
-      requestData: this.#requestData,
-      responseChannel: this.#responseChannel,
-      responseData: this.#responseData,
-      timestamp: Date.now(),
+      request: this.#request,
+      response: this.#response,
     });
   }
 
-  #getBrowsingContext() {
-    const id = lazy.NetworkUtils.getChannelBrowsingContextID(
-      this.#requestChannel
-    );
-    return BrowsingContext.get(id);
-  }
-
-  /**
-   * Retrieve the navigable id for the current browsing context associated to
-   * the requests' channel. Network events are recorded in the parent process
-   * so we always expect to be able to use TabManager.getIdForBrowsingContext.
-   *
-   * @returns {string}
-   *     The navigable id corresponding to the given browsing context.
-   */
-  #getContextId() {
-    return lazy.TabManager.getIdForBrowsingContext(this.#getBrowsingContext());
-  }
-
-  #getMimeType() {
-    // TODO: DevTools NetworkObserver is computing a similar value in
-    // addResponseContent, but uses an inconsistent implementation in
-    // addResponseStart. This approach can only be used as early as in
-    // addResponseHeaders. We should move this logic to the NetworkObserver and
-    // expose mimeType in addResponseStart. Bug 1809670.
-    let mimeType = "";
-
-    try {
-      mimeType = this.#wrappedChannel.contentType;
-      const contentCharset = this.#requestChannel.contentCharset;
-      if (contentCharset) {
-        mimeType += `;charset=${contentCharset}`;
-      }
-    } catch (e) {
-      // Ignore exceptions when reading contentType/contentCharset
+  #handleRequestEnd(blockedReason, sizes) {
+    if (this.#responseStartOverride) {
+      this.addResponseStart(this.#responseStartOverride);
     }
 
-    return mimeType;
+    if (blockedReason) {
+      this.#emitFetchError();
+    } else {
+      // In the meantime, if the request was already completed, bail out here.
+      if (this.#request.alreadyCompleted) {
+        return;
+      }
+
+      if (!this.#response) {
+        lazy.logger.warn(
+          lazy.truncate`Missing response info, network.responseCompleted will be skipped for URL: ${this.#request.serializedURL}`
+        );
+      } else {
+        this.#response.setResponseSizes(sizes);
+        this.#emitResponseCompleted();
+      }
+    }
+
+    this.#markRequestComplete();
   }
 
-  #getTimingsFromTimedChannel(timedChannel) {
-    const {
-      channelCreationTime,
-      redirectStartTime,
-      redirectEndTime,
-      dispatchFetchEventStartTime,
-      cacheReadStartTime,
-      domainLookupStartTime,
-      domainLookupEndTime,
-      connectStartTime,
-      connectEndTime,
-      secureConnectionStartTime,
-      requestStartTime,
-      responseStartTime,
-      responseEndTime,
-    } = timedChannel;
+  #markRequestComplete() {
+    this.#request.alreadyCompleted = true;
+    this.#networkEventsMap.delete(this.#requestId);
+    this.#decodedBodySizeMap.delete(this.#request.channel.channelId);
 
-    // fetchStart should be the post-redirect start time, which should be the
-    // first non-zero timing from: dispatchFetchEventStart, cacheReadStart and
-    // domainLookupStart. See https://www.w3.org/TR/navigation-timing-2/#processing-model
-    const fetchStartTime =
-      dispatchFetchEventStartTime ||
-      cacheReadStartTime ||
-      domainLookupStartTime;
-
-    // Bug 1805478: Per spec, the origin time should match Performance API's
-    // timeOrigin for the global which initiated the request. This is not
-    // available in the parent process, so for now we will use 0.
-    const timeOrigin = 0;
-
-    return {
-      timeOrigin,
-      requestTime: this.#convertTimestamp(channelCreationTime, timeOrigin),
-      redirectStart: this.#convertTimestamp(redirectStartTime, timeOrigin),
-      redirectEnd: this.#convertTimestamp(redirectEndTime, timeOrigin),
-      fetchStart: this.#convertTimestamp(fetchStartTime, timeOrigin),
-      dnsStart: this.#convertTimestamp(domainLookupStartTime, timeOrigin),
-      dnsEnd: this.#convertTimestamp(domainLookupEndTime, timeOrigin),
-      connectStart: this.#convertTimestamp(connectStartTime, timeOrigin),
-      connectEnd: this.#convertTimestamp(connectEndTime, timeOrigin),
-      tlsStart: this.#convertTimestamp(secureConnectionStartTime, timeOrigin),
-      tlsEnd: this.#convertTimestamp(connectEndTime, timeOrigin),
-      requestStart: this.#convertTimestamp(requestStartTime, timeOrigin),
-      responseStart: this.#convertTimestamp(responseStartTime, timeOrigin),
-      responseEnd: this.#convertTimestamp(responseEndTime, timeOrigin),
-    };
+    if (this.#wrappedChannel) {
+      this.#wrappedChannel.removeEventListener(
+        "error",
+        this.#onChannelCompleted
+      );
+      this.#wrappedChannel.removeEventListener(
+        "stop",
+        this.#onChannelCompleted
+      );
+    }
   }
 
-  /**
-   * Update the timings and the redirect count from the nsITimedChannel
-   * corresponding to the current channel. This should be called before emitting
-   * any event from this class.
-   */
-  #updateDataFromTimedChannel() {
-    const timedChannel = this.#requestChannel.QueryInterface(
-      Ci.nsITimedChannel
+  #onChannelCompleted = async () => {
+    if (this.#request.alreadyCompleted) {
+      return;
+    }
+
+    const { blockedReason } = lazy.NetworkUtils.getBlockedReason(
+      this.#request.channel,
+      this.#response ? this.#response.fromCache : false
     );
-    this.#redirectCount = timedChannel.redirectCount;
-    this.#requestData.timings = this.#getTimingsFromTimedChannel(timedChannel);
-  }
+
+    // TODO: Figure out a good default value for the decoded body size for non
+    // http channels.
+    // Blocked channels will emit a fetchError event which does not contain
+    // sizes.
+    const sizes = {};
+    if (this.#request.isHttpChannel && !blockedReason) {
+      sizes.decodedBodySize = await this.#decodedBodySizeMap.getDecodedBodySize(
+        this.#request.channel.channelId
+      );
+      sizes.encodedBodySize = this.#request.channel.encodedBodySize;
+      sizes.totalTransmittedSize = this.#request.channel.transferSize;
+    }
+
+    this.#handleRequestEnd(blockedReason, sizes);
+  };
 }

@@ -1,12 +1,15 @@
 /* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
 
-const { XPCOMUtils } = ChromeUtils.importESModule(
-  "resource://gre/modules/XPCOMUtils.sys.mjs"
-);
-
 ChromeUtils.defineESModuleGetters(this, {
+  AddonTestUtils: "resource://testing-common/AddonTestUtils.sys.mjs",
+  clearTimeout: "resource://gre/modules/Timer.sys.mjs",
+  EnterprisePolicyTesting:
+    "resource://testing-common/EnterprisePolicyTesting.sys.mjs",
+  ExtensionTestUtils:
+    "resource://testing-common/ExtensionXPCShellUtils.sys.mjs",
   FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
+  HttpServer: "resource://testing-common/httpd.sys.mjs",
   Region: "resource://gre/modules/Region.sys.mjs",
   RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
   RemoteSettingsClient:
@@ -17,40 +20,30 @@ ChromeUtils.defineESModuleGetters(this, {
   SearchTestUtils: "resource://testing-common/SearchTestUtils.sys.mjs",
   SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
   TestUtils: "resource://testing-common/TestUtils.sys.mjs",
-  clearTimeout: "resource://gre/modules/Timer.sys.mjs",
+  updateAppInfo: "resource://testing-common/AppInfo.sys.mjs",
+  Utils: "resource://services-settings/Utils.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
   sinon: "resource://testing-common/Sinon.sys.mjs",
 });
 
-var { HttpServer } = ChromeUtils.importESModule(
-  "resource://testing-common/httpd.sys.mjs"
-);
-var { AddonTestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/AddonTestUtils.sys.mjs"
-);
-const { ExtensionTestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/ExtensionXPCShellUtils.sys.mjs"
-);
+// Expose Remote Settings utils with an explicit name.
+const RemoteSettingsUtils = Utils;
+
+// We need Services.appinfo.name set up to allow the hashes to work with a
+// consistent name.
+// Note: the name and versions here match those in ExtensionXPCShellUtils.sys.mjs.
+updateAppInfo({ name: "XPCShell", version: "48", platformVersion: "48" });
+
+// We generally also need a profile set-up, for saving search settings etc.
+do_get_profile();
 
 SearchTestUtils.init(this);
 
 const SETTINGS_FILENAME = "search.json.mozlz4";
 
-// nsSearchService.js uses Services.appinfo.name to build a salt for a hash.
-// eslint-disable-next-line mozilla/use-services
-var XULRuntime = Cc["@mozilla.org/xre/runtime;1"].getService(Ci.nsIXULRuntime);
-
 // Expand the amount of information available in error logs
 Services.prefs.setBoolPref("browser.search.log", true);
 Services.prefs.setBoolPref("browser.region.log", true);
-
-AddonTestUtils.init(this, false);
-AddonTestUtils.createAppInfo(
-  "xpcshell@tests.mozilla.org",
-  "XPCShell",
-  "42",
-  "42"
-);
 
 // Allow telemetry probes which may otherwise be disabled for some applications (e.g. Thunderbird)
 Services.prefs.setBoolPref(
@@ -233,24 +226,22 @@ function isSubObjectOf(expectedObj, actualObj, skipProp) {
 }
 
 /**
- * After useHttpServer() is called, this string contains the URL of the "data"
- * directory, including the final slash.
+ * After useHttpServer() is called, this string contains the URL test directory,
+ * excluding the final slash.
  */
-var gDataUrl;
+var gHttpURL;
 
 /**
  * Initializes the HTTP server and ensures that it is terminated when tests end.
  *
- * @param {string} dir
- *   The test sub-directory to use for the engines.
  * @returns {HttpServer}
  *   The HttpServer object in case further customization is needed.
  */
-function useHttpServer(dir = "data") {
+function useHttpServer() {
   let httpServer = new HttpServer();
   httpServer.start(-1);
   httpServer.registerDirectory("/", do_get_cwd());
-  gDataUrl = `http://localhost:${httpServer.identity.primaryPort}/${dir}/`;
+  gHttpURL = `http://localhost:${httpServer.identity.primaryPort}`;
   registerCleanupFunction(async function cleanup_httpServer() {
     await new Promise(resolve => {
       httpServer.stop(resolve);
@@ -288,22 +279,109 @@ function checkCountryResultTelemetry(aExpectedValue) {
 }
 
 /**
- * Provides a basic set of remote settings for use in tests.
+ * Reads the specified file from the data directory and returns its contents as
+ * an Uint8Array.
+ *
+ * @param {string} filename
+ *   The name of the file to read.
+ * @returns {Promise<Uint8Array>}
+ *   The contents of the file in an Uint8Array.
  */
-async function setupRemoteSettings() {
-  const settings = await RemoteSettings("hijack-blocklists");
-  sinon.stub(settings, "get").returns([
-    {
-      id: "load-paths",
-      matches: ["[addon]searchignore@mozilla.com"],
-      _status: "synced",
+async function getFileDataBuffer(filename) {
+  return IOUtils.read(PathUtils.join(do_get_cwd().path, "icons", filename));
+}
+
+/**
+ * Creates a mock attachment record for use in remote settings related tests.
+ *
+ * @param {object} item
+ *   An object containing the details of the attachment.
+ * @param {string} item.filename
+ *   The name of the attachmnet file in the data directory.
+ * @param {string[]} item.engineIdentifiers
+ *  The engine identifiers for the attachment.
+ * @param {number} item.imageSize
+ *  The size of the image.
+ * @param {string} [item.id]
+ *   The ID to use for the record. If not provided, a new UUID will be generated.
+ * @param {number} [item.lastModified]
+ *   The last modified time for the record. Defaults to the current time.
+ * @returns {object}
+ *   An object containing the record and attachment.
+ */
+async function mockRecordWithAttachment({
+  filename,
+  engineIdentifiers,
+  imageSize,
+  id = Services.uuid.generateUUID().toString(),
+  lastModified = Date.now(),
+}) {
+  let buffer = await getFileDataBuffer(filename);
+
+  // Generate a hash.
+  let hasher = Cc["@mozilla.org/security/hash;1"].createInstance(
+    Ci.nsICryptoHash
+  );
+  hasher.init(Ci.nsICryptoHash.SHA256);
+  hasher.update(buffer, buffer.length);
+
+  let hash = hasher.finish(false);
+  hash = Array.from(hash, (_, i) =>
+    ("0" + hash.charCodeAt(i).toString(16)).slice(-2)
+  ).join("");
+
+  // Mapping file extensions to corresponding MIME types.
+  const mimetypeFromExtension = {
+    ico: "image/x-icon",
+    svg: "image/svg+xml",
+    png: "image/png",
+  };
+
+  const extension = filename.split(".").pop().toLowerCase();
+
+  let record = {
+    id,
+    engineIdentifiers,
+    imageSize,
+    attachment: {
+      hash,
+      location: `${filename}`,
+      filename,
+      size: buffer.byteLength,
+      mimetype: mimetypeFromExtension[extension] || "",
     },
-    {
-      id: "submission-urls",
-      matches: ["ignore=true"],
-      _status: "synced",
-    },
-  ]);
+    last_modified: lastModified,
+  };
+
+  let attachment = {
+    record,
+    blob: new Blob([buffer]),
+  };
+
+  return { record, attachment };
+}
+
+/**
+ * Inserts an attachment record into the remote settings collection.
+ *
+ * @param {RemoteSettingsClient} client
+ *   The remote settings client to use.
+ * @param {object} item
+ *   An object containing the details of the attachment - see mockRecordWithAttachment.
+ * @param {boolean} [addAttachmentToCache]
+ *   Whether to add the attachment file to the cache. Defaults to true.
+ */
+async function insertRecordIntoCollection(
+  client,
+  item,
+  addAttachmentToCache = true
+) {
+  let { record, attachment } = await mockRecordWithAttachment(item);
+  await client.db.create(record);
+  if (addAttachmentToCache) {
+    await client.attachments.cacheImpl.set(record.id, attachment);
+  }
+  await client.db.importChanges({}, record.last_modified);
 }
 
 /**
@@ -393,6 +471,41 @@ async function assertGleanDefaultEngine(expected) {
       );
     }
   }
+}
+
+/**
+ * Loads a new enterprise policy, and re-initialise the search service
+ * with the new policy. Also waits for the search service to write the settings
+ * file to disk.
+ *
+ * @param {object} policy
+ *   The enterprise policy to use.
+ */
+async function setupPolicyEngineWithJson(policy) {
+  Services.search.wrappedJSObject.reset();
+
+  await this.EnterprisePolicyTesting.setupPolicyEngineWithJson(policy);
+
+  let settingsWritten = SearchTestUtils.promiseSearchNotification(
+    "write-settings-to-disk-complete"
+  );
+  await Services.search.init();
+  await settingsWritten;
+}
+
+/**
+ * Makes Services.policies.isEnterprise return true by loading an enterprise
+ * policy and re-initialise the search service with the new policy. Also waits
+ * for the search service to write the settings file to disk.
+ */
+async function enableEnterprise() {
+  await setupPolicyEngineWithJson({
+    // Use any policy.
+    policies: {
+      BlockAboutSupport: true,
+    },
+  });
+  Assert.ok(Services.policies.isEnterprise, "isEnterprise");
 }
 
 /**

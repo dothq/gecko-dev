@@ -66,6 +66,7 @@ dictionary RTCReceivedRtpStreamStats: RTCRtpStreamStats {
 
 dictionary RTCInboundRtpStreamStats : RTCReceivedRtpStreamStats {
   required DOMString trackIdentifier;
+  DOMString mid;
   DOMString remoteId;
   unsigned long framesDecoded;
   unsigned long framesDropped;
@@ -115,7 +116,9 @@ dictionary RTCSentRtpStreamStats : RTCRtpStreamStats {
 };
 
 dictionary RTCOutboundRtpStreamStats : RTCSentRtpStreamStats {
+  DOMString mid;
   DOMString remoteId;
+  DOMString rid;
   unsigned long framesEncoded;
   unsigned long long qpSum;
   unsigned long nackCount;
@@ -198,13 +201,6 @@ dictionary RTCIceCandidatePairStats : RTCStats {
   boolean selected;
   [ChromeOnly]
   unsigned long componentId; // moz
-};
-
-enum RTCIceCandidateType {
-  "host",
-  "srflx",
-  "prflx",
-  "relay"
 };
 
 dictionary RTCIceCandidateStats : RTCStats {

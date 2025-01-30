@@ -28,10 +28,6 @@ pref(
 // is required for the system to function.
 pref("browser.newtabpage.activity-stream.asrouter.providers.cfr", "null");
 pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "null");
-pref(
-  "browser.newtabpage.activity-stream.asrouter.providers.whats-new-panel",
-  "null"
-);
 
 // The `browser.newtabpage.activity-stream.asrouter.providers.cfr` provider is
 // disabled, but belt and braces: disable extension recommendations and feature
@@ -49,3 +45,8 @@ pref("app.normandy.run_interval_seconds", 0);
 // Use a separate Nimbus application ID from regular Firefox Desktop.
 // This prevents enrolling in regular desktop experiments.
 pref("nimbus.appId", "firefox-desktop-background-task");
+
+#if defined(ENABLE_TESTS)
+  // Test prefs to verify background tasks override browser prefs correctly.
+  pref("toolkit.backgroundtasks.tests.browserPrefsOverriden", 26);
+#endif

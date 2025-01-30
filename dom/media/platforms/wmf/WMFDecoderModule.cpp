@@ -21,13 +21,13 @@
 #include "WMFVideoMFTManager.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/mscom/EnsureMTA.h"
-#include "mozilla/ProfilerMarkers.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIXULRuntime.h"
 #include "nsIXULRuntime.h"  // for BrowserTabsRemoteAutostart
@@ -85,13 +85,9 @@ static bool IsRemoteAcceleratedCompositor(
          ident.mParentProcessType == GeckoProcessType_GPU;
 }
 
-static Atomic<bool> sSupportedTypesInitialized(false);
-static EnumSet<WMFStreamType> sSupportedTypes;
-static EnumSet<WMFStreamType> sLackOfExtensionTypes;
-
 /* static */
 void WMFDecoderModule::Init(Config aConfig) {
-  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
+  // TODO : add an assertion to prevent this from running on main thread.
   if (XRE_IsContentProcess()) {
     // If we're in the content process and the UseGPUDecoder pref is set, it
     // means that we've given up on the GPU process (it's been crashing) so we
@@ -134,6 +130,7 @@ void WMFDecoderModule::Init(Config aConfig) {
   sDXVAEnabled = sDXVAEnabled && hwVideo;
 
   mozilla::mscom::EnsureMTA([&]() {
+    StaticMutexAutoLock lock(sMutex);
     // Store the supported MFT decoders.
     sSupportedTypes.clear();
     sLackOfExtensionTypes.clear();
@@ -146,13 +143,13 @@ void WMFDecoderModule::Init(Config aConfig) {
       if (SUCCEEDED(hr)) {
         sSupportedTypes += type;
         WmfDecoderModuleMarkerAndLog("WMFInit Decoder Supported",
-                                     "%s is enabled", StreamTypeToString(type));
+                                     "%s is enabled", EnumValueToString(type));
       } else if (hr != E_FAIL) {
         // E_FAIL should be logged by CreateMFTDecoder. Skipping those codes
         // will help to keep the logs readable.
         WmfDecoderModuleMarkerAndLog("WMFInit Decoder Failed",
                                      "%s failed with code 0x%lx",
-                                     StreamTypeToString(type), hr);
+                                     EnumValueToString(type), hr);
         if (hr == WINCODEC_ERR_COMPONENTNOTFOUND &&
             type == WMFStreamType::AV1) {
           WmfDecoderModuleMarkerAndLog("No AV1 extension",
@@ -163,7 +160,10 @@ void WMFDecoderModule::Init(Config aConfig) {
     }
   });
 
-  sSupportedTypesInitialized = true;
+  {
+    StaticMutexAutoLock lock(sMutex);
+    sSupportedTypesInitialized = true;
+  }
 
   WmfDecoderModuleMarkerAndLog("WMFInit Result",
                                "WMFDecoderModule::Init finishing");
@@ -212,7 +212,7 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
                                      VP8_USABLE_BUILD);
         return E_FAIL;
       }
-      if (!gfx::gfxVars::UseVP8HwDecode()) {
+      if (!gfx::gfxVars::GetUseVP8HwDecodeOrDefault()) {
         WmfDecoderModuleMarkerAndLog("CreateMFTDecoder, VP8 Failure",
                                      "Gfx VP8 blocklist");
         return E_FAIL;
@@ -222,7 +222,7 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
       if (!sDXVAEnabled) {
         WmfDecoderModuleMarkerAndLog("CreateMFTDecoder, VPx Disabled",
                                      "%s MFT requires DXVA",
-                                     StreamTypeToString(aType));
+                                     EnumValueToString(aType));
         return E_FAIL;
       }
 
@@ -270,15 +270,13 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
 /* static */
 bool WMFDecoderModule::CanCreateMFTDecoder(const WMFStreamType& aType) {
   MOZ_ASSERT(WMFStreamType::Unknown < aType && aType < WMFStreamType::SENTINEL);
-  if (!sSupportedTypesInitialized) {
-    if (NS_IsMainThread()) {
-      Init();
-    } else {
-      nsCOMPtr<nsIRunnable> runnable =
-          NS_NewRunnableFunction("WMFDecoderModule::Init", [&]() { Init(); });
-      SyncRunnable::DispatchToThread(GetMainThreadSerialEventTarget(),
-                                     runnable);
-    }
+  bool hasInitialized = false;
+  {
+    StaticMutexAutoLock lock(sMutex);
+    hasInitialized = sSupportedTypesInitialized;
+  }
+  if (!hasInitialized) {
+    Init();
   }
 
   // Check prefs here rather than CreateMFTDecoder so that prefs aren't baked
@@ -324,7 +322,7 @@ bool WMFDecoderModule::CanCreateMFTDecoder(const WMFStreamType& aType) {
         break;
     }
   }
-
+  StaticMutexAutoLock lock(sMutex);
   return sSupportedTypes.contains(aType);
 }
 
@@ -380,6 +378,7 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
       return media::DecodeSupport::SoftwareDecode;
     }
   }
+  StaticMutexAutoLock lock(sMutex);
   return sLackOfExtensionTypes.contains(type)
              ? media::DecodeSupport::UnsureDueToLackOfExtension
              : media::DecodeSupportSet{};
@@ -485,6 +484,9 @@ media::DecodeSupportSet WMFDecoderModule::SupportsMimeType(
 bool WMFDecoderModule::IsHEVCSupported() {
   return sForceEnableHEVC || StaticPrefs::media_wmf_hevc_enabled() == 1;
 }
+
+/* static */
+void WMFDecoderModule::DisableForceEnableHEVC() { sForceEnableHEVC = false; }
 
 }  // namespace mozilla
 

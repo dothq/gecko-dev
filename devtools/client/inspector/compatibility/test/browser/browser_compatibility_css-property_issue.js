@@ -13,13 +13,13 @@ const TEST_URI = `
   <style>
   body {
     color: blue;
-    scrollbar-width: thin;
+    scrollbar-color: gold;
     user-modify: read-only;
-    hyphenate-limit-chars: auto;
+    object-view-box: inset(0% 19% -33% 57%);
     overflow-clip-box: padding-box;
   }
   div {
-    ruby-align: center;
+    overflow-anchor: auto;
   }
   </style>
   <body>
@@ -30,8 +30,8 @@ const TEST_URI = `
 const TEST_DATA_SELECTED = [
   {
     type: COMPATIBILITY_ISSUE_TYPE.CSS_PROPERTY,
-    property: "scrollbar-width",
-    url: "https://developer.mozilla.org/docs/Web/CSS/scrollbar-width",
+    property: "scrollbar-color",
+    url: "https://developer.mozilla.org/docs/Web/CSS/scrollbar-color",
     deprecated: false,
     experimental: false,
   },
@@ -45,12 +45,11 @@ const TEST_DATA_SELECTED = [
   },
   {
     type: COMPATIBILITY_ISSUE_TYPE.CSS_PROPERTY,
-    property: "hyphenate-limit-chars",
+    property: "object-view-box",
     // No MDN url but a spec one
-    specUrl:
-      "https://drafts.csswg.org/css-text-4/#propdef-hyphenate-limit-chars",
+    specUrl: "https://drafts.csswg.org/css-images-5/#propdef-object-view-box",
     deprecated: false,
-    experimental: false,
+    experimental: true,
   },
   // TODO: Re-enable it when we have another property with no MDN url nor spec url Bug 1840910
   /*{
@@ -66,10 +65,10 @@ const TEST_DATA_ALL = [
   ...TEST_DATA_SELECTED,
   {
     type: COMPATIBILITY_ISSUE_TYPE.CSS_PROPERTY,
-    property: "ruby-align",
-    url: "https://developer.mozilla.org/docs/Web/CSS/ruby-align",
+    property: "overflow-anchor",
+    url: "https://developer.mozilla.org/docs/Web/CSS/overflow-anchor",
     deprecated: false,
-    experimental: true,
+    experimental: false,
   },
 ];
 

@@ -312,13 +312,15 @@ static TextureType ChooseTextureType(gfx::SurfaceFormat aFormat,
 #endif
 
 #ifdef XP_MACOSX
-  if (StaticPrefs::gfx_use_iosurface_textures_AtStartup()) {
+  if (StaticPrefs::gfx_use_iosurface_textures_AtStartup() &&
+      !aKnowsCompositor->UsingSoftwareWebRender()) {
     return TextureType::MacIOSurface;
   }
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
-  if (StaticPrefs::gfx_use_surfacetexture_textures_AtStartup()) {
+  if (StaticPrefs::gfx_use_surfacetexture_textures_AtStartup() &&
+      !aKnowsCompositor->UsingSoftwareWebRender()) {
     return TextureType::AndroidNativeWindow;
   }
 #endif
@@ -375,9 +377,13 @@ TextureData* TextureData::Create(TextureForwarder* aAllocator,
   if (aAllocFlags & ALLOC_FORCE_REMOTE) {
     RefPtr<CanvasChild> canvasChild = aAllocator->GetCanvasChild();
     if (canvasChild) {
-      return new RecordedTextureData(canvasChild.forget(), aSize, aFormat,
-                                     textureType,
-                                     layers::TexTypeForWebgl(aKnowsCompositor));
+      TextureType webglTextureType =
+          TexTypeForWebgl(aKnowsCompositor, /* aIsWebglOop */ true);
+      if (canvasChild->EnsureRecorder(aSize, aFormat, textureType,
+                                      webglTextureType)) {
+        return new RecordedTextureData(canvasChild.forget(), aSize, aFormat,
+                                       textureType, webglTextureType);
+      }
     }
     // If we must be remote, but there is no canvas child, then falling back
     // is not possible.
@@ -1489,6 +1495,7 @@ already_AddRefed<TextureClient> TextureClient::CreateForRawBufferAccess(
                            aMoz2DBackend == gfx::BackendType::DIRECT2D1_1,
                        "Unsupported TextureClient backend type");
 
+  // For future changes, check aAllocFlags aAllocFlags & ALLOC_DO_NOT_ACCELERATE
   TextureData* texData = BufferTextureData::Create(
       aSize, aFormat, gfx::BackendType::SKIA, aLayersBackend, aTextureFlags,
       aAllocFlags, aAllocator);
@@ -1546,12 +1553,7 @@ TextureClient::TextureClient(TextureData* aData, TextureFlags aFlags,
       mUpdated(false),
       mAddedToCompositableClient(false),
       mFwdTransactionId(0),
-      mSerial(++sSerialCounter)
-#ifdef GFX_DEBUG_TRACK_CLIENTS_IN_POOL
-      ,
-      mPoolTracker(nullptr)
-#endif
-{
+      mSerial(++sSerialCounter) {
   mData->FillInfo(mInfo);
   mFlags |= mData->GetTextureFlags();
 }
@@ -1613,8 +1615,9 @@ void TextureClient::GetSurfaceDescriptorRemoteDecoder(
   MOZ_RELEASE_ASSERT(mData);
   mData->GetSubDescriptor(&subDesc);
 
-  *aOutDesc =
-      SurfaceDescriptorRemoteDecoder(handle, std::move(subDesc), Nothing());
+  *aOutDesc = SurfaceDescriptorRemoteDecoder(
+      handle, std::move(subDesc), Nothing(),
+      SurfaceDescriptorRemoteDecoderId::GetNext());
 }
 
 class MemoryTextureReadLock : public NonBlockingTextureReadLock {
@@ -1728,10 +1731,14 @@ class CrossProcessSemaphoreReadLock : public TextureReadLock {
 already_AddRefed<TextureReadLock> TextureReadLock::Deserialize(
     ReadLockDescriptor&& aDescriptor, ISurfaceAllocator* aAllocator) {
   switch (aDescriptor.type()) {
-    case ReadLockDescriptor::TShmemSection: {
-      const ShmemSection& section = aDescriptor.get_ShmemSection();
-      MOZ_RELEASE_ASSERT(section.shmem().IsReadable());
-      return MakeAndAddRef<ShmemTextureReadLock>(section);
+    case ReadLockDescriptor::TUntrustedShmemSection: {
+      const UntrustedShmemSection& untrusted =
+          aDescriptor.get_UntrustedShmemSection();
+      Maybe<ShmemSection> section = ShmemSection::FromUntrusted(untrusted);
+      if (section.isNothing()) {
+        return nullptr;
+      }
+      return MakeAndAddRef<ShmemTextureReadLock>(section.value());
     }
     case ReadLockDescriptor::Tuintptr_t: {
       if (!aAllocator->IsSameProcess()) {
@@ -1761,8 +1768,8 @@ already_AddRefed<TextureReadLock> TextureReadLock::Deserialize(
       return nullptr;
     }
     default: {
-      // Invalid descriptor.
-      MOZ_DIAGNOSTIC_ASSERT(false);
+      MOZ_DIAGNOSTIC_CRASH(
+          "Invalid descriptor in TextureReadLock::Deserialize");
     }
   }
   return nullptr;
@@ -1838,7 +1845,7 @@ ShmemTextureReadLock::~ShmemTextureReadLock() {
 
 bool ShmemTextureReadLock::Serialize(ReadLockDescriptor& aOutput,
                                      base::ProcessId aOther) {
-  aOutput = ReadLockDescriptor(GetShmemSection());
+  aOutput = ReadLockDescriptor(GetShmemSection().AsUntrusted());
   return true;
 }
 
@@ -1924,7 +1931,7 @@ bool UpdateYCbCrTextureClient(TextureClient* aTexture,
                               const PlanarYCbCrData& aData) {
   MOZ_ASSERT(aTexture);
   MOZ_ASSERT(aTexture->IsLocked());
-  MOZ_ASSERT(aTexture->GetFormat() == gfx::SurfaceFormat::YUV,
+  MOZ_ASSERT(aTexture->GetFormat() == gfx::SurfaceFormat::YUV420,
              "This textureClient can only use YCbCr data");
   MOZ_ASSERT(!aTexture->IsImmutable());
   MOZ_ASSERT(aTexture->IsValid());

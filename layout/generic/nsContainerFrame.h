@@ -210,9 +210,9 @@ class nsContainerFrame : public nsSplittableFrame {
   template <typename ISizeData, typename F>
   void DoInlineIntrinsicISize(ISizeData* aData, F& aHandleChildren);
 
-  void DoInlineMinISize(gfxContext* aRenderingContext,
+  void DoInlineMinISize(const mozilla::IntrinsicSizeInput& aInput,
                         InlineMinISizeData* aData);
-  void DoInlinePrefISize(gfxContext* aRenderingContext,
+  void DoInlinePrefISize(const mozilla::IntrinsicSizeInput& aInput,
                          InlinePrefISizeData* aData);
 
   /**
@@ -326,7 +326,8 @@ class nsContainerFrame : public nsSplittableFrame {
    * overflow containers and adding them to the appropriate list.
    * See nsBlockFrame::Reflow for a sample implementation.
    *
-   * For more information, see https://wiki.mozilla.org/Gecko:Continuation_Model
+   * For more information, see
+   * https://firefox-source-docs.mozilla.org/layout/LayoutOverview.html#fragmentation
    *
    * Note that Flex/GridContainerFrame doesn't use nsOverflowContinuationTracker
    * so the above doesn't apply.  Flex/Grid containers may have items that
@@ -446,26 +447,22 @@ class nsContainerFrame : public nsSplittableFrame {
                                 const nsDisplayListSet& aLists) override;
 
   static void PlaceFrameView(nsIFrame* aFrame) {
-    if (aFrame->HasView())
+    if (aFrame->HasView()) {
       nsContainerFrame::PositionFrameView(aFrame);
-    else
+    } else {
       nsContainerFrame::PositionChildViews(aFrame);
+    }
   }
 
   /**
    * Returns a CSS Box Alignment constant which the caller can use to align
    * the absolutely-positioned child (whose ReflowInput is aChildRI) within
-   * a CSS Box Alignment area associated with this container.
+   * a CSS Box Alignment area associated with this container. Used for
+   * computing the static position of an absolutely positioned box.
    *
    * The lower 8 bits of the returned value are guaranteed to form a valid
    * argument for CSSAlignUtils::AlignJustifySelf(). (The upper 8 bits may
    * encode an <overflow-position>.)
-   *
-   * NOTE: This default nsContainerFrame implementation is a stub, and isn't
-   * meant to be called.  Subclasses must provide their own implementations, if
-   * they use CSS Box Alignment to determine the static position of their
-   * absolutely-positioned children. (Though: if subclasses share enough code,
-   * maybe this nsContainerFrame impl should include some shared code.)
    *
    * @param aChildRI A ReflowInput for the positioned child frame that's being
    *                 aligned.
@@ -473,6 +470,14 @@ class nsContainerFrame : public nsSplittableFrame {
    *                     would like to align the child frame.
    */
   virtual mozilla::StyleAlignFlags CSSAlignmentForAbsPosChild(
+      const ReflowInput& aChildRI, mozilla::LogicalAxis aLogicalAxis) const;
+
+  /**
+   * Default implementation of `CSSAlignmentForAbsPosChild`, where we treat
+   * this frame as a plain absolute containing block instead of depending
+   * on its type (By overriding `CSSAlignmentForAbsPosChild`).
+   */
+  mozilla::StyleAlignFlags CSSAlignmentForAbsPosChildWithinContainingBlock(
       const ReflowInput& aChildRI, mozilla::LogicalAxis aLogicalAxis) const;
 
 #define NS_DECLARE_FRAME_PROPERTY_FRAMELIST(prop) \
@@ -505,7 +510,7 @@ class nsContainerFrame : public nsSplittableFrame {
   // Incorporate the child overflow areas into aOverflowAreas.
   // If the child does not have a overflow, use the child area.
   void ConsiderChildOverflow(mozilla::OverflowAreas& aOverflowAreas,
-                             nsIFrame* aChildFrame);
+                             nsIFrame* aChildFrame, bool aAsIfScrolled = false);
 
  protected:
   nsContainerFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
@@ -1008,10 +1013,14 @@ class nsOverflowContinuationTracker {
    public:
     AutoFinish(nsOverflowContinuationTracker* aTracker, nsIFrame* aChild)
         : mTracker(aTracker), mChild(aChild) {
-      if (mTracker) mTracker->BeginFinish(mChild);
+      if (mTracker) {
+        mTracker->BeginFinish(mChild);
+      }
     }
     ~AutoFinish() {
-      if (mTracker) mTracker->EndFinish(mChild);
+      if (mTracker) {
+        mTracker->EndFinish(mChild);
+      }
     }
 
    private:
@@ -1075,127 +1084,5 @@ class nsOverflowContinuationTracker {
   /* Tells us whether to pay attention to OOF frames or non-OOF frames */
   bool mWalkOOFFrames;
 };
-
-// Start Display Reflow Debugging
-#ifdef DEBUG
-
-struct DR_cookie {
-  DR_cookie(nsPresContext* aPresContext, nsIFrame* aFrame,
-            const mozilla::ReflowInput& aReflowInput,
-            mozilla::ReflowOutput& aMetrics, nsReflowStatus& aStatus);
-  ~DR_cookie();
-  void Change() const;
-
-  nsPresContext* mPresContext;
-  nsIFrame* mFrame;
-  const mozilla::ReflowInput& mReflowInput;
-  mozilla::ReflowOutput& mMetrics;
-  nsReflowStatus& mStatus;
-  void* mValue;
-};
-
-struct DR_layout_cookie {
-  explicit DR_layout_cookie(nsIFrame* aFrame);
-  ~DR_layout_cookie();
-
-  nsIFrame* mFrame;
-  void* mValue;
-};
-
-struct DR_intrinsic_inline_size_cookie {
-  DR_intrinsic_inline_size_cookie(nsIFrame* aFrame, const char* aType,
-                                  nscoord& aResult);
-  ~DR_intrinsic_inline_size_cookie();
-
-  nsIFrame* mFrame;
-  const char* mType;
-  nscoord& mResult;
-  void* mValue;
-};
-
-struct DR_intrinsic_size_cookie {
-  DR_intrinsic_size_cookie(nsIFrame* aFrame, const char* aType,
-                           nsSize& aResult);
-  ~DR_intrinsic_size_cookie();
-
-  nsIFrame* mFrame;
-  const char* mType;
-  nsSize& mResult;
-  void* mValue;
-};
-
-struct DR_init_constraints_cookie {
-  DR_init_constraints_cookie(
-      nsIFrame* aFrame, mozilla::ReflowInput* aState, nscoord aCBWidth,
-      nscoord aCBHeight, const mozilla::Maybe<mozilla::LogicalMargin> aBorder,
-      const mozilla::Maybe<mozilla::LogicalMargin> aPadding);
-  ~DR_init_constraints_cookie();
-
-  nsIFrame* mFrame;
-  mozilla::ReflowInput* mState;
-  void* mValue;
-};
-
-struct DR_init_offsets_cookie {
-  DR_init_offsets_cookie(nsIFrame* aFrame,
-                         mozilla::SizeComputationInput* aState,
-                         nscoord aPercentBasis,
-                         mozilla::WritingMode aCBWritingMode,
-                         const mozilla::Maybe<mozilla::LogicalMargin> aBorder,
-                         const mozilla::Maybe<mozilla::LogicalMargin> aPadding);
-  ~DR_init_offsets_cookie();
-
-  nsIFrame* mFrame;
-  mozilla::SizeComputationInput* mState;
-  void* mValue;
-};
-
-#  define DISPLAY_REFLOW(dr_pres_context, dr_frame, dr_rf_state,               \
-                         dr_rf_metrics, dr_rf_status)                          \
-    DR_cookie dr_cookie(dr_pres_context, dr_frame, dr_rf_state, dr_rf_metrics, \
-                        dr_rf_status);
-#  define DISPLAY_REFLOW_CHANGE() dr_cookie.Change();
-#  define DISPLAY_LAYOUT(dr_frame) DR_layout_cookie dr_cookie(dr_frame);
-#  define DISPLAY_MIN_INLINE_SIZE(dr_frame, dr_result) \
-    DR_intrinsic_inline_size_cookie dr_cookie(dr_frame, "Min", dr_result)
-#  define DISPLAY_PREF_INLINE_SIZE(dr_frame, dr_result) \
-    DR_intrinsic_inline_size_cookie dr_cookie(dr_frame, "Pref", dr_result)
-#  define DISPLAY_PREF_SIZE(dr_frame, dr_result) \
-    DR_intrinsic_size_cookie dr_cookie(dr_frame, "Pref", dr_result)
-#  define DISPLAY_MIN_SIZE(dr_frame, dr_result) \
-    DR_intrinsic_size_cookie dr_cookie(dr_frame, "Min", dr_result)
-#  define DISPLAY_MAX_SIZE(dr_frame, dr_result) \
-    DR_intrinsic_size_cookie dr_cookie(dr_frame, "Max", dr_result)
-#  define DISPLAY_INIT_CONSTRAINTS(dr_frame, dr_state, dr_cbw, dr_cbh, dr_bdr, \
-                                   dr_pad)                                     \
-    DR_init_constraints_cookie dr_cookie(dr_frame, dr_state, dr_cbw, dr_cbh,   \
-                                         dr_bdr, dr_pad)
-#  define DISPLAY_INIT_OFFSETS(dr_frame, dr_state, dr_pb, dr_cbwm, dr_bdr, \
-                               dr_pad)                                     \
-    DR_init_offsets_cookie dr_cookie(dr_frame, dr_state, dr_pb, dr_cbwm,   \
-                                     dr_bdr, dr_pad)
-
-#else
-
-#  define DISPLAY_REFLOW(dr_pres_context, dr_frame, dr_rf_state, \
-                         dr_rf_metrics, dr_rf_status)
-#  define DISPLAY_REFLOW_CHANGE()
-#  define DISPLAY_LAYOUT(dr_frame) PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_MIN_INLINE_SIZE(dr_frame, dr_result) \
-    PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_PREF_INLINE_SIZE(dr_frame, dr_result) \
-    PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_PREF_SIZE(dr_frame, dr_result) PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_MIN_SIZE(dr_frame, dr_result) PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_MAX_SIZE(dr_frame, dr_result) PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_INIT_CONSTRAINTS(dr_frame, dr_state, dr_cbw, dr_cbh, dr_bdr, \
-                                   dr_pad)                                     \
-    PR_BEGIN_MACRO PR_END_MACRO
-#  define DISPLAY_INIT_OFFSETS(dr_frame, dr_state, dr_pb, dr_cbwm, dr_bdr, \
-                               dr_pad)                                     \
-    PR_BEGIN_MACRO PR_END_MACRO
-
-#endif
-// End Display Reflow Debugging
 
 #endif /* nsContainerFrame_h___ */

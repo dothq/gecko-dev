@@ -129,7 +129,7 @@ static mozilla::LazyLogModule sGVSupportLog("GeckoViewSupport");
 // All the toplevel windows that have been created; these are in
 // stacking order, so the window at gTopLevelWindows[0] is the topmost
 // one.
-static nsTArray<nsWindow*> gTopLevelWindows;
+MOZ_RUNINIT static nsTArray<nsWindow*> gTopLevelWindows;
 
 static bool sFailedToCreateGLContext = false;
 
@@ -183,6 +183,13 @@ bool DispatchToUiThread(const char* aName, Lambda&& aLambda) {
 
 namespace mozilla {
 namespace widget {
+
+// For double click detection
+static int64_t sLastMouseDownTime = 0;
+static int32_t sLastMouseButtons = 0;
+static int32_t sLastClickCount = 0;
+static float sLastMouseDownX = 0;
+static float sLastMouseDownY = 0;
 
 using WindowPtr = jni::NativeWeakPtr<GeckoViewSupport>;
 
@@ -543,6 +550,28 @@ class NPZCSupport final
         ConvertScrollDirections(aHandledResult.mOverscrollDirections));
   }
 
+  static bool IsIntoDoubleClickThreshold(float aX, float aY) {
+    int32_t deltaX = abs((int32_t)floorf(sLastMouseDownX - aX));
+    int32_t deltaY = abs((int32_t)floorf(sLastMouseDownY - aY));
+    int32_t threshold = StaticPrefs::widget_double_click_threshold();
+
+    return (deltaX * deltaX + deltaY * deltaY < threshold * threshold);
+  }
+
+  static bool IsDoubleClick(int64_t aTime, float aX, float aY, int buttons) {
+    if (sLastMouseButtons != buttons) {
+      return false;
+    }
+
+    int64_t deltaTime = aTime - sLastMouseDownTime;
+    if (deltaTime < (int64_t)StaticPrefs::widget_double_click_min() ||
+        deltaTime > (int64_t)StaticPrefs::widget_double_click_timeout()) {
+      return false;
+    }
+
+    return IsIntoDoubleClickThreshold(aX, aY);
+  }
+
  public:
   int32_t HandleMouseEvent(int32_t aAction, int64_t aTime, int32_t aMetaState,
                            float aX, float aY, int buttons) {
@@ -568,6 +597,16 @@ class NPZCSupport final
         mouseType = MouseInput::MOUSE_DOWN;
         buttonType = GetButtonType(buttons ^ mPreviousButtons);
         mPreviousButtons = buttons;
+
+        if (IsDoubleClick(aTime, aX, aY, buttons)) {
+          sLastClickCount++;
+        } else {
+          sLastClickCount = 1;
+        }
+        sLastMouseDownTime = aTime;
+        sLastMouseDownX = aX;
+        sLastMouseDownY = aY;
+        sLastMouseButtons = buttons;
         break;
       case java::sdk::MotionEvent::ACTION_UP:
         mouseType = MouseInput::MOUSE_UP;
@@ -576,6 +615,10 @@ class NPZCSupport final
         break;
       case java::sdk::MotionEvent::ACTION_MOVE:
         mouseType = MouseInput::MOUSE_MOVE;
+
+        if (!IsIntoDoubleClickThreshold(aX, aY)) {
+          sLastClickCount = 0;
+        }
         break;
       case java::sdk::MotionEvent::ACTION_HOVER_MOVE:
         mouseType = MouseInput::MOUSE_MOVE;
@@ -606,9 +649,35 @@ class NPZCSupport final
       return INPUT_RESULT_IGNORED;
     }
 
-    PostInputEvent([input = std::move(input), result](nsWindow* window) {
-      WidgetMouseEvent mouseEvent = input.ToWidgetEvent(window);
+    PostInputEvent([input = std::move(input), result,
+                    clickCount = sLastClickCount](nsWindow* window) {
+      WidgetMouseEvent mouseEvent =
+          input.ToWidgetEvent<WidgetMouseEvent>(window);
+      mouseEvent.mClickCount = clickCount;
       window->ProcessUntransformedAPZEvent(&mouseEvent, result);
+      if (MouseInput::SECONDARY_BUTTON == input.mButtonType) {
+        if ((StaticPrefs::ui_context_menus_after_mouseup() &&
+             MouseInput::MOUSE_UP == input.mType) ||
+            (!StaticPrefs::ui_context_menus_after_mouseup() &&
+             MouseInput::MOUSE_DOWN == input.mType)) {
+          MouseInput contextMenu = input;
+
+          // Actually we don't dispatch context menu event to APZ since we don't
+          // handle it on APZ yet. If handling it, we need to consider how to
+          // dispatch it on APZ thread. It may cause a race condition.
+          contextMenu.mType = MouseInput::MOUSE_CONTEXTMENU;
+
+          if (contextMenu.IsPointerEventType()) {
+            WidgetPointerEvent contextMenuEvent =
+                contextMenu.ToWidgetEvent<WidgetPointerEvent>(window);
+            window->ProcessUntransformedAPZEvent(&contextMenuEvent, result);
+          } else {
+            WidgetMouseEvent contextMenuEvent =
+                contextMenu.ToWidgetEvent<WidgetMouseEvent>(window);
+            window->ProcessUntransformedAPZEvent(&contextMenuEvent, result);
+          }
+        }
+      }
     });
 
     switch (result.GetStatus()) {
@@ -827,15 +896,57 @@ class NPZCSupport final
 
   void HandleDragEvent(int32_t aAction, int64_t aTime, float aX, float aY,
                        jni::Object::Param aDropData) {
-    // APZ handles some drag event type on APZ thread, but it cannot handle all
-    // types.
-    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
 
+    RefPtr<IAPZCTreeManager> controller;
     if (auto window = mWindow.Access()) {
       if (nsWindow* gkWindow = window->GetNsWindow()) {
-        gkWindow->OnDragEvent(aAction, aTime, aX, aY, aDropData);
+        controller = gkWindow->mAPZC;
       }
     }
+
+    if (!controller) {
+      return;
+    }
+
+    MouseInput::MouseType mouseType = MouseInput::MouseType::MOUSE_NONE;
+    switch (aAction) {
+      case java::sdk::DragEvent::ACTION_DRAG_STARTED:
+        mouseType = MouseInput::MouseType::MOUSE_DRAG_START;
+        break;
+      case java::sdk::DragEvent::ACTION_DRAG_ENDED:
+        mouseType = MouseInput::MouseType::MOUSE_DRAG_END;
+        break;
+      case java::sdk::DragEvent::ACTION_DRAG_ENTERED:
+        mouseType = MouseInput::MouseType::MOUSE_DRAG_ENTER;
+        break;
+      case java::sdk::DragEvent::ACTION_DRAG_LOCATION:
+        mouseType = MouseInput::MouseType::MOUSE_DRAG_OVER;
+        break;
+      case java::sdk::DragEvent::ACTION_DRAG_EXITED:
+        mouseType = MouseInput::MouseType::MOUSE_DRAG_EXIT;
+        break;
+      case java::sdk::DragEvent::ACTION_DROP:
+        mouseType = MouseInput::MouseType::MOUSE_DROP;
+        break;
+      default:
+        break;
+    }
+    ScreenPoint origin = ScreenPoint(aX, aY);
+    MouseInput input(
+        mouseType, MouseInput::NONE, MouseEvent_Binding::MOZ_SOURCE_MOUSE, 0,
+        origin, nsWindow::GetEventTimeStamp(aTime), nsWindow::GetModifiers(0));
+
+    APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
+      return;
+    }
+
+    PostInputEvent(
+        [input = std::move(input), result, aAction, aX, aY,
+         dropData = jni::Object::GlobalRef(aDropData)](nsWindow* window) {
+          window->OnDragEvent(aAction, aX, aY, dropData, result, input);
+        });
   }
 
   void ConsumeMotionEventsFromResampler() {
@@ -926,7 +1037,7 @@ class NPZCSupport final
   }
 };
 
-NS_IMPL_ISUPPORTS(AndroidView, nsIAndroidEventDispatcher, nsIAndroidView)
+NS_IMPL_ISUPPORTS(AndroidView, nsIGeckoViewEventDispatcher, nsIGeckoViewView)
 
 nsresult AndroidView::GetInitData(JSContext* aCx,
                                   JS::MutableHandle<JS::Value> aOut) {
@@ -1246,9 +1357,27 @@ class LayerViewSupport final
     gkWindow->UpdateDynamicToolbarMaxHeight(ScreenIntCoord(aHeight));
   }
 
+  void OnKeyboardHeightChanged(int32_t aHeight) {
+    MOZ_ASSERT(NS_IsMainThread());
+    auto win(mWindow.Access());
+    if (!win) {
+      return;  // Already shut down.
+    }
+
+    nsWindow* gkWindow = win->GetNsWindow();
+    if (!gkWindow) {
+      return;
+    }
+
+    gkWindow->KeyboardHeightChanged(ScreenIntCoord(aHeight));
+  }
+
   void SyncPauseCompositor() {
     MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
 
+    // Set this true prior to attempting to pause the compositor, so that if
+    // pausing fails the subsequent recovery knows to initialize the compositor
+    // in a paused state.
     mCompositorPaused = true;
 
     if (mUiCompositorControllerChild) {
@@ -1283,8 +1412,12 @@ class LayerViewSupport final
   void SyncResumeCompositor() {
     MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
 
+    // Set this false prior to attempting to resume the compositor, so that if
+    // resumption fails the subsequent recovery knows to initialize the
+    // compositor in a resumed state.
+    mCompositorPaused = false;
+
     if (mUiCompositorControllerChild) {
-      mCompositorPaused = false;
       bool resumed = mUiCompositorControllerChild->Resume();
       if (!resumed) {
         gfxCriticalNote
@@ -1299,6 +1432,11 @@ class LayerViewSupport final
       int32_t aWidth, int32_t aHeight, jni::Object::Param aSurface,
       jni::Object::Param aSurfaceControl) {
     MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
+
+    // Set this false prior to attempting to resume the compositor, so that if
+    // resumption fails the subsequent recovery knows to initialize the
+    // compositor in a resumed state.
+    mCompositorPaused = false;
 
     mX = aX;
     mY = aY;
@@ -1345,8 +1483,6 @@ class LayerViewSupport final
     }
 
     mRequestedNewSurface = false;
-
-    mCompositorPaused = false;
 
     class OnResumedEvent : public nsAppShell::Event {
       GeckoSession::Compositor::GlobalRef mCompositor;
@@ -1611,7 +1747,7 @@ class LayerViewSupport final
       return;
     }
 
-    ScreenIntMargin safeAreaInsets(aTop, aRight, aBottom, aLeft);
+    LayoutDeviceIntMargin safeAreaInsets(aTop, aRight, aBottom, aLeft);
     gkWindow->UpdateSafeAreaInsets(safeAreaInsets);
   }
 };
@@ -1651,7 +1787,7 @@ void GeckoViewSupport::Open(
     }
   }
 
-  // Prepare an nsIAndroidView to pass as argument to the window.
+  // Prepare an nsIGeckoViewView to pass as argument to the window.
   RefPtr<AndroidView> androidView = new AndroidView();
   androidView->mEventDispatcher->Attach(
       java::EventDispatcher::Ref::From(aDispatcher), nullptr);
@@ -1846,6 +1982,15 @@ void GeckoViewSupport::OnShowDynamicToolbar() const {
   window->OnShowDynamicToolbar();
 }
 
+void GeckoViewSupport::OnHideDynamicToolbar() const {
+  GeckoSession::Window::LocalRef window(mGeckoViewWindow);
+  if (!window) {
+    return;
+  }
+
+  window->OnHideDynamicToolbar();
+}
+
 void GeckoViewSupport::OnReady(jni::Object::Param aQueue) {
   GeckoSession::Window::LocalRef window(mGeckoViewWindow);
   if (!window) {
@@ -2029,6 +2174,10 @@ void nsWindow::LogWindow(nsWindow* win, int index, int indent) {
        spaces, index, win, win->mParent, win->mBounds.x, win->mBounds.y,
        win->mBounds.width, win->mBounds.height, win->mIsVisible,
        int(win->mWindowType));
+  int i = 0;
+  for (nsIWidget* kid = win->mFirstChild; kid; kid = kid->GetNextSibling()) {
+    LogWindow(static_cast<nsWindow*>(kid), i++, indent + 1);
+  }
 #endif
 }
 
@@ -2038,19 +2187,10 @@ void nsWindow::DumpWindows(const nsTArray<nsWindow*>& wins, int indent) {
   for (uint32_t i = 0; i < wins.Length(); ++i) {
     nsWindow* w = wins[i];
     LogWindow(w, i, indent);
-    DumpWindows(w->mChildren, indent + 1);
   }
 }
 
-nsWindow::nsWindow()
-    : mWidgetId(++sWidgetId),
-      mIsVisible(false),
-      mParent(nullptr),
-      mDynamicToolbarMaxHeight(0),
-      mSizeMode(nsSizeMode_Normal),
-      mIsFullScreen(false),
-      mCompositorWidgetDelegate(nullptr),
-      mDestroyMutex("nsWindow::mDestroyMutex") {}
+nsWindow::nsWindow() : mWidgetId(++sWidgetId) {}
 
 nsWindow::~nsWindow() {
   gTopLevelWindows.RemoveElement(this);
@@ -2063,27 +2203,13 @@ nsWindow::~nsWindow() {
 
 bool nsWindow::IsTopLevel() {
   return mWindowType == WindowType::TopLevel ||
-         mWindowType == WindowType::Dialog ||
-         mWindowType == WindowType::Invisible;
+         mWindowType == WindowType::Dialog;
 }
 
-nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
-                          const LayoutDeviceIntRect& aRect,
+nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
                           InitData* aInitData) {
   ALOG("nsWindow[%p]::Create %p [%d %d %d %d]", (void*)this, (void*)aParent,
        aRect.x, aRect.y, aRect.width, aRect.height);
-
-  nsWindow* parent = (nsWindow*)aParent;
-  if (aNativeParent) {
-    if (parent) {
-      ALOG(
-          "Ignoring native parent on Android window [%p], "
-          "since parent was specified (%p %p)",
-          (void*)this, (void*)aNativeParent, (void*)aParent);
-    } else {
-      parent = (nsWindow*)aNativeParent;
-    }
-  }
 
   // A default size of 1x1 confuses MobileViewportManager, so
   // use 0x0 instead. This is also a little more fitting since
@@ -2098,17 +2224,14 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   mBounds = rect;
   SetSizeConstraints(SizeConstraints());
 
-  BaseCreate(nullptr, aInitData);
+  MOZ_DIAGNOSTIC_ASSERT(!aInitData ||
+                        aInitData->mWindowType != WindowType::Invisible);
 
-  NS_ASSERTION(IsTopLevel() || parent,
-               "non-top-level window doesn't have a parent!");
+  BaseCreate(aParent, aInitData);
+  MOZ_ASSERT_IF(!IsTopLevel(), aParent);
 
   if (IsTopLevel()) {
     gTopLevelWindows.AppendElement(this);
-
-  } else if (parent) {
-    parent->mChildren.AppendElement(this);
-    mParent = parent;
   }
 
 #ifdef DEBUG_ANDROID_WIDGET
@@ -2129,22 +2252,15 @@ void nsWindow::Destroy() {
   // Stuff below may release the last ref to this
   nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
 
-  while (mChildren.Length()) {
-    // why do we still have children?
-    ALOG("### Warning: Destroying window %p and reparenting child %p to null!",
-         (void*)this, (void*)mChildren[0]);
-    mChildren[0]->SetParent(nullptr);
-  }
-
   // Ensure the compositor has been shutdown before this nsWindow is potentially
   // deleted
   nsBaseWidget::DestroyCompositor();
 
   nsBaseWidget::Destroy();
 
-  if (IsTopLevel()) gTopLevelWindows.RemoveElement(this);
-
-  SetParent(nullptr);
+  if (IsTopLevel()) {
+    gTopLevelWindows.RemoveElement(this);
+  }
 
   nsBaseWidget::OnDestroy();
 
@@ -2188,22 +2304,12 @@ void nsWindow::OnGeckoViewReady() {
   acc->OnReady();
 }
 
-void nsWindow::SetParent(nsIWidget* aNewParent) {
-  if ((nsIWidget*)mParent == aNewParent) return;
-
-  // If we had a parent before, remove ourselves from its list of
-  // children.
-  if (mParent) mParent->mChildren.RemoveElement(this);
-
-  mParent = (nsWindow*)aNewParent;
-
-  if (mParent) mParent->mChildren.AppendElement(this);
-
+void nsWindow::DidClearParent(nsIWidget*) {
   // if we are now in the toplevel window's hierarchy, schedule a redraw
-  if (FindTopLevel() == nsWindow::TopWindow()) RedrawAll();
+  if (FindTopLevel() == nsWindow::TopWindow()) {
+    RedrawAll();
+  }
 }
-
-nsIWidget* nsWindow::GetParent() { return mParent; }
 
 RefPtr<MozPromise<bool, bool, false>> nsWindow::OnLoadRequest(
     nsIURI* aUri, int32_t aWindowType, int32_t aFlags,
@@ -2244,15 +2350,6 @@ RefPtr<MozPromise<bool, bool, false>> nsWindow::OnLoadRequest(
   return geckoResult
              ? MozPromise<bool, bool, false>::FromGeckoResult(geckoResult)
              : nullptr;
-}
-
-void nsWindow::OnUpdateSessionStore(mozilla::jni::Object::Param aBundle) {
-  auto geckoViewSupport(mGeckoViewSupport.Access());
-  if (!geckoViewSupport) {
-    return;
-  }
-
-  geckoViewSupport->OnUpdateSessionStore(aBundle);
 }
 
 float nsWindow::GetDPI() {
@@ -2307,7 +2404,9 @@ void nsWindow::Show(bool aState) {
       unsigned int i;
       for (i = 1; i < gTopLevelWindows.Length(); i++) {
         nsWindow* win = gTopLevelWindows[i];
-        if (!win->mIsVisible) continue;
+        if (!win->mIsVisible) {
+          continue;
+        }
 
         win->BringToFront();
         break;
@@ -2373,10 +2472,6 @@ void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
   if (aRepaint && FindTopLevel() == nsWindow::TopWindow()) RedrawAll();
 }
 
-void nsWindow::SetZIndex(int32_t aZIndex) {
-  ALOG("nsWindow[%p]::SetZIndex %d ignored", (void*)this, aZIndex);
-}
-
 void nsWindow::SetSizeMode(nsSizeMode aMode) {
   if (aMode == mSizeMode) {
     return;
@@ -2407,9 +2502,10 @@ void nsWindow::Invalidate(const LayoutDeviceIntRect& aRect) {}
 nsWindow* nsWindow::FindTopLevel() {
   nsWindow* toplevel = this;
   while (toplevel) {
-    if (toplevel->IsTopLevel()) return toplevel;
-
-    toplevel = toplevel->mParent;
+    if (toplevel->IsTopLevel()) {
+      return toplevel;
+    }
+    toplevel = static_cast<nsWindow*>(toplevel->mParent);
   }
 
   ALOG(
@@ -2470,10 +2566,8 @@ LayoutDeviceIntRect nsWindow::GetScreenBounds() {
 LayoutDeviceIntPoint nsWindow::WidgetToScreenOffset() {
   LayoutDeviceIntPoint p(0, 0);
 
-  for (nsWindow* w = this; !!w; w = w->mParent) {
-    p.x += w->mBounds.x;
-    p.y += w->mBounds.y;
-
+  for (nsWindow* w = this; !!w; w = static_cast<nsWindow*>(w->mParent)) {
+    p += w->mBounds.TopLeft();
     if (w->IsTopLevel()) {
       break;
     }
@@ -2586,85 +2680,67 @@ void nsWindow::ShowDynamicToolbar() {
   acc->OnShowDynamicToolbar();
 }
 
-void GeckoViewSupport::OnUpdateSessionStore(
-    mozilla::jni::Object::Param aBundle) {
-  GeckoSession::Window::LocalRef window(mGeckoViewWindow);
-  if (!window) {
-    return;
-  }
-
-  window->OnUpdateSessionStore(aBundle);
-}
-
-static EventMessage convertDragEventActionToGeckoEvent(int32_t aAction) {
-  switch (aAction) {
-    case java::sdk::DragEvent::ACTION_DRAG_ENTERED:
-      return eDragEnter;
-    case java::sdk::DragEvent::ACTION_DRAG_EXITED:
-      return eDragExit;
-    case java::sdk::DragEvent::ACTION_DRAG_LOCATION:
-      return eDragOver;
-    case java::sdk::DragEvent::ACTION_DROP:
-      return eDrop;
-  }
-  return eVoidEvent;
-}
-
-void nsWindow::OnDragEvent(int32_t aAction, int64_t aTime, float aX, float aY,
-                           jni::Object::Param aDropData) {
+void nsWindow::OnDragEvent(int32_t aAction, float aX, float aY,
+                           jni::Object::Param aDropData,
+                           const mozilla::layers::APZEventResult& aApzResult,
+                           const MouseInput& aInput) {
   MOZ_ASSERT(NS_IsMainThread());
+
+  LayoutDeviceIntPoint point =
+      LayoutDeviceIntPoint(int32_t(floorf(aX)), int32_t(floorf(aY)));
 
   RefPtr<nsDragService> dragService = nsDragService::GetInstance();
   if (!dragService) {
     return;
   }
 
-  LayoutDeviceIntPoint point =
-      LayoutDeviceIntPoint(int32_t(floorf(aX)), int32_t(floorf(aY)));
-
+  RefPtr<nsDragSession> dragSession =
+      static_cast<nsDragSession*>(dragService->GetCurrentSession(this));
   if (aAction == java::sdk::DragEvent::ACTION_DRAG_STARTED) {
-    dragService->SetDragEndPoint(point);
+    if (dragSession) {
+      dragSession->SetDragEndPoint(point.x, point.y);
+    }
     return;
   }
 
   if (aAction == java::sdk::DragEvent::ACTION_DRAG_ENDED) {
-    dragService->EndDragSession(false, 0);
+    if (dragSession) {
+      dragSession->EndDragSession(false, 0);
+    }
     return;
   }
 
-  EventMessage message = convertDragEventActionToGeckoEvent(aAction);
-
-  if (message == eDragEnter) {
-    dragService->StartDragSession();
+  if (aAction == java::sdk::DragEvent::ACTION_DRAG_ENTERED) {
+    nsIWidget* widget = this;
+    dragSession =
+        static_cast<nsDragSession*>(dragService->StartDragSession(widget));
     // For compatibility, we have to set temporary data.
     auto dropData =
         mozilla::java::GeckoDragAndDrop::DropData::Ref::From(aDropData);
-    nsDragService::SetDropData(dropData);
+    dragSession->SetDropData(dropData);
   }
 
-  nsCOMPtr<nsIDragSession> dragSession;
-  dragService->GetCurrentSession(getter_AddRefs(dragSession));
   if (dragSession) {
-    switch (message) {
-      case eDragOver:
-        dragService->SetDragEndPoint(point);
-        dragService->FireDragEventAtSource(eDrag, 0);
+    switch (aAction) {
+      case java::sdk::DragEvent::ACTION_DRAG_LOCATION:
+        dragSession->SetDragEndPoint(point.x, point.y);
+        dragSession->FireDragEventAtSource(eDrag, 0);
         break;
-      case eDrop: {
+      case java::sdk::DragEvent::ACTION_DROP: {
         bool canDrop = false;
         dragSession->GetCanDrop(&canDrop);
         if (!canDrop) {
           nsCOMPtr<nsINode> sourceNode;
           dragSession->GetSourceNode(getter_AddRefs(sourceNode));
           if (!sourceNode) {
-            dragService->EndDragSession(false, 0);
+            dragSession->EndDragSession(false, 0);
           }
           return;
         }
         auto dropData =
             mozilla::java::GeckoDragAndDrop::DropData::Ref::From(aDropData);
-        nsDragService::SetDropData(dropData);
-        dragService->SetDragEndPoint(point);
+        dragSession->SetDropData(dropData);
+        dragSession->SetDragEndPoint(point.x, point.y);
         break;
       }
       default:
@@ -2674,18 +2750,15 @@ void nsWindow::OnDragEvent(int32_t aAction, int64_t aTime, float aX, float aY,
     dragSession->SetDragAction(nsIDragService::DRAGDROP_ACTION_MOVE);
   }
 
-  WidgetDragEvent geckoEvent(true, message, this);
-  geckoEvent.mRefPoint = point;
-  geckoEvent.mTimeStamp = nsWindow::GetEventTimeStamp(aTime);
-  geckoEvent.mModifiers = 0;  // DragEvent has no modifiers
-  DispatchInputEvent(&geckoEvent);
+  WidgetDragEvent geckoEvent = aInput.ToWidgetEvent<WidgetDragEvent>(this);
+  ProcessUntransformedAPZEvent(&geckoEvent, aApzResult);
 
   if (!dragSession) {
     return;
   }
 
-  switch (message) {
-    case eDragExit: {
+  switch (aAction) {
+    case java::sdk::DragEvent::ACTION_DRAG_EXITED: {
       nsCOMPtr<nsINode> sourceNode;
       dragSession->GetSourceNode(getter_AddRefs(sourceNode));
       if (!sourceNode) {
@@ -2693,12 +2766,12 @@ void nsWindow::OnDragEvent(int32_t aAction, int64_t aTime, float aX, float aY,
         // initiated in a different app. End the drag session,
         // since we're done with it for now (until the user
         // drags back into mozilla).
-        dragService->EndDragSession(false, 0);
+        dragSession->EndDragSession(false, 0);
       }
       break;
     }
-    case eDrop:
-      dragService->EndDragSession(true, 0);
+    case java::sdk::DragEvent::ACTION_DROP:
+      dragSession->EndDragSession(true, 0);
       break;
     default:
       break;
@@ -2791,6 +2864,15 @@ void nsWindow::UpdateOverscrollOffset(const float aX, const float aY) {
           compositor->UpdateOverscrollOffset(aX, aY);
         });
   }
+}
+
+void nsWindow::HideDynamicToolbar() {
+  auto acc(mGeckoViewSupport.Access());
+  if (!acc) {
+    return;
+  }
+
+  acc->OnHideDynamicToolbar();
 }
 
 void* nsWindow::GetNativeData(uint32_t aDataType) {
@@ -2976,8 +3058,7 @@ nsresult nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
 
   const auto& npzc = npzcSup->GetJavaNPZC();
   const auto& bounds = FindTopLevel()->mBounds;
-  aPoint.x -= bounds.x;
-  aPoint.y -= bounds.y;
+  aPoint -= bounds.TopLeft();
 
   DispatchToUiThread(
       "nsWindow::SynthesizeNativeTouchPoint",
@@ -3002,8 +3083,7 @@ nsresult nsWindow::SynthesizeNativeMouseEvent(
 
   const auto& npzc = npzcSup->GetJavaNPZC();
   const auto& bounds = FindTopLevel()->mBounds;
-  aPoint.x -= bounds.x;
-  aPoint.y -= bounds.y;
+  aPoint -= bounds.TopLeft();
 
   int32_t nativeMessage;
   switch (aNativeMessage) {
@@ -3185,9 +3265,22 @@ void nsWindow::UpdateDynamicToolbarOffset(ScreenIntCoord aOffset) {
   }
 }
 
-ScreenIntMargin nsWindow::GetSafeAreaInsets() const { return mSafeAreaInsets; }
+void nsWindow::KeyboardHeightChanged(ScreenIntCoord aHeight) {
+  if (mWidgetListener) {
+    mWidgetListener->KeyboardHeightChanged(aHeight);
+  }
 
-void nsWindow::UpdateSafeAreaInsets(const ScreenIntMargin& aSafeAreaInsets) {
+  if (mAttachedWidgetListener) {
+    mAttachedWidgetListener->KeyboardHeightChanged(aHeight);
+  }
+}
+
+LayoutDeviceIntMargin nsWindow::GetSafeAreaInsets() const {
+  return mSafeAreaInsets;
+}
+
+void nsWindow::UpdateSafeAreaInsets(
+    const LayoutDeviceIntMargin& aSafeAreaInsets) {
   mSafeAreaInsets = aSafeAreaInsets;
 
   if (mWidgetListener) {

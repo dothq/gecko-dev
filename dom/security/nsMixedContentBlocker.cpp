@@ -115,9 +115,9 @@ static void LogMixedContentMessage(
                                         messageLookupKey.get(), params,
                                         localizedMsg);
 
-  nsContentUtils::ReportToConsoleByWindowID(localizedMsg, severityFlag,
-                                            messageCategory, aInnerWindowID,
-                                            aRequestingLocation);
+  nsContentUtils::ReportToConsoleByWindowID(
+      localizedMsg, severityFlag, messageCategory, aInnerWindowID,
+      SourceLocation(aRequestingLocation));
 }
 
 /* nsIChannelEventSink implementation
@@ -378,6 +378,7 @@ bool nsMixedContentBlocker::IsUpgradableContentType(nsContentPolicyType aType,
   switch (aType) {
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE:
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD:
+    case nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON:
       return !aConsiderPrefs ||
              StaticPrefs::
                  security_mixed_content_upgrade_display_content_image();
@@ -610,6 +611,7 @@ nsresult nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     case ExtContentPolicy::TYPE_SPECULATIVE:
     case ExtContentPolicy::TYPE_WEB_TRANSPORT:
     case ExtContentPolicy::TYPE_WEB_IDENTITY:
+    case ExtContentPolicy::TYPE_JSON:
       break;
 
     case ExtContentPolicy::TYPE_INVALID:
@@ -802,13 +804,13 @@ nsresult nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     CopyUTF8toUTF16(spec, *params.AppendElement());
 
     CSP_LogLocalizedStr("blockAllMixedContent", params,
-                        u""_ns,  // aSourceFile
+                        ""_ns,   // aSourceFile
                         u""_ns,  // aScriptSample
                         0,       // aLineNumber
                         1,       // aColumnNumber
                         nsIScriptError::errorFlag, "blockAllMixedContent"_ns,
                         requestingWindow->Id(),
-                        !!aLoadInfo->GetOriginAttributes().mPrivateBrowsingId);
+                        aLoadInfo->GetOriginAttributes().IsPrivateBrowsing());
     *aDecision = REJECT_REQUEST;
     MOZ_LOG(
         sMCBLog, LogLevel::Verbose,

@@ -24,7 +24,6 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
-  NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
   ShellService: "resource:///modules/ShellService.sys.mjs",
 });
 
@@ -52,12 +51,14 @@ const L10N = new Localization([
   "branding/brand.ftl",
   "browser/newtab/onboarding.ftl",
   "toolkit/branding/brandings.ftl",
-  "toolkit/branding/accounts.ftl",
 ]);
 
 const HOMEPAGE_PREF = "browser.startup.homepage";
 const NEWTAB_PREF = "browser.newtabpage.enabled";
 const FOURTEEN_DAYS_IN_MS = 14 * 24 * 60 * 60 * 1000;
+const isMSIX =
+  AppConstants.platform === "win" &&
+  Services.sysinfo.getProperty("hasWinPackageId", false);
 
 const BASE_MESSAGES = () => [
   {
@@ -147,11 +148,23 @@ const BASE_MESSAGES = () => [
             },
             primary_button: {
               label: {
-                string_id: "mr2022-onboarding-pin-primary-button-label",
+                string_id: isMSIX
+                  ? "mr2022-onboarding-pin-primary-button-label-msix"
+                  : "mr2022-onboarding-pin-primary-button-label",
               },
               action: {
+                type: "MULTI_ACTION",
                 navigate: true,
-                type: "PIN_FIREFOX_TO_TASKBAR",
+                data: {
+                  actions: [
+                    {
+                      type: "PIN_FIREFOX_TO_TASKBAR",
+                    },
+                    {
+                      type: "PIN_FIREFOX_TO_START_MENU",
+                    },
+                  ],
+                },
               },
             },
             checkbox: {
@@ -172,6 +185,9 @@ const BASE_MESSAGES = () => [
                     },
                     {
                       type: "PIN_FIREFOX_TO_TASKBAR",
+                    },
+                    {
+                      type: "PIN_FIREFOX_TO_START_MENU",
                     },
                   ],
                 },
@@ -479,8 +495,18 @@ const BASE_MESSAGES = () => [
                 string_id: "fx100-thank-you-pin-primary-button-label",
               },
               action: {
+                type: "MULTI_ACTION",
                 navigate: true,
-                type: "PIN_FIREFOX_TO_TASKBAR",
+                data: {
+                  actions: [
+                    {
+                      type: "PIN_FIREFOX_TO_TASKBAR",
+                    },
+                    {
+                      type: "PIN_FIREFOX_TO_START_MENU",
+                    },
+                  ],
+                },
               },
             },
             secondary_button: {
@@ -872,7 +898,7 @@ const BASE_MESSAGES = () => [
       ],
       lifetime: 12,
     },
-    targeting: "!inMr2022Holdback && doesAppNeedPrivatePin",
+    targeting: "doesAppNeedPrivatePin",
   },
   {
     id: "PB_NEWTAB_COOKIE_BANNERS_PROMO",
@@ -1128,8 +1154,15 @@ const BASE_MESSAGES = () => [
     frequency: {
       lifetime: 2,
     },
-    targeting:
-      "source == 'startup' && !isMajorUpgrade && !activeNotifications && !isDefaultBrowser && !willShowDefaultPrompt && 'browser.shell.checkDefaultBrowser'|preferenceValue && (currentDate|date - profileAgeCreated|date) / 86400000 >= 28 && userPrefs.cfrFeatures == true",
+    targeting: `source == 'startup'
+    && !isMajorUpgrade
+    && !activeNotifications
+    && !isDefaultBrowser
+    && !willShowDefaultPrompt
+    && 'browser.shell.checkDefaultBrowser'|preferenceValue
+    && (currentDate|date - profileAgeCreated|date) / 86400000 >= 28
+    && previousSessionEnd
+    && userPrefs.cfrFeatures == true`,
     trigger: {
       id: "defaultBrowserCheck",
     },
@@ -1204,8 +1237,130 @@ const BASE_MESSAGES = () => [
     frequency: {
       lifetime: 1,
     },
+    targeting: `source == 'startup'
+    && !isMajorUpgrade
+    && !activeNotifications
+    && !isDefaultBrowser
+    && !willShowDefaultPrompt
+    && 'browser.shell.checkDefaultBrowser'|preferenceValue
+    && (currentDate|date - profileAgeCreated|date) / 86400000 <= 28
+    && (currentDate|date - profileAgeCreated|date) / 86400000 >= 7
+    && previousSessionEnd
+    && userPrefs.cfrFeatures == true`,
+    trigger: {
+      id: "defaultBrowserCheck",
+    },
+  },
+  {
+    id: "SET_DEFAULT_BROWSER_GUIDANCE_NOTIFICATION_WIN10",
+    template: "toast_notification",
+    content: {
+      title: {
+        string_id: "default-browser-guidance-notification-title",
+      },
+      body: {
+        string_id:
+          "default-browser-guidance-notification-body-instruction-win10",
+      },
+      launch_action: {
+        type: "OPEN_URL",
+        data: {
+          args: "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/win-set-firefox-default-browser",
+          where: "tabshifted",
+        },
+      },
+      requireInteraction: true,
+      actions: [
+        {
+          action: "info-page",
+          title: {
+            string_id: "default-browser-guidance-notification-info-page",
+          },
+          launch_action: {
+            type: "OPEN_URL",
+            data: {
+              args: "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/win-set-firefox-default-browser",
+              where: "tabshifted",
+            },
+          },
+        },
+        {
+          action: "dismiss",
+          title: {
+            string_id: "default-browser-guidance-notification-dismiss",
+          },
+          windowsSystemActivationType: true,
+        },
+      ],
+      tag: "set-default-guidance-notification",
+    },
+    // Both Windows 10 and 11 return `os.windowsVersion == 10.0`. We limit to
+    // only Windows 10 with `os.windowsBuildNumber < 22000`. We need this due to
+    // Windows 10 and 11 having substantively different UX for Windows Settings.
     targeting:
-      "source == 'startup' && !isMajorUpgrade && !activeNotifications && !isDefaultBrowser && !willShowDefaultPrompt && 'browser.shell.checkDefaultBrowser'|preferenceValue && (currentDate|date - profileAgeCreated|date) / 86400000 <= 28 && (currentDate|date - profileAgeCreated|date) / 86400000 >= 7 && userPrefs.cfrFeatures == true",
+      "os.isWindows && os.windowsVersion >= 10.0 && os.windowsBuildNumber < 22000",
+    trigger: { id: "deeplinkedToWindowsSettingsUI" },
+  },
+  {
+    id: "SET_DEFAULT_BROWSER_GUIDANCE_NOTIFICATION_WIN11",
+    template: "toast_notification",
+    content: {
+      title: {
+        string_id: "default-browser-guidance-notification-title",
+      },
+      body: {
+        string_id:
+          "default-browser-guidance-notification-body-instruction-win11",
+      },
+      launch_action: {
+        type: "OPEN_URL",
+        data: {
+          args: "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/win-set-firefox-default-browser",
+          where: "tabshifted",
+        },
+      },
+      requireInteraction: true,
+      actions: [
+        {
+          action: "info-page",
+          title: {
+            string_id: "default-browser-guidance-notification-info-page",
+          },
+          launch_action: {
+            type: "OPEN_URL",
+            data: {
+              args: "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/win-set-firefox-default-browser",
+              where: "tabshifted",
+            },
+          },
+        },
+        {
+          action: "dismiss",
+          title: {
+            string_id: "default-browser-guidance-notification-dismiss",
+          },
+          windowsSystemActivationType: true,
+        },
+      ],
+      tag: "set-default-guidance-notification",
+    },
+    // Both Windows 10 and 11 return `os.windowsVersion == 10.0`. We limit to
+    // only Windows 11 with `os.windowsBuildNumber >= 22000`. We need this due to
+    // Windows 10 and 11 having substantively different UX for Windows Settings.
+    targeting:
+      "os.isWindows && os.windowsVersion >= 10.0 && os.windowsBuildNumber >= 22000",
+    trigger: { id: "deeplinkedToWindowsSettingsUI" },
+  },
+  {
+    id: "FXA_ACCOUNTS_BADGE_REVISED",
+    template: "toolbar_badge",
+    content: {
+      delay: 1000,
+      target: "fxa-toolbar-menu-button",
+    },
+    skip_in_tests: "covered by browser_asrouter_toolbarbadge.js",
+    targeting:
+      "source == 'newtab' && !hasAccessedFxAPanel && !usesFirefoxSync && isFxAEnabled && !isFxASignedIn",
     trigger: {
       id: "defaultBrowserCheck",
     },
@@ -1275,9 +1430,8 @@ export const OnboardingMessageProvider = {
     return checkDefault && !isDefault;
   },
   _shouldShowPrivacySegmentationScreen() {
-    // Fall back to pref: browser.privacySegmentation.preferences.show
-    return lazy.NimbusFeatures.majorRelease2022.getVariable(
-      "feltPrivacyShowPreferencesSection"
+    return Services.prefs.getBoolPref(
+      "browser.privacySegmentation.preferences.show"
     );
   },
   _doesHomepageNeedReset() {

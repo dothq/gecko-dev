@@ -154,11 +154,25 @@ class ArrayBufferDataStream {
       return value;
     }
 
+    readBytes() {
+      const size = this.readInt32();
+      const bytes = new Uint8Array(this.dataView.buffer, this.pos, size);
+      this.pos += size;
+      return bytes
+    }
+
+    writeBytes(uint8Array) {
+      this.writeUint32(uint8Array.length);
+      value.forEach((elt) => {
+        dataStream.writeUint8(elt);
+      })
+    }
+
     // Reads a Optionneur pointer from the data stream
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     readPointerOptionneur() {
-        const pointerId = 5; // rondpoint:Optionneur
+        const pointerId = 16; // rondpoint:Optionneur
         const res = UniFFIScaffolding.readPointer(pointerId, this.dataView.buffer, this.pos);
         this.pos += 8;
         return res;
@@ -168,7 +182,7 @@ class ArrayBufferDataStream {
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     writePointerOptionneur(value) {
-        const pointerId = 5; // rondpoint:Optionneur
+        const pointerId = 16; // rondpoint:Optionneur
         UniFFIScaffolding.writePointer(pointerId, value, this.dataView.buffer, this.pos);
         this.pos += 8;
     }
@@ -178,7 +192,7 @@ class ArrayBufferDataStream {
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     readPointerRetourneur() {
-        const pointerId = 6; // rondpoint:Retourneur
+        const pointerId = 17; // rondpoint:Retourneur
         const res = UniFFIScaffolding.readPointer(pointerId, this.dataView.buffer, this.pos);
         this.pos += 8;
         return res;
@@ -188,7 +202,7 @@ class ArrayBufferDataStream {
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     writePointerRetourneur(value) {
-        const pointerId = 6; // rondpoint:Retourneur
+        const pointerId = 17; // rondpoint:Retourneur
         UniFFIScaffolding.writePointer(pointerId, value, this.dataView.buffer, this.pos);
         this.pos += 8;
     }
@@ -198,7 +212,7 @@ class ArrayBufferDataStream {
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     readPointerStringifier() {
-        const pointerId = 7; // rondpoint:Stringifier
+        const pointerId = 18; // rondpoint:Stringifier
         const res = UniFFIScaffolding.readPointer(pointerId, this.dataView.buffer, this.pos);
         this.pos += 8;
         return res;
@@ -208,7 +222,7 @@ class ArrayBufferDataStream {
     // UniFFI Pointers are **always** 8 bytes long. That is enforced
     // by the C++ and Rust Scaffolding code.
     writePointerStringifier(value) {
-        const pointerId = 7; // rondpoint:Stringifier
+        const pointerId = 18; // rondpoint:Stringifier
         UniFFIScaffolding.writePointer(pointerId, value, this.dataView.buffer, this.pos);
         this.pos += 8;
     }
@@ -224,9 +238,8 @@ function handleRustResult(result, liftCallback, liftErrCallback) {
             throw liftErrCallback(result.data);
 
         case "internal-error":
-            let message = result.internalErrorMessage;
-            if (message) {
-                throw new UniFFIInternalError(message);
+            if (result.data) {
+                throw new UniFFIInternalError(FfiConverterString.lift(result.data));
             } else {
                 throw new UniFFIInternalError("Unknown error");
             }
@@ -596,6 +609,9 @@ export class FfiConverterString extends FfiConverter {
     }
 }
 
+/**
+ * Optionneur
+ */
 export class Optionneur {
     // Use `init` to instantiate this class.
     // DO NOT USE THIS CONSTRUCTOR DIRECTLY
@@ -610,17 +626,15 @@ export class Optionneur {
         this[uniffiObjectPtr] = opts[constructUniffiObject];
     }
     /**
-     * An async constructor for Optionneur.
-     * 
-     * @returns {Promise<Optionneur>}: A promise that resolves
-     *      to a newly constructed Optionneur
+     * init
+     * @returns {Optionneur}
      */
     static init() {
         const liftResult = (result) => FfiConverterTypeOptionneur.lift(result);
         const liftError = null;
         const functionCall = () => {
-            return UniFFIScaffolding.callAsync(
-                46, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_optionneur_new
+            return UniFFIScaffolding.callAsyncWrapper(
+                162, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_optionneur_new
             )
         }
         try {
@@ -629,6 +643,10 @@ export class Optionneur {
             return Promise.reject(error)
         }}
 
+    /**
+     * sinonBoolean
+     * @returns {Boolean}
+     */
     sinonBoolean(value = false) {
         const liftResult = (result) => FfiConverterBool.lift(result);
         const liftError = null;
@@ -641,8 +659,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                47, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_boolean
+            return UniFFIScaffolding.callAsyncWrapper(
+                137, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_boolean
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterBool.lower(value),
             )
@@ -654,6 +672,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonEnum
+     * @returns {Enumeration}
+     */
     sinonEnum(value = Enumeration.TROIS) {
         const liftResult = (result) => FfiConverterTypeEnumeration.lift(result);
         const liftError = null;
@@ -666,8 +688,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                48, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_enum
+            return UniFFIScaffolding.callAsyncWrapper(
+                138, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_enum
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterTypeEnumeration.lower(value),
             )
@@ -679,6 +701,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonF32
+     * @returns {number}
+     */
     sinonF32(value = 42.0) {
         const liftResult = (result) => FfiConverterF32.lift(result);
         const liftError = null;
@@ -691,8 +717,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                49, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_f32
+            return UniFFIScaffolding.callAsyncWrapper(
+                139, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_f32
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterF32.lower(value),
             )
@@ -704,6 +730,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonF64
+     * @returns {number}
+     */
     sinonF64(value = 42.1) {
         const liftResult = (result) => FfiConverterF64.lift(result);
         const liftError = null;
@@ -716,8 +746,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                50, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_f64
+            return UniFFIScaffolding.callAsyncWrapper(
+                140, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_f64
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterF64.lower(value),
             )
@@ -729,6 +759,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI16Dec
+     * @returns {number}
+     */
     sinonI16Dec(value = 42) {
         const liftResult = (result) => FfiConverterI16.lift(result);
         const liftError = null;
@@ -741,8 +775,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                51, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i16_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                141, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i16_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI16.lower(value),
             )
@@ -754,6 +788,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI16Hex
+     * @returns {number}
+     */
     sinonI16Hex(value = 0x7f) {
         const liftResult = (result) => FfiConverterI16.lift(result);
         const liftError = null;
@@ -766,8 +804,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                52, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i16_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                142, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i16_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI16.lower(value),
             )
@@ -779,6 +817,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI32Dec
+     * @returns {number}
+     */
     sinonI32Dec(value = 42) {
         const liftResult = (result) => FfiConverterI32.lift(result);
         const liftError = null;
@@ -791,8 +833,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                53, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i32_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                143, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i32_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI32.lower(value),
             )
@@ -804,6 +846,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI32Hex
+     * @returns {number}
+     */
     sinonI32Hex(value = 0x7fffffff) {
         const liftResult = (result) => FfiConverterI32.lift(result);
         const liftError = null;
@@ -816,8 +862,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                54, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i32_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                144, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i32_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI32.lower(value),
             )
@@ -829,6 +875,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI64Dec
+     * @returns {number}
+     */
     sinonI64Dec(value = 42) {
         const liftResult = (result) => FfiConverterI64.lift(result);
         const liftError = null;
@@ -841,8 +891,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                55, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i64_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                145, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i64_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI64.lower(value),
             )
@@ -854,6 +904,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI64Hex
+     * @returns {number}
+     */
     sinonI64Hex(value = 0x7fffffffffffffff) {
         const liftResult = (result) => FfiConverterI64.lift(result);
         const liftError = null;
@@ -866,8 +920,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                56, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i64_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                146, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i64_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI64.lower(value),
             )
@@ -879,6 +933,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI8Dec
+     * @returns {number}
+     */
     sinonI8Dec(value = -42) {
         const liftResult = (result) => FfiConverterI8.lift(result);
         const liftError = null;
@@ -891,8 +949,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                57, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i8_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                147, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i8_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI8.lower(value),
             )
@@ -904,6 +962,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonI8Hex
+     * @returns {number}
+     */
     sinonI8Hex(value = -127) {
         const liftResult = (result) => FfiConverterI8.lift(result);
         const liftError = null;
@@ -916,8 +978,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                58, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i8_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                148, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_i8_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterI8.lower(value),
             )
@@ -929,6 +991,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonNull
+     * @returns {?string}
+     */
     sinonNull(value = null) {
         const liftResult = (result) => FfiConverterOptionalstring.lift(result);
         const liftError = null;
@@ -941,8 +1007,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                59, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_null
+            return UniFFIScaffolding.callAsyncWrapper(
+                149, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_null
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterOptionalstring.lower(value),
             )
@@ -954,6 +1020,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonSequence
+     * @returns {Array.<string>}
+     */
     sinonSequence(value = []) {
         const liftResult = (result) => FfiConverterSequencestring.lift(result);
         const liftError = null;
@@ -966,8 +1036,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                60, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_sequence
+            return UniFFIScaffolding.callAsyncWrapper(
+                150, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_sequence
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterSequencestring.lower(value),
             )
@@ -979,6 +1049,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonString
+     * @returns {string}
+     */
     sinonString(value = "default") {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -991,8 +1065,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                61, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_string
+            return UniFFIScaffolding.callAsyncWrapper(
+                151, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_string
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterString.lower(value),
             )
@@ -1004,6 +1078,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU16Dec
+     * @returns {number}
+     */
     sinonU16Dec(value = 42) {
         const liftResult = (result) => FfiConverterU16.lift(result);
         const liftError = null;
@@ -1016,8 +1094,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                62, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u16_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                152, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u16_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU16.lower(value),
             )
@@ -1029,6 +1107,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU16Hex
+     * @returns {number}
+     */
     sinonU16Hex(value = 0xffff) {
         const liftResult = (result) => FfiConverterU16.lift(result);
         const liftError = null;
@@ -1041,8 +1123,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                63, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u16_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                153, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u16_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU16.lower(value),
             )
@@ -1054,6 +1136,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU32Dec
+     * @returns {number}
+     */
     sinonU32Dec(value = 42) {
         const liftResult = (result) => FfiConverterU32.lift(result);
         const liftError = null;
@@ -1066,8 +1152,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                64, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                154, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU32.lower(value),
             )
@@ -1079,6 +1165,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU32Hex
+     * @returns {number}
+     */
     sinonU32Hex(value = 0xffffffff) {
         const liftResult = (result) => FfiConverterU32.lift(result);
         const liftError = null;
@@ -1091,8 +1181,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                65, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                155, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU32.lower(value),
             )
@@ -1104,6 +1194,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU32Oct
+     * @returns {number}
+     */
     sinonU32Oct(value = 0o755) {
         const liftResult = (result) => FfiConverterU32.lift(result);
         const liftError = null;
@@ -1116,8 +1210,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                66, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_oct
+            return UniFFIScaffolding.callAsyncWrapper(
+                156, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u32_oct
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU32.lower(value),
             )
@@ -1129,6 +1223,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU64Dec
+     * @returns {number}
+     */
     sinonU64Dec(value = 42) {
         const liftResult = (result) => FfiConverterU64.lift(result);
         const liftError = null;
@@ -1141,8 +1239,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                67, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u64_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                157, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u64_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU64.lower(value),
             )
@@ -1154,6 +1252,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU64Hex
+     * @returns {number}
+     */
     sinonU64Hex(value = 0xffffffffffffffff) {
         const liftResult = (result) => FfiConverterU64.lift(result);
         const liftError = null;
@@ -1166,8 +1268,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                68, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u64_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                158, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u64_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU64.lower(value),
             )
@@ -1179,6 +1281,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU8Dec
+     * @returns {number}
+     */
     sinonU8Dec(value = 42) {
         const liftResult = (result) => FfiConverterU8.lift(result);
         const liftError = null;
@@ -1191,8 +1297,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                69, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u8_dec
+            return UniFFIScaffolding.callAsyncWrapper(
+                159, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u8_dec
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU8.lower(value),
             )
@@ -1204,6 +1310,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonU8Hex
+     * @returns {number}
+     */
     sinonU8Hex(value = 0xff) {
         const liftResult = (result) => FfiConverterU8.lift(result);
         const liftError = null;
@@ -1216,8 +1326,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                70, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u8_hex
+            return UniFFIScaffolding.callAsyncWrapper(
+                160, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_u8_hex
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterU8.lower(value),
             )
@@ -1229,6 +1339,10 @@ export class Optionneur {
         }
     }
 
+    /**
+     * sinonZero
+     * @returns {?number}
+     */
     sinonZero(value = 0) {
         const liftResult = (result) => FfiConverterOptionali32.lift(result);
         const liftError = null;
@@ -1241,8 +1355,8 @@ export class Optionneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                71, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_zero
+            return UniFFIScaffolding.callAsyncWrapper(
+                161, // rondpoint:uniffi_uniffi_rondpoint_fn_method_optionneur_sinon_zero
                 FfiConverterTypeOptionneur.lower(this),
                 FfiConverterOptionali32.lower(value),
             )
@@ -1265,7 +1379,11 @@ export class FfiConverterTypeOptionneur extends FfiConverter {
     }
 
     static lower(value) {
-        return value[uniffiObjectPtr];
+        const ptr = value[uniffiObjectPtr];
+        if (!(ptr instanceof UniFFIPointer)) {
+            throw new UniFFITypeError("Object is not a 'Optionneur' instance");
+        }
+        return ptr;
     }
 
     static read(dataStream) {
@@ -1281,6 +1399,9 @@ export class FfiConverterTypeOptionneur extends FfiConverter {
     }
 }
 
+/**
+ * Retourneur
+ */
 export class Retourneur {
     // Use `init` to instantiate this class.
     // DO NOT USE THIS CONSTRUCTOR DIRECTLY
@@ -1295,17 +1416,15 @@ export class Retourneur {
         this[uniffiObjectPtr] = opts[constructUniffiObject];
     }
     /**
-     * An async constructor for Retourneur.
-     * 
-     * @returns {Promise<Retourneur>}: A promise that resolves
-     *      to a newly constructed Retourneur
+     * init
+     * @returns {Retourneur}
      */
     static init() {
         const liftResult = (result) => FfiConverterTypeRetourneur.lift(result);
         const liftError = null;
         const functionCall = () => {
-            return UniFFIScaffolding.callAsync(
-                72, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_retourneur_new
+            return UniFFIScaffolding.callAsyncWrapper(
+                178, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_retourneur_new
             )
         }
         try {
@@ -1314,6 +1433,10 @@ export class Retourneur {
             return Promise.reject(error)
         }}
 
+    /**
+     * identiqueBoolean
+     * @returns {Boolean}
+     */
     identiqueBoolean(value) {
         const liftResult = (result) => FfiConverterBool.lift(result);
         const liftError = null;
@@ -1326,8 +1449,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                73, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_boolean
+            return UniFFIScaffolding.callAsyncWrapper(
+                163, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_boolean
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterBool.lower(value),
             )
@@ -1339,6 +1462,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueDouble
+     * @returns {number}
+     */
     identiqueDouble(value) {
         const liftResult = (result) => FfiConverterF64.lift(result);
         const liftError = null;
@@ -1351,8 +1478,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                74, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_double
+            return UniFFIScaffolding.callAsyncWrapper(
+                164, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_double
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterF64.lower(value),
             )
@@ -1364,6 +1491,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueFloat
+     * @returns {number}
+     */
     identiqueFloat(value) {
         const liftResult = (result) => FfiConverterF32.lift(result);
         const liftError = null;
@@ -1376,8 +1507,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                75, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_float
+            return UniFFIScaffolding.callAsyncWrapper(
+                165, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_float
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterF32.lower(value),
             )
@@ -1389,6 +1520,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueI16
+     * @returns {number}
+     */
     identiqueI16(value) {
         const liftResult = (result) => FfiConverterI16.lift(result);
         const liftError = null;
@@ -1401,8 +1536,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                76, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i16
+            return UniFFIScaffolding.callAsyncWrapper(
+                166, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i16
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterI16.lower(value),
             )
@@ -1414,6 +1549,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueI32
+     * @returns {number}
+     */
     identiqueI32(value) {
         const liftResult = (result) => FfiConverterI32.lift(result);
         const liftError = null;
@@ -1426,8 +1565,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                77, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i32
+            return UniFFIScaffolding.callAsyncWrapper(
+                167, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i32
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterI32.lower(value),
             )
@@ -1439,6 +1578,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueI64
+     * @returns {number}
+     */
     identiqueI64(value) {
         const liftResult = (result) => FfiConverterI64.lift(result);
         const liftError = null;
@@ -1451,8 +1594,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                78, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i64
+            return UniFFIScaffolding.callAsyncWrapper(
+                168, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i64
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterI64.lower(value),
             )
@@ -1464,6 +1607,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueI8
+     * @returns {number}
+     */
     identiqueI8(value) {
         const liftResult = (result) => FfiConverterI8.lift(result);
         const liftError = null;
@@ -1476,8 +1623,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                79, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i8
+            return UniFFIScaffolding.callAsyncWrapper(
+                169, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_i8
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterI8.lower(value),
             )
@@ -1489,6 +1636,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueNombres
+     * @returns {DictionnaireNombres}
+     */
     identiqueNombres(value) {
         const liftResult = (result) => FfiConverterTypeDictionnaireNombres.lift(result);
         const liftError = null;
@@ -1501,8 +1652,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                80, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_nombres
+            return UniFFIScaffolding.callAsyncWrapper(
+                170, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_nombres
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterTypeDictionnaireNombres.lower(value),
             )
@@ -1514,6 +1665,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueNombresSignes
+     * @returns {DictionnaireNombresSignes}
+     */
     identiqueNombresSignes(value) {
         const liftResult = (result) => FfiConverterTypeDictionnaireNombresSignes.lift(result);
         const liftError = null;
@@ -1526,8 +1681,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                81, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_nombres_signes
+            return UniFFIScaffolding.callAsyncWrapper(
+                171, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_nombres_signes
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterTypeDictionnaireNombresSignes.lower(value),
             )
@@ -1539,6 +1694,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueOptionneurDictionnaire
+     * @returns {OptionneurDictionnaire}
+     */
     identiqueOptionneurDictionnaire(value) {
         const liftResult = (result) => FfiConverterTypeOptionneurDictionnaire.lift(result);
         const liftError = null;
@@ -1551,8 +1710,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                82, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_optionneur_dictionnaire
+            return UniFFIScaffolding.callAsyncWrapper(
+                172, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_optionneur_dictionnaire
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterTypeOptionneurDictionnaire.lower(value),
             )
@@ -1564,6 +1723,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueString
+     * @returns {string}
+     */
     identiqueString(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1576,8 +1739,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                83, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_string
+            return UniFFIScaffolding.callAsyncWrapper(
+                173, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_string
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterString.lower(value),
             )
@@ -1589,6 +1752,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueU16
+     * @returns {number}
+     */
     identiqueU16(value) {
         const liftResult = (result) => FfiConverterU16.lift(result);
         const liftError = null;
@@ -1601,8 +1768,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                84, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u16
+            return UniFFIScaffolding.callAsyncWrapper(
+                174, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u16
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterU16.lower(value),
             )
@@ -1614,6 +1781,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueU32
+     * @returns {number}
+     */
     identiqueU32(value) {
         const liftResult = (result) => FfiConverterU32.lift(result);
         const liftError = null;
@@ -1626,8 +1797,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                85, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u32
+            return UniFFIScaffolding.callAsyncWrapper(
+                175, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u32
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterU32.lower(value),
             )
@@ -1639,6 +1810,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueU64
+     * @returns {number}
+     */
     identiqueU64(value) {
         const liftResult = (result) => FfiConverterU64.lift(result);
         const liftError = null;
@@ -1651,8 +1826,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                86, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u64
+            return UniFFIScaffolding.callAsyncWrapper(
+                176, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u64
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterU64.lower(value),
             )
@@ -1664,6 +1839,10 @@ export class Retourneur {
         }
     }
 
+    /**
+     * identiqueU8
+     * @returns {number}
+     */
     identiqueU8(value) {
         const liftResult = (result) => FfiConverterU8.lift(result);
         const liftError = null;
@@ -1676,8 +1855,8 @@ export class Retourneur {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                87, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u8
+            return UniFFIScaffolding.callAsyncWrapper(
+                177, // rondpoint:uniffi_uniffi_rondpoint_fn_method_retourneur_identique_u8
                 FfiConverterTypeRetourneur.lower(this),
                 FfiConverterU8.lower(value),
             )
@@ -1700,7 +1879,11 @@ export class FfiConverterTypeRetourneur extends FfiConverter {
     }
 
     static lower(value) {
-        return value[uniffiObjectPtr];
+        const ptr = value[uniffiObjectPtr];
+        if (!(ptr instanceof UniFFIPointer)) {
+            throw new UniFFITypeError("Object is not a 'Retourneur' instance");
+        }
+        return ptr;
     }
 
     static read(dataStream) {
@@ -1716,6 +1899,9 @@ export class FfiConverterTypeRetourneur extends FfiConverter {
     }
 }
 
+/**
+ * Stringifier
+ */
 export class Stringifier {
     // Use `init` to instantiate this class.
     // DO NOT USE THIS CONSTRUCTOR DIRECTLY
@@ -1730,17 +1916,15 @@ export class Stringifier {
         this[uniffiObjectPtr] = opts[constructUniffiObject];
     }
     /**
-     * An async constructor for Stringifier.
-     * 
-     * @returns {Promise<Stringifier>}: A promise that resolves
-     *      to a newly constructed Stringifier
+     * init
+     * @returns {Stringifier}
      */
     static init() {
         const liftResult = (result) => FfiConverterTypeStringifier.lift(result);
         const liftError = null;
         const functionCall = () => {
-            return UniFFIScaffolding.callAsync(
-                88, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_stringifier_new
+            return UniFFIScaffolding.callAsyncWrapper(
+                191, // rondpoint:uniffi_uniffi_rondpoint_fn_constructor_stringifier_new
             )
         }
         try {
@@ -1749,6 +1933,10 @@ export class Stringifier {
             return Promise.reject(error)
         }}
 
+    /**
+     * toStringBoolean
+     * @returns {string}
+     */
     toStringBoolean(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1761,8 +1949,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                89, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_boolean
+            return UniFFIScaffolding.callAsyncWrapper(
+                179, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_boolean
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterBool.lower(value),
             )
@@ -1774,6 +1962,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringDouble
+     * @returns {string}
+     */
     toStringDouble(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1786,8 +1978,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                90, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_double
+            return UniFFIScaffolding.callAsyncWrapper(
+                180, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_double
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterF64.lower(value),
             )
@@ -1799,6 +1991,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringFloat
+     * @returns {string}
+     */
     toStringFloat(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1811,8 +2007,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                91, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_float
+            return UniFFIScaffolding.callAsyncWrapper(
+                181, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_float
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterF32.lower(value),
             )
@@ -1824,6 +2020,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringI16
+     * @returns {string}
+     */
     toStringI16(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1836,8 +2036,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                92, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i16
+            return UniFFIScaffolding.callAsyncWrapper(
+                182, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i16
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterI16.lower(value),
             )
@@ -1849,6 +2049,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringI32
+     * @returns {string}
+     */
     toStringI32(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1861,8 +2065,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                93, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i32
+            return UniFFIScaffolding.callAsyncWrapper(
+                183, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i32
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterI32.lower(value),
             )
@@ -1874,6 +2078,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringI64
+     * @returns {string}
+     */
     toStringI64(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1886,8 +2094,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                94, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i64
+            return UniFFIScaffolding.callAsyncWrapper(
+                184, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i64
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterI64.lower(value),
             )
@@ -1899,6 +2107,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringI8
+     * @returns {string}
+     */
     toStringI8(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1911,8 +2123,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                95, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i8
+            return UniFFIScaffolding.callAsyncWrapper(
+                185, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_i8
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterI8.lower(value),
             )
@@ -1924,6 +2136,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringU16
+     * @returns {string}
+     */
     toStringU16(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1936,8 +2152,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                96, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u16
+            return UniFFIScaffolding.callAsyncWrapper(
+                186, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u16
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterU16.lower(value),
             )
@@ -1949,6 +2165,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringU32
+     * @returns {string}
+     */
     toStringU32(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1961,8 +2181,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                97, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u32
+            return UniFFIScaffolding.callAsyncWrapper(
+                187, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u32
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterU32.lower(value),
             )
@@ -1974,6 +2194,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringU64
+     * @returns {string}
+     */
     toStringU64(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -1986,8 +2210,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                98, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u64
+            return UniFFIScaffolding.callAsyncWrapper(
+                188, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u64
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterU64.lower(value),
             )
@@ -1999,6 +2223,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * toStringU8
+     * @returns {string}
+     */
     toStringU8(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -2011,8 +2239,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                99, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u8
+            return UniFFIScaffolding.callAsyncWrapper(
+                189, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_to_string_u8
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterU8.lower(value),
             )
@@ -2024,6 +2252,10 @@ export class Stringifier {
         }
     }
 
+    /**
+     * wellKnownString
+     * @returns {string}
+     */
     wellKnownString(value) {
         const liftResult = (result) => FfiConverterString.lift(result);
         const liftError = null;
@@ -2036,8 +2268,8 @@ export class Stringifier {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                100, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_well_known_string
+            return UniFFIScaffolding.callAsyncWrapper(
+                190, // rondpoint:uniffi_uniffi_rondpoint_fn_method_stringifier_well_known_string
                 FfiConverterTypeStringifier.lower(this),
                 FfiConverterString.lower(value),
             )
@@ -2060,7 +2292,11 @@ export class FfiConverterTypeStringifier extends FfiConverter {
     }
 
     static lower(value) {
-        return value[uniffiObjectPtr];
+        const ptr = value[uniffiObjectPtr];
+        if (!(ptr instanceof UniFFIPointer)) {
+            throw new UniFFITypeError("Object is not a 'Stringifier' instance");
+        }
+        return ptr;
     }
 
     static read(dataStream) {
@@ -2076,6 +2312,9 @@ export class FfiConverterTypeStringifier extends FfiConverter {
     }
 }
 
+/**
+ * Dictionnaire
+ */
 export class Dictionnaire {
     constructor({ un, deux, petitNombre, grosNombre } = {}) {
         try {
@@ -2110,11 +2349,24 @@ export class Dictionnaire {
             }
             throw e;
         }
+        /**
+         * @type {Enumeration}
+         */
         this.un = un;
+        /**
+         * @type {Boolean}
+         */
         this.deux = deux;
+        /**
+         * @type {number}
+         */
         this.petitNombre = petitNombre;
+        /**
+         * @type {number}
+         */
         this.grosNombre = grosNombre;
     }
+
     equals(other) {
         return (
             this.un == other.un &&
@@ -2154,7 +2406,7 @@ export class FfiConverterTypeDictionnaire extends FfiConverterArrayBuffer {
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof Dictionnaire)) {
-            throw new TypeError(`Expected 'Dictionnaire', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'Dictionnaire', found '${typeof value}'`);
         }
         try {
             FfiConverterTypeEnumeration.checkType(value.un);
@@ -2191,6 +2443,9 @@ export class FfiConverterTypeDictionnaire extends FfiConverterArrayBuffer {
     }
 }
 
+/**
+ * DictionnaireNombres
+ */
 export class DictionnaireNombres {
     constructor({ petitNombre, courtNombre, nombreSimple, grosNombre } = {}) {
         try {
@@ -2225,11 +2480,24 @@ export class DictionnaireNombres {
             }
             throw e;
         }
+        /**
+         * @type {number}
+         */
         this.petitNombre = petitNombre;
+        /**
+         * @type {number}
+         */
         this.courtNombre = courtNombre;
+        /**
+         * @type {number}
+         */
         this.nombreSimple = nombreSimple;
+        /**
+         * @type {number}
+         */
         this.grosNombre = grosNombre;
     }
+
     equals(other) {
         return (
             this.petitNombre == other.petitNombre &&
@@ -2269,7 +2537,7 @@ export class FfiConverterTypeDictionnaireNombres extends FfiConverterArrayBuffer
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof DictionnaireNombres)) {
-            throw new TypeError(`Expected 'DictionnaireNombres', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'DictionnaireNombres', found '${typeof value}'`);
         }
         try {
             FfiConverterU8.checkType(value.petitNombre);
@@ -2306,6 +2574,9 @@ export class FfiConverterTypeDictionnaireNombres extends FfiConverterArrayBuffer
     }
 }
 
+/**
+ * DictionnaireNombresSignes
+ */
 export class DictionnaireNombresSignes {
     constructor({ petitNombre, courtNombre, nombreSimple, grosNombre } = {}) {
         try {
@@ -2340,11 +2611,24 @@ export class DictionnaireNombresSignes {
             }
             throw e;
         }
+        /**
+         * @type {number}
+         */
         this.petitNombre = petitNombre;
+        /**
+         * @type {number}
+         */
         this.courtNombre = courtNombre;
+        /**
+         * @type {number}
+         */
         this.nombreSimple = nombreSimple;
+        /**
+         * @type {number}
+         */
         this.grosNombre = grosNombre;
     }
+
     equals(other) {
         return (
             this.petitNombre == other.petitNombre &&
@@ -2384,7 +2668,7 @@ export class FfiConverterTypeDictionnaireNombresSignes extends FfiConverterArray
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof DictionnaireNombresSignes)) {
-            throw new TypeError(`Expected 'DictionnaireNombresSignes', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'DictionnaireNombresSignes', found '${typeof value}'`);
         }
         try {
             FfiConverterI8.checkType(value.petitNombre);
@@ -2421,6 +2705,9 @@ export class FfiConverterTypeDictionnaireNombresSignes extends FfiConverterArray
     }
 }
 
+/**
+ * OptionneurDictionnaire
+ */
 export class OptionneurDictionnaire {
     constructor({ i8Var = -8, u8Var = 8, i16Var = -16, u16Var = 0x10, i32Var = -32, u32Var = 32, i64Var = -64, u64Var = 64, floatVar = 4.0, doubleVar = 8.0, booleanVar = true, stringVar = "default", listVar = [], enumerationVar = Enumeration.DEUX, dictionnaireVar = null } = {}) {
         try {
@@ -2543,22 +2830,68 @@ export class OptionneurDictionnaire {
             }
             throw e;
         }
+        /**
+         * @type {number}
+         */
         this.i8Var = i8Var;
+        /**
+         * @type {number}
+         */
         this.u8Var = u8Var;
+        /**
+         * @type {number}
+         */
         this.i16Var = i16Var;
+        /**
+         * @type {number}
+         */
         this.u16Var = u16Var;
+        /**
+         * @type {number}
+         */
         this.i32Var = i32Var;
+        /**
+         * @type {number}
+         */
         this.u32Var = u32Var;
+        /**
+         * @type {number}
+         */
         this.i64Var = i64Var;
+        /**
+         * @type {number}
+         */
         this.u64Var = u64Var;
+        /**
+         * @type {number}
+         */
         this.floatVar = floatVar;
+        /**
+         * @type {number}
+         */
         this.doubleVar = doubleVar;
+        /**
+         * @type {Boolean}
+         */
         this.booleanVar = booleanVar;
+        /**
+         * @type {string}
+         */
         this.stringVar = stringVar;
+        /**
+         * @type {Array.<string>}
+         */
         this.listVar = listVar;
+        /**
+         * @type {Enumeration}
+         */
         this.enumerationVar = enumerationVar;
+        /**
+         * @type {?minusculeMAJUSCULEEnum}
+         */
         this.dictionnaireVar = dictionnaireVar;
     }
+
     equals(other) {
         return (
             this.i8Var == other.i8Var &&
@@ -2642,7 +2975,7 @@ export class FfiConverterTypeOptionneurDictionnaire extends FfiConverterArrayBuf
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof OptionneurDictionnaire)) {
-            throw new TypeError(`Expected 'OptionneurDictionnaire', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'OptionneurDictionnaire', found '${typeof value}'`);
         }
         try {
             FfiConverterI8.checkType(value.i8Var);
@@ -2767,6 +3100,9 @@ export class FfiConverterTypeOptionneurDictionnaire extends FfiConverterArrayBuf
     }
 }
 
+/**
+ * MinusculeMajusculeDict
+ */
 export class MinusculeMajusculeDict {
     constructor({ minusculeMajusculeField } = {}) {
         try {
@@ -2777,8 +3113,12 @@ export class MinusculeMajusculeDict {
             }
             throw e;
         }
+        /**
+         * @type {Boolean}
+         */
         this.minusculeMajusculeField = minusculeMajusculeField;
     }
+
     equals(other) {
         return (
             this.minusculeMajusculeField == other.minusculeMajusculeField
@@ -2806,7 +3146,7 @@ export class FfiConverterTypeminusculeMajusculeDict extends FfiConverterArrayBuf
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof MinusculeMajusculeDict)) {
-            throw new TypeError(`Expected 'MinusculeMajusculeDict', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'MinusculeMajusculeDict', found '${typeof value}'`);
         }
         try {
             FfiConverterBool.checkType(value.minusculeMajusculeField);
@@ -2820,9 +3160,21 @@ export class FfiConverterTypeminusculeMajusculeDict extends FfiConverterArrayBuf
 }
 
 
+/**
+ * Enumeration
+ */
 export const Enumeration = {
+    /**
+     * UN
+     */
     UN: 1,
+    /**
+     * DEUX
+     */
     DEUX: 2,
+    /**
+     * TROIS
+     */
     TROIS: 3,
 };
 
@@ -2838,7 +3190,7 @@ export class FfiConverterTypeEnumeration extends FfiConverterArrayBuffer {
             case 3:
                 return Enumeration.TROIS
             default:
-                return new Error("Unknown Enumeration variant");
+                throw new UniFFITypeError("Unknown Enumeration variant");
         }
     }
 
@@ -2855,7 +3207,7 @@ export class FfiConverterTypeEnumeration extends FfiConverterArrayBuffer {
             dataStream.writeInt32(3);
             return;
         }
-        return new Error("Unknown Enumeration variant");
+        throw new UniFFITypeError("Unknown Enumeration variant");
     }
 
     static computeSize(value) {
@@ -2871,13 +3223,22 @@ export class FfiConverterTypeEnumeration extends FfiConverterArrayBuffer {
 
 
 
+/**
+ * EnumerationAvecDonnees
+ */
 export class EnumerationAvecDonnees {}
+/**
+ * Zero
+ */
 EnumerationAvecDonnees.Zero = class extends EnumerationAvecDonnees{
     constructor(
         ) {
             super();
         }
 }
+/**
+ * Un
+ */
 EnumerationAvecDonnees.Un = class extends EnumerationAvecDonnees{
     constructor(
         premier
@@ -2886,6 +3247,9 @@ EnumerationAvecDonnees.Un = class extends EnumerationAvecDonnees{
             this.premier = premier;
         }
 }
+/**
+ * Deux
+ */
 EnumerationAvecDonnees.Deux = class extends EnumerationAvecDonnees{
     constructor(
         premier,
@@ -2914,7 +3278,7 @@ export class FfiConverterTypeEnumerationAvecDonnees extends FfiConverterArrayBuf
                     FfiConverterString.read(dataStream)
                     );
             default:
-                return new Error("Unknown EnumerationAvecDonnees variant");
+                throw new UniFFITypeError("Unknown EnumerationAvecDonnees variant");
         }
     }
 
@@ -2934,7 +3298,7 @@ export class FfiConverterTypeEnumerationAvecDonnees extends FfiConverterArrayBuf
             FfiConverterString.write(dataStream, value.second);
             return;
         }
-        return new Error("Unknown EnumerationAvecDonnees variant");
+        throw new UniFFITypeError("Unknown EnumerationAvecDonnees variant");
     }
 
     static computeSize(value) {
@@ -2952,7 +3316,7 @@ export class FfiConverterTypeEnumerationAvecDonnees extends FfiConverterArrayBuf
             totalSize += FfiConverterString.computeSize(value.second);
             return totalSize;
         }
-        return new Error("Unknown EnumerationAvecDonnees variant");
+        throw new UniFFITypeError("Unknown EnumerationAvecDonnees variant");
     }
 
     static checkType(value) {
@@ -2964,7 +3328,13 @@ export class FfiConverterTypeEnumerationAvecDonnees extends FfiConverterArrayBuf
 
 
 
+/**
+ * MinusculeMajusculeEnum
+ */
 export const MinusculeMajusculeEnum = {
+    /**
+     * MINUSCULE_MAJUSCULE_VARIANT
+     */
     MINUSCULE_MAJUSCULE_VARIANT: 1,
 };
 
@@ -2976,7 +3346,7 @@ export class FfiConverterTypeminusculeMajusculeEnum extends FfiConverterArrayBuf
             case 1:
                 return MinusculeMajusculeEnum.MINUSCULE_MAJUSCULE_VARIANT
             default:
-                return new Error("Unknown MinusculeMajusculeEnum variant");
+                throw new UniFFITypeError("Unknown MinusculeMajusculeEnum variant");
         }
     }
 
@@ -2985,7 +3355,7 @@ export class FfiConverterTypeminusculeMajusculeEnum extends FfiConverterArrayBuf
             dataStream.writeInt32(1);
             return;
         }
-        return new Error("Unknown MinusculeMajusculeEnum variant");
+        throw new UniFFITypeError("Unknown MinusculeMajusculeEnum variant");
     }
 
     static computeSize(value) {
@@ -3258,6 +3628,10 @@ export class FfiConverterMapStringTypeEnumerationAvecDonnees extends FfiConverte
 
 
 
+/**
+ * copieCarte
+ * @returns {object}
+ */
 export function copieCarte(c) {
 
         const liftResult = (result) => FfiConverterMapStringTypeEnumerationAvecDonnees.lift(result);
@@ -3271,8 +3645,8 @@ export function copieCarte(c) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                101, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_carte
+            return UniFFIScaffolding.callAsyncWrapper(
+                132, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_carte
                 FfiConverterMapStringTypeEnumerationAvecDonnees.lower(c),
             )
         }
@@ -3283,6 +3657,10 @@ export function copieCarte(c) {
         }
 }
 
+/**
+ * copieDictionnaire
+ * @returns {Dictionnaire}
+ */
 export function copieDictionnaire(d) {
 
         const liftResult = (result) => FfiConverterTypeDictionnaire.lift(result);
@@ -3296,8 +3674,8 @@ export function copieDictionnaire(d) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                102, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_dictionnaire
+            return UniFFIScaffolding.callAsyncWrapper(
+                133, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_dictionnaire
                 FfiConverterTypeDictionnaire.lower(d),
             )
         }
@@ -3308,6 +3686,10 @@ export function copieDictionnaire(d) {
         }
 }
 
+/**
+ * copieEnumeration
+ * @returns {Enumeration}
+ */
 export function copieEnumeration(e) {
 
         const liftResult = (result) => FfiConverterTypeEnumeration.lift(result);
@@ -3321,8 +3703,8 @@ export function copieEnumeration(e) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                103, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_enumeration
+            return UniFFIScaffolding.callAsyncWrapper(
+                134, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_enumeration
                 FfiConverterTypeEnumeration.lower(e),
             )
         }
@@ -3333,6 +3715,10 @@ export function copieEnumeration(e) {
         }
 }
 
+/**
+ * copieEnumerations
+ * @returns {Array.<Enumeration>}
+ */
 export function copieEnumerations(e) {
 
         const liftResult = (result) => FfiConverterSequenceTypeEnumeration.lift(result);
@@ -3346,8 +3732,8 @@ export function copieEnumerations(e) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                104, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_enumerations
+            return UniFFIScaffolding.callAsyncWrapper(
+                135, // rondpoint:uniffi_uniffi_rondpoint_fn_func_copie_enumerations
                 FfiConverterSequenceTypeEnumeration.lower(e),
             )
         }
@@ -3358,6 +3744,10 @@ export function copieEnumerations(e) {
         }
 }
 
+/**
+ * switcheroo
+ * @returns {Boolean}
+ */
 export function switcheroo(b) {
 
         const liftResult = (result) => FfiConverterBool.lift(result);
@@ -3371,8 +3761,8 @@ export function switcheroo(b) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                105, // rondpoint:uniffi_uniffi_rondpoint_fn_func_switcheroo
+            return UniFFIScaffolding.callAsyncWrapper(
+                136, // rondpoint:uniffi_uniffi_rondpoint_fn_func_switcheroo
                 FfiConverterBool.lower(b),
             )
         }

@@ -18,8 +18,6 @@
 // For the public interface to Telemetry functionality, see Telemetry.h.
 
 namespace mozilla {
-// This is only used for the GeckoView persistence.
-class JSONWriter;
 namespace Telemetry {
 struct ScalarAction;
 struct KeyedScalarAction;
@@ -37,24 +35,12 @@ void SetCanRecordBase(bool b);
 void SetCanRecordExtended(bool b);
 
 // JS API Endpoints.
-nsresult Add(const nsACString& aName, JS::Handle<JS::Value> aVal,
-             JSContext* aCx);
-nsresult Set(const nsACString& aName, JS::Handle<JS::Value> aVal,
-             JSContext* aCx);
-nsresult SetMaximum(const nsACString& aName, JS::Handle<JS::Value> aVal,
-                    JSContext* aCx);
 nsresult CreateSnapshots(unsigned int aDataset, bool aClearScalars,
                          JSContext* aCx, uint8_t optional_argc,
                          JS::MutableHandle<JS::Value> aResult, bool aFilterTest,
                          const nsACString& aStoreName);
 
 // Keyed JS API Endpoints.
-nsresult Add(const nsACString& aName, const nsAString& aKey,
-             JS::Handle<JS::Value> aVal, JSContext* aCx);
-nsresult Set(const nsACString& aName, const nsAString& aKey,
-             JS::Handle<JS::Value> aVal, JSContext* aCx);
-nsresult SetMaximum(const nsACString& aName, const nsAString& aKey,
-                    JS::Handle<JS::Value> aVal, JSContext* aCx);
 nsresult CreateKeyedSnapshots(unsigned int aDataset, bool aClearScalars,
                               JSContext* aCx, uint8_t optional_argc,
                               JS::MutableHandle<JS::Value> aResult,
@@ -65,7 +51,6 @@ void Add(mozilla::Telemetry::ScalarID aId, uint32_t aValue);
 void Set(mozilla::Telemetry::ScalarID aId, uint32_t aValue);
 void Set(mozilla::Telemetry::ScalarID aId, const nsAString& aValue);
 void Set(mozilla::Telemetry::ScalarID aId, bool aValue);
-void SetMaximum(mozilla::Telemetry::ScalarID aId, uint32_t aValue);
 
 // Keyed C++ API Endpoints.
 void Add(mozilla::Telemetry::ScalarID aId, const nsAString& aKey,
@@ -73,16 +58,13 @@ void Add(mozilla::Telemetry::ScalarID aId, const nsAString& aKey,
 void Set(mozilla::Telemetry::ScalarID aId, const nsAString& aKey,
          uint32_t aValue);
 void Set(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, bool aValue);
-void SetMaximum(mozilla::Telemetry::ScalarID aId, const nsAString& aKey,
-                uint32_t aValue);
 
 nsresult RegisterScalars(const nsACString& aCategoryName,
-                         JS::Handle<JS::Value> aScalarData, bool aBuiltin,
-                         JSContext* cx);
+                         JS::Handle<JS::Value> aScalarData, JSContext* cx);
 
 // Event Summary
 void SummarizeEvent(const nsCString& aUniqueEventName,
-                    mozilla::Telemetry::ProcessID aProcessType, bool aDynamic);
+                    mozilla::Telemetry::ProcessID aProcessType);
 
 // Only to be used for testing.
 void ClearScalars();
@@ -112,22 +94,6 @@ void AddDynamicScalarDefinitions(
  * This includes dynamic stores.
  */
 nsresult GetAllStores(mozilla::Telemetry::Common::StringHashSet& set);
-
-// They are responsible for updating in-memory probes with the data persisted
-// on the disk and vice-versa.
-nsresult SerializeScalars(mozilla::JSONWriter& aWriter);
-nsresult SerializeKeyedScalars(mozilla::JSONWriter& aWriter);
-nsresult DeserializePersistedScalars(JSContext* aCx,
-                                     JS::Handle<JS::Value> aData);
-nsresult DeserializePersistedKeyedScalars(JSContext* aCx,
-                                          JS::Handle<JS::Value> aData);
-// Mark deserialization as in progress.
-// After this, all scalar operations are recorded into the pending operations
-// list.
-void DeserializationStarted();
-// Apply all operations from the pending operations list and mark
-// deserialization finished afterwards.
-void ApplyPendingOperations();
 }  // namespace TelemetryScalar
 
 #endif  // TelemetryScalar_h__

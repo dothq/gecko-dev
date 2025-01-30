@@ -59,6 +59,7 @@
 #include "nsIUploadChannel.h"
 #include "nsStringStream.h"
 #include "nsNetUtil.h"
+#include "nsThreadUtils.h"
 #include "nsToolkitCompsCID.h"
 
 namespace mozilla {
@@ -231,12 +232,52 @@ class nsUrlClassifierDBService::FeatureHolder final {
   }
 
   ~FeatureHolder() {
-    for (FeatureData& featureData : mFeatureData) {
-      NS_ReleaseOnMainThread("FeatureHolder:mFeatureData",
-                             featureData.mFeature.forget());
+    class FeatureHolderRelease final : public mozilla::Runnable {
+     public:
+      explicit FeatureHolderRelease(nsTArray<nsCOMPtr<nsISupports>>&& aDoomed)
+          : Runnable("FeatureHolderRelease"), mDoomed(std::move(aDoomed)) {}
+
+      NS_IMETHOD Run() override {
+        mDoomed.Clear();
+        return NS_OK;
+      }
+
+     private:
+      ~FeatureHolderRelease() {
+        // If we still have some references, let's forget them to avoid crashes.
+        // Probably we are shutdown.
+        for (nsCOMPtr<nsISupports>& doomed : mDoomed) {
+          mozilla::Unused << doomed.forget().take();
+        }
+      }
+
+      nsTArray<nsCOMPtr<nsISupports>> mDoomed;
+    };
+
+    nsTArray<nsCOMPtr<nsISupports>> arrayToRelease;
+
+    if (mURI) {
+      arrayToRelease.AppendElement(mURI.forget());
     }
 
-    NS_ReleaseOnMainThread("FeatureHolder:mURI", mURI.forget());
+    for (FeatureData& featureData : mFeatureData) {
+      if (featureData.mFeature) {
+        arrayToRelease.AppendElement(featureData.mFeature.forget());
+      }
+    }
+
+    if (arrayToRelease.IsEmpty()) {
+      return;
+    }
+
+    if (NS_IsMainThread()) {
+      arrayToRelease.Clear();
+      return;
+    }
+
+    RefPtr<FeatureHolderRelease> runnable(
+        new FeatureHolderRelease(std::move(arrayToRelease)));
+    NS_DispatchToMainThread(runnable.forget());
   }
 
   TableData* GetOrCreateTableData(const nsACString& aTable) {
@@ -693,11 +734,6 @@ nsUrlClassifierDBServiceWorker::FinishStream() {
     mTableUpdates.AppendElements(mProtocolParser->GetTableUpdates());
     mProtocolParser->ForgetTableUpdates();
 
-#ifdef MOZ_SAFEBROWSING_DUMP_FAILED_UPDATES
-    // The assignment involves no string copy since the source string is
-    // sharable.
-    mRawTableUpdates = mProtocolParser->GetRawTableUpdates();
-#endif
   } else {
     LOG(
         ("nsUrlClassifierDBService::FinishStream Failed to parse the stream "
@@ -754,18 +790,8 @@ nsUrlClassifierDBServiceWorker::FinishUpdate() {
 
   RefPtr<nsUrlClassifierDBServiceWorker> self = this;
   nsresult rv = mClassifier->AsyncApplyUpdates(
-      mTableUpdates, [self](nsresult aRv) -> void {
-#ifdef MOZ_SAFEBROWSING_DUMP_FAILED_UPDATES
-        if (NS_FAILED(aRv) && NS_ERROR_OUT_OF_MEMORY != aRv &&
-            NS_ERROR_UC_UPDATE_SHUTDOWNING != aRv) {
-          self->mClassifier->DumpRawTableUpdates(self->mRawTableUpdates);
-        }
-        // Invalidate the raw table updates.
-        self->mRawTableUpdates.Truncate();
-#endif
-
-        self->NotifyUpdateObserver(aRv);
-      });
+      mTableUpdates,
+      [self](nsresult aRv) -> void { self->NotifyUpdateObserver(aRv); });
   mTableUpdates.Clear();  // Classifier is working on its copy.
 
   if (NS_FAILED(rv)) {
@@ -1476,6 +1502,11 @@ nsresult nsUrlClassifierLookupCallback::CacheMisses() {
   return NS_OK;
 }
 
+struct LiteralProvider {
+  nsLiteralCString name;
+  uint8_t priority;
+};
+
 struct Provider {
   nsCString name;
   uint8_t priority;
@@ -1483,7 +1514,7 @@ struct Provider {
 
 // Order matters
 // Provider which is not included in this table has the lowest priority 0
-static const Provider kBuiltInProviders[] = {
+static constexpr LiteralProvider kBuiltInProviders[] = {
     {"mozilla"_ns, 1},
     {"google4"_ns, 2},
     {"google"_ns, 3},
@@ -1574,9 +1605,9 @@ nsUrlClassifierClassifyCallback::HandleResult(const nsACString& aTable,
 
   matchedInfo->provider.name = NS_SUCCEEDED(rv) ? provider : ""_ns;
   matchedInfo->provider.priority = 0;
-  for (uint8_t i = 0; i < ArrayLength(kBuiltInProviders); i++) {
-    if (kBuiltInProviders[i].name.Equals(matchedInfo->provider.name)) {
-      matchedInfo->provider.priority = kBuiltInProviders[i].priority;
+  for (auto const& BuiltInProvider : kBuiltInProviders) {
+    if (BuiltInProvider.name.Equals(matchedInfo->provider.name)) {
+      matchedInfo->provider.priority = BuiltInProvider.priority;
     }
   }
   matchedInfo->errorCode = TablesToResponse(aTable);
@@ -1966,7 +1997,7 @@ nsUrlClassifierDBService::SendThreatHitReport(nsIChannel* aChannel,
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIStringInputStream> sis(
       do_CreateInstance(NS_STRINGINPUTSTREAM_CONTRACTID));
-  rv = sis->SetData(reportBody.get(), reportBody.Length());
+  rv = sis->SetByteStringData(reportBody);
   NS_ENSURE_SUCCESS(rv, rv);
 
   LOG(("Sending the following ThreatHit report to %s about %s: %s",

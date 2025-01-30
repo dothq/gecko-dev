@@ -24,9 +24,11 @@
 #include "wasm/WasmBuiltinModuleGenerated.h"
 
 namespace js {
+class JitFrameIter;
 namespace jit {
+class AutoMarkJitCodeWritableForThread;
 struct ResumeFromException;
-}
+}  // namespace jit
 namespace wasm {
 
 class WasmFrameIter;
@@ -68,7 +70,10 @@ enum class SymbolicAddress {
   LogD,
   PowD,
   ATan2D,
+  ArrayMemMove,
+  ArrayRefsMove,
   HandleDebugTrap,
+  HandleRequestTierUp,
   HandleThrow,
   HandleTrap,
   ReportV128JSCall,
@@ -146,8 +151,11 @@ enum class SymbolicAddress {
 #define VISIT_BUILTIN_FUNC(op, export, sa_name, ...) sa_name,
   FOR_EACH_BUILTIN_MODULE_FUNC(VISIT_BUILTIN_FUNC)
 #undef VISIT_BUILTIN_FUNC
+#ifdef ENABLE_WASM_JSPI
+      UpdateSuspenderState,
+#endif
 #ifdef WASM_CODEGEN_DEBUG
-      PrintI32,
+  PrintI32,
   PrintPtr,
   PrintF32,
   PrintF64,
@@ -229,6 +237,8 @@ extern const SymbolicAddressSignature SASigExpD;
 extern const SymbolicAddressSignature SASigLogD;
 extern const SymbolicAddressSignature SASigPowD;
 extern const SymbolicAddressSignature SASigATan2D;
+extern const SymbolicAddressSignature SASigArrayMemMove;
+extern const SymbolicAddressSignature SASigArrayRefsMove;
 extern const SymbolicAddressSignature SASigMemoryGrowM32;
 extern const SymbolicAddressSignature SASigMemoryGrowM64;
 extern const SymbolicAddressSignature SASigMemorySizeM32;
@@ -280,6 +290,7 @@ extern const SymbolicAddressSignature SASigArrayNewElem;
 extern const SymbolicAddressSignature SASigArrayInitData;
 extern const SymbolicAddressSignature SASigArrayInitElem;
 extern const SymbolicAddressSignature SASigArrayCopy;
+extern const SymbolicAddressSignature SASigUpdateSuspenderState;
 #define VISIT_BUILTIN_FUNC(op, export, sa_name, ...) \
   extern const SymbolicAddressSignature SASig##sa_name;
 FOR_EACH_BUILTIN_MODULE_FUNC(VISIT_BUILTIN_FUNC)
@@ -299,7 +310,7 @@ bool NeedsBuiltinThunk(SymbolicAddress sym);
 // CodeRange is relative to.
 
 bool LookupBuiltinThunk(void* pc, const CodeRange** codeRange,
-                        uint8_t** codeBase);
+                        const uint8_t** codeBase);
 
 // EnsureBuiltinThunksInitialized() must be called, and must succeed, before
 // SymbolicAddressTarget() or MaybeGetBuiltinThunk(). This function creates all
@@ -308,9 +319,11 @@ bool LookupBuiltinThunk(void* pc, const CodeRange** codeRange,
 // executable code has been released.
 
 bool EnsureBuiltinThunksInitialized();
+bool EnsureBuiltinThunksInitialized(
+    jit::AutoMarkJitCodeWritableForThread& writable);
 
-bool HandleThrow(JSContext* cx, WasmFrameIter& iter,
-                 jit::ResumeFromException* rfe);
+void HandleExceptionWasm(JSContext* cx, JitFrameIter& iter,
+                         jit::ResumeFromException* rfe);
 
 void* SymbolicAddressTarget(SymbolicAddress sym);
 

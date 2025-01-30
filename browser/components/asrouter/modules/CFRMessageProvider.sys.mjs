@@ -142,8 +142,8 @@ const CFR_MESSAGES = [
       (${JSON.stringify(
         FACEBOOK_CONTAINER_PARAMS.open_urls
       )} intersect topFrecentSites[.frecency >= ${
-      FACEBOOK_CONTAINER_PARAMS.min_frecency
-    }]|mapToProperty('host'))|length > 0`,
+        FACEBOOK_CONTAINER_PARAMS.min_frecency
+      }]|mapToProperty('host'))|length > 0`,
     trigger: { id: "openURL", params: FACEBOOK_CONTAINER_PARAMS.open_urls },
   },
   {
@@ -213,8 +213,8 @@ const CFR_MESSAGES = [
       (${JSON.stringify(
         GOOGLE_TRANSLATE_PARAMS.open_urls
       )} intersect topFrecentSites[.frecency >= ${
-      GOOGLE_TRANSLATE_PARAMS.min_frecency
-    }]|mapToProperty('host'))|length > 0`,
+        GOOGLE_TRANSLATE_PARAMS.min_frecency
+      }]|mapToProperty('host'))|length > 0`,
     trigger: { id: "openURL", params: GOOGLE_TRANSLATE_PARAMS.open_urls },
   },
   {
@@ -284,8 +284,8 @@ const CFR_MESSAGES = [
       (${JSON.stringify(
         YOUTUBE_ENHANCE_PARAMS.open_urls
       )} intersect topFrecentSites[.frecency >= ${
-      YOUTUBE_ENHANCE_PARAMS.min_frecency
-    }]|mapToProperty('host'))|length > 0`,
+        YOUTUBE_ENHANCE_PARAMS.min_frecency
+      }]|mapToProperty('host'))|length > 0`,
     trigger: { id: "openURL", params: YOUTUBE_ENHANCE_PARAMS.open_urls },
   },
   {
@@ -356,8 +356,8 @@ const CFR_MESSAGES = [
       (${JSON.stringify(
         WIKIPEDIA_CONTEXT_MENU_SEARCH_PARAMS.open_urls
       )} intersect topFrecentSites[.frecency >= ${
-      WIKIPEDIA_CONTEXT_MENU_SEARCH_PARAMS.min_frecency
-    }]|mapToProperty('host'))|length > 0`,
+        WIKIPEDIA_CONTEXT_MENU_SEARCH_PARAMS.min_frecency
+      }]|mapToProperty('host'))|length > 0`,
     trigger: {
       id: "openURL",
       params: WIKIPEDIA_CONTEXT_MENU_SEARCH_PARAMS.open_urls,
@@ -431,8 +431,8 @@ const CFR_MESSAGES = [
       (${JSON.stringify(
         REDDIT_ENHANCEMENT_PARAMS.open_urls
       )} intersect topFrecentSites[.frecency >= ${
-      REDDIT_ENHANCEMENT_PARAMS.min_frecency
-    }]|mapToProperty('host'))|length > 0`,
+        REDDIT_ENHANCEMENT_PARAMS.min_frecency
+      }]|mapToProperty('host'))|length > 0`,
     trigger: { id: "openURL", params: REDDIT_ENHANCEMENT_PARAMS.open_urls },
   },
   {
@@ -810,6 +810,80 @@ const CFR_MESSAGES = [
       ],
     },
     trigger: { id: "preferenceObserver", params: ["foo.bar"] },
+  },
+  {
+    id: "FACEBOOK_CONTAINER_ADDON_A",
+    template: "cfr_doorhanger",
+    groups: ["cfr"],
+    content: {
+      layout: "addon_recommendation",
+      category: "cfrAddons",
+      bucket_id: "CFR",
+      anchor_id: "PanelUI-menu-button",
+      skip_address_bar_notifier: true,
+      icon_class: "cfr-doorhanger-medium-icon",
+      notification_text: {
+        string_id: "cfr-doorhanger-extension-notification2",
+      },
+      heading_text: {
+        string_id: "cfr-doorhanger-extension-heading",
+      },
+      info_icon: {
+        label: {
+          string_id: "cfr-doorhanger-extension-sumo-link",
+        },
+        sumo_path: "extensionrecommendations",
+      },
+      addon: {
+        id: "954390",
+        title: "Facebook Container",
+        icon: "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/03c866df-82ea-489c-83c7-df6d0662d893.svg",
+        rating: "4.5",
+        users: "1.1M",
+        author: "Mozilla",
+        amo_url: "https://addons.mozilla.org/firefox/addon/facebook-container/",
+      },
+      text: "Make it harder for Facebook to track your browsing activity, including info from medical and financial sites.",
+      buttons: {
+        primary: {
+          label: {
+            value: "Try it",
+            attributes: {
+              accesskey: "T",
+            },
+          },
+          action: {
+            type: "INSTALL_ADDON_FROM_URL",
+            data: {
+              url: "https://example.com",
+              telemetrySource: "amo",
+            },
+          },
+        },
+        secondary: [
+          {
+            label: {
+              value: "Not now",
+              attributes: {
+                accesskey: "N",
+              },
+            },
+            action: {
+              type: "CANCEL",
+            },
+          },
+        ],
+      },
+    },
+    frequency: {
+      lifetime: 1,
+    },
+    targeting:
+      "!('@contain-facebook' in addonsInfo.addons|keys) && !('@testpilot-containers' in addonsInfo.addons|keys) && ('browser.discovery.enabled'|preferenceValue)",
+    trigger: {
+      id: "openURL",
+      params: ["www.facebook.com", "facebook.com"],
+    },
   },
 ];
 

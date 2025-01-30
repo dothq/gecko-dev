@@ -26,9 +26,61 @@
 #include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsTextFrame.h"
+#include "WordMovementType.h"
 
 namespace mozilla {
 using namespace dom;
+template Result<RangeBoundary, nsresult>
+SelectionMovementUtils::MoveRangeBoundaryToSomewhere(
+    const RangeBoundary& aRangeBoundary, nsDirection aDirection,
+    CaretAssociationHint aHint, intl::BidiEmbeddingLevel aCaretBidiLevel,
+    nsSelectionAmount aAmount, PeekOffsetOptions aOptions,
+    const dom::Element* aAncestorLimiter);
+
+template Result<RawRangeBoundary, nsresult>
+SelectionMovementUtils::MoveRangeBoundaryToSomewhere(
+    const RawRangeBoundary& aRangeBoundary, nsDirection aDirection,
+    CaretAssociationHint aHint, intl::BidiEmbeddingLevel aCaretBidiLevel,
+    nsSelectionAmount aAmount, PeekOffsetOptions aOptions,
+    const dom::Element* aAncestorLimiter);
+
+template <typename ParentType, typename RefType>
+Result<RangeBoundaryBase<ParentType, RefType>, nsresult>
+SelectionMovementUtils::MoveRangeBoundaryToSomewhere(
+    const RangeBoundaryBase<ParentType, RefType>& aRangeBoundary,
+    nsDirection aDirection, CaretAssociationHint aHint,
+    intl::BidiEmbeddingLevel aCaretBidiLevel, nsSelectionAmount aAmount,
+    PeekOffsetOptions aOptions, const dom::Element* aAncestorLimiter) {
+  MOZ_ASSERT(aDirection == eDirNext || aDirection == eDirPrevious);
+  MOZ_ASSERT(aAmount == eSelectCharacter || aAmount == eSelectCluster ||
+             aAmount == eSelectWord || aAmount == eSelectBeginLine ||
+             aAmount == eSelectEndLine);
+
+  if (!aRangeBoundary.IsSetAndValid()) {
+    return Err(NS_ERROR_FAILURE);
+  }
+  if (!aRangeBoundary.Container()->IsContent()) {
+    return Err(NS_ERROR_FAILURE);
+  }
+  Result<PeekOffsetStruct, nsresult> result = PeekOffsetForCaretMove(
+      aRangeBoundary.Container()->AsContent(),
+      *aRangeBoundary.Offset(
+          RangeBoundaryBase<ParentType,
+                            RefType>::OffsetFilter::kValidOrInvalidOffsets),
+      aDirection, aHint, aCaretBidiLevel, aAmount, nsPoint{0, 0}, aOptions,
+      aAncestorLimiter);
+  if (result.isErr()) {
+    return Err(NS_ERROR_FAILURE);
+  }
+  const PeekOffsetStruct& pos = result.unwrap();
+  if (NS_WARN_IF(!pos.mResultContent)) {
+    return RangeBoundaryBase<ParentType, RefType>{};
+  }
+
+  return RangeBoundaryBase<ParentType, RefType>{
+      pos.mResultContent, static_cast<uint32_t>(pos.mContentOffset)};
+}
+
 // FYI: This was done during a call of GetPrimaryFrameForCaretAtFocusNode.
 // Therefore, this may not be intended by the original author.
 
@@ -38,7 +90,7 @@ SelectionMovementUtils::PeekOffsetForCaretMove(
     nsIContent* aContent, uint32_t aOffset, nsDirection aDirection,
     CaretAssociationHint aHint, intl::BidiEmbeddingLevel aCaretBidiLevel,
     const nsSelectionAmount aAmount, const nsPoint& aDesiredCaretPos,
-    PeekOffsetOptions aOptions) {
+    PeekOffsetOptions aOptions, const Element* aAncestorLimiter) {
   const PrimaryFrameData frameForFocus =
       SelectionMovementUtils::GetPrimaryFrameForCaret(
           aContent, aOffset, aOptions.contains(PeekOffsetOption::Visual), aHint,
@@ -51,7 +103,7 @@ SelectionMovementUtils::PeekOffsetForCaretMove(
   PeekOffsetStruct pos(
       aAmount, aDirection,
       static_cast<int32_t>(frameForFocus.mOffsetInFrameContent),
-      aDesiredCaretPos, aOptions);
+      aDesiredCaretPos, aOptions, eDefaultBehavior, aAncestorLimiter);
   nsresult rv = frameForFocus.mFrame->PeekOffset(&pos);
   if (NS_FAILED(rv)) {
     return Err(rv);
@@ -205,11 +257,15 @@ nsIFrame* SelectionMovementUtils::GetFrameForNodeOffset(
     return nullptr;
   }
 
-  nsIFrame* returnFrame = nullptr;
+  nsIFrame *returnFrame = nullptr, *lastFrame = aNode->GetPrimaryFrame();
   nsCOMPtr<nsIContent> theNode;
-  uint32_t offsetInFrameContent;
+  uint32_t offsetInFrameContent, offsetInLastFrameContent = 0;
 
   while (true) {
+    if (returnFrame) {
+      lastFrame = returnFrame;
+      offsetInLastFrameContent = offsetInFrameContent;
+    }
     offsetInFrameContent = aOffset;
 
     theNode = aNode;
@@ -321,7 +377,11 @@ nsIFrame* SelectionMovementUtils::GetFrameForNodeOffset(
   }  // end while
 
   if (!returnFrame) {
-    return nullptr;
+    if (!lastFrame) {
+      return nullptr;
+    }
+    returnFrame = lastFrame;
+    offsetInFrameContent = offsetInLastFrameContent;
   }
 
   // If we ended up here and were asked to position the caret after a visible
@@ -408,8 +468,7 @@ static void AdjustCaretFrameForLineEnd(nsIFrame** aFrame, uint32_t* aOffset,
     if (aEditableOnly && !r->GetContent()->IsEditable()) {
       return;
     }
-    // We found our frame, but we may not be able to properly paint the caret
-    // if -moz-user-modify differs from our actual frame.
+    // We found our frame.
     MOZ_ASSERT(r->IsTextFrame(), "Expected text frame");
     *aFrame = r;
     *aOffset = (static_cast<nsTextFrame*>(r))->GetContentEnd();

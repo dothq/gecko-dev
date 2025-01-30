@@ -6,7 +6,7 @@ pub struct TypeTracer<'a> {
     pub types_used: &'a mut HandleSet<crate::Type>,
 }
 
-impl<'a> TypeTracer<'a> {
+impl TypeTracer<'_> {
     /// Propagate usage through `self.types`, starting with `self.types_used`.
     ///
     /// Treat `self.types_used` as the initial set of "known
@@ -44,7 +44,9 @@ impl<'a> TypeTracer<'a> {
                     size: _,
                     stride: _,
                 }
-                | Ti::BindingArray { base, size: _ } => self.types_used.insert(base),
+                | Ti::BindingArray { base, size: _ } => {
+                    self.types_used.insert(base);
+                }
                 Ti::Struct {
                     ref members,
                     span: _,

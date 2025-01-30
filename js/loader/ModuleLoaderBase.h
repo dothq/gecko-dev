@@ -23,7 +23,6 @@
 #include "nsURIHashKey.h"
 #include "mozilla/Attributes.h"  // MOZ_RAII
 #include "mozilla/CORSMode.h"
-#include "mozilla/dom/JSExecutionContext.h"
 #include "mozilla/MaybeOneOf.h"
 #include "mozilla/UniquePtr.h"
 #include "ResolveResult.h"
@@ -73,7 +72,7 @@ class ModuleScript;
 
 class ScriptLoaderInterface : public nsISupports {
  public:
-  // alias common classes
+  // Alias common classes.
   using ScriptFetchOptions = JS::loader::ScriptFetchOptions;
   using ScriptKind = JS::loader::ScriptKind;
   using ScriptLoadRequest = JS::loader::ScriptLoadRequest;
@@ -107,6 +106,58 @@ class ScriptLoaderInterface : public nsISupports {
   }
 
   virtual void MaybeTriggerBytecodeEncoding() {}
+};
+
+class ModuleMapKey : public PLDHashEntryHdr {
+ public:
+  using KeyType = const ModuleMapKey&;
+  using KeyTypePointer = const ModuleMapKey*;
+
+  ModuleMapKey(const nsIURI* aUri, const ModuleType aModuleType)
+      : mUri(const_cast<nsIURI*>(aUri)), mModuleType(aModuleType) {
+    MOZ_COUNT_CTOR(ModuleMapKey);
+    MOZ_ASSERT(aUri);
+  }
+  explicit ModuleMapKey(KeyTypePointer aOther)
+      : mUri(std::move(aOther->mUri)), mModuleType(aOther->mModuleType) {
+    MOZ_COUNT_CTOR(ModuleMapKey);
+    MOZ_ASSERT(mUri);
+  }
+  ModuleMapKey(ModuleMapKey&& aOther)
+      : mUri(std::move(aOther.mUri)), mModuleType(aOther.mModuleType) {
+    MOZ_COUNT_CTOR(ModuleMapKey);
+    MOZ_ASSERT(mUri);
+  }
+  MOZ_COUNTED_DTOR(ModuleMapKey)
+
+  bool KeyEquals(KeyTypePointer aKey) const {
+    if (mModuleType != aKey->mModuleType) {
+      return false;
+    }
+
+    bool eq;
+    if (NS_SUCCEEDED(mUri->Equals(aKey->mUri, &eq))) {
+      return eq;
+    }
+
+    return false;
+  }
+
+  static KeyTypePointer KeyToPointer(KeyType key) { return &key; }
+
+  static PLDHashNumber HashKey(KeyTypePointer aKey) {
+    MOZ_ASSERT(aKey->mUri);
+    nsAutoCString spec;
+    // This is based on `nsURIHashKey`, and it ignores GetSpec() failures, so
+    // do the same here.
+    (void)aKey->mUri->GetSpec(spec);
+    return mozilla::HashGeneric(mozilla::HashString(spec), aKey->mModuleType);
+  }
+
+  enum { ALLOW_MEMMOVE = true };
+
+  const nsCOMPtr<nsIURI> mUri;
+  const ModuleType mModuleType;
 };
 
 /*
@@ -164,22 +215,40 @@ class ScriptLoaderInterface : public nsISupports {
  * 10. The client calls EvaluateModule() to execute the top-level module.
  */
 class ModuleLoaderBase : public nsISupports {
+ public:
+  // Alias common classes.
+  using LoadedScript = JS::loader::LoadedScript;
+  using ScriptFetchOptions = JS::loader::ScriptFetchOptions;
+  using ScriptLoadRequest = JS::loader::ScriptLoadRequest;
+  using ModuleLoadRequest = JS::loader::ModuleLoadRequest;
+
+ private:
   /*
-   * The set of requests that are waiting for an ongoing fetch to complete.
+   * Represents an ongoing load operation for a URI initiated for one request
+   * and which may have other requests waiting for it to complete.
+   *
+   * These are tracked in the mFetchingModules map.
    */
-  class WaitingRequests final : public nsISupports {
-    virtual ~WaitingRequests() = default;
+  class LoadingRequest final : public nsISupports {
+    virtual ~LoadingRequest() = default;
 
    public:
     NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-    NS_DECL_CYCLE_COLLECTION_CLASS(WaitingRequests)
+    NS_DECL_CYCLE_COLLECTION_CLASS(LoadingRequest)
 
+    // The request that initiated the load and which is currently fetching or
+    // being compiled.
+    RefPtr<ModuleLoadRequest> mRequest;
+
+    // A list of any other requests for the same URI that are waiting for the
+    // initial load to complete. These will be resumed by ResumeWaitingRequests
+    // when that happens.
     nsTArray<RefPtr<ModuleLoadRequest>> mWaiting;
   };
 
   // Module map
-  nsRefPtrHashtable<nsURIHashKey, WaitingRequests> mFetchingModules;
-  nsRefPtrHashtable<nsURIHashKey, ModuleScript> mFetchedModules;
+  nsRefPtrHashtable<ModuleMapKey, LoadingRequest> mFetchingModules;
+  nsRefPtrHashtable<ModuleMapKey, ModuleScript> mFetchedModules;
 
   // List of dynamic imports that are currently being loaded.
   ScriptLoadRequestList mDynamicImportRequests;
@@ -220,11 +289,6 @@ class ModuleLoaderBase : public nsISupports {
 
   virtual nsIURI* GetBaseURI() const { return mLoader->GetBaseURI(); };
 
-  using LoadedScript = JS::loader::LoadedScript;
-  using ScriptFetchOptions = JS::loader::ScriptFetchOptions;
-  using ScriptLoadRequest = JS::loader::ScriptLoadRequest;
-  using ModuleLoadRequest = JS::loader::ModuleLoadRequest;
-
   using MaybeSourceText =
       mozilla::MaybeOneOf<JS::SourceText<char16_t>, JS::SourceText<Utf8Unit>>;
 
@@ -234,12 +298,15 @@ class ModuleLoaderBase : public nsISupports {
  private:
   // Create a module load request for a static module import.
   virtual already_AddRefed<ModuleLoadRequest> CreateStaticImport(
-      nsIURI* aURI, ModuleLoadRequest* aParent) = 0;
+      nsIURI* aURI, JS::ModuleType aModuleType, ModuleLoadRequest* aParent) = 0;
 
   // Called by HostImportModuleDynamically hook.
   virtual already_AddRefed<ModuleLoadRequest> CreateDynamicImport(
-      JSContext* aCx, nsIURI* aURI, LoadedScript* aMaybeActiveScript,
-      JS::Handle<JSString*> aSpecifier, JS::Handle<JSObject*> aPromise) = 0;
+      JSContext* aCx, nsIURI* aURI, JS::ModuleType aModuleType,
+      LoadedScript* aMaybeActiveScript, JS::Handle<JSString*> aSpecifier,
+      JS::Handle<JSObject*> aPromise) = 0;
+
+  virtual bool IsDynamicImportSupported() { return true; }
 
   // Called when dynamic import started successfully.
   virtual void OnDynamicImportStarted(ModuleLoadRequest* aRequest) {}
@@ -328,14 +395,10 @@ class ModuleLoaderBase : public nsISupports {
   // https://html.spec.whatwg.org/multipage/webappapis.html#disallow-further-import-maps
   void DisallowImportMaps() { mImportMapsAllowed = false; }
 
-  // Returns true if the module for given URL is already fetched.
-  bool IsModuleFetched(nsIURI* aURL) const;
+  // Returns true if the module for given module key is already fetched.
+  bool IsModuleFetched(const ModuleMapKey& key) const;
 
   nsresult GetFetchedModuleURLs(nsTArray<nsCString>& aURLs);
-
-  // Removed a fetched module from the module map. Asserts that the module is
-  // unlinked. Extreme care should be taken when calling this method.
-  bool RemoveFetchedModule(nsIURI* aURL);
 
   // Override the module loader with given loader until ResetOverride is called.
   // While overridden, ModuleLoaderBase::GetCurrentModuleLoader returns aLoader.
@@ -406,28 +469,29 @@ class ModuleLoaderBase : public nsISupports {
   nsresult StartOrRestartModuleLoad(ModuleLoadRequest* aRequest,
                                     RestartRequest aRestart);
 
-  bool ModuleMapContainsURL(nsIURI* aURL) const;
-  bool IsModuleFetching(nsIURI* aURL) const;
+  bool ModuleMapContainsURL(const ModuleMapKey& key) const;
+  bool IsModuleFetching(const ModuleMapKey& key) const;
   void WaitForModuleFetch(ModuleLoadRequest* aRequest);
   void SetModuleFetchStarted(ModuleLoadRequest* aRequest);
 
-  ModuleScript* GetFetchedModule(nsIURI* aURL) const;
+  ModuleScript* GetFetchedModule(const ModuleMapKey& moduleMapKey) const;
 
   JS::Value FindFirstParseError(ModuleLoadRequest* aRequest);
   static nsresult InitDebuggerDataForModuleGraph(JSContext* aCx,
                                                  ModuleLoadRequest* aRequest);
-  nsresult ResolveRequestedModules(ModuleLoadRequest* aRequest,
-                                   nsCOMArray<nsIURI>* aUrlsOut);
+  nsresult ResolveRequestedModules(
+      ModuleLoadRequest* aRequest,
+      nsTArray<ModuleMapKey>* aRequestedModulesOut);
 
   void SetModuleFetchFinishedAndResumeWaitingRequests(
       ModuleLoadRequest* aRequest, nsresult aResult);
-  void ResumeWaitingRequests(WaitingRequests* aWaitingRequests, bool aSuccess);
+  void ResumeWaitingRequests(LoadingRequest* aLoadingRequest, bool aSuccess);
   void ResumeWaitingRequest(ModuleLoadRequest* aRequest, bool aSuccess);
 
   void StartFetchingModuleDependencies(ModuleLoadRequest* aRequest);
 
   void StartFetchingModuleAndDependencies(ModuleLoadRequest* aParent,
-                                          nsIURI* aURI);
+                                          const ModuleMapKey& aRequestedModule);
 
   void InstantiateAndEvaluateDynamicImport(ModuleLoadRequest* aRequest);
 
@@ -471,6 +535,8 @@ class ModuleLoaderBase : public nsISupports {
   void RemoveDynamicImport(ModuleLoadRequest* aRequest);
 
   nsresult CreateModuleScript(ModuleLoadRequest* aRequest);
+
+  bool IsFetchingAndHasWaitingRequest(ModuleLoadRequest* aRequest);
 
   // The slot stored in ImportMetaResolve function.
   enum { ModulePrivateSlot = 0, SlotCount };

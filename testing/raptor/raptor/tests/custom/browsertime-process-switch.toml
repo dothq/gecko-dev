@@ -1,7 +1,7 @@
 [DEFAULT]
 alert_on = "fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange"
 alert_threshold = 2.0
-apps = "firefox, chrome, chromium"
+apps = "firefox, chrome"
 browser_cycles = 25
 gecko_profile_interval = 1
 lower_is_better = true
@@ -13,6 +13,7 @@ playback_version = "5.1.1"
 type = "pageload"
 unit = "ms"
 use_live_sites = false
+support_class = "browsertime_pageload.py"
 
 # raptor-browsertime fission process switch time test
 

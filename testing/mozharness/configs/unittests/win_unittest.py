@@ -18,6 +18,10 @@ REQUIRE_GPU = False
 if "REQUIRE_GPU" in os.environ:
     REQUIRE_GPU = os.environ["REQUIRE_GPU"] == "1"
 
+USE_HARDWARE = False
+if "USE_HARDWARE" in os.environ:
+    USE_HARDWARE = os.environ["USE_HARDWARE"] == "1"
+
 PYWIN32 = "pywin32==306"
 
 XPCSHELL_NAME = "xpcshell.exe"
@@ -44,7 +48,7 @@ config = {
     "installer_path": INSTALLER_PATH,
     "binary_path": BINARY_PATH,
     "xpcshell_name": XPCSHELL_NAME,
-    "virtualenv_modules": [PYWIN32, "six==1.13.0", "vcversioner==2.16.0.0"],
+    "virtualenv_modules": [PYWIN32, "six==1.16.0", "vcversioner==2.16.0.0"],
     "virtualenv_path": "venv",
     "exe_suffix": EXE_SUFFIX,
     "run_file_names": {
@@ -167,6 +171,10 @@ config = {
         ],
         "mochitest-browser-a11y": ["--flavor=browser", "--subsuite=a11y"],
         "mochitest-browser-media": ["--flavor=browser", "--subsuite=media-bc"],
+        "mochitest-browser-translations": [
+            "--flavor=browser",
+            "--subsuite=translations",
+        ],
         "mochitest-a11y": ["--flavor=a11y", "--disable-e10s"],
         "mochitest-remote": ["--flavor=browser", "--subsuite=remote"],
     },
@@ -188,27 +196,14 @@ config = {
             "options": ["--suite=reftest", "--topsrcdir=tests/reftest/tests"],
             "tests": ["tests/reftest/tests/layout/reftests/reftest.list"],
         },
-        "reftest-no-accel": {
-            "options": [
-                "--suite=reftest",
-                "--setpref=layers.acceleration.disabled=true",
-                "--topsrcdir=tests/reftest/tests",
-            ],
-            "tests": ["tests/reftest/tests/layout/reftests/reftest.list"],
-        },
     },
     "all_xpcshell_suites": {
         "xpcshell": {
             "options": [
                 "--xpcshell=%(abs_app_dir)s/" + XPCSHELL_NAME,
-            ],
-            "tests": [],
-        },
-        "xpcshell-msix": {
-            "options": [
-                "--app-binary=%(binary_path)s",
-                "--app-path=%(install_dir)s",
-                "--xre-path=%(install_dir)s",
+                "--msix-app-binary=%(binary_path)s",
+                "--msix-app-path=%(install_dir)s",
+                "--msix-xre-path=%(install_dir)s",
             ],
             "tests": [],
         },
@@ -245,11 +240,15 @@ config = {
                     "external_tools",
                     "machine-configuration.json",
                 ),
-                "--platform=win10-vm"
-                if REQUIRE_GPU and (platform.uname().version == "10.0.19045")
-                else "--platform=win11-hw"
-                if REQUIRE_GPU and (platform.uname().version == "10.0.22621")
-                else "--platform=win7",
+                (
+                    "--platform=win10-vm"
+                    if REQUIRE_GPU and (platform.uname().version == "10.0.19045")
+                    else (
+                        "--platform=win11-hw"
+                        if REQUIRE_GPU and (platform.uname().version == "10.0.22621")
+                        else "--platform=win7"
+                    )
+                ),
             ],
             "architectures": ["32bit", "64bit"],
             "halt_on_failure": True,
@@ -323,7 +322,31 @@ config = {
             ],
             "architectures": ["32bit", "64bit"],
             "halt_on_failure": True,
-            "enabled": True,
+            "enabled": False,
+        },
+        {
+            "name": "ensure proper graphics driver",
+            "cmd": [
+                "powershell",
+                "-command",
+                'if (-Not ((Get-CimInstance win32_VideoController).InstalledDisplayDrivers | Out-String).contains("nvgrid")) { echo "Missing nvgrid driver: " + (Get-CimInstance win32_VideoController).InstalledDisplayDrivers; exit 4; }',
+            ],
+            "architectures": ["32bit", "64bit"],
+            "halt_on_failure": True,
+            "enabled": True if REQUIRE_GPU and not USE_HARDWARE else False,
+            "fatal_exit_code": 4,
+        },
+        {
+            "name": "ensure display refresh rate == 60",
+            "cmd": [
+                "powershell",
+                "-command",
+                'if (-Not ((Get-WmiObject win32_videocontroller).CurrentRefreshRate | Out-String).contains("60")) { echo "Screen refresh rate != 60: " + ((Get-WmiObject win32_videocontroller).CurrentRefreshRate | Out-String); exit 4; }',
+            ],
+            "architectures": ["32bit", "64bit"],
+            "halt_on_failure": True,
+            "enabled": True if REQUIRE_GPU and USE_HARDWARE else False,
+            "fatal_exit_code": 4,
         },
     ],
     "vcs_output_timeout": 1000,

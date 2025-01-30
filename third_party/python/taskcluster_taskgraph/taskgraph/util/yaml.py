@@ -5,10 +5,13 @@
 
 import os
 
-from yaml.loader import SafeLoader
+try:
+    from yaml import CSafeLoader as SafeLoader
+except ImportError:
+    from yaml import SafeLoader
 
 
-class UnicodeLoader(SafeLoader):
+class UnicodeLoader(SafeLoader):  # type: ignore
     def construct_yaml_str(self, node):
         return self.construct_scalar(node)
 

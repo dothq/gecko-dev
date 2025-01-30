@@ -25,15 +25,17 @@ prefs = [
 
 ["browser_adjusted_rating.js"]
 
-["browser_ads_exposure_telemetry.js"]
-
 ["browser_analysis_explainer.js"]
 
 ["browser_auto_open.js"]
 
+["browser_empty_states.js"]
+
 ["browser_exposure_telemetry.js"]
 
 ["browser_inprogress_analysis.js"]
+
+["browser_integrated_sidebar.js"]
 
 ["browser_keep_close_message_bar.js"]
 
@@ -70,9 +72,6 @@ prefs = [
 ["browser_stale_product.js"]
 
 ["browser_ui_telemetry.js"]
-skip-if = [
-  "os == 'linux' && os_version == '18.04'"
-]
 
 ["browser_unanalyzed_product.js"]
 

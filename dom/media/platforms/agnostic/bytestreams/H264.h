@@ -6,11 +6,48 @@
 #define MP4_DEMUXER_H264_H_
 
 #include <stdint.h>
-#include "DecoderData.h"
+#include "ErrorList.h"
+#include "mozilla/AlreadyAddRefed.h"
+#include "mozilla/Result.h"
+#include "mozilla/Span.h"
+#include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Types.h"
 
 namespace mozilla {
 class BitReader;
+class MediaByteBuffer;
+class MediaRawData;
+
+enum H264_PROFILE {
+  H264_PROFILE_UNKNOWN = 0,
+  H264_PROFILE_BASE = 0x42,
+  H264_PROFILE_MAIN = 0x4D,
+  H264_PROFILE_EXTENDED = 0x58,
+  H264_PROFILE_HIGH = 0x64,
+};
+
+enum class H264_LEVEL {
+  H264_LEVEL_1 = 10,
+  H264_LEVEL_1_b = 11,
+  H264_LEVEL_1_1 = 11,
+  H264_LEVEL_1_2 = 12,
+  H264_LEVEL_1_3 = 13,
+  H264_LEVEL_2 = 20,
+  H264_LEVEL_2_1 = 21,
+  H264_LEVEL_2_2 = 22,
+  H264_LEVEL_3 = 30,
+  H264_LEVEL_3_1 = 31,
+  H264_LEVEL_3_2 = 32,
+  H264_LEVEL_4 = 40,
+  H264_LEVEL_4_1 = 41,
+  H264_LEVEL_4_2 = 42,
+  H264_LEVEL_5 = 50,
+  H264_LEVEL_5_1 = 51,
+  H264_LEVEL_5_2 = 52,
+  H264_LEVEL_6 = 60,
+  H264_LEVEL_6_1 = 61,
+  H264_LEVEL_6_2 = 62
+};
 
 // Spec 7.4.2.1
 #define MAX_SPS_COUNT 32
@@ -487,10 +524,15 @@ class H264 {
   // Returns the frame type. Returns I_FRAME if the sample is an IDR
   // (Instantaneous Decoding Refresh) Picture.
   static FrameType GetFrameType(const mozilla::MediaRawData* aSample);
+
+  /* From a NAL, extract the SVC temporal id, per H264 spec Annex G, 7.3.1.1 */
+  static Result<int, nsresult> ExtractSVCTemporalId(const uint8_t* aData,
+                                                    size_t aLength);
+
   // Create a dummy extradata, useful to create a decoder and test the
   // capabilities of the decoder.
   static already_AddRefed<mozilla::MediaByteBuffer> CreateExtraData(
-      uint8_t aProfile, uint8_t aConstraints, uint8_t aLevel,
+      uint8_t aProfile, uint8_t aConstraints, H264_LEVEL aLevel,
       const gfx::IntSize& aSize);
   static void WriteExtraData(mozilla::MediaByteBuffer* aDestExtraData,
                              const uint8_t aProfile, const uint8_t aConstraints,
@@ -500,6 +542,7 @@ class H264 {
 
  private:
   friend class SPSNAL;
+
   /* Extract RAW BYTE SEQUENCE PAYLOAD from NAL content.
      Returns nullptr if invalid content.
      This is compliant to ITU H.264 7.3.1 Syntax in tabular form NAL unit syntax

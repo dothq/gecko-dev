@@ -10,11 +10,11 @@
   --uei-button-hover-color: inherit;
   --uei-button-active-bgcolor: var(--panel-item-active-bgcolor);
   --uei-button-active-color: inherit;
-  --uei-button-attention-dot-color: var(--tab-attention-icon-color);
-}
+  --uei-button-attention-dot-color: var(--attention-dot-color);
 
-:root[uidensity="compact"] {
-  --uei-icon-size: 24px;
+  &[uidensity="compact"] {
+    --uei-icon-size: 24px;
+  }
 }
 
 #unified-extensions-panel {
@@ -29,11 +29,10 @@
 /* Align extensions rendered with custom elements. */
 unified-extensions-item {
   display: flex;
-  align-items: center;
-}
 
-unified-extensions-item > .subviewbutton {
-  flex-shrink: 1;
+  & > .unified-extensions-item-row-wrapper > .subviewbutton {
+    flex-shrink: 1;
+  }
 }
 
 #unified-extensions-panel .unified-extensions-item {
@@ -43,7 +42,9 @@ unified-extensions-item > .subviewbutton {
   margin-block: 2px !important; /* override panelUI-shared.css */
 }
 
-.unified-extensions-item > .subviewbutton {
+/* Override the margin for the subviewbutton wrapped inside
+* the row wrapper box */
+.unified-extensions-item > .unified-extensions-item-row-wrapper > .subviewbutton {
   margin: 0;
 }
 
@@ -55,39 +56,63 @@ unified-extensions-item > .subviewbutton {
 /* For extension widgets placed in a toolbar, we use the stack element
  * (containing the icon) of the action button to draw the attention dot.
  * Otherwise (in the extensions panel), we use the action button itself. */
-.unified-extensions-item[attention] > .unified-extensions-item-action-button.toolbarbutton-1 > .toolbarbutton-badge-stack,
-.unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton {
+.unified-extensions-item[attention] > .unified-extensions-item-row-wrapper > .unified-extensions-item-action-button.toolbarbutton-1 > .toolbarbutton-badge-stack,
+.unified-extensions-item[attention] > .unified-extensions-item-row-wrapper > .unified-extensions-item-action-button.subviewbutton {
   background-image: radial-gradient(circle, var(--uei-button-attention-dot-color), var(--uei-button-attention-dot-color) 2px, transparent 2px);
   background-size: var(--uei-attention-dot-size) var(--uei-attention-dot-size);
   background-repeat: no-repeat;
-}
 
-/* Adjust attention dots position in the toolbar. */
-#unified-extensions-button[attention] > .toolbarbutton-icon,
-.unified-extensions-item[attention] > .unified-extensions-item-action-button.toolbarbutton-1 > .toolbarbutton-badge-stack {
+  /* Adjust attention dots position in the toolbar. */
   background-position: center bottom calc(var(--toolbarbutton-inner-padding) / 2 - var(--uei-attention-dot-size) / 2);
-}
 
-/* Adjust attention dots position in the unified extensions panel. */
-.unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton {
-  background-position: left var(--uei-dot-horizontal-position-in-panel) bottom var(--uei-dot-vertical-position-in-panel);
-}
+  /* Adjust attention dots position in the unified extensions panel. */
+  &.subviewbutton {
+    background-position: left var(--uei-dot-horizontal-position-in-panel) bottom var(--uei-dot-vertical-position-in-panel);
 
-/* Adjust attention dots position in the unified extensions panel for RTL. */
-.unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton:-moz-locale-dir(rtl) {
-  background-position-x: right var(--uei-dot-horizontal-position-in-panel);
+    &:-moz-locale-dir(rtl) {
+      background-position-x: right var(--uei-dot-horizontal-position-in-panel);
+    }
+  }
 }
 
 .unified-extensions-item-action-button {
   flex: 1;
   overflow: hidden;
+
+  /* The padding-block for menuitems is set to 0 in compact mode which, with the
+   * extension icon being 32px in this case, makes the item look crowded even for
+   * compact mode. */
+  :root[uidensity="compact"] panel:not([touchmode]) & {
+    padding-block: 4px;
+  }
 }
 
-/* The padding-block for menuitems is set to 0 in compact mode which, with the
- * extension icon being 32px in this case, makes the item look crowded even for
- * compact mode. */
-:root[uidensity="compact"] panel:not([touchmode]) .unified-extensions-item-action-button {
-  padding-block: 4px;
+.unified-extensions-item-action-button {
+  list-style-image: var(--webextension-toolbar-image, inherit);
+
+  toolbar[brighttext] & {
+    list-style-image: var(--webextension-toolbar-image-light, inherit);
+  }
+  :root[lwtheme] toolbar:not([brighttext]) & {
+    list-style-image: var(--webextension-toolbar-image-dark, inherit);
+  }
+  toolbaritem:is([overflowedItem="true"], [cui-areatype="panel"]) > .unified-extensions-item-row-wrapper > & {
+    list-style-image: var(--webextension-menupanel-image, inherit);
+    /* TODO: This feels a bit odd, why do we have three images? It feels we
+     * should probably have only two (light/dark), and choose based on
+     * prefers-color-scheme + lwt-popup */
+    :root[lwt-popup="dark"] & {
+      list-style-image: var(--webextension-menupanel-image-light, inherit);
+    }
+    :root[lwt-popup="light"] & {
+      list-style-image: var(--webextension-menupanel-image-dark, inherit);
+    }
+  }
+
+  > .toolbarbutton-badge-stack > .toolbarbutton-icon {
+    height: 16px;
+    width: 16px;
+  }
 }
 
 .unified-extensions-item-icon,
@@ -129,34 +154,34 @@ unified-extensions-item > .subviewbutton {
   background-color: transparent !important;
   box-shadow: none !important;
   outline: none !important;
+
+  > .toolbarbutton-icon {
+    box-sizing: content-box;
+    padding: var(--arrowpanel-menuitem-padding-inline);
+    border: 1px solid transparent;
+    border-radius: var(--arrowpanel-menuitem-border-radius);
+  }
+
+  /* Background color, outline, and shadow on the icon to allow the clickable
+   * padding on the button to remain invisible */
+  &:hover > .toolbarbutton-icon {
+    background-color: var(--uei-button-hover-bgcolor);
+  }
+
+  &:hover:active > .toolbarbutton-icon {
+    background-color: var(--uei-button-active-bgcolor);
+    box-shadow: 0 1px 0 hsla(210,4%,10%,.03) inset;
+  }
+
+  &:focus-visible > .toolbarbutton-icon {
+    outline: var(--focus-outline);
+    outline-offset: var(--focus-outline-inset);
+  }
 }
 
 /* Hide subview label. */
 .unified-extensions-item .toolbarbutton-text {
   display: none !important; /* override panelUI-shared.css */
-}
-
-.unified-extensions-item-menu-button.subviewbutton > .toolbarbutton-icon {
-  box-sizing: content-box;
-  padding: var(--arrowpanel-menuitem-padding-inline);
-  border: 1px solid transparent;
-  border-radius: var(--arrowpanel-menuitem-border-radius);
-}
-
-/* Background color, outline, and shadow on the icon to allow the clickable
- * padding on the button to remain invisible */
-.unified-extensions-item-menu-button.subviewbutton:hover > .toolbarbutton-icon {
-  background-color: var(--uei-button-hover-bgcolor);
-}
-
-.unified-extensions-item-menu-button.subviewbutton:hover:active > .toolbarbutton-icon {
-  background-color: var(--uei-button-active-bgcolor);
-  box-shadow: 0 1px 0 hsla(210,4%,10%,.03) inset;
-}
-
-.unified-extensions-item-menu-button.subviewbutton:focus-visible > .toolbarbutton-icon {
-  outline: var(--focus-outline);
-  outline-offset: var(--focus-outline-inset);
 }
 
 /* --- warning messages --- */
@@ -166,7 +191,7 @@ unified-extensions-item > .subviewbutton {
 }
 
 .unified-extensions-message-bar {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-small);
 }
 
 /* Hide the menu button and the unified extensions content when the extension
@@ -176,59 +201,90 @@ unified-extensions-item > .subviewbutton {
   display: none;
 }
 
+.unified-extensions-item-messagebar {
+  /* Keep the messagebar hidden when the extension item is placed
+   * in the toolbar */
+  display: none;
+
+  /* Show the messagebar when the item is placed into the panel unless it is
+   * explicitly hidden */
+  toolbaritem:is([overflowedItem="true"], [cui-areatype="panel"]).unified-extensions-item > unified-extensions-item-messagebar-wrapper > &,
+  unified-extensions-item > unified-extensions-item-messagebar-wrapper > & {
+    display: block;
+    margin-top: var(--space-xsmall);
+
+    &[hidden] {
+      display: none;
+    }
+  }
+}
+
+.unified-extensions-item-row-wrapper {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+}
+
+/* Override .toolbaritem-combined-buttons rules applied from panelUI-shared.css
+ * to make sure the extensions panel item row (the one including extension icon,
+*  name, origin control message and gear menu button) and the messagebar that may
+*  follow it (e.g. when the extension is soft-blocked) are going to be rendered
+*  as two separate rows */
+toolbaritem:is([overflowedItem="true"], [cui-areatype="panel"]).unified-extensions-item,
+unified-extensions-item.unified-extensions-item {
+  flex-direction: column;
+  align-items: normal;
+}
+
 /* --- browser action CUI widget styles in the extensions panel --- */
 
 @media (prefers-contrast) {
-  :root:not(:-moz-lwtheme) {
+  :root:not([lwtheme]) {
     --uei-button-attention-dot-color: ButtonText;
-  }
 
-  .unified-extensions-item-action-button.subviewbutton:not([disabled], :-moz-lwtheme),
-  .unified-extensions-item-menu-button.subviewbutton > .toolbarbutton-icon:not(:-moz-lwtheme) {
-    border-color: currentColor;
-    background-color: ButtonFace;
-    color: ButtonText;
-    --uei-button-hover-bgcolor: SelectedItem;
-    --uei-button-hover-color: SelectedItemText;
-    --uei-button-active-bgcolor: ButtonFace;
-    --uei-button-active-color: ButtonText;
-  }
+    .unified-extensions-item-action-button.subviewbutton:not([disabled]),
+    .unified-extensions-item-menu-button.subviewbutton > .toolbarbutton-icon {
+      border-color: currentColor;
+      background-color: ButtonFace;
+      color: ButtonText;
+      --uei-button-hover-bgcolor: SelectedItem;
+      --uei-button-hover-color: SelectedItemText;
+      --uei-button-active-bgcolor: ButtonFace;
+      --uei-button-active-color: ButtonText;
+    }
 
-  .unified-extensions-item-action-button[disabled].subviewbutton:not(:-moz-lwtheme) {
-    background-color: Canvas;
-    color: GrayText !important; /* override panelUI-shared.css */
-    opacity: 1 !important; /* override panelUI-shared.css */
-  }
+    .unified-extensions-item-action-button[disabled].subviewbutton {
+      background-color: Canvas;
+      color: GrayText !important; /* override panelUI-shared.css */
+      opacity: 1 !important; /* override panelUI-shared.css */
+    }
 
-  .unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton:hover:not(:-moz-lwtheme) {
-    --uei-button-attention-dot-color: ButtonFace;
-  }
+    .unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton:hover:not(:active) {
+      --uei-button-attention-dot-color: ButtonFace;
+    }
 
-  .unified-extensions-item[attention] > .unified-extensions-item-action-button.subviewbutton:hover:active:not(:-moz-lwtheme) {
-    --uei-button-attention-dot-color: ButtonText;
-  }
+    .unified-extensions-item-message {
+      color: inherit;
+    }
 
-  .unified-extensions-item-message:not(:-moz-lwtheme) {
-    color: inherit;
-  }
+    .unified-extensions-item > .unified-extensions-item-action-button.subviewbutton:hover:not([disabled]),
+    .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:hover > .toolbarbutton-icon {
+      background-color: var(--uei-button-hover-bgcolor);
+      color: var(--uei-button-hover-color);
+      border-color: var(--uei-button-hover-bgcolor);
+    }
 
-  .unified-extensions-item > .unified-extensions-item-action-button.subviewbutton:hover:not([disabled], :-moz-lwtheme),
-  .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:hover > .toolbarbutton-icon:not(:-moz-lwtheme) {
-    background-color: var(--uei-button-hover-bgcolor);
-    color: var(--uei-button-hover-color);
-    border-color: var(--uei-button-hover-bgcolor);
-  }
+    .unified-extensions-item > .unified-extensions-item-action-button.subviewbutton:hover:active:not([disabled]),
+    .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:hover:active > .toolbarbutton-icon {
+      background-color: var(--uei-button-active-bgcolor);
+      color: var(--uei-button-active-color);
+      border-color: var(--uei-button-active-color);
+    }
 
-  .unified-extensions-item > .unified-extensions-item-action-button.subviewbutton:hover:active:not([disabled], :-moz-lwtheme),
-  .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:hover:active > .toolbarbutton-icon:not(:-moz-lwtheme) {
-    background-color: var(--uei-button-active-bgcolor);
-    color: var(--uei-button-active-color);
-    border-color: var(--uei-button-active-color);
-  }
-
-  .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:focus-visible > .toolbarbutton-icon:not(:-moz-lwtheme) {
-    /* The border would otherwise overlap with the focus outline, causing an
-     * unsightly anti-aliasing artifact */
-    border-color: transparent;
+    .unified-extensions-item > .unified-extensions-item-menu-button.subviewbutton:focus-visible > .toolbarbutton-icon {
+      /* The border would otherwise overlap with the focus outline, causing an
+       * unsightly anti-aliasing artifact */
+      border-color: transparent;
+    }
   }
 }

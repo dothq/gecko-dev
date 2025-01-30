@@ -1,5 +1,5 @@
 fuzzy(0-4,0-89700) == linear-1a.html linear-1-ref.html
-fuzzy(0-2,0-23918) == linear-keywords-1a.html linear-keywords-1-ref.html
+fuzzy(0-2,0-27600) == linear-keywords-1a.html linear-keywords-1-ref.html
 == linear-diagonal-1a.html linear-diagonal-1-ref.html
 == linear-diagonal-2a.html linear-diagonal-2-ref.html
 == linear-diagonal-3a.html linear-diagonal-3-ref.html
@@ -47,8 +47,8 @@ fuzzy-if(Android,0-8,0-771) == radial-shape-farthest-corner-1a.html radial-shape
 fails-if(gtkWidget) fuzzy(0-2,0-500) == radial-shape-farthest-corner-1b.html radial-shape-farthest-corner-1-ref.html
 fuzzy(0-2,0-15000) fuzzy-if(Android,0-17,0-13320) == radial-shape-farthest-side-1a.html radial-shape-farthest-side-1-ref.html
 fuzzy(0-2,0-15000) fuzzy-if(Android,0-17,0-13320) == radial-shape-farthest-side-1b.html radial-shape-farthest-side-1-ref.html
-== radial-size-1a.html radial-size-1-ref.html
-== radial-size-1b.html radial-size-1-ref.html
+fuzzy(0-1,0-100) == radial-size-1a.html radial-size-1-ref.html
+fuzzy(0-1,0-100) == radial-size-1b.html radial-size-1-ref.html
 fuzzy-if(Android,0-4,0-248) == radial-zero-length-1a.html radial-zero-length-1-ref.html
 fuzzy-if(Android,0-4,0-248) == radial-zero-length-1b.html radial-zero-length-1-ref.html
 fuzzy-if(Android,0-4,0-248) == radial-zero-length-1c.html radial-zero-length-1-ref.html

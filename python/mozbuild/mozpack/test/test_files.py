@@ -2,7 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from mozbuild.util import ensure_bytes, ensureParentDir
+from mozbuild.dirutils import ensureParentDir
+from mozbuild.util import ensure_bytes
 from mozpack.errors import ErrorMessage, errors
 from mozpack.files import (
     AbsoluteSymlinkFile,
@@ -275,7 +276,7 @@ class TestAbsoluteSymlinkFile(TestWithTmpDir):
     def test_absolute_relative(self):
         AbsoluteSymlinkFile("/foo")
 
-        with self.assertRaisesRegexp(ValueError, "Symlink target not absolute"):
+        with self.assertRaisesRegex(ValueError, "Symlink target not absolute"):
             AbsoluteSymlinkFile("./foo")
 
     def test_symlink_file(self):
@@ -580,7 +581,7 @@ class TestPreprocessedFile(TestWithTmpDir):
 
 class TestExistingFile(TestWithTmpDir):
     def test_required_missing_dest(self):
-        with self.assertRaisesRegexp(ErrorMessage, "Required existing file"):
+        with self.assertRaisesRegex(ErrorMessage, "Required existing file"):
             f = ExistingFile(required=True)
             f.copy(self.tmppath("dest"))
 

@@ -5,10 +5,8 @@
 #![warn(rust_2018_idioms, unused_qualifications)]
 
 //! Macros for `uniffi`.
-//!
-//! Currently this is just for easily generating integration tests, but maybe
-//! we'll put some other code-annotation helper macros in here at some point.
 
+#[cfg(feature = "trybuild")]
 use camino::Utf8Path;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -18,9 +16,12 @@ use syn::{
 };
 
 mod custom;
+mod default;
+mod derive;
 mod enum_;
 mod error;
 mod export;
+mod ffiops;
 mod fnsig;
 mod object;
 mod record;
@@ -29,23 +30,9 @@ mod test;
 mod util;
 
 use self::{
-    enum_::expand_enum, error::expand_error, export::expand_export, object::expand_object,
-    record::expand_record,
+    derive::DeriveOptions, enum_::expand_enum, error::expand_error, export::expand_export,
+    object::expand_object, record::expand_record,
 };
-
-struct IdentPair {
-    lhs: Ident,
-    rhs: Ident,
-}
-
-impl Parse for IdentPair {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let lhs = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let rhs = input.parse()?;
-        Ok(Self { lhs, rhs })
-    }
-}
 
 struct CustomTypeInfo {
     ident: Ident,
@@ -107,9 +94,8 @@ fn do_export(attr_args: TokenStream, input: TokenStream, udl_mode: bool) -> Toke
     let copied_input = (!udl_mode).then(|| proc_macro2::TokenStream::from(input.clone()));
 
     let gen_output = || {
-        let args = syn::parse(attr_args)?;
         let item = syn::parse(input)?;
-        expand_export(item, args, udl_mode)
+        expand_export(item, attr_args, udl_mode)
     };
     let output = gen_output().unwrap_or_else(syn::Error::into_compile_error);
 
@@ -122,28 +108,28 @@ fn do_export(attr_args: TokenStream, input: TokenStream, udl_mode: bool) -> Toke
 
 #[proc_macro_derive(Record, attributes(uniffi))]
 pub fn derive_record(input: TokenStream) -> TokenStream {
-    expand_record(parse_macro_input!(input), false)
+    expand_record(parse_macro_input!(input), DeriveOptions::default())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro_derive(Enum)]
 pub fn derive_enum(input: TokenStream) -> TokenStream {
-    expand_enum(parse_macro_input!(input), false)
+    expand_enum(parse_macro_input!(input), DeriveOptions::default())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro_derive(Object)]
 pub fn derive_object(input: TokenStream) -> TokenStream {
-    expand_object(parse_macro_input!(input), false)
+    expand_object(parse_macro_input!(input), DeriveOptions::default())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro_derive(Error, attributes(uniffi))]
 pub fn derive_error(input: TokenStream) -> TokenStream {
-    expand_error(parse_macro_input!(input), None, false)
+    expand_error(parse_macro_input!(input), DeriveOptions::default())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -169,28 +155,11 @@ pub fn custom_newtype(tokens: TokenStream) -> TokenStream {
         .into()
 }
 
-// == derive_for_udl and export_for_udl ==
+// Derive items for UDL mode
 //
-// The Askama templates generate placeholder items wrapped with these attributes. The goal is to
-// have all scaffolding generation go through the same code path.
-//
-// The one difference is that derive-style attributes are not allowed inside attribute macro
-// inputs.  Instead, we take the attributes from the macro invocation itself.
-//
-// Instead of:
-//
-// ```
-// #[derive(Error)
-// #[uniffi(flat_error])
-// enum { .. }
-// ```
-//
-// We have:
-//
-// ```
-// #[derive_error_for_udl(flat_error)]
-// enum { ... }
-//  ```
+// The Askama templates generate placeholder items wrapped with the `#[udl_derive(<kind>)]`
+// attribute.  The macro code then generates derived items based on the input.  This system ensures
+// that the same code path is used for UDL-based code and proc-macros.
 //
 // # Differences between UDL-mode and normal mode
 //
@@ -214,63 +183,25 @@ pub fn custom_newtype(tokens: TokenStream) -> TokenStream {
 //
 // With proc-macros this system isn't so natural.  Instead, we create a blanket implementation
 // for all UT and support for remote types is still TODO.
-
 #[doc(hidden)]
 #[proc_macro_attribute]
-pub fn derive_record_for_udl(_attrs: TokenStream, input: TokenStream) -> TokenStream {
-    expand_record(syn::parse_macro_input!(input), true)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[proc_macro_attribute]
-pub fn derive_enum_for_udl(_attrs: TokenStream, input: TokenStream) -> TokenStream {
-    expand_enum(syn::parse_macro_input!(input), true)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[proc_macro_attribute]
-pub fn derive_error_for_udl(attrs: TokenStream, input: TokenStream) -> TokenStream {
-    expand_error(
-        syn::parse_macro_input!(input),
-        Some(syn::parse_macro_input!(attrs)),
-        true,
+pub fn udl_derive(attrs: TokenStream, input: TokenStream) -> TokenStream {
+    derive::expand_derive(
+        parse_macro_input!(attrs),
+        parse_macro_input!(input),
+        DeriveOptions::udl_derive(),
     )
     .unwrap_or_else(syn::Error::into_compile_error)
     .into()
 }
 
-#[doc(hidden)]
-#[proc_macro_attribute]
-pub fn derive_object_for_udl(_attrs: TokenStream, input: TokenStream) -> TokenStream {
-    expand_object(syn::parse_macro_input!(input), true)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
+// Generate export items for UDL mode
+//
+// This works similarly to `udl_derive`, but for #[export].
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn export_for_udl(attrs: TokenStream, input: TokenStream) -> TokenStream {
     do_export(attrs, input, true)
-}
-
-/// Generate various support elements, including the FfiConverter implementation,
-/// for a trait interface for the scaffolding code
-#[doc(hidden)]
-#[proc_macro]
-pub fn expand_trait_interface_support(tokens: TokenStream) -> TokenStream {
-    export::ffi_converter_trait_impl(&syn::parse_macro_input!(tokens), true).into()
-}
-
-/// Generate the FfiConverter implementation for an trait interface for the scaffolding code
-#[doc(hidden)]
-#[proc_macro]
-pub fn scaffolding_ffi_converter_callback_interface(tokens: TokenStream) -> TokenStream {
-    let input: IdentPair = syn::parse_macro_input!(tokens);
-    export::ffi_converter_callback_interface_impl(&input.lhs, &input.rhs, true).into()
 }
 
 /// A helper macro to include generated component scaffolding.
@@ -373,6 +304,7 @@ pub fn use_udl_object(tokens: TokenStream) -> TokenStream {
 /// uniffi_macros::generate_and_include_scaffolding!("path/to/my/interface.udl");
 /// ```
 #[proc_macro]
+#[cfg(feature = "trybuild")]
 pub fn generate_and_include_scaffolding(udl_file: TokenStream) -> TokenStream {
     let udl_file = syn::parse_macro_input!(udl_file as LitStr);
     let udl_file_string = udl_file.value();
@@ -396,15 +328,25 @@ pub fn generate_and_include_scaffolding(udl_file: TokenStream) -> TokenStream {
     }.into()
 }
 
-/// A dummy macro that does nothing.
+/// An attribute for constructors.
+///
+/// Constructors are in `impl` blocks which have a `#[uniffi::export]` attribute,
 ///
 /// This exists so `#[uniffi::export]` can emit its input verbatim without
-/// causing unexpected errors, plus some extra code in case everything is okay.
+/// causing unexpected errors in the entire exported block.
+/// This happens very often when the proc-macro is run on an incomplete
+/// input by rust-analyzer while the developer is typing.
 ///
-/// It is important for `#[uniffi::export]` to not raise unexpected errors if it
-/// fails to parse the input as this happens very often when the proc-macro is
-/// run on an incomplete input by rust-analyzer while the developer is typing.
+/// So much better to do nothing here then let the impl block find the attribute.
 #[proc_macro_attribute]
 pub fn constructor(_attrs: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// An attribute for methods.
+///
+/// Everything above applies here too.
+#[proc_macro_attribute]
+pub fn method(_attrs: TokenStream, input: TokenStream) -> TokenStream {
     input
 }

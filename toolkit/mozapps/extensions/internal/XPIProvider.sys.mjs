@@ -35,7 +35,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
   JSONFile: "resource://gre/modules/JSONFile.sys.mjs",
   Langpack: "resource://gre/modules/Extension.sys.mjs",
-  SitePermission: "resource://gre/modules/Extension.sys.mjs",
   TelemetrySession: "resource://gre/modules/TelemetrySession.sys.mjs",
 });
 
@@ -120,7 +119,7 @@ const XPI_PERMISSION = "install";
 
 const XPI_SIGNATURE_CHECK_PERIOD = 24 * 60 * 60;
 
-const DB_SCHEMA = 35;
+const DB_SCHEMA = 37;
 
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
@@ -165,14 +164,7 @@ const BOOTSTRAP_REASONS = {
 // to return only supported add-ons. Without these, it is possible for
 // AddonManager.getAddonsByTypes to return addons from other providers, or even
 // add-on types that are no longer supported by XPIProvider.
-const ALL_XPI_TYPES = new Set([
-  "dictionary",
-  "extension",
-  "locale",
-  // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-  "sitepermission-deprecated",
-  "theme",
-]);
+const ALL_XPI_TYPES = new Set(["dictionary", "extension", "locale", "theme"]);
 
 /**
  * Valid IDs fit this pattern.
@@ -443,6 +435,7 @@ function migrateAddonLoader(addon) {
  * as stored in the addonStartup.json file.
  */
 const JSON_FIELDS = Object.freeze([
+  "blocklistState",
   "dependencies",
   "enabled",
   "file",
@@ -537,6 +530,7 @@ class XPIState {
    */
   toJSON() {
     let json = {
+      blocklistState: this.blocklistState,
       dependencies: this.dependencies,
       enabled: this.enabled,
       lastModifiedTime: this.lastModifiedTime,
@@ -647,6 +641,7 @@ class XPIState {
     this.file = aDBAddon._sourceBundle;
     this.rootURI = aDBAddon.rootURI;
     this.recommendationState = aDBAddon.recommendationState;
+    this.blocklistState = aDBAddon.blocklistState;
 
     if ((aUpdated || mustGetMod) && this.file) {
       this.getModTime(this.file);
@@ -1598,7 +1593,7 @@ var XPIStates = {
    *
    * @returns {XPIState?}
    */
-  findAddon(aId, aFilter = location => true) {
+  findAddon(aId, aFilter = () => true) {
     // Fortunately the Map iterator returns in order of insertion, which is
     // also our highest -> lowest priority order.
     for (let location of this.locations()) {
@@ -1815,9 +1810,17 @@ class BootstrapScope {
         }
       }
 
+      // NOTE: Make sure the properties meant to be consistently passed to
+      // the bootstrap startup method to be part of the XPIStates JSON_FIELDS
+      // and to have been propagated from the db properties stored in the DB
+      // to the startupCache XPIStates by the syncWithDB method (because of
+      // browser startup the properties for the already installed addons
+      // are going to be retrieved from the XPIStates before the addonDB
+      // has been fully loaded).
       let params = {
         id: addon.id,
         version: addon.version,
+        type: addon.type,
         resourceURI: addon.resolvedRootURI,
         signedState: addon.signedState,
         temporarilyInstalled: addon.location.isTemporary,
@@ -1826,6 +1829,7 @@ class BootstrapScope {
         isPrivileged: addon.isPrivileged,
         locationHidden: addon.location.hidden,
         recommendationState: addon.recommendationState,
+        blocklistState: addon.blocklistState,
       };
 
       if (aMethod == "startup" && addon.startupData) {
@@ -1897,11 +1901,6 @@ class BootstrapScope {
         case "extension":
         case "theme":
           this.scope = lazy.Extension.getBootstrapScope();
-          break;
-
-        // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-        case "sitepermission-deprecated":
-          this.scope = lazy.SitePermission.getBootstrapScope();
           break;
 
         case "locale":
@@ -2545,9 +2544,10 @@ export var XPIProvider = {
           AddonManagerPrivate.notifyAddonChanged(null, "theme")
         );
       }
+      // Keep version in sync with toolkit/mozapps/extensions/default-theme/manifest.json
       this.maybeInstallBuiltinAddon(
         "default-theme@mozilla.org",
-        "1.3",
+        "1.4.1",
         "resource://default-theme/"
       );
 
@@ -2706,7 +2706,7 @@ export var XPIProvider = {
           "profile-before-change",
           "test-load-xpi-database",
         ];
-        let observer = (subject, topic, data) => {
+        let observer = (subject, topic) => {
           if (
             topic == "xul-window-visible" &&
             !Services.wm.getMostRecentWindow("devtools:toolbox")
@@ -3284,6 +3284,14 @@ export var XPIProvider = {
     }
 
     return { addons: result, fullData: false };
+  },
+
+  shouldShowBlocklistAttention() {
+    return XPIExports.XPIDatabase.shouldShowBlocklistAttention();
+  },
+
+  getBlocklistAttentionInfo() {
+    return XPIExports.XPIDatabase.getBlocklistAttentionInfo();
   },
 
   /*

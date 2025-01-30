@@ -3,6 +3,8 @@ head = "head.js"
 
 ["test_AppInfo.js"]
 
+["test_AsyncQueue.js"]
+
 ["test_ChallengeHeaderParser.js"]
 
 ["test_DOM.js"]
@@ -18,7 +20,5 @@ head = "head.js"
 ["test_Stack.js"]
 
 ["test_Sync.js"]
-
-["test_TabManager.js"]
 
 ["test_UUID.js"]

@@ -28,9 +28,8 @@ async function testErrorMessagesResources() {
   // Open a test tab
   const tab = await addTab(TEST_URI);
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   const receivedMessages = [];
   // The expected messages are the errors, twice (once for cached messages, once for live messages)
@@ -109,9 +108,8 @@ async function testErrorMessagesResourcesWithIgnoreExistingResources() {
   info("Test ignoreExistingResources option for ERROR_MESSAGE");
   const tab = await addTab(TEST_URI);
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   info(
     "Check whether onAvailable will not be called with existing error messages"
@@ -223,7 +221,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -256,7 +253,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl("docs/Web/JavaScript/Reference/Errors/Bad_radix"),
@@ -287,7 +283,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl("docs/Web/JavaScript/Reference/Errors/Read-only"),
@@ -318,7 +313,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -351,7 +345,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -391,7 +384,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -431,7 +423,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -465,7 +456,6 @@ const expectedPageErrors = new Map([
       warning: true,
       info: false,
       sourceId: null,
-      lineText: "function a() { return; 1 + 1; }",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -492,7 +482,6 @@ const expectedPageErrors = new Map([
       warning: false,
       info: false,
       sourceId: null,
-      lineText: "{let a, a;}",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: mdnUrl(
@@ -528,7 +517,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: undefined,
@@ -559,7 +547,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: undefined,
@@ -597,7 +584,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       exceptionDocURL: undefined,
@@ -640,7 +626,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,
@@ -685,7 +670,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,
@@ -738,7 +722,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,
@@ -776,7 +759,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,
@@ -814,7 +796,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,
@@ -850,7 +831,6 @@ const expectedPageErrors = new Map([
       error: true,
       warning: false,
       info: false,
-      lineText: "",
       lineNumber: NUMBER_REGEX,
       columnNumber: NUMBER_REGEX,
       innerWindowID: NUMBER_REGEX,

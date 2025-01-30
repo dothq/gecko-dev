@@ -13,6 +13,7 @@ extern crate sha2;
 extern crate xpcom;
 
 use base64::Engine;
+use digest::generic_array::GenericArray;
 use digest::{Digest, DynDigest};
 use nserror::{
     nsresult, NS_ERROR_FAILURE, NS_ERROR_INVALID_ARG, NS_ERROR_NOT_AVAILABLE,
@@ -103,11 +104,13 @@ impl CryptoHash {
             Some(digest) => digest,
             None => return Err(NS_ERROR_NOT_INITIALIZED),
         };
-        // Safety: this is safe as long as xpcom gave us valid arguments.
-        let data = unsafe {
-            std::slice::from_raw_parts(data, len.try_into().map_err(|_| NS_ERROR_INVALID_ARG)?)
-        };
-        digest.update(data);
+        if len > 0 {
+            // Safety: this is safe as long as xpcom gave us valid arguments.
+            let data = unsafe {
+                std::slice::from_raw_parts(data, len.try_into().map_err(|_| NS_ERROR_INVALID_ARG)?)
+            };
+            digest.update(data);
+        }
         Ok(())
     }
 
@@ -120,14 +123,22 @@ impl CryptoHash {
         };
         let mut available = 0u64;
         unsafe { stream.Available(&mut available as *mut u64).to_result()? };
-        let mut to_read = if len == u32::MAX { available } else { len as u64 };
+        let mut to_read = if len == u32::MAX {
+            available
+        } else {
+            len as u64
+        };
         if available == 0 || available < to_read {
             return Err(NS_ERROR_NOT_AVAILABLE);
         }
         let mut buf = vec![0u8; 4096];
         let buf_len = buf.len() as u64;
         while to_read > 0 {
-            let chunk_len = if to_read >= buf_len { buf_len as u32 } else { to_read as u32 };
+            let chunk_len = if to_read >= buf_len {
+                buf_len as u32
+            } else {
+                to_read as u32
+            };
             let mut read = 0u32;
             unsafe {
                 stream
@@ -174,4 +185,24 @@ pub extern "C" fn crypto_hash_constructor(
         digest: Mutex::new(None),
     });
     unsafe { crypto_hash.QueryInterface(iid, result) }
+}
+
+// 32 bytes will be written to `output` so it must point at a buffer
+// at least that big.
+#[no_mangle]
+pub extern "C" fn crypto_hash_sha256(data: *const u8, length: usize, result: *mut u8) {
+    let mut hasher = sha2::Sha256::new();
+    // slice::from_raw_parts doesn't want a null pointer. We'll handle that here
+    // so the caller doesn't have to worry about it.
+    let data = if data.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, length) }
+    };
+    // Sha256 implements both Digest and DynDigest so use function call syntax instead of a method
+    // call to disambiguate
+    Digest::update(&mut hasher, data);
+    let result = unsafe { std::slice::from_raw_parts_mut(result, 32) };
+    let result = GenericArray::from_mut_slice(result);
+    Digest::finalize_into(hasher, result);
 }

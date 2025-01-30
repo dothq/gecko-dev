@@ -15,6 +15,7 @@ from gecko_taskgraph.transforms.job import configure_taskdesc_for_run, run_job_u
 from gecko_taskgraph.transforms.job.common import get_expiration, support_vcs_checkout
 from gecko_taskgraph.transforms.test import normpath, test_description_schema
 from gecko_taskgraph.util.attributes import is_try
+from gecko_taskgraph.util.chunking import get_test_tags
 from gecko_taskgraph.util.perftest import is_external_browser
 
 VARIANTS = [
@@ -109,7 +110,7 @@ def mozharness_test_on_docker(config, job, taskdesc):
     worker["max-run-time"] = test["max-run-time"]
     worker["retry-exit-status"] = test["retry-exit-status"]
     if "android-em-7.0-x86" in test["test-platform"]:
-        worker["privileged"] = True
+        worker["kvm"] = True
 
     artifacts = [
         # (artifact name prefix, in-image path)
@@ -146,7 +147,6 @@ def mozharness_test_on_docker(config, job, taskdesc):
             "MOZHARNESS_CONFIG": " ".join(mozharness["config"]),
             "MOZHARNESS_SCRIPT": mozharness["script"],
             "MOZILLA_BUILD_URL": {"task-reference": installer},
-            "NEED_PULSEAUDIO": "true",
             "NEED_WINDOW_MANAGER": "true",
             "ENABLE_E10S": str(bool(test.get("e10s"))).lower(),
             "WORKING_DIR": "/builds/worker",
@@ -155,18 +155,19 @@ def mozharness_test_on_docker(config, job, taskdesc):
 
     env["PYTHON"] = "python3"
 
-    # Legacy linux64 tests rely on compiz.
-    if test.get("docker-image", {}).get("in-tree") == "desktop1604-test":
-        env.update({"NEED_COMPIZ": "true"})
-
-    # Bug 1602701/1601828 - use compiz on ubuntu1804 due to GTK asynchiness
-    # when manipulating windows.
     if test.get("docker-image", {}).get("in-tree") == "ubuntu1804-test":
+        env["NEED_PULSEAUDIO"] = "true"
+
+        # Bug 1602701/1601828 - use compiz on ubuntu1804 due to GTK asynchiness
+        # when manipulating windows.
         if "wdspec" in job["run"]["test"]["suite"] or (
             "marionette" in job["run"]["test"]["suite"]
             and "headless" not in job["label"]
         ):
             env.update({"NEED_COMPIZ": "true"})
+
+    if test.get("docker-image", {}).get("in-tree") == "ubuntu2404-test":
+        env["NEED_PIPEWIRE"] = "true"
 
     # Set MOZ_ENABLE_WAYLAND env variables to enable Wayland backend.
     if "wayland" in job["label"]:
@@ -229,6 +230,11 @@ def mozharness_test_on_docker(config, job, taskdesc):
         env["MOZHARNESS_TEST_PATHS"] = json.dumps(
             {test["suite"]: test["test-manifests"]}, sort_keys=True
         )
+
+    test_tags = get_test_tags(config, env)
+    if test_tags:
+        env["MOZHARNESS_TEST_TAG"] = json.dumps(test_tags)
+        command.extend(["--tag={}".format(x) for x in test_tags])
 
     # TODO: remove the need for run['chunked']
     elif mozharness.get("chunked") or test["chunks"] > 1:
@@ -363,7 +369,6 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
                     "artifact-reference": "<build/public/build/mozharness.zip>"
                 },
                 "MOZILLA_BUILD_URL": {"task-reference": installer},
-                "MOZ_NO_REMOTE": "1",
                 "NEED_XVFB": "false",
                 "XPCOM_DEBUG_BREAK": "warn",
                 "NO_FAIL_ON_TEST_ERRORS": "1",
@@ -439,6 +444,13 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
         env["MOZHARNESS_TEST_PATHS"] = json.dumps(
             {test["suite"]: test["test-manifests"]}, sort_keys=True
         )
+
+    test_tags = get_test_tags(config, env)
+    if test_tags:
+        # do not add --tag for perf tests
+        if test["suite"] not in ["talos", "raptor"]:
+            env["MOZHARNESS_TEST_TAG"] = json.dumps(test_tags)
+            mh_command.extend(["--tag={}".format(x) for x in test_tags])
 
     # TODO: remove the need for run['chunked']
     elif mozharness.get("chunked") or test["chunks"] > 1:

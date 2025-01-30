@@ -22,6 +22,11 @@ topic.
 Push Information
 ----------------
 
+``android_perftest_backstop``
+   Whether or not this push is a "backstop" push for android performance tests.
+   That is a push where all android performance tests should run to ensure
+   regressions aren't accidentally missed.
+
 ``backstop``
    Whether or not this push is a "backstop" push. That is a push where all
    builds and tests should run to ensure regressions aren't accidentally
@@ -53,6 +58,9 @@ Push Information
 
 ``head_tag``
    The tag attached to the revision, if any.
+
+``files_changed``
+   The list of all files added or modified by the push.
 
 ``owner``
    Email address indicating the person who made the push.  Note that this
@@ -197,7 +205,7 @@ Release Promotion
    Specify the next version for version bump tasks.
 
 ``release_type``
-   The type of release being promoted. One of "nightly", "beta", "esr115", "release-rc", or "release".
+   The type of release being promoted. One of "nightly", "beta", "esr115", "esr128", "release-rc", or "release".
 
 ``release_eta``
    The time and date when a release is scheduled to live. This value is passed to Balrog.

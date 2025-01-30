@@ -50,14 +50,16 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(ModuleLoadRequest,
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 /* static */
-VisitedURLSet* ModuleLoadRequest::NewVisitedSetForTopLevelImport(nsIURI* aURI) {
+VisitedURLSet* ModuleLoadRequest::NewVisitedSetForTopLevelImport(
+    nsIURI* aURI, JS::ModuleType aModuleType) {
   auto set = new VisitedURLSet();
-  set->PutEntry(aURI);
+  set->PutEntry(ModuleMapKey(aURI, aModuleType));
   return set;
 }
 
 ModuleLoadRequest::ModuleLoadRequest(
-    nsIURI* aURI, mozilla::dom::ReferrerPolicy aReferrerPolicy,
+    nsIURI* aURI, JS::ModuleType aModuleType,
+    mozilla::dom::ReferrerPolicy aReferrerPolicy,
     ScriptFetchOptions* aFetchOptions,
     const mozilla::dom::SRIMetadata& aIntegrity, nsIURI* aReferrer,
     LoadContextBase* aContext, bool aIsTopLevel, bool aIsDynamicImport,
@@ -66,6 +68,7 @@ ModuleLoadRequest::ModuleLoadRequest(
     : ScriptLoadRequest(ScriptKind::eModule, aURI, aReferrerPolicy,
                         aFetchOptions, aIntegrity, aReferrer, aContext),
       mIsTopLevel(aIsTopLevel),
+      mModuleType(aModuleType),
       mIsDynamicImport(aIsDynamicImport),
       mLoader(aLoader),
       mRootModule(aRootModule),
@@ -108,8 +111,6 @@ void ModuleLoadRequest::SetReady() {
   // dependencies have had their source loaded, parsed as a module and the
   // modules instantiated.
 
-  AssertAllImportsFinished();
-
   ScriptLoadRequest::SetReady();
 
   if (mWaitingParentRequest) {
@@ -130,7 +131,7 @@ void ModuleLoadRequest::ModuleLoaded() {
 
   MOZ_ASSERT(IsFetching() || IsPendingFetchingError());
 
-  mModuleScript = mLoader->GetFetchedModule(mURI);
+  mModuleScript = mLoader->GetFetchedModule(ModuleMapKey(mURI, mModuleType));
   if (IsErrored()) {
     ModuleErrored();
     return;
@@ -162,7 +163,7 @@ void ModuleLoadRequest::ModuleErrored() {
 
   LOG(("ScriptLoadRequest (%p): Module errored", this));
 
-  if (IsCanceled()) {
+  if (IsCanceled() || IsCancelingImports()) {
     return;
   }
 
@@ -195,6 +196,7 @@ void ModuleLoadRequest::DependenciesLoaded() {
   MOZ_ASSERT(!IsErrored());
 
   CheckModuleDependenciesLoaded();
+  AssertAllImportsFinished();
   SetReady();
   LoadFinished();
 }
@@ -205,6 +207,7 @@ void ModuleLoadRequest::CheckModuleDependenciesLoaded() {
   if (!mModuleScript || mModuleScript->HasParseError()) {
     return;
   }
+
   for (const auto& childRequest : mImports) {
     ModuleScript* childScript = childRequest->mModuleScript;
     if (!childScript) {
@@ -213,15 +216,31 @@ void ModuleLoadRequest::CheckModuleDependenciesLoaded() {
            childRequest.get()));
       return;
     }
+
+    MOZ_DIAGNOSTIC_ASSERT(mModuleScript->HadImportMap() ==
+                          childScript->HadImportMap());
   }
 
   LOG(("ScriptLoadRequest (%p):   all ok", this));
 }
 
 void ModuleLoadRequest::CancelImports() {
+  State origState = mState;
+
+  // To prevent reentering ModuleErrored() for this request via mImports[i]'s
+  // ChildLoadComplete().
+  mState = State::CancelingImports;
+
   for (size_t i = 0; i < mImports.Length(); i++) {
+    if (mLoader->IsFetchingAndHasWaitingRequest(mImports[i])) {
+      LOG(("CancelImports import %p is fetching and has waiting\n",
+           mImports[i].get()));
+      continue;
+    }
     mImports[i]->Cancel();
   }
+
+  mState = origState;
 }
 
 void ModuleLoadRequest::LoadFinished() {

@@ -5,23 +5,17 @@
 //! Specified color values.
 
 use super::AllowQuirks;
-use crate::color::component::ColorComponent;
-use crate::color::convert::normalize_hue;
-use crate::color::parsing::{self, FromParsedColor, NumberOrAngle, NumberOrPercentage};
-use crate::color::{mix::ColorInterpolationMethod, AbsoluteColor, ColorSpace};
+use crate::color::mix::ColorInterpolationMethod;
+use crate::color::{parsing, AbsoluteColor, ColorFunction, ColorSpace};
 use crate::media_queries::Device;
 use crate::parser::{Parse, ParserContext};
 use crate::values::computed::{Color as ComputedColor, Context, ToComputedValue};
-use crate::values::generics::calc::CalcUnits;
 use crate::values::generics::color::{
     ColorMixFlags, GenericCaretColor, GenericColorMix, GenericColorOrAuto,
 };
-use crate::values::specified::calc::{CalcNode, Leaf};
 use crate::values::specified::Percentage;
 use crate::values::{normalize, CustomIdent};
-use cssparser::color::OPAQUE;
-use cssparser::{color::PredefinedColorSpace, BasicParseErrorKind, ParseErrorKind, Parser, Token};
-use itoa;
+use cssparser::{BasicParseErrorKind, ParseErrorKind, Parser, Token};
 use std::fmt::{self, Write};
 use std::io::Write as IoWrite;
 use style_traits::{CssType, CssWriter, KeywordsCollectFn, ParseError, StyleParseErrorKind};
@@ -121,6 +115,9 @@ pub enum Color {
     /// An absolute color.
     /// https://w3c.github.io/csswg-drafts/css-color-4/#typedef-absolute-color-function
     Absolute(Box<Absolute>),
+    /// A color function that could not be resolved to a [Color::Absolute] color at parse time.
+    /// Right now this is only the case for relative colors with `currentColor` as the origin.
+    ColorFunction(Box<ColorFunction<Self>>),
     /// A system color.
     #[cfg(feature = "gecko")]
     System(SystemColor),
@@ -145,8 +142,12 @@ pub struct LightDark {
 
 impl LightDark {
     fn compute(&self, cx: &Context) -> ComputedColor {
-        let style_color_scheme = cx.style().get_inherited_ui().clone_color_scheme();
-        let dark = cx.device().is_dark_color_scheme(&style_color_scheme);
+        let dark = cx.device().is_dark_color_scheme(cx.builder.color_scheme);
+        if cx.for_non_inherited_property {
+            cx.rule_cache_conditions
+                .borrow_mut()
+                .set_color_scheme_dependency(cx.builder.color_scheme);
+        }
         let used = if dark { &self.dark } else { &self.light };
         used.to_computed_value(cx)
     }
@@ -371,6 +372,10 @@ pub enum SystemColor {
     #[css(skip)]
     TextHighlightForeground,
     #[css(skip)]
+    TargetTextBackground,
+    #[css(skip)]
+    TargetTextForeground,
+    #[css(skip)]
     IMERawInputBackground,
     #[css(skip)]
     IMERawInputForeground,
@@ -420,356 +425,16 @@ impl SystemColor {
         use crate::gecko::values::convert_nscolor_to_absolute_color;
         use crate::gecko_bindings::bindings;
 
-        // TODO: We should avoid cloning here most likely, though it's cheap-ish.
-        let style_color_scheme = cx.style().get_inherited_ui().clone_color_scheme();
-        let color = cx.device().system_nscolor(*self, &style_color_scheme);
+        let color = cx.device().system_nscolor(*self, cx.builder.color_scheme);
+        if cx.for_non_inherited_property {
+            cx.rule_cache_conditions
+                .borrow_mut()
+                .set_color_scheme_dependency(cx.builder.color_scheme);
+        }
         if color == bindings::NS_SAME_AS_FOREGROUND_COLOR {
             return ComputedColor::currentcolor();
         }
         ComputedColor::Absolute(convert_nscolor_to_absolute_color(color))
-    }
-}
-
-impl<T> From<ColorComponent<T>> for Option<T> {
-    fn from(value: ColorComponent<T>) -> Self {
-        match value {
-            ColorComponent::None => None,
-            ColorComponent::Value(value) => Some(value),
-        }
-    }
-}
-
-impl ColorComponent<NumberOrPercentage> {
-    #[inline]
-    fn into_alpha(self) -> Option<f32> {
-        match self {
-            ColorComponent::None => None,
-            ColorComponent::Value(number_or_percentage) => {
-                Some(normalize(number_or_percentage.to_number(1.0)).clamp(0.0, OPAQUE))
-            },
-        }
-    }
-}
-
-impl FromParsedColor for Color {
-    fn from_current_color() -> Self {
-        Color::CurrentColor
-    }
-
-    fn from_rgba(
-        red: ColorComponent<u8>,
-        green: ColorComponent<u8>,
-        blue: ColorComponent<u8>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        macro_rules! c {
-            ($c:expr) => {{
-                match $c {
-                    ColorComponent::None => 0u8,
-                    ColorComponent::Value(value) => value,
-                }
-            }};
-        }
-
-        // Legacy rgb() doesn't support "none" alpha values and falls back to 0.
-        let alpha = alpha.into_alpha().unwrap_or(0.0);
-
-        AbsoluteColor::srgb_legacy(c!(red), c!(green), c!(blue), alpha).into()
-    }
-
-    fn from_hsl(
-        hue: ColorComponent<NumberOrAngle>,
-        saturation: ColorComponent<NumberOrPercentage>,
-        lightness: ColorComponent<NumberOrPercentage>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // Percent reference range for S and L: 0% = 0.0, 100% = 100.0
-        const LIGHTNESS_RANGE: f32 = 100.0;
-        const SATURATION_RANGE: f32 = 100.0;
-
-        let hue = hue.map_value(|angle| normalize_hue(angle.degrees()));
-        let saturation =
-            saturation.map_value(|s| s.to_number(SATURATION_RANGE).clamp(0.0, SATURATION_RANGE));
-        let lightness =
-            lightness.map_value(|l| l.to_number(LIGHTNESS_RANGE).clamp(0.0, LIGHTNESS_RANGE));
-
-        AbsoluteColor::new(
-            ColorSpace::Hsl,
-            hue,
-            saturation,
-            lightness,
-            alpha.into_alpha(),
-        )
-        .into()
-    }
-
-    fn from_hwb(
-        hue: ColorComponent<NumberOrAngle>,
-        whiteness: ColorComponent<NumberOrPercentage>,
-        blackness: ColorComponent<NumberOrPercentage>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // Percent reference range for W and B: 0% = 0.0, 100% = 100.0
-        const WHITENESS_RANGE: f32 = 100.0;
-        const BLACKNESS_RANGE: f32 = 100.0;
-
-        let hue = hue.map_value(|angle| normalize_hue(angle.degrees()));
-        let whiteness =
-            whiteness.map_value(|w| w.to_number(WHITENESS_RANGE).clamp(0.0, WHITENESS_RANGE));
-        let blackness =
-            blackness.map_value(|b| b.to_number(BLACKNESS_RANGE).clamp(0.0, BLACKNESS_RANGE));
-
-        AbsoluteColor::new(
-            ColorSpace::Hwb,
-            hue,
-            whiteness,
-            blackness,
-            alpha.into_alpha(),
-        )
-        .into()
-    }
-
-    fn from_lab(
-        lightness: ColorComponent<NumberOrPercentage>,
-        a: ColorComponent<NumberOrPercentage>,
-        b: ColorComponent<NumberOrPercentage>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // for L: 0% = 0.0, 100% = 100.0
-        // for a and b: -100% = -125, 100% = 125
-        const LIGHTNESS_RANGE: f32 = 100.0;
-        const A_B_RANGE: f32 = 125.0;
-
-        let lightness = lightness.map_value(|l| l.to_number(LIGHTNESS_RANGE));
-        let a = a.map_value(|a| a.to_number(A_B_RANGE));
-        let b = b.map_value(|b| b.to_number(A_B_RANGE));
-
-        AbsoluteColor::new(ColorSpace::Lab, lightness, a, b, alpha.into_alpha()).into()
-    }
-
-    fn from_lch(
-        lightness: ColorComponent<NumberOrPercentage>,
-        chroma: ColorComponent<NumberOrPercentage>,
-        hue: ColorComponent<NumberOrAngle>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // for L: 0% = 0.0, 100% = 100.0
-        // for C: 0% = 0, 100% = 150
-        const LIGHTNESS_RANGE: f32 = 100.0;
-        const CHROMA_RANGE: f32 = 150.0;
-
-        let lightness = lightness.map_value(|l| l.to_number(LIGHTNESS_RANGE));
-        let chroma = chroma.map_value(|c| c.to_number(CHROMA_RANGE));
-        let hue = hue.map_value(|angle| normalize_hue(angle.degrees()));
-
-        AbsoluteColor::new(ColorSpace::Lch, lightness, chroma, hue, alpha.into_alpha()).into()
-    }
-
-    fn from_oklab(
-        lightness: ColorComponent<NumberOrPercentage>,
-        a: ColorComponent<NumberOrPercentage>,
-        b: ColorComponent<NumberOrPercentage>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // for L: 0% = 0.0, 100% = 1.0
-        // for a and b: -100% = -0.4, 100% = 0.4
-        const LIGHTNESS_RANGE: f32 = 1.0;
-        const A_B_RANGE: f32 = 0.4;
-
-        let lightness = lightness.map_value(|l| l.to_number(LIGHTNESS_RANGE));
-        let a = a.map_value(|a| a.to_number(A_B_RANGE));
-        let b = b.map_value(|b| b.to_number(A_B_RANGE));
-
-        AbsoluteColor::new(ColorSpace::Oklab, lightness, a, b, alpha.into_alpha()).into()
-    }
-
-    fn from_oklch(
-        lightness: ColorComponent<NumberOrPercentage>,
-        chroma: ColorComponent<NumberOrPercentage>,
-        hue: ColorComponent<NumberOrAngle>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        // for L: 0% = 0.0, 100% = 1.0
-        // for C: 0% = 0.0 100% = 0.4
-        const LIGHTNESS_RANGE: f32 = 1.0;
-        const CHROMA_RANGE: f32 = 0.4;
-
-        let lightness = lightness.map_value(|l| l.to_number(LIGHTNESS_RANGE));
-        let chroma = chroma.map_value(|c| c.to_number(CHROMA_RANGE));
-        let hue = hue.map_value(|angle| normalize_hue(angle.degrees()));
-
-        AbsoluteColor::new(
-            ColorSpace::Oklch,
-            lightness,
-            chroma,
-            hue,
-            alpha.into_alpha(),
-        )
-        .into()
-    }
-
-    fn from_color_function(
-        color_space: PredefinedColorSpace,
-        c1: ColorComponent<NumberOrPercentage>,
-        c2: ColorComponent<NumberOrPercentage>,
-        c3: ColorComponent<NumberOrPercentage>,
-        alpha: ColorComponent<NumberOrPercentage>,
-    ) -> Self {
-        let c1 = c1.map_value(|c| c.to_number(1.0));
-        let c2 = c2.map_value(|c| c.to_number(1.0));
-        let c3 = c3.map_value(|c| c.to_number(1.0));
-
-        AbsoluteColor::new(color_space.into(), c1, c2, c3, alpha.into_alpha()).into()
-    }
-}
-
-struct ColorParser<'a, 'b: 'a>(&'a ParserContext<'b>);
-
-impl<'a, 'b: 'a, 'i: 'a> parsing::ColorParser<'i> for ColorParser<'a, 'b> {
-    type Output = Color;
-
-    fn parse_number_or_angle<'t>(
-        &self,
-        input: &mut Parser<'i, 't>,
-        allow_none: bool,
-    ) -> Result<ColorComponent<NumberOrAngle>, ParseError<'i>> {
-        use crate::values::specified::Angle;
-
-        let location = input.current_source_location();
-        let token = input.next()?.clone();
-        Ok(match token {
-            Token::Ident(ref value) if allow_none && value.eq_ignore_ascii_case("none") => {
-                ColorComponent::None
-            },
-            Token::Dimension {
-                value, ref unit, ..
-            } => {
-                let angle = Angle::parse_dimension(value, unit, /* from_calc = */ false);
-
-                let degrees = match angle {
-                    Ok(angle) => angle.degrees(),
-                    Err(()) => return Err(location.new_unexpected_token_error(token.clone())),
-                };
-
-                ColorComponent::Value(NumberOrAngle::Angle { degrees })
-            },
-            Token::Number { value, .. } => ColorComponent::Value(NumberOrAngle::Number { value }),
-            Token::Function(ref name) => {
-                let function = CalcNode::math_function(self.0, name, location)?;
-                let node = CalcNode::parse(self.0, input, function, CalcUnits::ANGLE)?;
-
-                // If we can resolve the calc node, then use the value.
-                match node.resolve() {
-                    Ok(Leaf::Number(value)) => {
-                        ColorComponent::Value(NumberOrAngle::Number { value })
-                    },
-                    Ok(Leaf::Angle(angle)) => ColorComponent::Value(NumberOrAngle::Angle {
-                        degrees: angle.degrees(),
-                    }),
-                    _ => {
-                        return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError))
-                    },
-                }
-            },
-            t => return Err(location.new_unexpected_token_error(t)),
-        })
-    }
-
-    fn parse_percentage<'t>(
-        &self,
-        input: &mut Parser<'i, 't>,
-        allow_none: bool,
-    ) -> Result<ColorComponent<f32>, ParseError<'i>> {
-        let location = input.current_source_location();
-
-        Ok(match *input.next()? {
-            Token::Ident(ref value) if allow_none && value.eq_ignore_ascii_case("none") => {
-                ColorComponent::None
-            },
-            Token::Percentage { unit_value, .. } => ColorComponent::Value(unit_value),
-            Token::Function(ref name) => {
-                let function = CalcNode::math_function(self.0, name, location)?;
-                let node = CalcNode::parse(self.0, input, function, CalcUnits::PERCENTAGE)?;
-
-                // If we can resolve the calc node, then use the value.
-                let Ok(resolved_leaf) = node.resolve() else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                };
-                if let Leaf::Percentage(value) = resolved_leaf {
-                    ColorComponent::Value(value)
-                } else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                }
-            },
-            ref t => return Err(location.new_unexpected_token_error(t.clone())),
-        })
-    }
-
-    fn parse_number<'t>(
-        &self,
-        input: &mut Parser<'i, 't>,
-        allow_none: bool,
-    ) -> Result<ColorComponent<f32>, ParseError<'i>> {
-        let location = input.current_source_location();
-
-        Ok(match *input.next()? {
-            Token::Ident(ref value) if allow_none && value.eq_ignore_ascii_case("none") => {
-                ColorComponent::None
-            },
-            Token::Number { value, .. } => ColorComponent::Value(value),
-            Token::Function(ref name) => {
-                let function = CalcNode::math_function(self.0, name, location)?;
-                let node = CalcNode::parse(self.0, input, function, CalcUnits::empty())?;
-
-                // If we can resolve the calc node, then use the value.
-                let Ok(resolved_leaf) = node.resolve() else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                };
-                if let Leaf::Number(value) = resolved_leaf {
-                    ColorComponent::Value(value)
-                } else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                }
-            },
-            ref t => return Err(location.new_unexpected_token_error(t.clone())),
-        })
-    }
-
-    fn parse_number_or_percentage<'t>(
-        &self,
-        input: &mut Parser<'i, 't>,
-        allow_none: bool,
-    ) -> Result<ColorComponent<NumberOrPercentage>, ParseError<'i>> {
-        let location = input.current_source_location();
-
-        Ok(match *input.next()? {
-            Token::Ident(ref value) if allow_none && value.eq_ignore_ascii_case("none") => {
-                ColorComponent::None
-            },
-            Token::Number { value, .. } => {
-                ColorComponent::Value(NumberOrPercentage::Number { value })
-            },
-            Token::Percentage { unit_value, .. } => {
-                ColorComponent::Value(NumberOrPercentage::Percentage { unit_value })
-            },
-            Token::Function(ref name) => {
-                let function = CalcNode::math_function(self.0, name, location)?;
-                let node = CalcNode::parse(self.0, input, function, CalcUnits::PERCENTAGE)?;
-
-                // If we can resolve the calc node, then use the value.
-                let Ok(resolved_leaf) = node.resolve() else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                };
-                if let Leaf::Percentage(unit_value) = resolved_leaf {
-                    ColorComponent::Value(NumberOrPercentage::Percentage { unit_value })
-                } else if let Leaf::Number(value) = resolved_leaf {
-                    ColorComponent::Value(NumberOrPercentage::Number { value })
-                } else {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                }
-            },
-            ref t => return Err(location.new_unexpected_token_error(t.clone())),
-        })
     }
 }
 
@@ -809,8 +474,7 @@ impl Color {
             },
         };
 
-        let color_parser = ColorParser(&*context);
-        match input.try_parse(|i| parsing::parse_color_with(&color_parser, i)) {
+        match input.try_parse(|i| parsing::parse_color_with(context, i)) {
             Ok(mut color) => {
                 if let Color::Absolute(ref mut absolute) = color {
                     // Because we can't set the `authored` value at construction time, we have to set it
@@ -908,6 +572,7 @@ impl ToCss for Color {
         match *self {
             Color::CurrentColor => dest.write_str("currentcolor"),
             Color::Absolute(ref absolute) => absolute.to_css(dest),
+            Color::ColorFunction(ref color_function) => color_function.to_css(dest),
             Color::ColorMix(ref mix) => mix.to_css(dest),
             Color::LightDark(ref ld) => ld.to_css(dest),
             #[cfg(feature = "gecko")]
@@ -922,9 +587,20 @@ impl Color {
     /// Returns whether this color is allowed in forced-colors mode.
     pub fn honored_in_forced_colors_mode(&self, allow_transparent: bool) -> bool {
         match *self {
+            #[cfg(feature = "gecko")]
             Self::InheritFromBodyQuirk => false,
-            Self::CurrentColor | Color::System(..) => true,
+            Self::CurrentColor => true,
+            #[cfg(feature = "gecko")]
+            Self::System(..) => true,
             Self::Absolute(ref absolute) => allow_transparent && absolute.color.is_transparent(),
+            Self::ColorFunction(ref color_function) => {
+                // For now we allow transparent colors if we can resolve the color function.
+                // <https://bugzilla.mozilla.org/show_bug.cgi?id=1923053>
+                color_function
+                    .resolve_to_absolute()
+                    .map(|resolved| allow_transparent && resolved.is_transparent())
+                    .unwrap_or(false)
+            },
             Self::LightDark(ref ld) => {
                 ld.light.honored_in_forced_colors_mode(allow_transparent) &&
                     ld.dark.honored_in_forced_colors_mode(allow_transparent)
@@ -957,6 +633,32 @@ impl Color {
         }))
     }
 
+    /// Resolve this Color into an AbsoluteColor if it does not use any of the
+    /// forms that are invalid in an absolute color.
+    ///   https://drafts.csswg.org/css-color-5/#absolute-color
+    /// Returns None if the specified color is not valid as an absolute color.
+    pub fn resolve_to_absolute(&self) -> Option<AbsoluteColor> {
+        use crate::values::specified::percentage::ToPercentage;
+
+        match self {
+            Self::Absolute(c) => Some(c.color),
+            Self::ColorFunction(ref color_function) => color_function.resolve_to_absolute().ok(),
+            Self::ColorMix(ref mix) => {
+                let left = mix.left.resolve_to_absolute()?;
+                let right = mix.right.resolve_to_absolute()?;
+                Some(crate::color::mix::mix(
+                    mix.interpolation,
+                    &left,
+                    mix.left_percentage.to_percentage(),
+                    &right,
+                    mix.right_percentage.to_percentage(),
+                    mix.flags,
+                ))
+            },
+            _ => None,
+        }
+    }
+
     /// Parse a color, with quirks.
     ///
     /// <https://quirks.spec.whatwg.org/#the-hashless-hex-color-quirk>
@@ -978,12 +680,9 @@ impl Color {
         loc: &cssparser::SourceLocation,
     ) -> Result<Self, ParseError<'i>> {
         match cssparser::color::parse_hash_color(bytes) {
-            Ok((r, g, b, a)) => Ok(Self::from_rgba(
-                r.into(),
-                g.into(),
-                b.into(),
-                ColorComponent::Value(NumberOrPercentage::Number { value: a }),
-            )),
+            Ok((r, g, b, a)) => Ok(Self::from_absolute_color(AbsoluteColor::srgb_legacy(
+                r, g, b, a,
+            ))),
             Err(()) => Err(loc.new_custom_error(StyleParseErrorKind::UnspecifiedError)),
         }
     }
@@ -1060,27 +759,44 @@ impl Color {
     /// If `context` is `None`, and the specified color requires data from
     /// the context to resolve, then `None` is returned.
     pub fn to_computed_color(&self, context: Option<&Context>) -> Option<ComputedColor> {
+        macro_rules! adjust_absolute_color {
+            ($color:expr) => {{
+                // Computed lightness values can not be NaN.
+                if matches!(
+                    $color.color_space,
+                    ColorSpace::Lab | ColorSpace::Oklab | ColorSpace::Lch | ColorSpace::Oklch
+                ) {
+                    $color.components.0 = normalize($color.components.0);
+                }
+
+                // Computed RGB and XYZ components can not be NaN.
+                if !$color.is_legacy_syntax() && $color.color_space.is_rgb_or_xyz_like() {
+                    $color.components = $color.components.map(normalize);
+                }
+
+                $color.alpha = normalize($color.alpha);
+            }};
+        }
+
         Some(match *self {
             Color::CurrentColor => ComputedColor::CurrentColor,
             Color::Absolute(ref absolute) => {
                 let mut color = absolute.color;
-
-                // Computed lightness values can not be NaN.
-                if matches!(
-                    color.color_space,
-                    ColorSpace::Lab | ColorSpace::Oklab | ColorSpace::Lch | ColorSpace::Oklch
-                ) {
-                    color.components.0 = normalize(color.components.0);
-                }
-
-                // Computed RGB and XYZ components can not be NaN.
-                if !color.is_legacy_syntax() && color.color_space.is_rgb_or_xyz_like() {
-                    color.components = color.components.map(normalize);
-                }
-
-                color.alpha = normalize(color.alpha);
-
+                adjust_absolute_color!(color);
                 ComputedColor::Absolute(color)
+            },
+            Color::ColorFunction(ref color_function) => {
+                debug_assert!(color_function.has_origin_color(),
+                    "no need for a ColorFunction if it doesn't contain an unresolvable origin color");
+
+                // Try to eagerly resolve the color function before making it a computed color.
+                if let Ok(absolute) = color_function.resolve_to_absolute() {
+                    ComputedColor::Absolute(absolute)
+                } else {
+                    let color_function = color_function
+                        .map_origin_color(|origin_color| origin_color.to_computed_color(context));
+                    ComputedColor::ColorFunction(Box::new(color_function))
+                }
             },
             Color::LightDark(ref ld) => ld.compute(context?),
             Color::ColorMix(ref mix) => {
@@ -1112,12 +828,23 @@ impl ToComputedValue for Color {
     type ComputedValue = ComputedColor;
 
     fn to_computed_value(&self, context: &Context) -> ComputedColor {
-        self.to_computed_color(Some(context)).unwrap()
+        self.to_computed_color(Some(context)).unwrap_or_else(|| {
+            debug_assert!(
+                false,
+                "Specified color could not be resolved to a computed color!"
+            );
+            ComputedColor::Absolute(AbsoluteColor::BLACK)
+        })
     }
 
     fn from_computed_value(computed: &ComputedColor) -> Self {
         match *computed {
             ComputedColor::Absolute(ref color) => Self::from_absolute_color(color.clone()),
+            ComputedColor::ColorFunction(ref color_function) => {
+                let color_function =
+                    color_function.map_origin_color(|o| Some(Self::from_computed_value(o)));
+                Self::ColorFunction(Box::new(color_function))
+            },
             ComputedColor::CurrentColor => Color::CurrentColor,
             ComputedColor::ColorMix(ref mix) => {
                 Color::ColorMix(Box::new(ToComputedValue::from_computed_value(&**mix)))
@@ -1136,19 +863,20 @@ impl SpecifiedValueInfo for Color {
         // XXX `currentColor` should really be `currentcolor`. But let's
         // keep it consistent with the old system for now.
         f(&[
+            "currentColor",
+            "transparent",
             "rgb",
             "rgba",
             "hsl",
             "hsla",
             "hwb",
-            "currentColor",
-            "transparent",
-            "color-mix",
             "color",
             "lab",
             "lch",
             "oklab",
             "oklch",
+            "color-mix",
+            "light-dark",
         ]);
     }
 }
@@ -1246,7 +974,8 @@ bitflags! {
 pub struct ColorScheme {
     #[ignore_malloc_size_of = "Arc"]
     idents: crate::ArcSlice<CustomIdent>,
-    bits: ColorSchemeFlags,
+    /// The computed bits for the known color schemes (plus the only keyword).
+    pub bits: ColorSchemeFlags,
 }
 
 impl ColorScheme {
@@ -1383,4 +1112,25 @@ pub enum ForcedColorAdjust {
     Auto,
     /// Respect specified colors.
     None,
+}
+
+/// Possible values for the forced-colors media query.
+/// <https://drafts.csswg.org/mediaqueries-5/#forced-colors>
+#[derive(Clone, Copy, Debug, FromPrimitive, Parse, PartialEq, ToCss)]
+#[repr(u8)]
+pub enum ForcedColors {
+    /// Page colors are not being forced.
+    None,
+    /// Page colors would be forced in content.
+    #[parse(condition = "ParserContext::chrome_rules_enabled")]
+    Requested,
+    /// Page colors are being forced.
+    Active,
+}
+
+impl ForcedColors {
+    /// Returns whether forced-colors is active for this page.
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
 }

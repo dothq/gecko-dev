@@ -4,19 +4,17 @@
 
 add_task(async function test_sidebar_click_isAppTab_behavior() {
   function sidebarScript() {
-    browser.tabs.onUpdated.addListener(function onUpdated(
-      tabId,
-      changeInfo,
-      tab
-    ) {
-      if (
-        changeInfo.status == "complete" &&
-        tab.url == "http://mochi.test:8888/"
-      ) {
-        browser.tabs.remove(tab.id);
-        browser.test.notifyPass("sidebar-click");
+    browser.tabs.onUpdated.addListener(
+      function onUpdated(tabId, changeInfo, tab) {
+        if (
+          changeInfo.status == "complete" &&
+          tab.url == "http://mochi.test:8888/"
+        ) {
+          browser.tabs.remove(tab.id);
+          browser.test.notifyPass("sidebar-click");
+        }
       }
-    });
+    );
     window.addEventListener(
       "load",
       () => {
@@ -54,7 +52,7 @@ add_task(async function test_sidebar_click_isAppTab_behavior() {
   await extension.awaitMessage("sidebar-ready");
 
   // This test fails if docShell.isAppTab has not been set to true.
-  let content = SidebarUI.browser.contentWindow;
+  let content = SidebarController.browser.contentWindow;
 
   // Wait for the layout to be flushed, otherwise this test may
   // fail intermittently if synthesizeMouseAtCenter is being called

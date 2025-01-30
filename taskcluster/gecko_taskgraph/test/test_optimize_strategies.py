@@ -10,6 +10,7 @@ import pytest
 from mozunit import main
 from taskgraph.optimize.base import registry
 from taskgraph.task import Task
+from taskgraph.util.copy import deepcopy
 
 from gecko_taskgraph.optimize import project
 from gecko_taskgraph.optimize.backstop import SkipUnlessBackstop, SkipUnlessPushInterval
@@ -19,7 +20,8 @@ from gecko_taskgraph.optimize.bugbug import (
     DisperseGroups,
     SkipUnlessDebug,
 )
-from gecko_taskgraph.optimize.strategies import SkipUnlessSchedules
+from gecko_taskgraph.optimize.mozlint import SkipUnlessMozlint
+from gecko_taskgraph.optimize.strategies import SkipUnlessMissing, SkipUnlessSchedules
 from gecko_taskgraph.util.backstop import BACKSTOP_PUSH_INTERVAL
 from gecko_taskgraph.util.bugbug import (
     BUGBUG_BASE_URL,
@@ -509,6 +511,162 @@ def test_project_autoland_test(monkeypatch, responses, params):
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     }
     assert scheduled == {"task-0-label", "task-1-label"}
+
+
+@pytest.mark.parametrize(
+    "pushed_files,to_lint,expected",
+    [
+        pytest.param(
+            ["a/b/c.txt"],
+            [],
+            True,
+        ),
+        pytest.param(
+            ["python/mozlint/a/support_file.txt", "b/c/d.txt"],
+            ["python/mozlint/a/support_file.txt"],
+            False,
+        ),
+    ],
+    ids=idfn,
+)
+def test_mozlint_should_remove_task(
+    monkeypatch, params, pushed_files, to_lint, expected
+):
+    import mozlint.pathutils
+
+    class MockParser:
+        def __call__(self, *args, **kwargs):
+            return []
+
+    def mock_filterpaths(*args, **kwargs):
+        return to_lint, None
+
+    monkeypatch.setattr(mozlint.pathutils, "filterpaths", mock_filterpaths)
+
+    opt = SkipUnlessMozlint("")
+    monkeypatch.setattr(opt, "mozlint_parser", MockParser())
+    params["files_changed"] = pushed_files
+
+    result = opt.should_remove_task(default_tasks[0], params, "")
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "pushed_files,linter_config,expected",
+    [
+        pytest.param(
+            ["a/b/c.txt"],
+            [{"include": ["b/c"]}],
+            True,
+        ),
+        pytest.param(
+            ["a/b/c.txt"],
+            [{"include": ["a/b"], "exclude": ["a/b/c.txt"]}],
+            True,
+        ),
+        pytest.param(
+            ["python/mozlint/a/support_file.txt", "b/c/d.txt"],
+            [{}],
+            False,
+        ),
+    ],
+    ids=idfn,
+)
+def test_mozlint_should_remove_task2(
+    monkeypatch, params, pushed_files, linter_config, expected
+):
+    class MockParser:
+        def __call__(self, *args, **kwargs):
+            return linter_config
+
+    opt = SkipUnlessMozlint("")
+    monkeypatch.setattr(opt, "mozlint_parser", MockParser())
+    params["files_changed"] = pushed_files
+
+    result = opt.should_remove_task(default_tasks[0], params, "")
+    assert result == expected
+
+
+def test_skip_unless_missing(responses, params):
+    opt = SkipUnlessMissing()
+    task = deepcopy(default_tasks[0])
+    task.task["deadline"] = "2024-01-02T00:00:00.000Z"
+    index = "foo.bar.baz"
+    task_id = "abc"
+    root_url = "https://firefox-ci-tc.services.mozilla.com/api"
+
+    # Task is missing, don't optimize
+    responses.add(
+        responses.GET,
+        f"{root_url}/index/v1/task/{index}",
+        status=404,
+    )
+    result = opt.should_remove_task(task, params, index)
+    assert result is False
+
+    # Task is found but failed, don't optimize
+    responses.replace(
+        responses.GET,
+        f"{root_url}/index/v1/task/{index}",
+        json={"taskId": task_id},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{root_url}/queue/v1/task/{task_id}/status",
+        json={"status": {"state": "failed"}},
+        status=200,
+    )
+    result = opt.should_remove_task(task, params, index)
+    assert result is False
+
+    # Task is found and passed but expires before deadline, don't optimize
+    responses.replace(
+        responses.GET,
+        f"{root_url}/index/v1/task/{index}",
+        json={"taskId": task_id},
+        status=200,
+    )
+    responses.replace(
+        responses.GET,
+        f"{root_url}/queue/v1/task/{task_id}/status",
+        json={"status": {"state": "completed", "expires": "2024-01-01T00:00:00.000Z"}},
+        status=200,
+    )
+    result = opt.should_remove_task(task, params, index)
+    assert result is False
+
+    # Task is found and passed and expires after deadline, optimize
+    responses.replace(
+        responses.GET,
+        f"{root_url}/index/v1/task/{index}",
+        json={"taskId": task_id},
+        status=200,
+    )
+    responses.replace(
+        responses.GET,
+        f"{root_url}/queue/v1/task/{task_id}/status",
+        json={"status": {"state": "completed", "expires": "2024-01-03T00:00:00.000Z"}},
+        status=200,
+    )
+    result = opt.should_remove_task(task, params, index)
+    assert result is True
+
+    # Task has parameterized deadline, does not raise
+    task.task["deadline"] = {"relative-datestamp": "1 day"}
+    responses.replace(
+        responses.GET,
+        f"{root_url}/index/v1/task/{index}",
+        json={"taskId": task_id},
+        status=200,
+    )
+    responses.replace(
+        responses.GET,
+        f"{root_url}/queue/v1/task/{task_id}/status",
+        json={"status": {"state": "completed", "expires": "2024-01-03T00:00:00.000Z"}},
+        status=200,
+    )
+    opt.should_remove_task(task, params, index)
 
 
 if __name__ == "__main__":

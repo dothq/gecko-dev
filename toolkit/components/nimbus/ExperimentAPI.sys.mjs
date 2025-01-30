@@ -25,9 +25,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
   COLLECTION_ID_PREF,
   COLLECTION_ID_FALLBACK
 );
-const EXPOSURE_EVENT_CATEGORY = "normandy";
-const EXPOSURE_EVENT_METHOD = "expose";
-const EXPOSURE_EVENT_OBJECT = "nimbus_experiment";
 
 function parseJSON(value) {
   if (value) {
@@ -268,22 +265,61 @@ export const ExperimentAPI = {
     );
   },
 
-  recordExposureEvent({ featureId, experimentSlug, branchSlug }) {
-    Services.telemetry.setEventRecordingEnabled(EXPOSURE_EVENT_CATEGORY, true);
-    try {
-      Services.telemetry.recordEvent(
-        EXPOSURE_EVENT_CATEGORY,
-        EXPOSURE_EVENT_METHOD,
-        EXPOSURE_EVENT_OBJECT,
-        experimentSlug,
-        {
-          branchSlug,
-          featureId,
-        }
+  /**
+   * Get all of the Firfox Labs opt-in recipes that match targeting and bucketing.
+   *
+   * @returns opt in recipes
+   */
+  async getFirefoxLabsOptInRecipes() {
+    if (!IS_MAIN_PROCESS) {
+      throw new Error(
+        "ExperimentAPI.getFirefoxLabsOptInRecipes() should not be called from the main process"
       );
-    } catch (e) {
-      console.error(e);
     }
+    return await this._manager.getAllOptInRecipes();
+  },
+
+  /**
+   * Enrolls an opt in recipe.
+   *
+   * @param slug {String} Recipe slug
+   * @param optInRecipeBranchSlug {String} Branch slug for that opt in recipe
+   */
+  async enrollInFirefoxLabsOptInRecipe(slug, optInRecipeBranchSlug) {
+    if (!slug || !optInRecipeBranchSlug) {
+      throw new Error(
+        "ExperimentAPI.enrollInFirefoxLabsOptInRecipe must be called with slug and optInRecipeBranchSlug."
+      );
+    }
+
+    // get the opt in recipe to enroll in
+    const recipe = await this._manager.getSingleOptInRecipe(slug);
+
+    if (!recipe) {
+      console.error(
+        `ExperimentAPI: Opt in recipe not found for slug: ${slug}, branchSlug: ${optInRecipeBranchSlug}.`
+      );
+      return;
+    }
+
+    try {
+      await this._manager.enroll(recipe, "rs-loader", {
+        optInRecipeBranchSlug,
+      });
+    } catch (e) {
+      console.error(
+        `ExperimentAPI: failed to enroll in opt-in recipe ${slug} and branch ${optInRecipeBranchSlug}`,
+        e
+      );
+    }
+  },
+
+  recordExposureEvent({ featureId, experimentSlug, branchSlug }) {
+    Glean.normandy.exposeNimbusExperiment.record({
+      value: experimentSlug,
+      branchSlug,
+      featureId,
+    });
     Glean.nimbusEvents.exposure.record({
       experiment: experimentSlug,
       branch: branchSlug,

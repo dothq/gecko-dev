@@ -16,10 +16,13 @@
 #include "absl/base/nullability.h"
 #include "api/enable_media_with_defaults.h"
 #include "api/environment/environment.h"
+#include "api/environment/environment_factory.h"
 #include "api/peer_connection_interface.h"
+#include "api/test/time_controller.h"
+#include "api/units/timestamp.h"
 #include "call/call.h"
-#include "call/rtp_transport_config.h"
-#include "call/rtp_transport_controller_send_factory_interface.h"
+#include "call/call_config.h"
+#include "media/base/media_engine.h"
 #include "pc/media_factory.h"
 #include "rtc_base/checks.h"
 #include "system_wrappers/include/clock.h"
@@ -48,10 +51,12 @@ void EnableMediaWithDefaultsAndTimeController(
         absl::Nonnull<std::unique_ptr<MediaFactory>> media_factory)
         : clock_(clock), media_factory_(std::move(media_factory)) {}
 
-    std::unique_ptr<Call> CreateCall(const CallConfig& config) override {
-      return Call::Create(config, clock_,
-                          config.rtp_transport_controller_send_factory->Create(
-                              config.ExtractTransportConfig(), clock_));
+    std::unique_ptr<Call> CreateCall(CallConfig config) override {
+      EnvironmentFactory env_factory(config.env);
+      env_factory.Set(clock_);
+
+      config.env = env_factory.Create();
+      return media_factory_->CreateCall(std::move(config));
     }
 
     std::unique_ptr<cricket::MediaEngineInterface> CreateMediaEngine(

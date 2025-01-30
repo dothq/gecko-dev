@@ -228,6 +228,7 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
       if (listener.isStarted) {
         listener.stop();
       }
+      listener.destroy();
     });
 
     await callback();
@@ -255,13 +256,26 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
     }
   };
 
+  const onPromptClosed = (_, data) => {
+    if (data.detail.promptType === "beforeunload" && !data.detail.accepted) {
+      // If a beforeunload prompt is dismissed there will be no navigation.
+      lazy.logger.trace(
+        `Canceled page load listener because a beforeunload prompt was dismissed`
+      );
+      checkDone({ finished: true });
+    }
+  };
+
   const onPromptOpened = (_, data) => {
     if (data.prompt.promptType === "beforeunload") {
-      // Ignore beforeunload prompts which are handled by the driver class.
+      // WebDriver HTTP basically doesn't know anything about beforeunload
+      // prompts. As such we always ignore the prompt opened event.
       return;
     }
 
-    lazy.logger.trace("Canceled page load listener because a dialog opened");
+    lazy.logger.trace(
+      `Canceled page load listener because a ${data.prompt.promptType} prompt opened`
+    );
     checkDone({ finished: true });
   };
 
@@ -269,8 +283,9 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
     // For the command "Element Click" we want to detect a potential navigation
     // as early as possible. The `beforeunload` event is an indication for that
     // but could still cause the navigation to get aborted by the user. As such
-    // wait a bit longer for the `unload` event to happen, which usually will
-    // occur pretty soon after `beforeunload`.
+    // wait a bit longer for the `unload` event to happen (only when the page
+    // load strategy is `none`), which usually will occur pretty soon after
+    // `beforeunload`.
     //
     // Note that with WebDriver BiDi enabled the `beforeunload` prompts might
     // not get implicitly accepted, so lets keep the timer around until we know
@@ -321,7 +336,7 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
         break;
 
       case "DOMContentLoaded":
-      case "pageshow":
+      case "pageshow": {
         // Don't require an unload event when a top-level browsing context
         // change occurred.
         if (!seenUnload && !browsingContextChanged) {
@@ -330,6 +345,7 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
         const result = checkReadyState(pageLoadStrategy, data);
         checkDone(result);
         break;
+      }
     }
   };
 
@@ -370,6 +386,7 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
     "XULFrameLoaderCreated",
     onBrowsingContextChanged
   );
+  driver.promptListener.on("closed", onPromptClosed);
   driver.promptListener.on("opened", onPromptOpened);
   Services.obs.addObserver(
     onBrowsingContextDiscarded,
@@ -421,6 +438,7 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
       "XULFrameLoaderCreated",
       onBrowsingContextChanged
     );
+    driver.promptListener?.off("closed", onPromptClosed);
     driver.promptListener?.off("opened", onPromptOpened);
     unloadTimer?.cancel();
 

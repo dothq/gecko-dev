@@ -4,10 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "FFmpegRuntimeLinker.h"
 #include "FFmpegLibWrapper.h"
-#include "mozilla/ArrayUtils.h"
 #include "FFmpegLog.h"
+#include "FFmpegRuntimeLinker.h"
+#include "mozilla/ArrayUtils.h"
 #include "prlink.h"
 
 namespace mozilla {
@@ -33,6 +33,7 @@ static FFmpegLibWrapper sLibAV;
 static const char* sLibs[] = {
 // clang-format off
 #if defined(XP_DARWIN)
+  "libavcodec.61.dylib",
   "libavcodec.60.dylib",
   "libavcodec.59.dylib",
   "libavcodec.58.dylib",
@@ -45,6 +46,7 @@ static const char* sLibs[] = {
   "libavcodec.so", // OpenBSD hardly controls the major/minor library version
                    // of ffmpeg and update it regulary on ABI/API changes
 #else
+  "libavcodec.so.61",
   "libavcodec.so.60",
   "libavcodec.so.59",
   "libavcodec.so.58",
@@ -74,7 +76,7 @@ bool FFmpegRuntimeLinker::Init() {
   // more precise error if possible.
   sLinkStatus = LinkStatus_NOT_FOUND;
 
-  for (size_t i = 0; i < ArrayLength(sLibs); i++) {
+  for (size_t i = 0; i < std::size(sLibs); i++) {
     const char* lib = sLibs[i];
     PRLibSpec lspec;
     lspec.type = PR_LibSpec_Pathname;
@@ -132,12 +134,12 @@ bool FFmpegRuntimeLinker::Init() {
           break;
       }
       FFMPEGP_LOG("Failed to link %s: %s", lib,
-                  FFmpegLibWrapper::LinkResultToString(res));
+                  FFmpegLibWrapper::EnumValueToString(res));
     }
   }
 
   FFMPEGV_LOG("H264/AAC codecs unsupported without [");
-  for (size_t i = 0; i < ArrayLength(sLibs); i++) {
+  for (size_t i = 0; i < std::size(sLibs); i++) {
     FFMPEGV_LOG("%s %s", i ? "," : " ", sLibs[i]);
   }
   FFMPEGV_LOG(" ]\n");
@@ -174,6 +176,9 @@ already_AddRefed<PlatformDecoderModule> FFmpegRuntimeLinker::CreateDecoder() {
     case 60:
       module = FFmpegDecoderModule<60>::Create(&sLibAV);
       break;
+    case 61:
+      module = FFmpegDecoderModule<61>::Create(&sLibAV);
+      break;
     default:
       module = nullptr;
   }
@@ -208,6 +213,9 @@ already_AddRefed<PlatformEncoderModule> FFmpegRuntimeLinker::CreateEncoder() {
       break;
     case 60:
       module = FFmpegEncoderModule<60>::Create(&sLibAV);
+      break;
+    case 61:
+      module = FFmpegEncoderModule<61>::Create(&sLibAV);
       break;
     default:
       module = nullptr;

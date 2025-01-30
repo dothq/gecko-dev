@@ -14,11 +14,6 @@ const SCRIPT_TEMPLATE_RESOURCE_PATH =
 let window = self;
 window.requestAnimationFrame = () => {};
 window.cancelAnimationFrame = () => {};
-window.ASRouterMessage = () => {
-  return Promise.resolve();
-};
-window.ASRouterAddParentListener = () => {};
-window.ASRouterRemoveParentListener = () => {};
 
 /* import-globals-from /toolkit/components/workerloader/require.js */
 importScripts("resource://gre/modules/workers/require.js");
@@ -90,13 +85,13 @@ let Agent = {
 
     this._templates = {};
 
-    for (let [name, path] of templateResources) {
+    for (let [templateName, path] of templateResources) {
       const xhr = new XMLHttpRequest();
       // Using a synchronous XHR in a worker is fine.
       xhr.open("GET", path, false);
       xhr.responseType = "text";
       xhr.send(null);
-      this._templates[name] = xhr.responseText;
+      this._templates[templateName] = xhr.responseText;
     }
 
     return this._templates;

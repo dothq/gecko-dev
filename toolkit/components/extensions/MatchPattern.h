@@ -108,6 +108,13 @@ class URLInfo final {
   const nsCString& CSpec() const;
 
   bool InheritsPrincipal() const;
+  // Whether the URL is a meaningful representation of a document URL, even if
+  // that document were to have an opaque origin (null principal).
+  // These URLs are more verbose than the precursor (origin) of a null
+  // principal, and therefore preferred for matching purposes.
+  //
+  // NOTE: This method is main-thread only
+  bool IsNonOpaqueURL() const;
 
  private:
   nsIURI* URINoRef() const;
@@ -125,6 +132,7 @@ class URLInfo final {
   mutable nsCString mCSpec;
 
   mutable Maybe<bool> mInheritsPrincipal;
+  mutable Maybe<bool> mIsNonOpaqueURL;
 };
 
 // Similar to URLInfo, but for cookies.

@@ -14,7 +14,6 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/StaticPrefs_extensions.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/dom/HeadersBinding.h"
 #include "mozilla/dom/InternalHeaders.h"
 #include "mozilla/dom/InternalResponse.h"
@@ -365,7 +364,7 @@ static_assert(
         nsIContentPolicy::TYPE_INTERNAL_AUDIO == 30 &&
         nsIContentPolicy::TYPE_INTERNAL_VIDEO == 31 &&
         nsIContentPolicy::TYPE_INTERNAL_TRACK == 32 &&
-        nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST == 33 &&
+        nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC == 33 &&
         nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE == 34 &&
         nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER == 35 &&
         nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD == 36 &&
@@ -391,7 +390,11 @@ static_assert(
         nsIContentPolicy::TYPE_WEB_IDENTITY == 57 &&
         nsIContentPolicy::TYPE_INTERNAL_WORKER_STATIC_MODULE == 58 &&
         nsIContentPolicy::TYPE_WEB_TRANSPORT == 59 &&
-        nsIContentPolicy::TYPE_END == 60,
+        nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_SYNC == 60 &&
+        nsIContentPolicy::TYPE_INTERNAL_EXTERNAL_RESOURCE == 61 &&
+        nsIContentPolicy::TYPE_JSON == 62 &&
+        nsIContentPolicy::TYPE_INTERNAL_JSON_PRELOAD == 63 &&
+        nsIContentPolicy::TYPE_END == 64,
     "nsContentPolicyType values are as expected");
 
 namespace {
@@ -497,33 +500,6 @@ class MOZ_RAII AutoDisableForeignKeyChecking {
   bool mForeignKeyCheckingDisabled;
 };
 
-nsresult IntegrityCheck(mozIStorageConnection& aConn) {
-  // CACHE_INTEGRITY_CHECK_COUNT is designed to report at most once.
-  static bool reported = false;
-  if (reported) {
-    return NS_OK;
-  }
-
-  QM_TRY_INSPECT(const auto& stmt,
-                 quota::CreateAndExecuteSingleStepStatement(
-                     aConn,
-                     "SELECT COUNT(*) FROM pragma_integrity_check() "
-                     "WHERE integrity_check != 'ok';"_ns));
-
-  QM_TRY_INSPECT(const auto& result, MOZ_TO_RESULT_INVOKE_MEMBER_TYPED(
-                                         nsString, *stmt, GetString, 0));
-
-  nsresult rv;
-  const uint32_t count = result.ToInteger(&rv);
-  QM_TRY(OkIf(NS_SUCCEEDED(rv)), rv);
-
-  Telemetry::ScalarSet(Telemetry::ScalarID::CACHE_INTEGRITY_CHECK_COUNT, count);
-
-  reported = true;
-
-  return NS_OK;
-}
-
 nsresult CreateOrMigrateSchema(nsIFile& aDBDir, mozIStorageConnection& aConn) {
   MOZ_ASSERT(!NS_IsMainThread());
 
@@ -596,12 +572,7 @@ nsresult CreateOrMigrateSchema(nsIFile& aDBDir, mozIStorageConnection& aConn) {
     // if a new migration is incorrect by fast failing on the corruption.
     // Unfortunately, this must be performed outside of the transaction.
 
-    QM_TRY(MOZ_TO_RESULT(aConn.ExecuteSimpleSQL("VACUUM"_ns)), QM_PROPAGATE,
-           ([&aConn](const nsresult rv) {
-             if (rv == NS_ERROR_STORAGE_CONSTRAINT) {
-               QM_WARNONLY_TRY(QM_TO_RESULT(IntegrityCheck(aConn)));
-             }
-           }));
+    QM_TRY(MOZ_TO_RESULT(aConn.ExecuteSimpleSQL("VACUUM"_ns)));
   }
 
   return NS_OK;
@@ -1646,7 +1617,7 @@ nsresult DeleteSecurityInfo(mozIStorageConnection& aConn, int32_t aId,
         QM_TRY_RETURN(MOZ_TO_RESULT_INVOKE_MEMBER(*state, GetInt32, 0));
       }()));
 
-  MOZ_DIAGNOSTIC_ASSERT(refcount >= aCount);
+  MOZ_ASSERT_DEBUG_OR_FUZZING(refcount >= aCount);
 
   // Next, calculate the new refcount
   int32_t newCount = refcount - aCount;
@@ -1794,8 +1765,8 @@ nsresult InsertEntry(mozIStorageConnection& aConn, CacheId aCacheId,
     QM_TRY(MOZ_TO_RESULT(state->BindUTF8StringByName("request_url_fragment"_ns,
                                                      aRequest.urlFragment())));
 
-    QM_TRY(MOZ_TO_RESULT(
-        state->BindStringByName("request_referrer"_ns, aRequest.referrer())));
+    QM_TRY(MOZ_TO_RESULT(state->BindUTF8StringByName("request_referrer"_ns,
+                                                     aRequest.referrer())));
 
     QM_TRY(MOZ_TO_RESULT(state->BindInt32ByName(
         "request_referrer_policy"_ns,
@@ -2208,7 +2179,8 @@ Result<SavedRequest, nsresult> ReadRequest(mozIStorageConnection& aConn,
       MOZ_TO_RESULT(state->GetUTF8String(2, savedRequest.mValue.urlQuery())));
   QM_TRY(MOZ_TO_RESULT(
       state->GetUTF8String(3, savedRequest.mValue.urlFragment())));
-  QM_TRY(MOZ_TO_RESULT(state->GetString(4, savedRequest.mValue.referrer())));
+  QM_TRY(
+      MOZ_TO_RESULT(state->GetUTF8String(4, savedRequest.mValue.referrer())));
 
   QM_TRY_INSPECT(const int32_t& referrerPolicy,
                  MOZ_TO_RESULT_INVOKE_MEMBER(state, GetInt32, 5));

@@ -203,7 +203,7 @@ add_task(async function firefoxSuggest() {
 
   // Implement the provider's `onEngagement()` so it removes the result.
   let onEngagementCallCount = 0;
-  provider.onEngagement = (state, queryContext, details, controller) => {
+  provider.onEngagement = (queryContext, controller, details) => {
     onEngagementCallCount++;
     controller.removeResult(details.result);
   };

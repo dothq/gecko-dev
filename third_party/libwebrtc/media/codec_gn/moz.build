@@ -18,20 +18,21 @@ DEFINES["WEBRTC_MOZILLA_BUILD"] = True
 DEFINES["WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS"] = "0"
 DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 
 UNIFIED_SOURCES += [
-    "/third_party/libwebrtc/media/base/codec.cc"
+    "/third_party/libwebrtc/media/base/codec.cc",
+    "/third_party/libwebrtc/media/base/codec_comparators.cc"
 ]
 
 if not CONFIG["MOZ_DEBUG"]:

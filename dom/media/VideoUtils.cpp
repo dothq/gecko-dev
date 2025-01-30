@@ -7,13 +7,18 @@
 #include <stdint.h>
 
 #include "CubebUtils.h"
+#include "H264.h"
 #include "ImageContainer.h"
 #include "MediaContainerType.h"
 #include "MediaResource.h"
+#include "PDMFactory.h"
 #include "TimeUnits.h"
 #include "mozilla/Base64.h"
+#include "mozilla/EnumeratedRange.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/SchedulerGroup.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/SharedThreadPool.h"
 #include "mozilla/StaticPrefs_accessibility.h"
 #include "mozilla/StaticPrefs_media.h"
@@ -27,6 +32,10 @@
 #include "nsNetCID.h"
 #include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
+
+#ifdef XP_WIN
+#  include "WMFDecoderModule.h"
+#endif
 
 namespace mozilla {
 
@@ -188,12 +197,13 @@ uint32_t DecideAudioPlaybackSampleRate(const AudioInfo& aInfo,
     rate = 48000;
   } else if (aInfo.mRate >= 44100) {
     // The original rate is of good quality and we want to minimize unecessary
-    // resampling, so we let cubeb decide how to resample (if needed).
-    rate = aInfo.mRate;
+    // resampling, so we let cubeb decide how to resample (if needed). Cap to
+    // 384kHz for good measure.
+    rate = std::min<unsigned>(aInfo.mRate, 384000u);
   } else {
     // We will resample all data to match cubeb's preferred sampling rate.
     rate = CubebUtils::PreferredSampleRate(aShouldResistFingerprinting);
-    if (rate > 384000) {
+    if (rate > 768000) {
       // bogus rate, fall back to something else;
       rate = 48000;
     }
@@ -439,7 +449,8 @@ bool ExtractVPXCodecDetails(const nsAString& aCodec, uint8_t& aProfile,
 }
 
 bool ExtractH264CodecDetails(const nsAString& aCodec, uint8_t& aProfile,
-                             uint8_t& aConstraint, uint8_t& aLevel) {
+                             uint8_t& aConstraint, H264_LEVEL& aLevel,
+                             H264CodecStringStrictness aStrictness) {
   // H.264 codecs parameters have a type defined as avcN.PPCCLL, where
   // N = avc type. avc3 is avcc with SPS & PPS implicit (within stream)
   // PP = profile_idc, CC = constraint_set flags, LL = level_idc.
@@ -468,13 +479,30 @@ bool ExtractH264CodecDetails(const nsAString& aCodec, uint8_t& aProfile,
   aConstraint = Substring(aCodec, 7, 2).ToInteger(&rv, 16);
   NS_ENSURE_SUCCESS(rv, false);
 
-  aLevel = Substring(aCodec, 9, 2).ToInteger(&rv, 16);
+  uint8_t level = Substring(aCodec, 9, 2).ToInteger(&rv, 16);
   NS_ENSURE_SUCCESS(rv, false);
 
-  if (aLevel == 9) {
-    aLevel = H264_LEVEL_1_b;
-  } else if (aLevel <= 5) {
-    aLevel *= 10;
+  if (level == 9) {
+    level = static_cast<uint8_t>(H264_LEVEL::H264_LEVEL_1_b);
+  } else if (level <= 5) {
+    level *= 10;
+  }
+
+  if (aStrictness == H264CodecStringStrictness::Lenient) {
+    aLevel = static_cast<H264_LEVEL>(level);
+    return true;
+  }
+
+  // Check if valid level value
+  aLevel = static_cast<H264_LEVEL>(level);
+  if (aLevel < H264_LEVEL::H264_LEVEL_1 ||
+      aLevel > H264_LEVEL::H264_LEVEL_6_2) {
+    return false;
+  }
+  if ((level % 10) > 2) {
+    if (level != 13) {
+      return false;
+    }
   }
 
   return true;
@@ -1075,8 +1103,9 @@ static bool StartsWith(const nsACString& string, const char (&prefix)[N]) {
 bool IsH264CodecString(const nsAString& aCodec) {
   uint8_t profile = 0;
   uint8_t constraint = 0;
-  uint8_t level = 0;
-  return ExtractH264CodecDetails(aCodec, profile, constraint, level);
+  H264_LEVEL level;
+  return ExtractH264CodecDetails(aCodec, profile, constraint, level,
+                                 H264CodecStringStrictness::Lenient);
 }
 
 bool IsH265CodecString(const nsAString& aCodec) {
@@ -1244,6 +1273,20 @@ void DetermineResolutionForTelemetry(const MediaInfo& aInfo,
     }
   }
   aResolutionOut.AppendASCII(resolution);
+}
+
+bool ContainHardwareCodecsSupported(
+    const media::MediaCodecsSupported& aSupport) {
+  return aSupport.contains(
+             mozilla::media::MediaCodecsSupport::H264HardwareDecode) ||
+         aSupport.contains(
+             mozilla::media::MediaCodecsSupport::VP8HardwareDecode) ||
+         aSupport.contains(
+             mozilla::media::MediaCodecsSupport::VP9HardwareDecode) ||
+         aSupport.contains(
+             mozilla::media::MediaCodecsSupport::AV1HardwareDecode) ||
+         aSupport.contains(
+             mozilla::media::MediaCodecsSupport::HEVCHardwareDecode);
 }
 
 }  // end namespace mozilla

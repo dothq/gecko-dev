@@ -154,9 +154,9 @@ HTTP(..) == font-redirect.html order-1-ref.html
 == dynamic-duplicate-rule-1c.html dynamic-duplicate-rule-1-ref.html
 
 # Test for COLR and CPAL support
-fuzzy-if(cocoaWidget,198-198,172-172) == color-1a.html color-1-ref.html
+fuzzy-if(cocoaWidget,154-198,172-172) == color-1a.html color-1-ref.html
 != color-1a.html color-1-notref.html
-fuzzy-if(cocoaWidget,198-198,172-172) == color-1b.html color-1-ref.html
+fuzzy-if(cocoaWidget,154-198,172-172) == color-1b.html color-1-ref.html
 == color-2a.html color-2-ref.html
 != color-2a.html color-2-notref.html
 
@@ -239,11 +239,14 @@ defaults pref(layout.css.font-variations.enabled,false)
 == variation-format-hint-1c.html variation-format-hint-1A-ref.html
 == variation-format-hint-1d.html variation-format-hint-1A-ref.html
 defaults pref(layout.css.font-variations.enabled,true)
-# Currently Windows 7 and macOS all fail on 
-# treeherder because our OS versions are too old to support variation fonts
 == variation-format-hint-1a.html variation-format-hint-1B-ttf-ref.html
 == variation-format-hint-1b.html variation-format-hint-1B-otf-ref.html
 == variation-format-hint-1c.html variation-format-hint-1B-woff-ref.html
 == variation-format-hint-1d.html variation-format-hint-1B-woff2-ref.html
+
+# Check that -webkit-font-smoothing affects rendering (macOS only)...
+skip-if(!cocoaWidget) != font-smoothing-antialiased.html font-smoothing-antialiased-notref.html
+# ...but has no effect on other platforms
+skip-if(cocoaWidget) == font-smoothing-antialiased.html font-smoothing-antialiased-notref.html
 
 defaults

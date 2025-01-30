@@ -6,7 +6,6 @@
 # (mach). It is packaged as a module because everything is a library.
 
 import argparse
-import codecs
 import logging
 import os
 import sys
@@ -134,7 +133,7 @@ class ArgumentParser(argparse.ArgumentParser):
         return text
 
 
-class ContextWrapper(object):
+class ContextWrapper:
     def __init__(self, context, handler):
         object.__setattr__(self, "_context", context)
         object.__setattr__(self, "_handler", handler)
@@ -156,7 +155,7 @@ class ContextWrapper(object):
         setattr(object.__getattribute__(self, "_context"), key, value)
 
 
-class Mach(object):
+class Mach:
     """Main mach driver type.
 
     This type is responsible for holding global mach state and dispatching
@@ -257,16 +256,6 @@ To see more help for a specific command, run:
 
         try:
             self.load_settings()
-
-            if sys.version_info < (3, 0):
-                if stdin.encoding is None:
-                    sys.stdin = codecs.getreader("utf-8")(stdin)
-
-                if stdout.encoding is None:
-                    sys.stdout = codecs.getwriter("utf-8")(stdout)
-
-                if stderr.encoding is None:
-                    sys.stderr = codecs.getwriter("utf-8")(stderr)
 
             # Allow invoked processes (which may not have a handle on the
             # original stdout file descriptor) to know if the original stdout

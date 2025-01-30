@@ -5,15 +5,16 @@
 #ifndef mozilla_ScrollTypes_h
 #define mozilla_ScrollTypes_h
 
+#include "mozilla/DefineEnum.h"
 #include "mozilla/TypedEnumBits.h"
 
-// Types used in main-thread scrolling interfaces such as nsIScrollableFrame.
+// Types used in main-thread scrolling interfaces such as ScrollContainerFrame.
 
 namespace mozilla {
 
 /**
  * Scroll modes for main-thread scroll operations. These are mostly used
- * by nsIScrollableFrame methods.
+ * by ScrollContainerFrame methods.
  *
  * When a scroll operation is requested, we ask for instant, smooth,
  * smooth msd, or normal scrolling.
@@ -41,7 +42,9 @@ namespace mozilla {
  * scroll is already in progress, the |SmoothMsd| scroll is interrupted without
  * first scrolling to the destination.
  */
-enum class ScrollMode { Instant, Smooth, SmoothMsd, Normal };
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE_AND_TOSTRING(ScrollMode, uint8_t,
+                                             (Instant, Smooth, SmoothMsd,
+                                              Normal));
 
 /**
  * When scrolling by a relative amount, we can choose various units.

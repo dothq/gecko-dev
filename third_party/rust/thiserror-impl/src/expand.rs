@@ -36,6 +36,7 @@ fn fallback(input: &DeriveInput, error: syn::Error) -> TokenStream {
         #error
 
         #[allow(unused_qualifications)]
+        #[automatically_derived]
         impl #impl_generics std::error::Error for #ty #ty_generics #where_clause
         where
             // Work around trivial bounds being unstable.
@@ -44,6 +45,7 @@ fn fallback(input: &DeriveInput, error: syn::Error) -> TokenStream {
         {}
 
         #[allow(unused_qualifications)]
+        #[automatically_derived]
         impl #impl_generics ::core::fmt::Display for #ty #ty_generics #where_clause {
             fn fmt(&self, __formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                 ::core::unreachable!()
@@ -155,7 +157,7 @@ fn impl_struct(input: Struct) -> TokenStream {
             ::core::fmt::Display::fmt(&self.#only_field, __formatter)
         })
     } else if let Some(display) = &input.attrs.display {
-        display_implied_bounds = display.implied_bounds.clone();
+        display_implied_bounds.clone_from(&display.implied_bounds);
         let use_as_display = use_as_display(display.has_bonus_display);
         let pat = fields_pat(&input.fields);
         Some(quote! {
@@ -178,6 +180,7 @@ fn impl_struct(input: Struct) -> TokenStream {
         let display_where_clause = display_inferred_bounds.augment_where_clause(input.generics);
         quote! {
             #[allow(unused_qualifications)]
+            #[automatically_derived]
             impl #impl_generics ::core::fmt::Display for #ty #ty_generics #display_where_clause {
                 #[allow(clippy::used_underscore_binding)]
                 fn fmt(&self, __formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -193,6 +196,7 @@ fn impl_struct(input: Struct) -> TokenStream {
         let body = from_initializer(from_field, backtrace_field);
         quote! {
             #[allow(unused_qualifications)]
+            #[automatically_derived]
             impl #impl_generics ::core::convert::From<#from> for #ty #ty_generics #where_clause {
                 #[allow(deprecated)]
                 fn from(source: #from) -> Self {
@@ -211,6 +215,7 @@ fn impl_struct(input: Struct) -> TokenStream {
 
     quote! {
         #[allow(unused_qualifications)]
+        #[automatically_derived]
         impl #impl_generics std::error::Error for #ty #ty_generics #error_where_clause {
             #source_method
             #provide_method
@@ -399,7 +404,7 @@ fn impl_enum(input: Enum) -> TokenStream {
             let mut display_implied_bounds = Set::new();
             let display = match &variant.attrs.display {
                 Some(display) => {
-                    display_implied_bounds = display.implied_bounds.clone();
+                    display_implied_bounds.clone_from(&display.implied_bounds);
                     display.to_token_stream()
                 }
                 None => {
@@ -427,6 +432,7 @@ fn impl_enum(input: Enum) -> TokenStream {
         let display_where_clause = display_inferred_bounds.augment_where_clause(input.generics);
         Some(quote! {
             #[allow(unused_qualifications)]
+            #[automatically_derived]
             impl #impl_generics ::core::fmt::Display for #ty #ty_generics #display_where_clause {
                 fn fmt(&self, __formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                     #use_as_display
@@ -449,6 +455,7 @@ fn impl_enum(input: Enum) -> TokenStream {
         let body = from_initializer(from_field, backtrace_field);
         Some(quote! {
             #[allow(unused_qualifications)]
+            #[automatically_derived]
             impl #impl_generics ::core::convert::From<#from> for #ty #ty_generics #where_clause {
                 #[allow(deprecated)]
                 fn from(source: #from) -> Self {
@@ -467,6 +474,7 @@ fn impl_enum(input: Enum) -> TokenStream {
 
     quote! {
         #[allow(unused_qualifications)]
+        #[automatically_derived]
         impl #impl_generics std::error::Error for #ty #ty_generics #error_where_clause {
             #source_method
             #provide_method

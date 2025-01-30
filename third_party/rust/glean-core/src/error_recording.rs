@@ -12,7 +12,6 @@
 //! but are not actually used directly, since the `send_in_pings` value needs to match the pings of the metric that is erroring (plus the "metrics" ping),
 //! not some constant value that we could define in `metrics.yaml`.
 
-use std::convert::TryFrom;
 use std::fmt::Display;
 
 use crate::common_metric_data::CommonMetricDataInternal;
@@ -24,6 +23,7 @@ use crate::Glean;
 use crate::Lifetime;
 
 /// The possible error types for metric recording.
+///
 /// Note: the cases in this enum must be kept in sync with the ones
 /// in the platform-specific code (e.g. `ErrorType.kt`) and with the
 /// metrics in the registry files.

@@ -25,7 +25,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   UpdateLog: "resource://gre/modules/UpdateLog.sys.mjs",
   UpdateUtils: "resource://gre/modules/UpdateUtils.sys.mjs",
   WindowsRegistry: "resource://gre/modules/WindowsRegistry.sys.mjs",
-  ctypes: "resource://gre/modules/ctypes.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
 });
 
@@ -47,25 +46,18 @@ XPCOMUtils.defineLazyServiceGetter(
   "@mozilla.org/updates/update-checker;1",
   "nsIUpdateChecker"
 );
-
-if (AppConstants.ENABLE_WEBDRIVER) {
-  XPCOMUtils.defineLazyServiceGetter(
-    lazy,
-    "Marionette",
-    "@mozilla.org/remote/marionette;1",
-    "nsIMarionette"
-  );
-
-  XPCOMUtils.defineLazyServiceGetter(
-    lazy,
-    "RemoteAgent",
-    "@mozilla.org/remote/agent;1",
-    "nsIRemoteAgent"
-  );
-} else {
-  lazy.Marionette = { running: false };
-  lazy.RemoteAgent = { running: false };
-}
+XPCOMUtils.defineLazyServiceGetter(
+  lazy,
+  "UpdateServiceStub",
+  "@mozilla.org/updates/update-service-stub;1",
+  "nsIApplicationUpdateServiceStub"
+);
+XPCOMUtils.defineLazyServiceGetter(
+  lazy,
+  "UpdateMutex",
+  "@mozilla.org/updates/update-mutex;1",
+  "nsIUpdateMutex"
+);
 
 const UPDATESERVICE_CID = Components.ID(
   "{B3C290A6-3943-4B89-8BBE-C01EB7B3B311}"
@@ -74,23 +66,24 @@ const UPDATESERVICE_CID = Components.ID(
 const PREF_APP_UPDATE_ALTUPDATEDIRPATH = "app.update.altUpdateDirPath";
 const PREF_APP_UPDATE_BACKGROUNDERRORS = "app.update.backgroundErrors";
 const PREF_APP_UPDATE_BACKGROUNDMAXERRORS = "app.update.backgroundMaxErrors";
+const PREF_APP_UPDATE_BACKGROUND_ALLOWDOWNLOADSWITHOUTBITS =
+  "app.update.background.allowDownloadsWithoutBITS";
 const PREF_APP_UPDATE_BITS_ENABLED = "app.update.BITS.enabled";
 const PREF_APP_UPDATE_CANCELATIONS = "app.update.cancelations";
 const PREF_APP_UPDATE_CANCELATIONS_OSX = "app.update.cancelations.osx";
 const PREF_APP_UPDATE_CANCELATIONS_OSX_MAX = "app.update.cancelations.osx.max";
 const PREF_APP_UPDATE_CHECK_ONLY_INSTANCE_ENABLED =
   "app.update.checkOnlyInstance.enabled";
-const PREF_APP_UPDATE_CHECK_ONLY_INSTANCE_INTERVAL =
-  "app.update.checkOnlyInstance.interval";
-const PREF_APP_UPDATE_CHECK_ONLY_INSTANCE_TIMEOUT =
-  "app.update.checkOnlyInstance.timeout";
-const PREF_APP_UPDATE_DISABLEDFORTESTING = "app.update.disabledForTesting";
 const PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS = "app.update.download.attempts";
 const PREF_APP_UPDATE_DOWNLOAD_MAXATTEMPTS = "app.update.download.maxAttempts";
 const PREF_APP_UPDATE_ELEVATE_NEVER = "app.update.elevate.never";
 const PREF_APP_UPDATE_ELEVATE_VERSION = "app.update.elevate.version";
 const PREF_APP_UPDATE_ELEVATE_ATTEMPTS = "app.update.elevate.attempts";
 const PREF_APP_UPDATE_ELEVATE_MAXATTEMPTS = "app.update.elevate.maxAttempts";
+const PREF_APP_UPDATE_INSTALL_LOCKOUT_ENABLED =
+  "app.update.multiSessionInstallLockout.enabled";
+const PREF_APP_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS =
+  "app.update.multiSessionInstallLockout.timeoutMs";
 const PREF_APP_UPDATE_LANGPACK_ENABLED = "app.update.langpack.enabled";
 const PREF_APP_UPDATE_LANGPACK_TIMEOUT = "app.update.langpack.timeout";
 const PREF_APP_UPDATE_NOTIFYDURINGDOWNLOAD = "app.update.notifyDuringDownload";
@@ -124,7 +117,6 @@ const DIR_UPDATE_DOWNLOADING = "downloading";
 const FILE_ACTIVE_UPDATE_XML = "active-update.xml";
 const FILE_BACKUP_UPDATE_LOG = "backup-update.log";
 const FILE_BACKUP_UPDATE_ELEVATED_LOG = "backup-update-elevated.log";
-const FILE_BT_RESULT = "bt.result";
 const FILE_LAST_UPDATE_LOG = "last-update.log";
 const FILE_LAST_UPDATE_ELEVATED_LOG = "last-update-elevated.log";
 const FILE_UPDATES_XML = "updates.xml";
@@ -134,6 +126,7 @@ const FILE_UPDATE_MAR = "update.mar";
 const FILE_UPDATE_STATUS = "update.status";
 const FILE_UPDATE_TEST = "update.test";
 const FILE_UPDATE_VERSION = "update.version";
+const FILE_UPDATE_TIMESTAMP = "update.timestamp";
 
 const STATE_NONE = "null";
 const STATE_DOWNLOADING = "downloading";
@@ -160,6 +153,9 @@ const BITS_ACTIVE_NO_PROGRESS_TIMEOUT_SECS = 5;
 // is the one used when no one is watching.
 const BITS_IDLE_POLL_RATE_MS = 1000;
 const BITS_ACTIVE_POLL_RATE_MS = 200;
+
+// The number of update attempts when a write error occurs during an attempt
+const MAX_TOTAL_INSTALL_ATTEMPTS = 2;
 
 // The values below used by this code are from common/updatererrors.h
 const WRITE_ERROR = 7;
@@ -203,7 +199,7 @@ const INVALID_UPDATER_STATE_CODE = 98;
 const INVALID_UPDATER_STATUS_CODE = 99;
 
 const SILENT_UPDATE_NEEDED_ELEVATION_ERROR = 105;
-const WRITE_ERROR_BACKGROUND_TASK_SHARING_VIOLATION = 106;
+const BACKGROUND_TASK_SHARING_VIOLATION = 106;
 
 // Array of write errors to simplify checks for write errors
 const WRITE_ERRORS = [
@@ -220,7 +216,6 @@ const WRITE_ERRORS = [
   WRITE_ERROR_DIR_ACCESS_DENIED,
   WRITE_ERROR_DELETE_BACKUP,
   WRITE_ERROR_EXTRACT,
-  WRITE_ERROR_BACKGROUND_TASK_SHARING_VIOLATION,
 ];
 
 // Array of write errors to simplify checks for service errors
@@ -270,35 +265,12 @@ const DEFAULT_SOCKET_RETRYTIMEOUT = 2000;
 // giving up.
 const DEFAULT_CANCELATIONS_OSX_MAX = 3;
 
-// This maps app IDs to their respective notification topic which signals when
-// the application's user interface has been displayed.
-const APPID_TO_TOPIC = {
-  // Firefox
-  "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}": "sessionstore-windows-restored",
-  // SeaMonkey
-  "{92650c4d-4b8e-4d2a-b7eb-24ecf4f6b63a}": "sessionstore-windows-restored",
-  // Thunderbird
-  "{3550f703-e582-4d05-9a08-453d09bdfdc6}": "mail-startup-done",
-};
-
 // The interval for the update xml write deferred task.
 const XML_SAVER_INTERVAL_MS = 200;
 
 // How long after a patch has downloaded should we wait for language packs to
 // update before proceeding anyway.
 const LANGPACK_UPDATE_DEFAULT_TIMEOUT = 300000;
-
-// Interval between rechecks for other instances after the initial check finds
-// at least one other instance.
-const ONLY_INSTANCE_CHECK_DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-
-// Wait this long after detecting that another instance is running (having been
-// polling that entire time) before giving up and applying the update anyway.
-const ONLY_INSTANCE_CHECK_DEFAULT_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
-
-// The other instance check timeout can be overridden via a pref, but we limit
-// that value to this so that the pref can't effectively disable the feature.
-const ONLY_INSTANCE_CHECK_MAX_TIMEOUT_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
 // Values to use when polling for staging. See `pollForStagingEnd` for more
 // details.
@@ -307,7 +279,11 @@ const STAGING_POLLING_MAX_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const STAGING_POLLING_ATTEMPTS_PER_INTERVAL = 5;
 const STAGING_POLLING_MAX_DURATION_MS = 1 * 60 * 60 * 1000; // 1 hour
 
-var gUpdateMutexHandle = null;
+// Timestamps further than this many milliseconds in the future will be
+// considered invalid.
+const MAX_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
+const DEFAULT_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 1 day
+
 // This value will be set to true if it appears that BITS is being used by
 // another user to download updates. We don't really want two users using BITS
 // at once. Computers with many users (ex: a school computer), should not end
@@ -347,26 +323,34 @@ ChromeUtils.defineLazyGetter(
   }
 );
 
-/**
- * gIsBackgroundTaskMode will be true if Firefox is currently running as a
- * background task. Otherwise it will be false.
- */
-ChromeUtils.defineLazyGetter(
-  lazy,
-  "gIsBackgroundTaskMode",
-  function aus_gCurrentlyRunningAsBackgroundTask() {
-    if (!("@mozilla.org/backgroundtasks;1" in Cc)) {
-      return false;
+function resetIsBackgroundTaskMode() {
+  /**
+   * gIsBackgroundTaskMode will be true if Firefox is currently running as a
+   * background task. Otherwise it will be false.
+   */
+  ChromeUtils.defineLazyGetter(
+    lazy,
+    "gIsBackgroundTaskMode",
+    function aus_gCurrentlyRunningAsBackgroundTask() {
+      if (!("@mozilla.org/backgroundtasks;1" in Cc)) {
+        return false;
+      }
+      const bts = Cc["@mozilla.org/backgroundtasks;1"].getService(
+        Ci.nsIBackgroundTasks
+      );
+      if (!bts) {
+        return false;
+      }
+      return bts.isBackgroundTaskMode;
     }
-    const bts = Cc["@mozilla.org/backgroundtasks;1"].getService(
-      Ci.nsIBackgroundTasks
-    );
-    if (!bts) {
-      return false;
-    }
-    return bts.isBackgroundTaskMode;
-  }
-);
+  );
+}
+resetIsBackgroundTaskMode();
+
+// Exported for testing only.
+export function testResetIsBackgroundTaskMode() {
+  resetIsBackgroundTaskMode();
+}
 
 /**
  * Changes `nsIApplicationUpdateService.currentState` and causes
@@ -423,15 +407,6 @@ function unwrap(obj) {
 const LangPackUpdates = new WeakMap();
 
 /**
- * When we're polling to see if other running instances of the application have
- * exited, there's no need to ever start polling again in parallel. To prevent
- * doing that, we keep track of the promise that resolves when polling completes
- * and return that if a second simultaneous poll is requested, so that the
- * multiple callers end up waiting for the same promise to resolve.
- */
-let gOtherInstancePollPromise;
-
-/**
  * Query the update sync manager to see if another instance of this same
  * installation of this application is currently running, under the context of
  * any operating system user (not just the current one).
@@ -462,72 +437,6 @@ function isOtherInstanceRunning() {
 }
 
 /**
- * Query the update sync manager to see if another instance of this same
- * installation of this application is currently running, under the context of
- * any operating system user (not just the one running this instance).
- * This function polls for the status of other instances continually
- * (asynchronously) until either none exist or a timeout expires.
- *
- * @return a Promise that resolves with false if at any point during polling no
- *         other instances can be found, or resolves with true if the timeout
- *         expires when other instances are still running
- */
-function waitForOtherInstances() {
-  // If we're already in the middle of a poll, reuse it rather than start again.
-  if (gOtherInstancePollPromise) {
-    return gOtherInstancePollPromise;
-  }
-
-  let timeout = Services.prefs.getIntPref(
-    PREF_APP_UPDATE_CHECK_ONLY_INSTANCE_TIMEOUT,
-    ONLY_INSTANCE_CHECK_DEFAULT_TIMEOUT_MS
-  );
-  // Don't allow the pref to set a super high timeout and break this feature.
-  if (timeout > ONLY_INSTANCE_CHECK_MAX_TIMEOUT_MS) {
-    timeout = ONLY_INSTANCE_CHECK_MAX_TIMEOUT_MS;
-  }
-
-  let interval = Services.prefs.getIntPref(
-    PREF_APP_UPDATE_CHECK_ONLY_INSTANCE_INTERVAL,
-    ONLY_INSTANCE_CHECK_DEFAULT_POLL_INTERVAL_MS
-  );
-  // Don't allow an interval longer than the timeout.
-  interval = Math.min(interval, timeout);
-
-  let iterations = 0;
-  const maxIterations = Math.ceil(timeout / interval);
-
-  gOtherInstancePollPromise = new Promise(function (resolve) {
-    let poll = function () {
-      iterations++;
-      if (!isOtherInstanceRunning()) {
-        LOG("waitForOtherInstances - no other instances found, exiting");
-        resolve(false);
-        gOtherInstancePollPromise = undefined;
-      } else if (iterations >= maxIterations) {
-        LOG(
-          "waitForOtherInstances - timeout expired while other instances " +
-            "are still running"
-        );
-        resolve(true);
-        gOtherInstancePollPromise = undefined;
-      } else if (iterations + 1 == maxIterations && timeout % interval != 0) {
-        // In case timeout isn't a multiple of interval, set the next timeout
-        // for the remainder of the time rather than for the usual interval.
-        lazy.setTimeout(poll, timeout % interval);
-      } else {
-        lazy.setTimeout(poll, interval);
-      }
-    };
-
-    LOG("waitForOtherInstances - beginning polling");
-    poll();
-  });
-
-  return gOtherInstancePollPromise;
-}
-
-/**
  * Tests to make sure that we can write to a given directory.
  *
  * @param updateTestFile a test file in the directory that needs to be tested.
@@ -548,110 +457,14 @@ function testWriteAccess(updateTestFile, createDirectory) {
 }
 
 /**
- * Windows only function that closes a Win32 handle.
+ * Tests whether or not the current instance has the update mutex. Tries to
+ * acquire it if it is not held currently.
  *
- * @param handle The handle to close
- */
-function closeHandle(handle) {
-  if (handle) {
-    let lib = lazy.ctypes.open("kernel32.dll");
-    let CloseHandle = lib.declare(
-      "CloseHandle",
-      lazy.ctypes.winapi_abi,
-      lazy.ctypes.int32_t /* success */,
-      lazy.ctypes.void_t.ptr
-    ); /* handle */
-    CloseHandle(handle);
-    lib.close();
-  }
-}
-
-/**
- * Windows only function that creates a mutex.
- *
- * @param  aName
- *         The name for the mutex.
- * @param  aAllowExisting
- *         If false the function will close the handle and return null.
- * @return The Win32 handle to the mutex.
- */
-function createMutex(aName, aAllowExisting = true) {
-  if (AppConstants.platform != "win") {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
-  }
-
-  const INITIAL_OWN = 1;
-  const ERROR_ALREADY_EXISTS = 0xb7;
-  let lib = lazy.ctypes.open("kernel32.dll");
-  let CreateMutexW = lib.declare(
-    "CreateMutexW",
-    lazy.ctypes.winapi_abi,
-    lazy.ctypes.void_t.ptr /* return handle */,
-    lazy.ctypes.void_t.ptr /* security attributes */,
-    lazy.ctypes.int32_t /* initial owner */,
-    lazy.ctypes.char16_t.ptr
-  ); /* name */
-
-  let handle = CreateMutexW(null, INITIAL_OWN, aName);
-  let alreadyExists = lazy.ctypes.winLastError == ERROR_ALREADY_EXISTS;
-  if (handle && !handle.isNull() && !aAllowExisting && alreadyExists) {
-    closeHandle(handle);
-    handle = null;
-  }
-  lib.close();
-
-  if (handle && handle.isNull()) {
-    handle = null;
-  }
-
-  return handle;
-}
-
-/**
- * Windows only function that determines a unique mutex name for the
- * installation.
- *
- * @param aGlobal
- *        true if the function should return a global mutex. A global mutex is
- *        valid across different sessions.
- * @return Global mutex path
- */
-function getPerInstallationMutexName(aGlobal = true) {
-  if (AppConstants.platform != "win") {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
-  }
-
-  let hasher = Cc["@mozilla.org/security/hash;1"].createInstance(
-    Ci.nsICryptoHash
-  );
-  hasher.init(hasher.SHA1);
-
-  let exeFile = Services.dirsvc.get(KEY_EXECUTABLE, Ci.nsIFile);
-
-  var data = new TextEncoder().encode(exeFile.path.toLowerCase());
-
-  hasher.update(data, data.length);
-  return (
-    (aGlobal ? "Global\\" : "") + "MozillaUpdateMutex-" + hasher.finish(true)
-  );
-}
-
-/**
- * Whether or not the current instance has the update mutex. The update mutex
- * gives protection against 2 applications from the same installation updating:
- * 1) Running multiple profiles from the same installation path
- * 2) Two applications running in 2 different user sessions from the same path
- *
- * @return true if this instance holds the update mutex
+ * @return true if this instance now holds the update mutex or was already
+ *         holding
  */
 function hasUpdateMutex() {
-  if (AppConstants.platform != "win") {
-    return true;
-  }
-  if (!gUpdateMutexHandle) {
-    gUpdateMutexHandle = createMutex(getPerInstallationMutexName(true), false);
-  }
-  return !!gUpdateMutexHandle;
+  return lazy.UpdateMutex.tryLock();
 }
 
 /**
@@ -801,48 +614,19 @@ function getCanApplyUpdates() {
     return false;
   }
 
-  if (AppConstants.platform == "macosx") {
+  if (AppConstants.platform == "macosx" || AppConstants.platform == "win") {
     LOG(
       "getCanApplyUpdates - bypass the write since elevation can be used " +
-        "on Mac OS X"
+        "on macOS and Windows"
     );
     return true;
   }
 
-  if (shouldUseService()) {
+  if (!isAppBaseDirWritable()) {
     LOG(
-      "getCanApplyUpdates - bypass the write checks because the Windows " +
-        "Maintenance Service can be used"
+      "getCanApplyUpdates - unable to apply updates, because the base " +
+        "directory is not writable."
     );
-    return true;
-  }
-
-  try {
-    if (AppConstants.platform == "win") {
-      // On Windows when the maintenance service isn't used updates can still be
-      // performed in a location requiring admin privileges by the client
-      // accepting a UAC prompt from an elevation request made by the updater.
-      // Whether the client can elevate (e.g. has a split token) is determined
-      // in nsXULAppInfo::GetUserCanElevate which is located in nsAppRunner.cpp.
-      let userCanElevate = Services.appinfo.QueryInterface(
-        Ci.nsIWinAppHelper
-      ).userCanElevate;
-      if (lazy.gIsBackgroundTaskMode) {
-        LOG(
-          "getCanApplyUpdates - in background task mode, assuming user can't elevate"
-        );
-        userCanElevate = false;
-      }
-      if (!userCanElevate && !isAppBaseDirWritable) {
-        LOG(
-          "getCanApplyUpdates - unable to apply updates, because the base " +
-            "directory is not writable."
-        );
-      }
-    }
-  } catch (e) {
-    LOG("getCanApplyUpdates - unable to apply updates. Exception: " + e);
-    // No write access to the installation directory
     return false;
   }
 
@@ -1181,33 +965,6 @@ function readStatusFile(dir) {
 }
 
 /**
- * Reads the binary transparency result file from the given directory.
- * Removes the file if it is present (so don't call this twice and expect a
- * result the second time).
- * @param   dir
- *          The dir to look for an update.bt file in
- * @return  A error code from verifying binary transparency information or null
- *          if the file was not present (indicating there was no error).
- */
-function readBinaryTransparencyResult(dir) {
-  let binaryTransparencyResultFile = dir.clone();
-  binaryTransparencyResultFile.append(FILE_BT_RESULT);
-  let result = readStringFromFile(binaryTransparencyResultFile);
-  LOG(
-    "readBinaryTransparencyResult - result: " +
-      result +
-      ", path: " +
-      binaryTransparencyResultFile.path
-  );
-  // If result is non-null, the file exists. We should remove it to avoid
-  // double-reporting this result.
-  if (result) {
-    binaryTransparencyResultFile.remove(false);
-  }
-  return result;
-}
-
-/**
  * Writes the current update operation/state to a file in the patch
  * directory, indicating to the patching system that operations need
  * to be performed.
@@ -1401,7 +1158,16 @@ function cleanUpReadyUpdateDir(aRemovePatchFiles = true) {
   }
 
   if (aRemovePatchFiles) {
-    let dirEntries = updateDir.directoryEntries;
+    let dirEntries;
+    try {
+      dirEntries = updateDir.directoryEntries;
+    } catch (ex) {
+      // If if doesn't exist, our job is already done.
+      if (ex.result == Cr.NS_ERROR_FILE_NOT_FOUND) {
+        return;
+      }
+      throw ex;
+    }
     while (dirEntries.hasMoreElements()) {
       let file = dirEntries.nextFile;
       // Now, recursively remove this file.  The recursive removal is needed for
@@ -1434,7 +1200,16 @@ function cleanUpDownloadingUpdateDir() {
     return;
   }
 
-  let dirEntries = updateDir.directoryEntries;
+  let dirEntries;
+  try {
+    dirEntries = updateDir.directoryEntries;
+  } catch (ex) {
+    // If if doesn't exist, our job is already done.
+    if (ex.result == Cr.NS_ERROR_FILE_NOT_FOUND) {
+      return;
+    }
+    throw ex;
+  }
   while (dirEntries.hasMoreElements()) {
     let file = dirEntries.nextFile;
     // Now, recursively remove this file.
@@ -1455,16 +1230,16 @@ function cleanUpDownloadingUpdateDir() {
  */
 function cleanupReadyUpdate() {
   // Move the update from the Active Update list into the Past Updates list.
-  if (lazy.UM.readyUpdate) {
+  if (lazy.UM.internal.readyUpdate) {
     LOG("cleanupReadyUpdate - Clearing readyUpdate");
-    lazy.UM.addUpdateToHistory(lazy.UM.readyUpdate);
-    lazy.UM.readyUpdate = null;
+    lazy.UM.internal.addUpdateToHistory(lazy.UM.internal.readyUpdate);
+    lazy.UM.internal.readyUpdate = null;
   }
   lazy.UM.saveUpdates();
 
   let readyUpdateDir = getReadyUpdateDir();
   let shouldSetDownloadingStatus =
-    lazy.UM.downloadingUpdate ||
+    lazy.UM.internal.downloadingUpdate ||
     readStatusFile(readyUpdateDir) == STATE_DOWNLOADING;
 
   // Now trash the ready update directory, since we're done with it
@@ -1493,12 +1268,13 @@ function cleanupReadyUpdate() {
  * Note - This function may cause a state transition. If the current state is
  *        STATE_DOWNLOADING, this will cause it to change to STATE_NONE.
  */
-function cleanupDownloadingUpdate() {
+async function cleanupDownloadingUpdate() {
   // Move the update from the Active Update list into the Past Updates list.
-  if (lazy.UM.downloadingUpdate) {
+  if (lazy.UM.internal.downloadingUpdate) {
     LOG("cleanupDownloadingUpdate - Clearing downloadingUpdate.");
-    lazy.UM.addUpdateToHistory(lazy.UM.downloadingUpdate);
-    lazy.UM.downloadingUpdate = null;
+    await lazy.AUS.wrappedJSObject.cancelDownloadingUpdate();
+    lazy.UM.internal.addUpdateToHistory(lazy.UM.internal.downloadingUpdate);
+    lazy.UM.internal.downloadingUpdate = null;
   }
   lazy.UM.saveUpdates();
 
@@ -1512,7 +1288,7 @@ function cleanupDownloadingUpdate() {
   if (status == STATE_DOWNLOADING) {
     let statusFile = readyUpdateDir.clone();
     statusFile.append(FILE_UPDATE_STATUS);
-    statusFile.remove();
+    statusFile.remove(false);
   }
 }
 
@@ -1530,17 +1306,18 @@ function cleanupDownloadingUpdate() {
  *
  * Note - This function causes a state transition to STATE_NONE.
  */
-function cleanupActiveUpdates() {
+async function cleanupActiveUpdates() {
   // Move the update from the Active Update list into the Past Updates list.
-  if (lazy.UM.readyUpdate) {
+  if (lazy.UM.internal.readyUpdate) {
     LOG("cleanupActiveUpdates - Clearing readyUpdate");
-    lazy.UM.addUpdateToHistory(lazy.UM.readyUpdate);
-    lazy.UM.readyUpdate = null;
+    lazy.UM.internal.addUpdateToHistory(lazy.UM.internal.readyUpdate);
+    lazy.UM.internal.readyUpdate = null;
   }
-  if (lazy.UM.downloadingUpdate) {
+  if (lazy.UM.internal.downloadingUpdate) {
     LOG("cleanupActiveUpdates - Clearing downloadingUpdate.");
-    lazy.UM.addUpdateToHistory(lazy.UM.downloadingUpdate);
-    lazy.UM.downloadingUpdate = null;
+    await lazy.AUS.wrappedJSObject.cancelDownloadingUpdate();
+    lazy.UM.internal.addUpdateToHistory(lazy.UM.internal.downloadingUpdate);
+    lazy.UM.internal.downloadingUpdate = null;
   }
   lazy.UM.saveUpdates();
 
@@ -1604,10 +1381,34 @@ function readStringFromFile(file) {
  */
 function handleUpdateFailure(update) {
   if (WRITE_ERRORS.includes(update.errorCode)) {
+    let nextState = getBestPendingState();
+
+    // Check how many install attempts we have with this patch
+    let totalInstallAttempts =
+      update.selectedPatch
+        .QueryInterface(Ci.nsIWritablePropertyBag)
+        .getProperty("numTotalInstallAttempts") ?? 0;
+    // Out of retries, unable to handle the update failure here
+    if (totalInstallAttempts >= MAX_TOTAL_INSTALL_ATTEMPTS) {
+      return false;
+    }
+
     LOG(
-      "handleUpdateFailure - Failure is a write error. Setting state to pending"
+      "handleUpdateFailure - Failure is a write error. Setting state to " +
+        nextState
     );
-    writeStatusFile(getReadyUpdateDir(), (update.state = STATE_PENDING));
+    writeStatusFile(getReadyUpdateDir(), (update.state = nextState));
+    transitionState(Ci.nsIApplicationUpdateService.STATE_PENDING);
+    return true;
+  }
+
+  if (update.errorCode == BACKGROUND_TASK_SHARING_VIOLATION) {
+    let newState = getBestPendingState();
+    LOG(
+      "handleUpdateFailure - witnessed BACKGROUND_TASK_SHARING_VIOLATION, setting state to " +
+        newState
+    );
+    writeStatusFile(getReadyUpdateDir(), (update.state = newState));
     transitionState(Ci.nsIApplicationUpdateService.STATE_PENDING);
     return true;
   }
@@ -1710,11 +1511,12 @@ function handleUpdateFailure(update) {
       update.statusText =
         lazy.gUpdateBundle.GetStringFromName("elevationFailure");
     } else {
+      const nextState = getBestPendingState();
       LOG(
-        "handleUpdateFailure - Failure because elevation was cancelled. " +
-          "again by setting status to pending."
+        `handleUpdateFailure - Failure because elevation was cancelled. ` +
+          `Setting status to ${nextState}.`
       );
-      writeStatusFile(getReadyUpdateDir(), (update.state = STATE_PENDING));
+      writeStatusFile(getReadyUpdateDir(), (update.state = nextState));
     }
     transitionState(Ci.nsIApplicationUpdateService.STATE_PENDING);
     return true;
@@ -1800,7 +1602,8 @@ async function handleFallbackToCompleteUpdate() {
 
   // The downloading update will be newer than the ready update, so use that
   // update, if it exists.
-  let update = lazy.UM.downloadingUpdate || lazy.UM.readyUpdate;
+  let update =
+    lazy.UM.internal.downloadingUpdate || lazy.UM.internal.readyUpdate;
   if (!update) {
     LOG(
       "handleFallbackToCompleteUpdate - Unable to find an update to fall " +
@@ -1813,8 +1616,7 @@ async function handleFallbackToCompleteUpdate() {
     "handleFallbackToCompleteUpdate - Cleaning up active updates in " +
       "preparation of falling back to complete update."
   );
-  await lazy.AUS.stopDownload();
-  cleanupActiveUpdates();
+  await cleanupActiveUpdates();
 
   if (!update.selectedPatch) {
     // If we don't have a partial patch selected but a partial is available,
@@ -1834,13 +1636,13 @@ async function handleFallbackToCompleteUpdate() {
       "handleFallbackToCompleteUpdate - install of partial patch " +
         "failed, downloading complete patch"
     );
-    var success = await lazy.AUS.downloadUpdate(update);
-    if (!success) {
+    var result = await lazy.AUS.internal.downloadUpdate(update);
+    if (result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS) {
       LOG(
         "handleFallbackToCompleteUpdate - Starting complete patch download " +
           "failed. Cleaning up downloading patch."
       );
-      cleanupDownloadingUpdate();
+      await cleanupDownloadingUpdate();
     }
   } else {
     LOG(
@@ -1920,15 +1722,6 @@ function pingStateAndStatusCodes(aUpdate, aStartup, aStatus) {
       AUSTLMY.pingStatusErrorCode(suffix, statusErrorCode);
     }
   }
-  let binaryTransparencyResult = readBinaryTransparencyResult(
-    getReadyUpdateDir()
-  );
-  if (binaryTransparencyResult) {
-    AUSTLMY.pingBinaryTransparencyResult(
-      suffix,
-      parseInt(binaryTransparencyResult)
-    );
-  }
   AUSTLMY.pingStateCode(suffix, stateCode);
 }
 
@@ -1966,16 +1759,16 @@ function updateIsAtLeastAsOldAsCurrentVersion(update) {
  */
 function updateIsAtLeastAsOldAsReadyUpdate(update) {
   if (
-    !lazy.UM.readyUpdate ||
-    !lazy.UM.readyUpdate.appVersion ||
-    !lazy.UM.readyUpdate.buildID
+    !lazy.UM.internal.readyUpdate ||
+    !lazy.UM.internal.readyUpdate.appVersion ||
+    !lazy.UM.internal.readyUpdate.buildID
   ) {
     return false;
   }
   return updateIsAtLeastAsOldAs(
     update,
-    lazy.UM.readyUpdate.appVersion,
-    lazy.UM.readyUpdate.buildID
+    lazy.UM.internal.readyUpdate.appVersion,
+    lazy.UM.internal.readyUpdate.buildID
   );
 }
 
@@ -2059,12 +1852,12 @@ function pollForStagingEnd() {
     timeElapsedMs += pollingIntervalMs;
 
     if (timeElapsedMs >= STAGING_POLLING_MAX_DURATION_MS) {
-      lazy.UM.refreshUpdateStatus();
+      lazy.UM.internal.refreshUpdateStatus();
       return;
     }
 
     if (readStatusFile(getReadyUpdateDir()) != STATE_APPLYING) {
-      lazy.UM.refreshUpdateStatus();
+      lazy.UM.internal.refreshUpdateStatus();
       return;
     }
 
@@ -2082,69 +1875,10 @@ function pollForStagingEnd() {
   lazy.setTimeout(pollingFn, pollingIntervalMs);
 }
 
-/**
- * Update Patch
- * @param   patch
- *          A <patch> element to initialize this object with
- * @throws if patch has a size of 0
- * @constructor
- */
-function UpdatePatch(patch) {
-  this._properties = {};
-  this.errorCode = 0;
-  this.finalURL = null;
-  this.state = STATE_NONE;
-
-  for (let i = 0; i < patch.attributes.length; ++i) {
-    var attr = patch.attributes.item(i);
-    // If an undefined value is saved to the xml file it will be a string when
-    // it is read from the xml file.
-    if (attr.value == "undefined") {
-      continue;
-    }
-    switch (attr.name) {
-      case "xmlns":
-        // Don't save the XML namespace.
-        break;
-      case "selected":
-        this.selected = attr.value == "true";
-        break;
-      case "size":
-        if (0 == parseInt(attr.value)) {
-          LOG("UpdatePatch:init - 0-sized patch!");
-          throw Components.Exception("", Cr.NS_ERROR_ILLEGAL_VALUE);
-        }
-        this[attr.name] = attr.value;
-        break;
-      case "errorCode":
-        if (attr.value) {
-          let val = parseInt(attr.value);
-          // This will evaluate to false if the value is 0 but that's ok since
-          // this.errorCode is set to the default of 0 above.
-          if (val) {
-            this.errorCode = val;
-          }
-        }
-        break;
-      case "finalURL":
-      case "state":
-      case "type":
-      case "URL":
-        this[attr.name] = attr.value;
-        break;
-      default:
-        if (!this._attrNames.includes(attr.name)) {
-          // Set nsIPropertyBag properties that were read from the xml file.
-          this.setProperty(attr.name, attr.value);
-        }
-        break;
-    }
-  }
-}
-UpdatePatch.prototype = {
+class UpdatePatch {
   // nsIUpdatePatch attribute names used to prevent nsIWritablePropertyBag from
   // over writing nsIUpdatePatch attributes.
-  _attrNames: [
+  _attrNames = [
     "errorCode",
     "finalURL",
     "selected",
@@ -2152,12 +1886,71 @@ UpdatePatch.prototype = {
     "state",
     "type",
     "URL",
-  ],
+  ];
+
+  /**
+   * @param   patch
+   *          A <patch> element to initialize this object with
+   * @throws if patch has a size of 0
+   * @constructor
+   */
+  constructor(patch) {
+    this._properties = {};
+    this.errorCode = 0;
+    this.finalURL = null;
+    this.state = STATE_NONE;
+
+    for (let i = 0; i < patch.attributes.length; ++i) {
+      var attr = patch.attributes.item(i);
+      // If an undefined value is saved to the xml file it will be a string when
+      // it is read from the xml file.
+      if (attr.value == "undefined") {
+        continue;
+      }
+      switch (attr.name) {
+        case "xmlns":
+          // Don't save the XML namespace.
+          break;
+        case "selected":
+          this.selected = attr.value == "true";
+          break;
+        case "size":
+          if (0 == parseInt(attr.value)) {
+            LOG("UpdatePatch:init - 0-sized patch!");
+            throw Components.Exception("", Cr.NS_ERROR_ILLEGAL_VALUE);
+          }
+          this[attr.name] = attr.value;
+          break;
+        case "errorCode":
+          if (attr.value) {
+            let val = parseInt(attr.value);
+            // This will evaluate to false if the value is 0 but that's ok since
+            // this.errorCode is set to the default of 0 above.
+            if (val) {
+              this.errorCode = val;
+            }
+          }
+          break;
+        case "finalURL":
+        case "state":
+        case "type":
+        case "URL":
+          this[attr.name] = attr.value;
+          break;
+        default:
+          if (!this._attrNames.includes(attr.name)) {
+            // Set nsIPropertyBag properties that were read from the xml file.
+            this.setProperty(attr.name, attr.value);
+          }
+          break;
+      }
+    }
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  serialize: function UpdatePatch_serialize(updates) {
+  serialize(updates) {
     var patch = updates.createElementNS(URI_UPDATE_NS, "patch");
     patch.setAttribute("size", this.size);
     patch.setAttribute("type", this.type);
@@ -2185,12 +1978,12 @@ UpdatePatch.prototype = {
       }
     }
     return patch;
-  },
+  }
 
   /**
    * See nsIWritablePropertyBag.idl
    */
-  setProperty: function UpdatePatch_setProperty(name, value) {
+  setProperty(name, value) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2201,12 +1994,12 @@ UpdatePatch.prototype = {
       );
     }
     this._properties[name] = { data: value, present: true };
-  },
+  }
 
   /**
    * See nsIWritablePropertyBag.idl
    */
-  deleteProperty: function UpdatePatch_deleteProperty(name) {
+  deleteProperty(name) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2221,7 +2014,7 @@ UpdatePatch.prototype = {
     } else {
       throw Components.Exception("", Cr.NS_ERROR_FAILURE);
     }
-  },
+  }
 
   /**
    * See nsIPropertyBag.idl
@@ -2231,7 +2024,7 @@ UpdatePatch.prototype = {
    */
   get enumerator() {
     return this.enumerate();
-  },
+  }
 
   *enumerate() {
     // An nsISupportsInterfacePointer is used so creating an array using
@@ -2239,7 +2032,7 @@ UpdatePatch.prototype = {
     let ip = Cc["@mozilla.org/supports-interface-pointer;1"].createInstance(
       Ci.nsISupportsInterfacePointer
     );
-    let qi = ChromeUtils.generateQI(["nsIProperty"]);
+    let qi = ChromeUtils.generateQI([Ci.nsIProperty]);
     for (let [name, value] of Object.entries(this._properties)) {
       if (value.present && !this._attrNames.includes(name)) {
         // The nsIPropertyBag enumerator returns a nsISimpleEnumerator whose
@@ -2251,7 +2044,7 @@ UpdatePatch.prototype = {
         yield ip.data.QueryInterface(Ci.nsIProperty);
       }
     }
-  },
+  }
 
   /**
    * See nsIPropertyBag.idl
@@ -2259,7 +2052,7 @@ UpdatePatch.prototype = {
    * Note: returns null instead of throwing when the property doesn't exist to
    *       simplify code and to silence warnings in debug builds.
    */
-  getProperty: function UpdatePatch_getProperty(name) {
+  getProperty(name) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2273,161 +2066,19 @@ UpdatePatch.prototype = {
       return this._properties[name].data;
     }
     return null;
-  },
-
-  QueryInterface: ChromeUtils.generateQI([
-    "nsIUpdatePatch",
-    "nsIPropertyBag",
-    "nsIWritablePropertyBag",
-  ]),
-};
-
-/**
- * Update
- * Implements nsIUpdate
- * @param   update
- *          An <update> element to initialize this object with
- * @throws if the update contains no patches
- * @constructor
- */
-function Update(update) {
-  this._patches = [];
-  this._properties = {};
-  this.isCompleteUpdate = false;
-  this.channel = "default";
-  this.promptWaitTime = Services.prefs.getIntPref(
-    PREF_APP_UPDATE_PROMPTWAITTIME,
-    43200
-  );
-  this.unsupported = false;
-
-  // Null <update>, assume this is a message container and do no
-  // further initialization
-  if (!update) {
-    return;
   }
 
-  for (let i = 0; i < update.childNodes.length; ++i) {
-    let patchElement = update.childNodes.item(i);
-    if (
-      patchElement.nodeType != patchElement.ELEMENT_NODE ||
-      patchElement.localName != "patch"
-    ) {
-      continue;
-    }
-
-    let patch;
-    try {
-      patch = new UpdatePatch(patchElement);
-    } catch (e) {
-      continue;
-    }
-    this._patches.push(patch);
-  }
-
-  if (!this._patches.length && !update.hasAttribute("unsupported")) {
-    throw Components.Exception("", Cr.NS_ERROR_ILLEGAL_VALUE);
-  }
-
-  // Set the installDate value with the current time. If the update has an
-  // installDate attribute this will be replaced with that value if it doesn't
-  // equal 0.
-  this.installDate = new Date().getTime();
-  this.patchCount = this._patches.length;
-
-  for (let i = 0; i < update.attributes.length; ++i) {
-    let attr = update.attributes.item(i);
-    if (attr.name == "xmlns" || attr.value == "undefined") {
-      // Don't save the XML namespace or undefined values.
-      // If an undefined value is saved to the xml file it will be a string when
-      // it is read from the xml file.
-      continue;
-    } else if (attr.name == "detailsURL") {
-      this.detailsURL = attr.value;
-    } else if (attr.name == "installDate" && attr.value) {
-      let val = parseInt(attr.value);
-      if (val) {
-        this.installDate = val;
-      }
-    } else if (attr.name == "errorCode" && attr.value) {
-      let val = parseInt(attr.value);
-      if (val) {
-        // Set the value of |_errorCode| instead of |errorCode| since
-        // selectedPatch won't be available at this point and normally the
-        // nsIUpdatePatch will provide the errorCode.
-        this._errorCode = val;
-      }
-    } else if (attr.name == "isCompleteUpdate") {
-      this.isCompleteUpdate = attr.value == "true";
-    } else if (attr.name == "promptWaitTime") {
-      if (!isNaN(attr.value)) {
-        this.promptWaitTime = parseInt(attr.value);
-      }
-    } else if (attr.name == "unsupported") {
-      this.unsupported = attr.value == "true";
-    } else {
-      switch (attr.name) {
-        case "appVersion":
-        case "buildID":
-        case "channel":
-        case "displayVersion":
-        case "elevationFailure":
-        case "name":
-        case "previousAppVersion":
-        case "serviceURL":
-        case "statusText":
-        case "type":
-          this[attr.name] = attr.value;
-          break;
-        default:
-          if (!this._attrNames.includes(attr.name)) {
-            // Set nsIPropertyBag properties that were read from the xml file.
-            this.setProperty(attr.name, attr.value);
-          }
-          break;
-      }
-    }
-  }
-
-  if (!this.previousAppVersion) {
-    this.previousAppVersion = Services.appinfo.version;
-  }
-
-  if (!this.elevationFailure) {
-    this.elevationFailure = false;
-  }
-
-  if (!this.detailsURL) {
-    try {
-      // Try using a default details URL supplied by the distribution
-      // if the update XML does not supply one.
-      this.detailsURL = Services.urlFormatter.formatURLPref(
-        PREF_APP_UPDATE_URL_DETAILS
-      );
-    } catch (e) {
-      this.detailsURL = "";
-    }
-  }
-
-  if (!this.displayVersion) {
-    this.displayVersion = this.appVersion;
-  }
-
-  if (!this.name) {
-    // When the update doesn't provide a name fallback to using
-    // "<App Name> <Update App Version>"
-    let brandBundle = Services.strings.createBundle(URI_BRAND_PROPERTIES);
-    let appName = brandBundle.GetStringFromName("brandShortName");
-    this.name = lazy.gUpdateBundle.formatStringFromName("updateName", [
-      appName,
-      this.displayVersion,
-    ]);
-  }
+  QueryInterface = ChromeUtils.generateQI([
+    Ci.nsIUpdatePatch,
+    Ci.nsIPropertyBag,
+    Ci.nsIWritablePropertyBag,
+  ]);
 }
-Update.prototype = {
+
+class Update {
   // nsIUpdate attribute names used to prevent nsIWritablePropertyBag from over
   // writing nsIUpdate attributes.
-  _attrNames: [
+  _attrNames = [
     "appVersion",
     "buildID",
     "channel",
@@ -2445,14 +2096,161 @@ Update.prototype = {
     "statusText",
     "type",
     "unsupported",
-  ],
+    "platformVersion",
+  ];
+
+  /**
+   * Implements nsIUpdate
+   * @param   update
+   *          An <update> element to initialize this object with
+   * @throws if the update contains no patches
+   * @constructor
+   */
+  constructor(update) {
+    this._patches = [];
+    this._properties = {};
+    this.isCompleteUpdate = false;
+    this.channel = "default";
+    this.promptWaitTime = Services.prefs.getIntPref(
+      PREF_APP_UPDATE_PROMPTWAITTIME,
+      43200
+    );
+    this.unsupported = false;
+
+    // Null <update>, assume this is a message container and do no
+    // further initialization
+    if (!update) {
+      return;
+    }
+
+    for (let i = 0; i < update.childNodes.length; ++i) {
+      let patchElement = update.childNodes.item(i);
+      if (
+        patchElement.nodeType != patchElement.ELEMENT_NODE ||
+        patchElement.localName != "patch"
+      ) {
+        continue;
+      }
+
+      let patch;
+      try {
+        patch = new UpdatePatch(patchElement);
+      } catch (e) {
+        continue;
+      }
+      this._patches.push(patch);
+    }
+
+    if (!this._patches.length && !update.hasAttribute("unsupported")) {
+      throw Components.Exception("", Cr.NS_ERROR_ILLEGAL_VALUE);
+    }
+
+    // Set the installDate value with the current time. If the update has an
+    // installDate attribute this will be replaced with that value if it doesn't
+    // equal 0.
+    this._installDate = new Date().getTime();
+    // The `installDate` set above isn't especially legitimate. In some cases,
+    // we need to be able to tell when we have the real install date.
+    this.usingDefaultInstallDate = true;
+    this.patchCount = this._patches.length;
+
+    for (let i = 0; i < update.attributes.length; ++i) {
+      let attr = update.attributes.item(i);
+      if (attr.name == "xmlns" || attr.value == "undefined") {
+        // Don't save the XML namespace or undefined values.
+        // If an undefined value is saved to the xml file it will be a string when
+        // it is read from the xml file.
+        continue;
+      } else if (attr.name == "detailsURL") {
+        this.detailsURL = attr.value;
+      } else if (attr.name == "installDate" && attr.value) {
+        let val = parseInt(attr.value);
+        if (val) {
+          this.installDate = val;
+        }
+      } else if (attr.name == "errorCode" && attr.value) {
+        let val = parseInt(attr.value);
+        if (val) {
+          // Set the value of |_errorCode| instead of |errorCode| since
+          // selectedPatch won't be available at this point and normally the
+          // nsIUpdatePatch will provide the errorCode.
+          this._errorCode = val;
+        }
+      } else if (attr.name == "isCompleteUpdate") {
+        this.isCompleteUpdate = attr.value == "true";
+      } else if (attr.name == "promptWaitTime") {
+        if (!isNaN(attr.value)) {
+          this.promptWaitTime = parseInt(attr.value);
+        }
+      } else if (attr.name == "unsupported") {
+        this.unsupported = attr.value == "true";
+      } else {
+        switch (attr.name) {
+          case "appVersion":
+          case "buildID":
+          case "channel":
+          case "displayVersion":
+          case "elevationFailure":
+          case "name":
+          case "previousAppVersion":
+          case "serviceURL":
+          case "statusText":
+          case "type":
+          case "platformVersion":
+            this[attr.name] = attr.value;
+            break;
+          default:
+            if (!this._attrNames.includes(attr.name)) {
+              // Set nsIPropertyBag properties that were read from the xml file.
+              this.setProperty(attr.name, attr.value);
+            }
+            break;
+        }
+      }
+    }
+
+    if (!this.previousAppVersion) {
+      this.previousAppVersion = Services.appinfo.version;
+    }
+
+    if (!this.elevationFailure) {
+      this.elevationFailure = false;
+    }
+
+    if (!this.detailsURL) {
+      try {
+        // Try using a default details URL supplied by the distribution
+        // if the update XML does not supply one.
+        this.detailsURL = Services.urlFormatter.formatURLPref(
+          PREF_APP_UPDATE_URL_DETAILS
+        );
+      } catch (e) {
+        this.detailsURL = "";
+      }
+    }
+
+    if (!this.displayVersion) {
+      this.displayVersion = this.appVersion;
+    }
+
+    if (!this.name) {
+      // When the update doesn't provide a name fallback to using
+      // "<App Name> <Update App Version>"
+      let brandBundle = Services.strings.createBundle(URI_BRAND_PROPERTIES);
+      let appName = brandBundle.GetStringFromName("brandShortName");
+      this.name = lazy.gUpdateBundle.formatStringFromName("updateName", [
+        appName,
+        this.displayVersion,
+      ]);
+    }
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  getPatchAt: function Update_getPatchAt(index) {
+  getPatchAt(index) {
     return this._patches[index];
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -2462,19 +2260,19 @@ Update.prototype = {
    * active updates from the update manager for some reason but still have
    * the update.status file to work with.
    */
-  _state: "",
+  _state = "";
   get state() {
     if (this.selectedPatch) {
       return this.selectedPatch.state;
     }
     return this._state;
-  },
+  }
   set state(state) {
     if (this.selectedPatch) {
       this.selectedPatch.state = state;
     }
     this._state = state;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -2484,19 +2282,19 @@ Update.prototype = {
    * active updates from the update manager for some reason but still have
    * the update.status file to work with.
    */
-  _errorCode: 0,
+  _errorCode = 0;
   get errorCode() {
     if (this.selectedPatch) {
       return this.selectedPatch.errorCode;
     }
     return this._errorCode;
-  },
+  }
   set errorCode(errorCode) {
     if (this.selectedPatch) {
       this.selectedPatch.errorCode = errorCode;
     }
     this._errorCode = errorCode;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -2508,12 +2306,12 @@ Update.prototype = {
       }
     }
     return null;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  serialize: function Update_serialize(updates) {
+  serialize(updates) {
     // If appVersion isn't defined just return null. This happens when cleaning
     // up invalid updates (e.g. incorrect channel).
     if (!this.appVersion) {
@@ -2525,6 +2323,7 @@ Update.prototype = {
     update.setAttribute("channel", this.channel);
     update.setAttribute("detailsURL", this.detailsURL);
     update.setAttribute("displayVersion", this.displayVersion);
+    update.setAttribute("platformVersion", this.platformVersion);
     update.setAttribute("installDate", this.installDate);
     update.setAttribute("isCompleteUpdate", this.isCompleteUpdate);
     update.setAttribute("name", this.name);
@@ -2555,12 +2354,12 @@ Update.prototype = {
 
     updates.documentElement.appendChild(update);
     return update;
-  },
+  }
 
   /**
    * See nsIWritablePropertyBag.idl
    */
-  setProperty: function Update_setProperty(name, value) {
+  setProperty(name, value) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2571,12 +2370,12 @@ Update.prototype = {
       );
     }
     this._properties[name] = { data: value, present: true };
-  },
+  }
 
   /**
    * See nsIWritablePropertyBag.idl
    */
-  deleteProperty: function Update_deleteProperty(name) {
+  deleteProperty(name) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2591,7 +2390,7 @@ Update.prototype = {
     } else {
       throw Components.Exception("", Cr.NS_ERROR_FAILURE);
     }
-  },
+  }
 
   /**
    * See nsIPropertyBag.idl
@@ -2601,7 +2400,7 @@ Update.prototype = {
    */
   get enumerator() {
     return this.enumerate();
-  },
+  }
 
   *enumerate() {
     // An nsISupportsInterfacePointer is used so creating an array using
@@ -2609,7 +2408,7 @@ Update.prototype = {
     let ip = Cc["@mozilla.org/supports-interface-pointer;1"].createInstance(
       Ci.nsISupportsInterfacePointer
     );
-    let qi = ChromeUtils.generateQI(["nsIProperty"]);
+    let qi = ChromeUtils.generateQI([Ci.nsIProperty]);
     for (let [name, value] of Object.entries(this._properties)) {
       if (value.present && !this._attrNames.includes(name)) {
         // The nsIPropertyBag enumerator returns a nsISimpleEnumerator whose
@@ -2621,14 +2420,14 @@ Update.prototype = {
         yield ip.data.QueryInterface(Ci.nsIProperty);
       }
     }
-  },
+  }
 
   /**
    * See nsIPropertyBag.idl
    * Note: returns null instead of throwing when the property doesn't exist to
    *       simplify code and to silence warnings in debug builds.
    */
-  getProperty: function Update_getProperty(name) {
+  getProperty(name) {
     if (this._attrNames.includes(name)) {
       throw Components.Exception(
         "Illegal value '" +
@@ -2642,60 +2441,108 @@ Update.prototype = {
       return this._properties[name].data;
     }
     return null;
-  },
+  }
 
-  QueryInterface: ChromeUtils.generateQI([
-    "nsIUpdate",
-    "nsIPropertyBag",
-    "nsIWritablePropertyBag",
-  ]),
-};
+  get installDate() {
+    return this._installDate;
+  }
 
-/**
- * UpdateService
- * A Service for managing the discovery and installation of software updates.
- * @constructor
- */
-export function UpdateService() {
-  LOG("Creating UpdateService");
-  // The observor notification to shut down the service must be before
-  // profile-before-change since nsIUpdateManager uses profile-before-change
-  // to shutdown and write the update xml files.
-  Services.obs.addObserver(this, "quit-application");
-  lazy.UpdateLog.addConfigChangeListener(() => {
-    this._logStatus();
-  });
+  set installDate(date) {
+    this._installDate = date;
+    this.usingDefaultInstallDate = false;
+  }
 
-  this._logStatus();
+  QueryInterface = ChromeUtils.generateQI([
+    Ci.nsIUpdate,
+    Ci.nsIPropertyBag,
+    Ci.nsIWritablePropertyBag,
+  ]);
 }
 
-UpdateService.prototype = {
+export class UpdateService {
+  #initPromise;
+
   /**
    * The downloader we are using to download updates. There is only ever one of
    * these.
    */
-  _downloader: null,
+  _downloader = null;
 
   /**
    * Whether or not the service registered the "online" observer.
    */
-  _registeredOnlineObserver: false,
+  _registeredOnlineObserver = false;
 
   /**
    * The current number of consecutive socket errors
    */
-  _consecutiveSocketErrors: 0,
+  _consecutiveSocketErrors = 0;
 
   /**
    * A timer used to retry socket errors
    */
-  _retryTimer: null,
+  _retryTimer = null;
 
   /**
    * Whether or not a background update check was initiated by the
    * application update timer notification.
    */
-  _isNotify: true,
+  _isNotify = true;
+
+  /**
+   * UpdateService
+   * A Service for managing the discovery and installation of software updates.
+   * @constructor
+   */
+  constructor() {
+    LOG("Creating UpdateService");
+    // The observor notification to shut down the service must be before
+    // profile-before-change since nsIUpdateManager uses profile-before-change
+    // to shutdown and write the update xml files.
+    Services.obs.addObserver(this, "quit-application");
+    lazy.UpdateLog.addConfigChangeListener(() => {
+      this._logStatus();
+    });
+
+    this._logStatus();
+
+    this.internal = {
+      init: async (force = false) => this.#init(force),
+      downloadUpdate: async update => this.#downloadUpdate(update),
+      stopDownload: async () => this.#stopDownload(),
+      QueryInterface: ChromeUtils.generateQI([
+        Ci.nsIApplicationUpdateServiceInternal,
+      ]),
+    };
+
+    Services.prefs.addObserver(PREF_APP_UPDATE_INSTALL_LOCKOUT_ENABLED, this);
+    Services.prefs.addObserver(
+      PREF_APP_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS,
+      this
+    );
+  }
+
+  /**
+   * See nsIUpdateService.idl
+   */
+  async init() {
+    await lazy.UpdateServiceStub.initUpdate();
+  }
+
+  /**
+   * See nsIApplicationUpdateServiceInternal.init in nsIUpdateService.idl
+   * and `#asyncInit`.
+   */
+  async #init(force = false) {
+    if (force) {
+      return this.#asyncInit();
+    }
+    if (!this.#initPromise) {
+      this.#initPromise = this.#asyncInit();
+    }
+
+    return this.#initPromise;
+  }
 
   /**
    * Handle Observer Service notifications
@@ -2706,56 +2553,27 @@ UpdateService.prototype = {
    * @param   data
    *          Additional data
    */
-  observe: async function AUS_observe(subject, topic, data) {
+  async observe(subject, topic, data) {
     switch (topic) {
-      case "post-update-processing":
-        // This pref was not cleared out of profiles after it stopped being used
-        // (Bug 1420514), so clear it out on the next update to avoid confusion
-        // regarding its use.
-        Services.prefs.clearUserPref("app.update.enabled");
-        Services.prefs.clearUserPref("app.update.BITS.inTrialGroup");
-
-        // Background tasks do not notify any delayed startup notifications.
-        if (
-          !lazy.gIsBackgroundTaskMode &&
-          Services.appinfo.ID in APPID_TO_TOPIC
-        ) {
-          // Delay post-update processing to ensure that possible update
-          // dialogs are shown in front of the app window, if possible.
-          // See bug 311614.
-          Services.obs.addObserver(this, APPID_TO_TOPIC[Services.appinfo.ID]);
-          break;
-        }
-      // intentional fallthrough
-      case "sessionstore-windows-restored":
-      case "mail-startup-done":
-        // Background tasks do not notify any delayed startup notifications.
-        if (
-          !lazy.gIsBackgroundTaskMode &&
-          Services.appinfo.ID in APPID_TO_TOPIC
-        ) {
-          Services.obs.removeObserver(
-            this,
-            APPID_TO_TOPIC[Services.appinfo.ID]
-          );
-        }
-      // intentional fallthrough
-      case "test-post-update-processing":
-        // Clean up any extant updates
-        await this._postUpdateProcessing();
-        break;
       case "network:offline-status-changed":
         await this._offlineStatusChanged(data);
         break;
       case "quit-application":
         Services.obs.removeObserver(this, topic);
+        Services.prefs.removeObserver(
+          PREF_APP_UPDATE_INSTALL_LOCKOUT_ENABLED,
+          this
+        );
+        Services.prefs.removeObserver(
+          PREF_APP_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS,
+          this
+        );
 
-        if (AppConstants.platform == "win" && gUpdateMutexHandle) {
+        if (lazy.UpdateMutex.isLocked()) {
           // If we hold the update mutex, let it go!
           // The OS would clean this up sometime after shutdown,
           // but that would have no guarantee on timing.
-          closeHandle(gUpdateMutexHandle);
-          gUpdateMutexHandle = null;
+          lazy.UpdateMutex.unlock();
         }
         if (this._retryTimer) {
           this._retryTimer.cancel();
@@ -2772,7 +2590,7 @@ UpdateService.prototype = {
             await this._downloader.cleanup();
           } else {
             // stopDownload() calls _downloader.cleanup()
-            await this.stopDownload();
+            await this.#stopDownload();
           }
         }
         // Prevent leaking the downloader (bug 454964)
@@ -2780,103 +2598,131 @@ UpdateService.prototype = {
         // In case any update checks are in progress.
         lazy.CheckSvc.stopAllChecks();
         break;
-      case "test-close-handle-update-mutex":
+      case "test-unlock-update-mutex":
         if (Cu.isInAutomation) {
-          if (AppConstants.platform == "win" && gUpdateMutexHandle) {
-            LOG("UpdateService:observe - closing mutex handle for testing");
-            closeHandle(gUpdateMutexHandle);
-            gUpdateMutexHandle = null;
+          if (lazy.UpdateMutex.isLocked()) {
+            LOG("UpdateService:observe - releasing update mutex for testing");
+            lazy.UpdateMutex.unlock();
           }
         }
         break;
+      case "nsPref:changed":
+        if (
+          data == PREF_APP_UPDATE_INSTALL_LOCKOUT_ENABLED ||
+          data == PREF_APP_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS
+        ) {
+          await this.writeTimestampFile();
+        }
+        break;
     }
-  },
+  }
 
   /**
-   * The following needs to happen during the post-update-processing
-   * notification from nsUpdateServiceStub.js:
-   * 1. post update processing
-   * 2. resume of a download that was in progress during a previous session
-   * 3. start of a complete update download after the failure to apply a partial
-   *    update
-   */
-
-  /**
-   * Perform post-processing on updates lingering in the updates directory
-   * from a previous application session - either report install failures (and
-   * optionally attempt to fetch a different version if appropriate) or
-   * notify the user of install success.
+   * This is effectively the initialization function for `UpdateService`.
+   *
+   * Bug 1900717 - This currently returns immediately if we don't hold the
+   *               update mutex when we initialize and it never runs again, even
+   *               if we eventually do get the update mutex.
+   *
+   * The initialization process basically involves doing any of these steps that
+   * are currently relevant:
+   *
+   * Make sure we are in a good state
+   *   Reset things and clean up if information in different files conflicts.
+   *
+   * Show the update elevation dialog
+   *   When we need to elevate our privileges to update on macOS, we show a
+   *   dialog to ask the user first. We show that now and if they accept it,
+   *   they are updated on the next application launch.
+   *
+   * Post update processing
+   *   Move installed updates into the history. Cleanup.
+   *
+   * Resume in-progress download
+   *   For BITS, this really just means connecting to the BITS manager.
+   *   For the internal downloader, we actually need to start the download
+   *   again.
+   *
+   * Error fallback
+   *   If an in-progress update failed in some way, we try to fall back. This
+   *   could include retrying the installation differently next time,
+   *   downloading a new MAR, or asking the user to download and run a new
+   *   installer.
    */
   /* eslint-disable-next-line complexity */
-  _postUpdateProcessing: async function AUS__postUpdateProcessing() {
-    if (this.disabled) {
-      // This function is a point when we can potentially enter the update
-      // system, even with update disabled. Make sure that we do not continue
-      // because update code can have side effects that are visible to the user
-      // and give the impression that updates are enabled. For example, if we
-      // can't write to the update directory, we might complain to the user that
-      // update is broken and they should reinstall.
-      return;
-    }
+  async #asyncInit() {
+    // This check also ensures we have the update mutex
     if (!this.canCheckForUpdates) {
       LOG(
-        "UpdateService:_postUpdateProcessing - unable to check for " +
+        "UpdateService:#asyncInit - unable to check for " +
           "updates... returning early"
       );
       return;
     }
-    let status = readStatusFile(getReadyUpdateDir());
-    LOG(`UpdateService:_postUpdateProcessing - status = "${status}"`);
-
-    if (!this.canApplyUpdates) {
+    const readyUpdateDir = getReadyUpdateDir();
+    let status = readStatusFile(readyUpdateDir);
+    LOG(`UpdateService:#asyncInit - status = "${status}"`);
+    if (!this.canUsuallyApplyUpdates) {
       LOG(
-        "UpdateService:_postUpdateProcessing - unable to apply " +
+        "UpdateService:#asyncInit - unable to apply " +
           "updates... returning early"
       );
-      if (hasUpdateMutex()) {
-        // If the update is present in the update directory somehow,
-        // it would prevent us from notifying the user of further updates.
-        LOG(
-          "UpdateService:_postUpdateProcessing - Cleaning up active updates."
-        );
-        cleanupActiveUpdates();
-      }
+      // If the update is present in the update directory somehow,
+      // it would prevent us from notifying the user of further updates.
+      LOG("UpdateService:#asyncInit - Cleaning up active updates.");
+      await cleanupActiveUpdates();
       return;
     }
 
     let updates = [];
-    if (lazy.UM.readyUpdate) {
-      updates.push(lazy.UM.readyUpdate);
+    if (lazy.UM.internal.readyUpdate) {
+      updates.push(lazy.UM.internal.readyUpdate);
     }
-    if (lazy.UM.downloadingUpdate) {
-      updates.push(lazy.UM.downloadingUpdate);
+    if (lazy.UM.internal.downloadingUpdate) {
+      updates.push(lazy.UM.internal.downloadingUpdate);
     }
 
     if (status == STATE_NONE) {
-      // A status of STATE_NONE in _postUpdateProcessing means that the
-      // update.status file is present but there isn't an update in progress.
-      // This isn't an expected state, so if we find ourselves in it, we want
-      // to just clean things up to go back to a good state.
-      LOG(
-        "UpdateService:_postUpdateProcessing - Cleaning up unexpected state."
-      );
-      if (!updates.length) {
-        updates.push(new Update(null));
+      // A status of STATE_NONE in #asyncInit means that the there
+      // isn't an update in progress. Let's make sure we initialize into a good
+      // state.
+      // Under some edgecases such as Windows system restore the
+      // active-update.xml will contain a pending update without the status
+      // file. We need to deal with that situation gracefully.
+      LOG("UpdateService:#asyncInit - Initial cleanup");
+
+      const statusFile = readyUpdateDir.clone();
+      statusFile.append(FILE_UPDATE_STATUS);
+      if (statusFile.exists()) {
+        // This file existing but not having a state in it is unexpected. In
+        // addition to putting things in a good state, put a null update in the
+        // update history if we didn't start up with any.
+        LOG("UpdateService:#asyncInit - Status file is empty?");
+
+        if (!updates.length) {
+          updates.push(new Update(null));
+        }
       }
-      for (let update of updates) {
-        update.state = STATE_FAILED;
-        update.errorCode = ERR_UPDATE_STATE_NONE;
-        update.statusText =
-          lazy.gUpdateBundle.GetStringFromName("statusFailed");
+
+      // There shouldn't be any updates when the update status is null. Mark any
+      // updates that are in there as having failed.
+      if (updates.length) {
+        for (let update of updates) {
+          update.state = STATE_FAILED;
+          update.errorCode = ERR_UPDATE_STATE_NONE;
+          update.statusText =
+            lazy.gUpdateBundle.GetStringFromName("statusFailed");
+        }
+        let newStatus = STATE_FAILED + ": " + ERR_UPDATE_STATE_NONE;
+        pingStateAndStatusCodes(updates[0], true, newStatus);
       }
-      let newStatus = STATE_FAILED + ": " + ERR_UPDATE_STATE_NONE;
-      pingStateAndStatusCodes(updates[0], true, newStatus);
-      cleanupActiveUpdates();
+
+      await cleanupActiveUpdates();
       return;
     }
 
-    let channelChanged = updates => {
-      for (let update of updates) {
+    let channelChanged = updatesToCheck => {
+      for (let update of updatesToCheck) {
         if (update.channel != lazy.UpdateUtils.UpdateChannel) {
           return true;
         }
@@ -2884,11 +2730,11 @@ UpdateService.prototype = {
       return false;
     };
     if (channelChanged(updates)) {
-      let channel = lazy.UM.readyUpdate
-        ? lazy.UM.readyUpdate.channel
-        : lazy.UM.downloadingUpdate.channel;
+      let channel = lazy.UM.internal.readyUpdate
+        ? lazy.UM.internal.readyUpdate.channel
+        : lazy.UM.internal.downloadingUpdate.channel;
       LOG(
-        "UpdateService:_postUpdateProcessing - update channel is " +
+        "UpdateService:#asyncInit - update channel is " +
           "different than application's channel, removing update. update " +
           "channel: " +
           channel +
@@ -2905,7 +2751,7 @@ UpdateService.prototype = {
       }
       let newStatus = STATE_FAILED + ": " + ERR_CHANNEL_CHANGE;
       pingStateAndStatusCodes(updates[0], true, newStatus);
-      cleanupActiveUpdates();
+      await cleanupActiveUpdates();
       return;
     }
 
@@ -2924,24 +2770,24 @@ UpdateService.prototype = {
       let tooOldUpdate;
       if (
         updateIsAtLeastAsOldAs(
-          lazy.UM.readyUpdate,
+          lazy.UM.internal.readyUpdate,
           Services.appinfo.version,
           Services.appinfo.appBuildID
         )
       ) {
-        tooOldUpdate = lazy.UM.readyUpdate;
+        tooOldUpdate = lazy.UM.internal.readyUpdate;
       } else if (
         updateIsAtLeastAsOldAs(
-          lazy.UM.downloadingUpdate,
+          lazy.UM.internal.downloadingUpdate,
           Services.appinfo.version,
           Services.appinfo.appBuildID
         )
       ) {
-        tooOldUpdate = lazy.UM.downloadingUpdate;
+        tooOldUpdate = lazy.UM.internal.downloadingUpdate;
       }
       if (tooOldUpdate) {
         LOG(
-          "UpdateService:_postUpdateProcessing - removing update for older " +
+          "UpdateService:#asyncInit - removing update for older " +
             "application version or same application version with same build " +
             "ID. update application version: " +
             tooOldUpdate.appVersion +
@@ -2965,19 +2811,19 @@ UpdateService.prototype = {
         // exceedingly unlikely that a user could end up in a state where one
         // update is acceptable and the other isn't. And it makes this function
         // considerably more complex to try to deal with that possibility.
-        cleanupActiveUpdates();
+        await cleanupActiveUpdates();
         return;
       }
     }
 
     pingStateAndStatusCodes(
       status == STATE_DOWNLOADING
-        ? lazy.UM.downloadingUpdate
-        : lazy.UM.readyUpdate,
+        ? lazy.UM.internal.downloadingUpdate
+        : lazy.UM.internal.readyUpdate,
       true,
       status
     );
-    if (lazy.UM.downloadingUpdate || status == STATE_DOWNLOADING) {
+    if (lazy.UM.internal.downloadingUpdate || status == STATE_DOWNLOADING) {
       if (status == STATE_SUCCEEDED) {
         // If we successfully installed an update while we were downloading
         // another update, the downloading update is now a partial MAR for
@@ -2985,34 +2831,41 @@ UpdateService.prototype = {
         // MAR without checking because we currently only download partial MARs
         // when an update has already been downloaded.
         LOG(
-          "UpdateService:_postUpdateProcessing - removing downloading patch " +
+          "UpdateService:#asyncInit - removing downloading patch " +
             "because we installed a different patch before it finished" +
             "downloading."
         );
-        cleanupDownloadingUpdate();
+        await cleanupDownloadingUpdate();
       } else {
         // Attempt to resume download
-        if (lazy.UM.downloadingUpdate) {
+        if (lazy.UM.internal.downloadingUpdate) {
           LOG(
-            "UpdateService:_postUpdateProcessing - resuming patch found in " +
+            "UpdateService:#asyncInit - resuming patch found in " +
               "downloading state"
           );
-          let success = await this.downloadUpdate(lazy.UM.downloadingUpdate);
-          if (!success) {
+          let result = await this.#downloadUpdate(
+            lazy.UM.internal.downloadingUpdate
+          );
+          if (
+            result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS &&
+            result !=
+              Ci.nsIApplicationUpdateService
+                .DOWNLOAD_FAILURE_CANNOT_RESUME_IN_BACKGROUND
+          ) {
             LOG(
-              "UpdateService:_postUpdateProcessing - Failed to resume patch. " +
+              "UpdateService:#asyncInit - Failed to resume patch. " +
                 "Cleaning up downloading update."
             );
-            cleanupDownloadingUpdate();
+            await cleanupDownloadingUpdate();
           }
         } else {
           LOG(
-            "UpdateService:_postUpdateProcessing - Warning: found " +
+            "UpdateService:#asyncInit - Warning: found " +
               "downloading state, but no downloading patch. Cleaning up " +
               "active updates."
           );
           // Put ourselves back in a good state.
-          cleanupActiveUpdates();
+          await cleanupActiveUpdates();
         }
         if (status == STATE_DOWNLOADING) {
           // Done dealing with the downloading update, and there is no ready
@@ -3022,7 +2875,7 @@ UpdateService.prototype = {
       }
     }
 
-    let update = lazy.UM.readyUpdate;
+    let update = lazy.UM.internal.readyUpdate;
 
     if (status == STATE_APPLYING) {
       // This indicates that the background updater service is in either of the
@@ -3043,7 +2896,7 @@ UpdateService.prototype = {
         (update.state == STATE_PENDING || update.state == STATE_PENDING_SERVICE)
       ) {
         LOG(
-          "UpdateService:_postUpdateProcessing - patch found in applying " +
+          "UpdateService:#asyncInit - patch found in applying " +
             "state for the first time"
         );
         update.state = STATE_APPLYING;
@@ -3053,7 +2906,7 @@ UpdateService.prototype = {
       } else {
         // We get here even if we don't have an update object
         LOG(
-          "UpdateService:_postUpdateProcessing - patch found in applying " +
+          "UpdateService:#asyncInit - patch found in applying " +
             "state for the second time. Cleaning up ready update."
         );
         cleanupReadyUpdate();
@@ -3064,37 +2917,53 @@ UpdateService.prototype = {
     if (!update) {
       if (status != STATE_SUCCEEDED) {
         LOG(
-          "UpdateService:_postUpdateProcessing - previous patch failed " +
+          "UpdateService:#asyncInit - previous patch failed " +
             "and no patch available. Cleaning up ready update."
         );
         cleanupReadyUpdate();
         return;
       }
       LOG(
-        "UpdateService:_postUpdateProcessing - Update data missing. Creating " +
+        "UpdateService:#asyncInit - Update data missing. Creating " +
           "an empty update object."
       );
       update = new Update(null);
     }
 
     let parts = status.split(":");
-    update.state = parts[0];
+    status = parts[0];
+    update.state = status;
     LOG(
-      `UpdateService:_postUpdateProcessing - Setting update's state from ` +
+      `UpdateService:#asyncInit - Setting update's state from ` +
         `the status file (="${update.state}")`
     );
     if (update.state == STATE_FAILED && parts[1]) {
       update.errorCode = parseInt(parts[1]);
       LOG(
-        `UpdateService:_postUpdateProcessing - Setting update's errorCode ` +
+        `UpdateService:#asyncInit - Setting update's errorCode ` +
           `from the status file (="${update.errorCode}")`
       );
     }
 
     if (status != STATE_SUCCEEDED) {
-      // Rotate the update logs so the update log isn't removed. By passing
-      // false the patch directory won't be removed.
+      // If there are new update logs, rotate them to ensure none are ever
+      // overwritten. By passing `false` the patch directory won't be removed.
       cleanUpReadyUpdateDir(false);
+    }
+
+    // Track number of installation attempts for this patch
+    if (
+      update.selectedPatch &&
+      [STATE_SUCCEEDED, STATE_FAILED].includes(status)
+    ) {
+      let totalInstallAttempts =
+        update.selectedPatch
+          .QueryInterface(Ci.nsIWritablePropertyBag)
+          .getProperty("numTotalInstallAttempts") ?? 0;
+
+      update.selectedPatch
+        .QueryInterface(Ci.nsIWritablePropertyBag)
+        .setProperty("numTotalInstallAttempts", totalInstallAttempts + 1);
     }
 
     if (status == STATE_SUCCEEDED) {
@@ -3106,19 +2975,16 @@ UpdateService.prototype = {
 
       // The only time that update is not a reference to readyUpdate is when
       // readyUpdate is null.
-      if (!lazy.UM.readyUpdate) {
+      if (!lazy.UM.internal.readyUpdate) {
         LOG(
-          "UpdateService:_postUpdateProcessing - Assigning successful update " +
+          "UpdateService:#asyncInit - Assigning successful update " +
             "readyUpdate before cleaning it up."
         );
-        lazy.UM.readyUpdate = update;
+        lazy.UM.internal.readyUpdate = update;
       }
 
       // Done with this update. Clean it up.
-      LOG(
-        "UpdateService:_postUpdateProcessing - Cleaning up successful ready " +
-          "update."
-      );
+      LOG("UpdateService:#asyncInit - Cleaning up successful ready update.");
       cleanupReadyUpdate();
 
       Services.prefs.setIntPref(PREF_APP_UPDATE_ELEVATE_ATTEMPTS, 0);
@@ -3126,7 +2992,7 @@ UpdateService.prototype = {
       // In case the active-update.xml file is deleted.
       if (!update) {
         LOG(
-          "UpdateService:_postUpdateProcessing - status is pending-elevate " +
+          "UpdateService:#asyncInit - status is pending-elevate " +
             "but there isn't a ready update, removing update"
         );
         cleanupReadyUpdate();
@@ -3140,13 +3006,13 @@ UpdateService.prototype = {
           // restart.
           // So this is defense in depth.
           LOG(
-            "UpdateService:_postUpdateProcessing - status is " +
+            "UpdateService:#asyncInit - status is " +
               "pending-elevate, but this is a silent startup, so the " +
               "elevation window has been suppressed."
           );
         } else {
           LOG(
-            "UpdateService:_postUpdateProcessing - status is " +
+            "UpdateService:#asyncInit - status is " +
               "pending-elevate. Showing Update elevation dialog."
           );
           let uri = "chrome://mozapps/content/update/updateElevation.xhtml";
@@ -3155,36 +3021,53 @@ UpdateService.prototype = {
           Services.ww.openWindow(null, uri, "Update:Elevation", features, null);
         }
       }
+    } else if (
+      status == STATE_PENDING ||
+      status == STATE_PENDING_SERVICE ||
+      status == STATE_APPLIED ||
+      status == STATE_APPLIED_SERVICE
+    ) {
+      // We started up with an update already pending. Usually we apply updates
+      // at startup, but there are some cases where we do not. Most likely, we
+      // will just end up installing this update the next time we start up, but
+      // we should make sure that the pending update looks valid since it may
+      // prevent us from downloading a new one in the meantime.
+      LOG("UpdateService:#asyncInit - Verifying existing pending update.");
+      // The only things the updater binary really needs to update are
+      // `update.status` (which we already read `status` from) and `update.mar`.
+      let marFile = readyUpdateDir.clone();
+      marFile.append(FILE_UPDATE_MAR);
+      if (!marFile.exists()) {
+        LOG("UpdateService:#asyncInit - Cleaning up missing pending update.");
+        cleanupReadyUpdate();
+      }
+      await this.writeTimestampFile();
     } else {
       // If there was an I/O error it is assumed that the patch is not invalid
       // and it is set to pending so an attempt to apply it again will happen
       // when the application is restarted.
       if (update.state == STATE_FAILED && update.errorCode) {
-        LOG(
-          "UpdateService:_postUpdateProcessing - Attempting handleUpdateFailure"
-        );
+        LOG("UpdateService:#asyncInit - Attempting handleUpdateFailure");
         if (handleUpdateFailure(update)) {
-          LOG(
-            "UpdateService:_postUpdateProcessing - handleUpdateFailure success."
-          );
+          LOG("UpdateService:#asyncInit - handleUpdateFailure success.");
           return;
         }
       }
 
       LOG(
-        "UpdateService:_postUpdateProcessing - Attempting to fall back to a " +
+        "UpdateService:#asyncInit - Attempting to fall back to a " +
           "complete update."
       );
       // Something went wrong with the patch application process.
       await handleFallbackToCompleteUpdate();
     }
-  },
+  }
 
   /**
    * Register an observer when the network comes online, so we can short-circuit
    * the app.update.interval when there isn't connectivity
    */
-  _registerOnlineObserver: function AUS__registerOnlineObserver() {
+  _registerOnlineObserver() {
     if (this._registeredOnlineObserver) {
       LOG(
         "UpdateService:_registerOnlineObserver - observer already registered"
@@ -3199,12 +3082,12 @@ UpdateService.prototype = {
 
     Services.obs.addObserver(this, "network:offline-status-changed");
     this._registeredOnlineObserver = true;
-  },
+  }
 
   /**
    * Called from the network:offline-status-changed observer.
    */
-  _offlineStatusChanged: async function AUS__offlineStatusChanged(status) {
+  async _offlineStatusChanged(status) {
     if (status !== "online") {
       return;
     }
@@ -3219,12 +3102,12 @@ UpdateService.prototype = {
 
     // the background checker is contained in notify
     await this._attemptResume();
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  onCheckComplete: async function AUS_onCheckComplete(result) {
+  async onCheckComplete(result) {
     if (result.succeeded) {
       await this._selectAndInstallUpdate(result.updates);
       return;
@@ -3268,7 +3151,7 @@ UpdateService.prototype = {
     // update check failures. As far as the user knows, the update status is
     // the status of the ready update. We don't want to confuse them by saying
     // that an update check failed.
-    if (lazy.UM.readyUpdate) {
+    if (lazy.UM.internal.readyUpdate) {
       LOG(
         "UpdateService:onCheckComplete - Ignoring error because another " +
           "update is ready."
@@ -3307,12 +3190,12 @@ UpdateService.prototype = {
       );
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_GENERAL_ERROR_SILENT);
     }
-  },
+  }
 
   /**
    * Called when a connection should be resumed
    */
-  _attemptResume: async function AUS_attemptResume() {
+  async _attemptResume() {
     LOG("UpdateService:_attemptResume");
     // If a download is in progress and we aren't already downloading it, then
     // resume it.
@@ -3331,44 +3214,46 @@ UpdateService.prototype = {
         "UpdateService:_attemptResume - _patch.state: " +
           this._downloader._patch.state
       );
-      let success = await this.downloadUpdate(this._downloader._update);
-      LOG("UpdateService:_attemptResume - downloadUpdate success: " + success);
-      if (!success) {
+      let result = await this.#downloadUpdate(this._downloader._update);
+      LOG("UpdateService:_attemptResume - downloadUpdate result: " + result);
+      if (result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS) {
         LOG(
           "UpdateService:_attemptResume - Resuming download failed. Cleaning " +
             "up downloading update."
         );
-        cleanupDownloadingUpdate();
+        await cleanupDownloadingUpdate();
       }
       return;
     }
 
     // Kick off an update check
     (async () => {
-      let check = lazy.CheckSvc.checkForUpdates(lazy.CheckSvc.BACKGROUND_CHECK);
+      let check = lazy.CheckSvc.internal.checkForUpdates(
+        lazy.CheckSvc.BACKGROUND_CHECK
+      );
       await this.onCheckComplete(await check.result);
     })();
-  },
+  }
 
   /**
    * Notified when a timer fires
    * @param   _timer
    *          The timer that fired
    */
-  notify: function AUS_notify(_timer) {
-    this._checkForBackgroundUpdates(true);
-  },
+  async notify(_timer) {
+    await this._checkForBackgroundUpdates(true);
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  checkForBackgroundUpdates: function AUS_checkForBackgroundUpdates() {
+  async checkForBackgroundUpdates() {
     return this._checkForBackgroundUpdates(false);
-  },
+  }
 
   // The suffix used for background update check telemetry histogram ID's.
   get _pingSuffix() {
-    if (lazy.UM.readyUpdate) {
+    if (lazy.UM.internal.readyUpdate) {
       // Once an update has been downloaded, all later updates will be reported
       // to telemetry as subsequent updates. We move the first update into
       // readyUpdate as soon as the download is complete, so any update checks
@@ -3376,7 +3261,7 @@ UpdateService.prototype = {
       return AUSTLMY.SUBSEQUENT;
     }
     return this._isNotify ? AUSTLMY.NOTIFY : AUSTLMY.EXTERNAL;
-  },
+  }
 
   /**
    * Checks for updates in the background.
@@ -3384,9 +3269,9 @@ UpdateService.prototype = {
    *          Whether or not a background update check was initiated by the
    *          application update timer notification.
    */
-  _checkForBackgroundUpdates: function AUS__checkForBackgroundUpdates(
-    isNotify
-  ) {
+  async _checkForBackgroundUpdates(isNotify) {
+    await this.init();
+
     if (!this.disabled && AppConstants.NIGHTLY_BUILD) {
       // Scalar ID: update.suppress_prompts
       AUSTLMY.pingSuppressPrompts();
@@ -3401,7 +3286,11 @@ UpdateService.prototype = {
       // update checks, because manual update checking uses a completely
       // different code path (AppUpdater.sys.mjs creates its own nsIUpdateChecker),
       // bypassing this function completely.
-      AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_DISABLED_BY_POLICY);
+      if (!this.disabledForTesting) {
+        // This can cause some problems for tests that aren't setup properly for
+        // this.
+        AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_DISABLED_BY_POLICY);
+      }
       return false;
     }
 
@@ -3532,9 +3421,9 @@ UpdateService.prototype = {
     // do not currently download complete updates if there is already a
     // readyUpdate available.
     if (
-      lazy.UM.readyUpdate &&
-      lazy.UM.readyUpdate.selectedPatch &&
-      lazy.UM.readyUpdate.selectedPatch.type == "complete"
+      lazy.UM.internal.readyUpdate &&
+      lazy.UM.internal.readyUpdate.selectedPatch &&
+      lazy.UM.internal.readyUpdate.selectedPatch.type == "complete"
     ) {
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_IS_DOWNLOADED);
       return false;
@@ -3573,8 +3462,6 @@ UpdateService.prototype = {
         );
       } else if (!hasUpdateMutex()) {
         AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_NO_MUTEX);
-      } else if (isOtherInstanceRunning()) {
-        AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_OTHER_INSTANCE);
       } else if (!this.canCheckForUpdates) {
         AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_UNABLE_TO_CHECK);
       }
@@ -3584,7 +3471,7 @@ UpdateService.prototype = {
     })();
 
     return true;
-  },
+  }
 
   /**
    * Determine the update from the specified updates that should be offered.
@@ -3594,7 +3481,7 @@ UpdateService.prototype = {
    *          An array of available nsIUpdate items
    * @return  The nsIUpdate to offer.
    */
-  selectUpdate: function AUS_selectUpdate(updates) {
+  #selectUpdate(updates) {
     if (!updates.length) {
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_NO_UPDATE_FOUND);
       return null;
@@ -3611,66 +3498,68 @@ UpdateService.prototype = {
     var vc = Services.vc;
     let lastCheckCode = AUSTLMY.CHK_NO_COMPAT_UPDATE_FOUND;
 
-    updates.forEach(function (aUpdate) {
+    for (const update of updates) {
       // Ignore updates for older versions of the application and updates for
       // the same version of the application with the same build ID.
-      if (updateIsAtLeastAsOldAsCurrentVersion(aUpdate)) {
+      if (updateIsAtLeastAsOldAsCurrentVersion(update)) {
         LOG(
           "UpdateService:selectUpdate - skipping update because the " +
             "update's application version is not greater than the current " +
             "application version"
         );
         lastCheckCode = AUSTLMY.CHK_UPDATE_PREVIOUS_VERSION;
-        return;
+        continue;
       }
 
-      if (updateIsAtLeastAsOldAsReadyUpdate(aUpdate)) {
+      if (updateIsAtLeastAsOldAsReadyUpdate(update)) {
         LOG(
           "UpdateService:selectUpdate - skipping update because the " +
             "update's application version is not greater than that of the " +
             "currently downloaded update"
         );
         lastCheckCode = AUSTLMY.CHK_UPDATE_PREVIOUS_VERSION;
-        return;
+        continue;
       }
 
-      if (lazy.UM.readyUpdate && !getPatchOfType(aUpdate, "partial")) {
+      if (lazy.UM.internal.readyUpdate && !getPatchOfType(update, "partial")) {
         LOG(
           "UpdateService:selectUpdate - skipping update because no partial " +
             "patch is available and an update has already been downloaded."
         );
         lastCheckCode = AUSTLMY.CHK_NO_PARTIAL_PATCH;
-        return;
+        continue;
       }
 
-      switch (aUpdate.type) {
+      switch (update.type) {
         case "major":
-          if (!majorUpdate) {
-            majorUpdate = aUpdate;
+          if (!majorUpdate || majorUpdate.unsupported) {
+            majorUpdate = update;
           } else if (
-            vc.compare(majorUpdate.appVersion, aUpdate.appVersion) <= 0
+            !update.unsupported &&
+            vc.compare(majorUpdate.appVersion, update.appVersion) <= 0
           ) {
-            majorUpdate = aUpdate;
+            majorUpdate = update;
           }
           break;
         case "minor":
-          if (!minorUpdate) {
-            minorUpdate = aUpdate;
+          if (!minorUpdate || minorUpdate.unsupported) {
+            minorUpdate = update;
           } else if (
-            vc.compare(minorUpdate.appVersion, aUpdate.appVersion) <= 0
+            !update.unsupported &&
+            vc.compare(minorUpdate.appVersion, update.appVersion) <= 0
           ) {
-            minorUpdate = aUpdate;
+            minorUpdate = update;
           }
           break;
         default:
           LOG(
             "UpdateService:selectUpdate - skipping unknown update type: " +
-              aUpdate.type
+              update.type
           );
           lastCheckCode = AUSTLMY.CHK_UPDATE_INVALID_TYPE;
           break;
       }
-    });
+    }
 
     let update = minorUpdate || majorUpdate;
     if (AppConstants.platform == "macosx" && update) {
@@ -3753,7 +3642,15 @@ UpdateService.prototype = {
     }
 
     return update;
-  },
+  }
+
+  /*
+   * See nsIUpdateService.idl
+   */
+  async selectUpdate(updates) {
+    await this.init();
+    return this.#selectUpdate(updates);
+  }
 
   /**
    * Determine which of the specified updates should be installed and begin the
@@ -3761,10 +3658,10 @@ UpdateService.prototype = {
    * @param   updates
    *          An array of available updates
    */
-  _selectAndInstallUpdate: async function AUS__selectAndInstallUpdate(updates) {
+  async _selectAndInstallUpdate(updates) {
     // Return early if there's an active update. The user is already aware and
     // is downloading or performed some user action to prevent notification.
-    if (lazy.UM.downloadingUpdate) {
+    if (lazy.UM.internal.downloadingUpdate) {
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_HAS_ACTIVEUPDATE);
       return;
     }
@@ -3778,7 +3675,7 @@ UpdateService.prototype = {
       return;
     }
 
-    var update = this.selectUpdate(updates);
+    var update = this.#selectUpdate(updates);
     if (!update || update.elevationFailure) {
       return;
     }
@@ -3833,43 +3730,37 @@ UpdateService.prototype = {
     }
 
     LOG("UpdateService:_selectAndInstallUpdate - download the update");
-    let success = await this.downloadUpdate(update);
-    if (!success && !this.isDownloading) {
+    let result = await this.#downloadUpdate(update);
+    if (
+      result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS &&
+      !this.isDownloading
+    ) {
       LOG(
         "UpdateService:_selectAndInstallUpdate - Failed to start downloading " +
           "update. Cleaning up downloading update."
       );
-      cleanupDownloadingUpdate();
+      await cleanupDownloadingUpdate();
     }
     AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_DOWNLOAD_UPDATE);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get isAppBaseDirWritable() {
     return isAppBaseDirWritable();
-  },
+  }
 
   get disabledForTesting() {
-    return (
-      (Cu.isInAutomation ||
-        lazy.Marionette.running ||
-        lazy.RemoteAgent.running) &&
-      Services.prefs.getBoolPref(PREF_APP_UPDATE_DISABLEDFORTESTING, false)
-    );
-  },
+    return lazy.UpdateServiceStub.updateDisabledForTesting;
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get disabled() {
-    return (
-      (Services.policies && !Services.policies.isAllowed("appUpdate")) ||
-      this.disabledForTesting ||
-      Services.sysinfo.getProperty("isPackagedApp")
-    );
-  },
+    return lazy.UpdateServiceStub.updateDisabled;
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -3878,7 +3769,7 @@ UpdateService.prototype = {
     return (
       Services.policies && !Services.policies.isAllowed("autoAppUpdateChecking")
     );
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -3912,7 +3803,7 @@ UpdateService.prototype = {
 
     LOG("UpdateService.canUsuallyCheckForUpdates - able to check for updates");
     return true;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -3930,78 +3821,65 @@ UpdateService.prototype = {
       return false;
     }
 
-    if (isOtherInstanceRunning()) {
-      // This doesn't block update checks, but we will have to wait until either
-      // the other instance is gone or we time out waiting for it.
-      LOG(
-        "UpdateService.canCheckForUpdates - another instance is holding the " +
-          "lock, will need to wait for it prior to checking for updates"
-      );
-    }
-
     LOG("UpdateService.canCheckForUpdates - able to check for updates");
     return true;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get elevationRequired() {
     return getElevationRequired();
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canUsuallyApplyUpdates() {
     return getCanApplyUpdates();
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canApplyUpdates() {
-    return (
-      this.canUsuallyApplyUpdates &&
-      hasUpdateMutex() &&
-      !isOtherInstanceRunning()
-    );
-  },
+    return this.canUsuallyApplyUpdates && hasUpdateMutex();
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canUsuallyStageUpdates() {
     return getCanStageUpdates(false);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canStageUpdates() {
     return getCanStageUpdates();
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canUsuallyUseBits() {
     return getCanUseBits(false) == "CanUseBits";
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get canUseBits() {
     return getCanUseBits() == "CanUseBits";
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get isOtherInstanceHandlingUpdates() {
     return !hasUpdateMutex() || isOtherInstanceRunning();
-  },
+  }
 
   /**
    * A set of download listeners to be notified by this._downloader when it
@@ -4010,12 +3888,12 @@ UpdateService.prototype = {
    * These are stored on the UpdateService rather than on the Downloader,
    * because they ought to persist across multiple Downloader instances.
    */
-  _downloadListeners: new Set(),
+  _downloadListeners = new Set();
 
   /**
    * See nsIUpdateService.idl
    */
-  addDownloadListener: function AUS_addDownloadListener(listener) {
+  addDownloadListener(listener) {
     let oldSize = this._downloadListeners.size;
     this._downloadListeners.add(listener);
 
@@ -4030,12 +3908,12 @@ UpdateService.prototype = {
     if (this._downloader) {
       this._downloader.onDownloadListenerAdded();
     }
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  removeDownloadListener: function AUS_removeDownloadListener(listener) {
+  removeDownloadListener(listener) {
     let elementRemoved = this._downloadListeners.delete(listener);
 
     if (!elementRemoved) {
@@ -4049,29 +3927,34 @@ UpdateService.prototype = {
     if (this._downloader) {
       this._downloader.onDownloadListenerRemoved();
     }
-  },
+  }
 
   /**
    * Returns a boolean indicating whether there are any download listeners
    */
   get hasDownloadListeners() {
     return !!this._downloadListeners.length;
-  },
+  }
 
   /*
    * Calls the provided function once with each download listener that is
    * currently registered.
    */
-  forEachDownloadListener: function AUS_forEachDownloadListener(fn) {
+  forEachDownloadListener(fn) {
     // Make a shallow copy in case listeners remove themselves.
     let listeners = new Set(this._downloadListeners);
     listeners.forEach(fn);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  downloadUpdate: async function AUS_downloadUpdate(update) {
+  async downloadUpdate(update) {
+    await this.init();
+    return this.#downloadUpdate(update);
+  }
+
+  async #downloadUpdate(update) {
     if (!update) {
       throw Components.Exception("", Cr.NS_ERROR_NULL_POINTER);
     }
@@ -4098,7 +3981,7 @@ UpdateService.prototype = {
           "update build ID : " +
           update.buildID
       );
-      return false;
+      return Ci.nsIApplicationUpdateService.DOWNLOAD_FAILURE_GENERIC;
     }
     if (updateIsAtLeastAsOldAsReadyUpdate(update)) {
       LOG(
@@ -4106,18 +3989,18 @@ UpdateService.prototype = {
           "update that's already been downloaded is the same version or " +
           "newer.\n" +
           "currently downloaded update application version: " +
-          lazy.UM.readyUpdate.appVersion +
+          lazy.UM.internal.readyUpdate.appVersion +
           "\n" +
           "available update application version : " +
           update.appVersion +
           "\n" +
           "currently downloaded update build ID: " +
-          lazy.UM.readyUpdate.buildID +
+          lazy.UM.internal.readyUpdate.buildID +
           "\n" +
           "available update build ID : " +
           update.buildID
       );
-      return false;
+      return Ci.nsIApplicationUpdateService.DOWNLOAD_FAILURE_GENERIC;
     }
 
     // If a download request is in progress vs. a download ready to resume
@@ -4127,18 +4010,23 @@ UpdateService.prototype = {
           "UpdateService:downloadUpdate - no support for downloading more " +
             "than one update at a time"
         );
-        return true;
+        return Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS;
       }
       this._downloader.cancel();
     }
     this._downloader = new Downloader(this);
     return this._downloader.downloadUpdate(update);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  stopDownload: async function AUS_stopDownload() {
+  async stopDownload() {
+    await this.init();
+    return this.#stopDownload();
+  }
+
+  async #stopDownload() {
     if (this.isDownloading) {
       await this._downloader.cancel();
     } else if (this._retryTimer) {
@@ -4154,7 +4042,7 @@ UpdateService.prototype = {
       await this._downloader.cleanup();
     }
     this._downloader = null;
-  },
+  }
 
   /**
    * Note that this is different from checking if `currentState` is
@@ -4163,9 +4051,9 @@ UpdateService.prototype = {
    */
   get isDownloading() {
     return this._downloader && this._downloader.isBusy;
-  },
+  }
 
-  _logStatus: function AUS__logStatus() {
+  _logStatus() {
     if (!lazy.UpdateLog.enabled) {
       return;
     }
@@ -4188,6 +4076,7 @@ UpdateService.prototype = {
       "Other instance of the application currently running: " +
         this.isOtherInstanceHandlingUpdates
     );
+    LOG("Current update state: " + this.getStateName(gUpdateState));
     LOG("Downloading: " + !!this.isDownloading);
     if (this._downloader && this._downloader.isBusy) {
       LOG("Downloading complete update: " + this._downloader.isCompleteUpdate);
@@ -4211,21 +4100,21 @@ UpdateService.prototype = {
       }
     }
     LOG("End of UpdateService status");
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get onlyDownloadUpdatesThisSession() {
     return gOnlyDownloadUpdatesThisSession;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   set onlyDownloadUpdatesThisSession(newValue) {
     gOnlyDownloadUpdatesThisSession = newValue;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
@@ -4244,194 +4133,413 @@ UpdateService.prototype = {
         return "STATE_SWAP";
     }
     return `[unknown update state: ${state}]`;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get currentState() {
     return gUpdateState;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
   get stateTransition() {
     return gStateTransitionPromise.promise;
-  },
+  }
 
-  classID: UPDATESERVICE_CID,
-
-  QueryInterface: ChromeUtils.generateQI([
-    "nsIApplicationUpdateService",
-    "nsITimerCallback",
-    "nsIObserver",
-  ]),
-};
-
-/**
- * A service to manage active and past updates.
- * @constructor
- */
-export function UpdateManager() {
-  // Load the active-update.xml file to see if there is an active update.
-  let activeUpdates = this._loadXMLFileIntoArray(FILE_ACTIVE_UPDATE_XML);
-  if (activeUpdates.length) {
-    // Set the active update directly on the var used to cache the value.
-    this._readyUpdate = activeUpdates[0];
-    if (activeUpdates.length >= 2) {
-      this._downloadingUpdate = activeUpdates[1];
+  /**
+   * Either starts a BITS transfer job or connects to an existing one.
+   * When starting a job, it starts it with a name and path that make sense for
+   * an update MAR download.
+   *
+   * @param  parameters
+   *         A parameters object must be passed, in which `bitsId` or `url` must
+   *         be specified. If `bitsId` is specified (and not null), this will
+   *         connect to an existing transfer.
+   *           activeListeners
+   *             If `true`, this option specifies that there are active
+   *             listeners, so the faster "active" progress update polling rate
+   *             should be used.
+   *           bitsId
+   *             The ID of the job to connect to. If this is not passed, a new
+   *             transfer will be started.
+   *           observer
+   *             If specified, should be an instance of `nsIRequestObserver`
+   *             and, optionally, `nsIProgressEventSink`. This will be connected
+   *             to the `BitsRequest` that is returned.
+   *           url
+   *             The URL to download.
+   *           extraHeaders
+   *             String of extra headers to include, in the format accepted by
+   *             `IBackgroundCopyJobHttpOptions::SetCustomHeaders`: separated by
+   *             `\r\n`, terminated by an additional `\r\n`.
+   * @return Promise<BitsRequest>
+   *         Returns a request object
+   * @throws BitsError
+   *         On failure to connect to the BITS job.
+   */
+  async makeBitsRequest({
+    activeListeners = false,
+    bitsId,
+    observer,
+    url,
+    extraHeaders,
+  }) {
+    let noProgressTimeout = BITS_IDLE_NO_PROGRESS_TIMEOUT_SECS;
+    let monitorInterval = BITS_IDLE_POLL_RATE_MS;
+    // The monitor's timeout should be much greater than the longest monitor
+    // poll interval. If the timeout is too short, delay in the pipe to the
+    // update agent might cause BITS to falsely report an error, causing an
+    // unnecessary fallback to nsIIncrementalDownload.
+    let monitorTimeout = Math.max(10 * monitorInterval, 10 * 60 * 1000);
+    if (activeListeners) {
+      noProgressTimeout = BITS_ACTIVE_NO_PROGRESS_TIMEOUT_SECS;
+      monitorInterval = BITS_ACTIVE_POLL_RATE_MS;
     }
-    let status = readStatusFile(getReadyUpdateDir());
-    LOG(`UpdateManager:UpdateManager - status = "${status}"`);
-    // This check is performed here since UpdateService:_postUpdateProcessing
-    // won't be called when there isn't an update.status file.
-    if (status == STATE_NONE) {
-      // Under some edgecases such as Windows system restore the
-      // active-update.xml will contain a pending update without the status
-      // file. To recover from this situation clean the updates dir and move
-      // the active update to the update history.
-      LOG(
-        "UpdateManager:UpdateManager - Found update data with no status " +
-          "file. Cleaning up..."
+
+    let updateRootDir = FileUtils.getDir(KEY_UPDROOT, []);
+    try {
+      updateRootDir.create(
+        Ci.nsIFile.DIRECTORY_TYPE,
+        FileUtils.PERMS_DIRECTORY
       );
-      this._readyUpdate.state = STATE_FAILED;
-      this._readyUpdate.errorCode = ERR_UPDATE_STATE_NONE;
-      this._readyUpdate.statusText =
-        lazy.gUpdateBundle.GetStringFromName("statusFailed");
-      let newStatus = STATE_FAILED + ": " + ERR_UPDATE_STATE_NONE;
-      pingStateAndStatusCodes(this._readyUpdate, true, newStatus);
-      this.addUpdateToHistory(this._readyUpdate);
-      this._readyUpdate = null;
-      this.saveUpdates();
-      cleanUpReadyUpdateDir();
-      cleanUpDownloadingUpdateDir();
-    } else if (status == STATE_DOWNLOADING) {
-      // The first update we read out of activeUpdates may not be the ready
-      // update, it may be the downloading update.
-      if (this._downloadingUpdate) {
-        // If the first update we read is a downloading update, it's
-        // unexpected to have read another active update. That would seem to
-        // indicate that we were downloading two updates at once, which we don't
-        // do.
-        LOG(
-          "UpdateManager:UpdateManager - Warning: Found and discarded a " +
-            "second downloading update."
-        );
+    } catch (ex) {
+      if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
+        throw ex;
       }
-      this._downloadingUpdate = this._readyUpdate;
-      this._readyUpdate = null;
+      // Ignore the exception due to a directory that already exists.
+    }
+
+    let jobName = "MozillaUpdate " + updateRootDir.leafName;
+    let updatePath = getDownloadingUpdateDir().path;
+    if (!Bits.initialized) {
+      Bits.init(jobName, updatePath, monitorTimeout);
+    }
+
+    if (bitsId) {
+      LOG(
+        "UpdateService:makeBitsRequest - Connecting to in-progress download. " +
+          "BITS ID: " +
+          bitsId
+      );
+
+      return Bits.monitorDownload(bitsId, monitorInterval, observer, null);
+    }
+
+    LOG(
+      "UpdateService:makeBitsRequest - Starting BITS download with url: " +
+        url +
+        ", updateDir: " +
+        updatePath +
+        ", filename: " +
+        FILE_UPDATE_MAR
+    );
+
+    return Bits.startDownload(
+      url,
+      FILE_UPDATE_MAR,
+      Ci.nsIBits.PROXY_PRECONFIG,
+      noProgressTimeout,
+      monitorInterval,
+      extraHeaders,
+      observer,
+      null
+    );
+  }
+
+  /**
+   * Get rid of a downloading update. This is generally done before cleaning it
+   * up.
+   *
+   * Connects to the in-progress BITS job in order to cancel it, if necessary.
+   * This is generally only necessary when cancelling a job at startup,
+   * otherwise we would have connected to it already.
+   *
+   * If there is not an in-progress download, this has no effect.
+   */
+  async cancelDownloadingUpdate() {
+    if (this.isDownloading) {
+      LOG(
+        "UpdateService:cancelDownloadingUpdate - Job is connected already. Stopping."
+      );
+      await this.internal.stopDownload();
+      return;
+    }
+
+    // If we didn't return above, either we haven't connected to the BITS job
+    // yet or there is no BITS job and nothing to cancel.
+
+    if (!lazy.UM.internal.downloadingUpdate) {
+      LOG(
+        "UpdateService:cancelDownloadingUpdate - Not cleaning up BITS Job. No update."
+      );
+      return;
+    }
+    const patch = lazy.UM.internal.downloadingUpdate.selectedPatch;
+    if (!patch || !patch.QueryInterface(Ci.nsIWritablePropertyBag)) {
+      LOG(
+        "UpdateService:cancelDownloadingUpdate - Not cleaning up BITS Job. No patch."
+      );
+      return;
+    }
+    const bitsId = patch.getProperty("bitsId");
+    if (!bitsId) {
+      LOG(
+        "UpdateService:cancelDownloadingUpdate - Not cleaning up BITS Job. No BITS ID."
+      );
+      return;
+    }
+    // If `!this.isDownloading`, we are not connected to the BITS request, which
+    // we need to do to stop a BITS download.
+    try {
+      const request = await this.makeBitsRequest({ bitsId });
+      await request.cancelAsync();
+    } catch (ex) {
+      LOG(
+        `UpdateService:cancelDownloadingUpdate - Failed to clean up BITS Job ${bitsId}: ${ex}`
+      );
+      return;
+    }
+    LOG(
+      `UpdateService:cancelDownloadingUpdate - Successfully cleaned up BITS Job ${bitsId}`
+    );
+  }
+
+  /**
+   * Writes a timestamp for the end of the install lockout timeout to
+   * 'update.timestamp'. Before this timestamp, Firefox will only install
+   * updates at startup if there are no other instances running. After this
+   * timestamp, Firefox will install updates at startup even if there are other
+   * instances running.
+   *
+   * Unless this is the initial write of this file, this function only writes to
+   * the file when we are reasonably sure we know when the timer ought to have
+   * started (i.e. when the update download finished). We want to make sure that
+   * we aren't writing a timestamp based on the current time to this file.
+   *
+   * If the update timeout feature is not enabled, this instead removes the
+   * timeout file, if present.
+   *
+   * @param  options
+   *         An optional object containing any of these keys:
+   *           dir
+   *             The patch directory where the update.timestamp file should be
+   *             written. Defaults to using `getReadyUpdateDir()`.
+   *           update
+   *             The nsIUpdate to write the timestamp for. Defaults to the
+   *             current `readyUpdate`.
+   *           isInitialWrite
+   *             Should be `true` if this is the first write of the timestamp
+   *             file for this update. If this is `true`, `update` must have a
+   *             valid `installDate` set (`usingDefaultInstallDate == false`).
+   */
+  async writeTimestampFile({ dir, update, isInitialWrite = false } = {}) {
+    if (!update) {
+      update = lazy.UM.internal.readyUpdate;
+    }
+    if (!update) {
+      LOG(
+        "UpdateService:writeTimestampFile - Not writing timestamp file. No update."
+      );
+      return;
+    }
+
+    const timeoutsEnabled = Services.prefs.getBoolPref(
+      PREF_APP_UPDATE_INSTALL_LOCKOUT_ENABLED,
+      true
+    );
+    if (timeoutsEnabled && update.usingDefaultInstallDate && !isInitialWrite) {
+      LOG(
+        "UpdateService:writeTimestampFile - Skipping timestamp update. Lack of valid data."
+      );
+      return;
+    }
+
+    const timestampFile = dir ? dir.clone() : getReadyUpdateDir();
+    timestampFile.append(FILE_UPDATE_TIMESTAMP);
+
+    const timeoutMs = Services.prefs.getIntPref(
+      PREF_APP_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS,
+      DEFAULT_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS
+    );
+
+    if (timeoutsEnabled && timeoutMs > 0) {
+      const timestampMs = Math.min(
+        update.installDate + timeoutMs,
+        Date.now() + MAX_UPDATE_INSTALL_LOCKOUT_TIMEOUT_MS
+      );
+      LOG(
+        `UpdateService:writeTimestampFile - Writing ${new Date(
+          timestampMs
+        )} (${timestampMs})`
+      );
+      writeStringToFile(timestampFile, timestampMs);
+    } else {
+      LOG(
+        `UpdateService:writeTimestampFile - Removing file. Feature ` +
+          `Enabled=${timeoutsEnabled}, Timeout=${timeoutMs}ms`
+      );
+      try {
+        await IOUtils.remove(timestampFile.path, { ignoreAbsent: true });
+      } catch (ex) {
+        LOG("UpdateService:writeTimestampFile - Failed to remove file: " + ex);
+      }
     }
   }
 
-  LOG(
-    "UpdateManager:UpdateManager - Initialized downloadingUpdate to " +
-      this._downloadingUpdate
-  );
-  if (this._downloadingUpdate) {
-    LOG(
-      "UpdateManager:UpdateManager - Initialized downloadingUpdate state to " +
-        this._downloadingUpdate.state
-    );
-  }
-  LOG(
-    "UpdateManager:UpdateManager - Initialized readyUpdate to " +
-      this._readyUpdate
-  );
-  if (this._readyUpdate) {
-    LOG(
-      "UpdateManager:UpdateManager - Initialized readyUpdate state to " +
-        this._readyUpdate.state
-    );
-  }
+  classID = UPDATESERVICE_CID;
+
+  QueryInterface = ChromeUtils.generateQI([
+    Ci.nsIApplicationUpdateService,
+    Ci.nsITimerCallback,
+    Ci.nsIObserver,
+  ]);
 }
 
-UpdateManager.prototype = {
+export class UpdateManager {
   /**
    * The nsIUpdate object for the update that has been downloaded.
    */
-  _readyUpdate: null,
+  _readyUpdate = null;
 
   /**
    * The nsIUpdate object for the update currently being downloaded.
    */
-  _downloadingUpdate: null,
+  _downloadingUpdate = null;
 
   /**
    * Whether the update history stored in _updates has changed since it was
    * loaded.
    */
-  _updatesDirty: false,
+  _updatesDirty = false;
 
   /**
-   * See nsIObserver.idl
+   * The backing for `nsIUpdateManager.updateInstalledAtStartup`.
    */
-  observe: function UM_observe(subject, topic, data) {
-    // Hack to be able to run and cleanup tests by reloading the update data.
-    if (topic == "um-reload-update-data") {
-      if (!Cu.isInAutomation) {
-        return;
-      }
-      LOG("UpdateManager:observe - Reloading update data.");
-      if (this._updatesXMLSaver) {
-        this._updatesXMLSaver.disarm();
-      }
+  #updateInstalledAtStartup = null;
 
-      let updates = [];
-      this._updatesDirty = true;
-      this._readyUpdate = null;
-      this._downloadingUpdate = null;
-      transitionState(Ci.nsIApplicationUpdateService.STATE_IDLE);
-      if (data != "skip-files") {
-        let activeUpdates = this._loadXMLFileIntoArray(FILE_ACTIVE_UPDATE_XML);
-        if (activeUpdates.length) {
-          this._readyUpdate = activeUpdates[0];
-          if (activeUpdates.length >= 2) {
-            this._downloadingUpdate = activeUpdates[1];
-          }
-          let status = readStatusFile(getReadyUpdateDir());
-          LOG(`UpdateManager:observe - Got status = ${status}`);
-          if (status == STATE_DOWNLOADING) {
-            this._downloadingUpdate = this._readyUpdate;
-            this._readyUpdate = null;
-            transitionState(Ci.nsIApplicationUpdateService.STATE_DOWNLOADING);
-          } else if (
-            [
-              STATE_PENDING,
-              STATE_PENDING_SERVICE,
-              STATE_PENDING_ELEVATE,
-              STATE_APPLIED,
-              STATE_APPLIED_SERVICE,
-            ].includes(status)
-          ) {
-            transitionState(Ci.nsIApplicationUpdateService.STATE_PENDING);
-          }
-        }
-        updates = this._loadXMLFileIntoArray(FILE_UPDATES_XML);
-      }
-      this._updatesCache = updates;
+  /**
+   * A service to manage active and past updates.
+   * @constructor
+   */
+  constructor() {
+    this.internal = {
+      reload: async skipFiles => this.#reload(skipFiles),
+      getHistory: () => this.#getHistory(),
+      addUpdateToHistory: update => this.#addUpdateToHistory(update),
+      refreshUpdateStatus: async () => this.#refreshUpdateStatus(),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateManagerInternal]),
+    };
 
-      LOG(
-        "UpdateManager:observe - Reloaded downloadingUpdate as " +
-          this._downloadingUpdate
-      );
-      if (this._downloadingUpdate) {
-        LOG(
-          "UpdateManager:observe - Reloaded downloadingUpdate state as " +
-            this._downloadingUpdate.state
-        );
-      }
-      LOG(
-        "UpdateManager:observe - Reloaded readyUpdate as " + this._readyUpdate
-      );
-      if (this._readyUpdate) {
-        LOG(
-          "UpdateManager:observe - Reloaded readyUpdate state as " +
-            this._readyUpdate.state
-        );
-      }
+    Object.defineProperty(this.internal, "readyUpdate", {
+      get: () => this._readyUpdate,
+      set: update => {
+        this._readyUpdate = update;
+      },
+    });
+
+    Object.defineProperty(this.internal, "downloadingUpdate", {
+      get: () => this._downloadingUpdate,
+      set: update => {
+        this._downloadingUpdate = update;
+      },
+    });
+  }
+
+  /**
+   * See `nsIUpdateManagerInternal.reload` in nsIUpdateService.idl
+   */
+  async #reload(skipFiles) {
+    LOG("UpdateManager:#reload - Reloading update data.");
+    if (this._updatesXMLSaver) {
+      this._updatesXMLSaver.disarm();
     }
-  },
+
+    let updates = [];
+    this._updatesDirty = skipFiles;
+    this._readyUpdate = null;
+    this._downloadingUpdate = null;
+    this.#updateInstalledAtStartup = null;
+    transitionState(Ci.nsIApplicationUpdateService.STATE_IDLE);
+    if (!skipFiles) {
+      // Load the active-update.xml file to see if there is an active update.
+      let activeUpdates = this._loadXMLFileIntoArray(FILE_ACTIVE_UPDATE_XML);
+      if (activeUpdates.length) {
+        const status = readStatusFile(getReadyUpdateDir());
+
+        // If there are two updates, the first one is the ready update.
+        // If there is only 1 update, we don't know which is which. We use the
+        // state to figure it out.
+        if (activeUpdates.length > 1) {
+          this._readyUpdate = activeUpdates[0];
+          this._downloadingUpdate = activeUpdates[1];
+          if (activeUpdates.length > 2) {
+            LOG(
+              "UpdateManager:#reload - Warning: Ignoring additional (>2) " +
+                "unexpected active updates"
+            );
+          }
+        } else if (
+          status == STATE_DOWNLOADING ||
+          activeUpdates[0].state == STATE_DOWNLOADING
+        ) {
+          this._downloadingUpdate = activeUpdates[0];
+          transitionState(Ci.nsIApplicationUpdateService.STATE_DOWNLOADING);
+        } else {
+          this._readyUpdate = activeUpdates[0];
+        }
+
+        LOG(`UpdateManager:#reload - Got status = ${status}`);
+        if (
+          [
+            STATE_PENDING,
+            STATE_PENDING_SERVICE,
+            STATE_PENDING_ELEVATE,
+            STATE_APPLIED,
+            STATE_APPLIED_SERVICE,
+          ].includes(status)
+        ) {
+          transitionState(Ci.nsIApplicationUpdateService.STATE_PENDING);
+        }
+        if (status == STATE_SUCCEEDED && this._readyUpdate) {
+          this.#updateInstalledAtStartup = this._readyUpdate;
+          // Bug 1889785 - When deciding whether or not to show a What's New Page, we
+          // rely on both `Services.appinfo.platformVersion` and this value. But Balrog
+          // doesn't guarantee that the value that it sends will match appinfo.
+          // We synchronize the values here so they are consistent.
+          this.#updateInstalledAtStartup.platformVersion =
+            Services.appinfo.platformVersion;
+          this.saveUpdates();
+        }
+      }
+      updates = this._loadXMLFileIntoArray(FILE_UPDATES_XML);
+    }
+    this._updatesCache = updates;
+
+    LOG(
+      "UpdateManager:#reload - Reloaded downloadingUpdate as " +
+        this._downloadingUpdate
+    );
+    if (this._downloadingUpdate) {
+      LOG(
+        "UpdateManager:#reload - Reloaded downloadingUpdate state as " +
+          this._downloadingUpdate.state
+      );
+    }
+    LOG("UpdateManager:#reload - Reloaded readyUpdate as " + this._readyUpdate);
+    if (this._readyUpdate) {
+      LOG(
+        "UpdateManager:#reload - Reloaded readyUpdate state as " +
+          this._readyUpdate.state
+      );
+    }
+    LOG(
+      "UpdateManager:UpdateManager - Reloaded updateInstalledAtStartup as  " +
+        this.#updateInstalledAtStartup
+    );
+  }
 
   /**
    * Loads an updates.xml formatted file into an array of nsIUpdate items.
@@ -4439,7 +4547,7 @@ UpdateManager.prototype = {
    *          The file name in the updates directory to load.
    * @return  The array of nsIUpdate items held in the file.
    */
-  _loadXMLFileIntoArray: function UM__loadXMLFileIntoArray(fileName) {
+  _loadXMLFileIntoArray(fileName) {
     let updates = [];
     let file = getUpdateFile([fileName]);
     if (!file.exists()) {
@@ -4528,7 +4636,12 @@ UpdateManager.prototype = {
       }
     }
     return updates;
-  },
+  }
+
+  #getHistory() {
+    const history = this._getUpdates();
+    return [...history];
+  }
 
   /**
    * Loads the update history from the updates.xml file into a cache.
@@ -4538,52 +4651,66 @@ UpdateManager.prototype = {
       this._updatesCache = this._loadXMLFileIntoArray(FILE_UPDATES_XML);
     }
     return this._updatesCache;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  getUpdateAt: function UM_getUpdateAt(aIndex) {
-    return this._getUpdates()[aIndex];
-  },
+  async getHistory() {
+    await lazy.AUS.init();
+    return lazy.UM.internal.getHistory();
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  getUpdateCount() {
-    return this._getUpdates().length;
-  },
-
-  /**
-   * See nsIUpdateService.idl
-   */
-  get readyUpdate() {
+  async getReadyUpdate() {
+    await lazy.AUS.init();
     return this._readyUpdate;
-  },
-  set readyUpdate(aUpdate) {
-    this._readyUpdate = aUpdate;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  get downloadingUpdate() {
+  async getDownloadingUpdate() {
+    await lazy.AUS.init();
     return this._downloadingUpdate;
-  },
-  set downloadingUpdate(aUpdate) {
-    this._downloadingUpdate = aUpdate;
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  addUpdateToHistory(aUpdate) {
+  async updateInstalledAtStartup() {
+    await lazy.AUS.init();
+    return this.#updateInstalledAtStartup;
+  }
+
+  /**
+   * See nsIUpdateService.idl
+   */
+  async lastUpdateInstalled() {
+    await lazy.AUS.init();
+    if (this.#updateInstalledAtStartup) {
+      return this.#updateInstalledAtStartup;
+    }
+    return this._getUpdates().find(u => u.state == STATE_SUCCEEDED) ?? null;
+  }
+
+  #addUpdateToHistory(aUpdate) {
     this._updatesDirty = true;
     let updates = this._getUpdates();
     updates.unshift(aUpdate);
     // Limit the update history to 10 updates.
     updates.splice(10);
-  },
+  }
+
+  /**
+   * See nsIUpdateService.idl
+   */
+  async addUpdateToHistory(aUpdate) {
+    await lazy.AUS.init();
+    this.#addUpdateToHistory(aUpdate);
+  }
 
   /**
    * Serializes an array of updates to an XML file or removes the file if the
@@ -4594,10 +4721,7 @@ UpdateManager.prototype = {
    *          The file name in the updates directory to write to.
    * @return  true on success, false on error
    */
-  _writeUpdatesToXMLFile: async function UM__writeUpdatesToXMLFile(
-    updates,
-    fileName
-  ) {
+  async _writeUpdatesToXMLFile(updates, fileName) {
     let file;
     try {
       file = getUpdateFile([fileName]);
@@ -4656,14 +4780,14 @@ UpdateManager.prototype = {
       return false;
     }
     return true;
-  },
+  }
 
-  _updatesXMLSaver: null,
-  _updatesXMLSaverCallback: null,
+  _updatesXMLSaver = null;
+  _updatesXMLSaverCallback = null;
   /**
    * See nsIUpdateService.idl
    */
-  saveUpdates: function UM_saveUpdates() {
+  saveUpdates() {
     if (!this._updatesXMLSaver) {
       this._updatesXMLSaverCallback = () => this._updatesXMLSaver.finalize();
 
@@ -4680,13 +4804,13 @@ UpdateManager.prototype = {
     }
 
     this._updatesXMLSaver.arm();
-  },
+  }
 
   /**
    * Saves the active-updates.xml and updates.xml when the updates history has
    * been modified files.
    */
-  _saveUpdatesXML: function UM__saveUpdatesXML() {
+  _saveUpdatesXML() {
     // This mechanism for how we store the updates might seem a bit odd, since,
     // if only one update is stored, we don't know if it's the ready update or
     // the downloading update. However, we can determine which it is by reading
@@ -4718,14 +4842,20 @@ UpdateManager.prototype = {
       );
     }
     return Promise.all(promises);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  refreshUpdateStatus: async function UM_refreshUpdateStatus() {
+  async refreshUpdateStatus() {
+    return this.#refreshUpdateStatus();
+  }
+
+  async #refreshUpdateStatus() {
     try {
       LOG("UpdateManager:refreshUpdateStatus - Staging done.");
+
+      await lazy.AUS.init();
 
       var update = this._readyUpdate;
       if (!update) {
@@ -4855,13 +4985,14 @@ UpdateManager.prototype = {
         transitionState(Ci.nsIApplicationUpdateService.STATE_IDLE);
       }
     }
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  elevationOptedIn: function UM_elevationOptedIn() {
+  async elevationOptedIn() {
     // The user has been been made aware that the update requires elevation.
+    await lazy.AUS.init();
     let update = this._readyUpdate;
     if (!update) {
       return;
@@ -4884,31 +5015,44 @@ UpdateManager.prototype = {
     } else {
       LOG("UpdateManager:elevationOptedIn - Not in pending-elevate state.");
     }
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  cleanupDownloadingUpdate: function UM_cleanupDownloadingUpdate() {
+  async cleanupDownloadingUpdate() {
     LOG(
       "UpdateManager:cleanupDownloadingUpdate - cleaning up downloading update."
     );
-    cleanupDownloadingUpdate();
-  },
+    await lazy.AUS.init();
+    await cleanupDownloadingUpdate();
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  cleanupReadyUpdate: function UM_cleanupReadyUpdate() {
+  async cleanupReadyUpdate() {
     LOG("UpdateManager:cleanupReadyUpdate - cleaning up ready update.");
+    await lazy.AUS.init();
     cleanupReadyUpdate();
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  doInstallCleanup: async function UM_doInstallCleanup() {
+  async cleanupActiveUpdates() {
+    LOG("UpdateManager:cleanupActiveUpdates - cleaning up active updates.");
+    await lazy.AUS.init();
+    await cleanupActiveUpdates();
+  }
+
+  /**
+   * See nsIUpdateService.idl
+   */
+  async doInstallCleanup() {
     LOG("UpdateManager:doInstallCleanup - cleaning up");
+    await lazy.AUS.init();
+
     let completionPromises = [];
 
     const delete_or_log = path =>
@@ -4944,13 +5088,14 @@ UpdateManager.prototype = {
     }
 
     return Promise.allSettled(completionPromises);
-  },
+  }
 
   /**
    * See nsIUpdateService.idl
    */
-  doUninstallCleanup: async function UM_doUninstallCleanup() {
+  async doUninstallCleanup() {
     LOG("UpdateManager:doUninstallCleanup - cleaning up.");
+    await lazy.AUS.init();
     let completionPromises = [];
 
     completionPromises.push(
@@ -4965,11 +5110,11 @@ UpdateManager.prototype = {
     );
 
     return Promise.allSettled(completionPromises);
-  },
+  }
 
-  classID: Components.ID("{093C2356-4843-4C65-8709-D7DBCBBE7DFB}"),
-  QueryInterface: ChromeUtils.generateQI(["nsIUpdateManager", "nsIObserver"]),
-};
+  classID = Components.ID("{093C2356-4843-4C65-8709-D7DBCBBE7DFB}");
+  QueryInterface = ChromeUtils.generateQI([Ci.nsIUpdateManager]);
+}
 
 /**
  * CheckerService
@@ -4994,6 +5139,13 @@ export class CheckerService {
   // checks being cancelled) or completed, its key will be removed from this
   // object.
   #updateCheckData = {};
+
+  constructor() {
+    this.internal = {
+      checkForUpdates: checkType => this.#checkForUpdates(checkType, true),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheckerInternal]),
+    };
+  }
 
   #makeUpdateCheckDataObject(type, promise) {
     return { type, promise, request: null };
@@ -5146,8 +5298,16 @@ export class CheckerService {
   /**
    * See nsIUpdateService.idl
    */
-
   checkForUpdates(checkType) {
+    return this.#checkForUpdates(checkType, false);
+  }
+
+  #checkForUpdates(checkType, internal) {
+    // Note that we should run update initialization if it was invoked
+    // externally (i.e. `internal == false`). But initialization is async and
+    // the asynchronous work of this function happens in `this.#updateCheck`, so
+    // we will delay initialization until then.
+
     LOG("CheckerService:checkForUpdates - checkType: " + checkType);
     if (!this.#validUpdateCheckType(checkType)) {
       LOG("CheckerService:checkForUpdates - Invalid checkType");
@@ -5157,7 +5317,7 @@ export class CheckerService {
     let checkId = this.#nextUpdateCheckId;
     this.#nextUpdateCheckId += 1;
 
-    // `checkType == FOREGROUND_CHECK`` can override `canCheckForUpdates`. But
+    // `checkType == FOREGROUND_CHECK` can override `canCheckForUpdates`. But
     // nothing should override enterprise policies.
     if (lazy.AUS.disabled) {
       LOG("CheckerService:checkForUpdates - disabled by policy");
@@ -5190,7 +5350,7 @@ export class CheckerService {
       );
       this.#updateCheckData[requestKey] = this.#makeUpdateCheckDataObject(
         checkType,
-        this.#updateCheck(checkType, requestKey)
+        this.#updateCheck(checkType, requestKey, internal)
       );
     }
 
@@ -5199,7 +5359,7 @@ export class CheckerService {
     return {
       id: checkId,
       result: this.#updateCheckData[requestKey].promise,
-      QueryInterface: ChromeUtils.generateQI(["nsIUpdateCheck"]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheck]),
     };
   }
 
@@ -5212,15 +5372,17 @@ export class CheckerService {
           succeeded: false,
           request: null,
           updates: [],
-          QueryInterface: ChromeUtils.generateQI(["nsIUpdateCheckResult"]),
+          QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheckResult]),
         })
       ),
-      QueryInterface: ChromeUtils.generateQI(["nsIUpdateCheck"]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheck]),
     };
   }
 
-  async #updateCheck(checkType, requestKey) {
-    await waitForOtherInstances();
+  async #updateCheck(checkType, requestKey, internal) {
+    if (!internal) {
+      await lazy.AUS.init();
+    }
 
     let url;
     try {
@@ -5240,9 +5402,8 @@ export class CheckerService {
     request.channel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
     // Disable cutting edge features, like TLS 1.3, where middleboxes might
     // brick us
-    request.channel.QueryInterface(
-      Ci.nsIHttpChannelInternal
-    ).beConservative = true;
+    request.channel.QueryInterface(Ci.nsIHttpChannelInternal).beConservative =
+      true;
 
     request.overrideMimeType("text/xml");
     // The Cache-Control header is only interpreted by proxies and the
@@ -5310,7 +5471,11 @@ export class CheckerService {
       // Set MitM pref.
       try {
         let secInfo = request.channel.securityInfo;
-        if (secInfo.serverCert && secInfo.serverCert.issuerName) {
+        if (
+          secInfo.errorCodeString == "SEC_ERROR_UNKNOWN_ISSUER" &&
+          secInfo.serverCert &&
+          secInfo.serverCert.issuerName
+        ) {
           Services.prefs.setStringPref(
             "security.pki.mitm_canary_issuer",
             secInfo.serverCert.issuerName
@@ -5370,7 +5535,7 @@ export class CheckerService {
       succeeded: true,
       request,
       updates,
-      QueryInterface: ChromeUtils.generateQI(["nsIUpdateCheckResult"]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheckResult]),
     });
   }
 
@@ -5408,7 +5573,7 @@ export class CheckerService {
       succeeded: false,
       request,
       updates: [update],
-      QueryInterface: ChromeUtils.generateQI(["nsIUpdateCheckResult"]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateCheckResult]),
     });
   }
 
@@ -5523,51 +5688,38 @@ export class CheckerService {
   }
 
   classID = Components.ID("{898CDC9B-E43F-422F-9CC4-2F6291B415A3}");
-  QueryInterface = ChromeUtils.generateQI(["nsIUpdateChecker"]);
+  QueryInterface = ChromeUtils.generateQI([Ci.nsIUpdateChecker]);
 }
 
-/**
- * Manages the download of updates
- * @param   background
- *          Whether or not this downloader is operating in background
- *          update mode.
- * @param   updateService
- *          The update service that created this downloader.
- * @constructor
- */
-function Downloader(updateService) {
-  LOG("Creating Downloader");
-  this.updateService = updateService;
-}
-Downloader.prototype = {
+class Downloader {
   /**
    * The nsIUpdatePatch that we are downloading
    */
-  _patch: null,
+  _patch = null;
 
   /**
    * The nsIUpdate that we are downloading
    */
-  _update: null,
+  _update = null;
 
   /**
    * The nsIRequest object handling the download.
    */
-  _request: null,
+  _request = null;
 
   /**
    * Whether or not the update being downloaded is a complete replacement of
    * the user's existing installation or a patch representing the difference
    * between the new version and the previous version.
    */
-  isCompleteUpdate: null,
+  isCompleteUpdate = null;
 
   /**
    * We get the nsIRequest from nsIBITS asynchronously. When downloadUpdate has
    * been called, but this._request is not yet valid, _pendingRequest will be
    * a promise that will resolve when this._request has been set.
    */
-  _pendingRequest: null,
+  _pendingRequest = null;
 
   /**
    * When using BITS, cancel actions happen asynchronously. This variable
@@ -5577,7 +5729,7 @@ Downloader.prototype = {
    * resolved promise will remain stored in this variable to prevent cancel
    * from being called twice (which, for BITS, is an error).
    */
-  _cancelPromise: null,
+  _cancelPromise = null;
 
   /**
    * BITS receives progress notifications slowly, unless a user is watching.
@@ -5591,14 +5743,14 @@ Downloader.prototype = {
    * we don't know if we need to start Active mode when _pendingRequest
    * resolves.
    */
-  _bitsActiveNotifications: false,
+  _bitsActiveNotifications = false;
 
   /**
    * This is a function that when called will stop the update process from
    * waiting for language pack updates. This is for safety to ensure that a
    * problem in the add-ons manager doesn't delay updates by much.
    */
-  _langPackTimeout: null,
+  _langPackTimeout = null;
 
   /**
    * If gOnlyDownloadUpdatesThisSession is true, we prevent the update process
@@ -5606,7 +5758,21 @@ Downloader.prototype = {
    * pretend that it hasn't in order to keep the current update in the
    * "downloading" state.
    */
-  _pretendingDownloadIsNotDone: false,
+  _pretendingDownloadIsNotDone = false;
+
+  /**
+   * Manages the download of updates
+   * @param   background
+   *          Whether or not this downloader is operating in background
+   *          update mode.
+   * @param   updateService
+   *          The update service that created this downloader.
+   * @constructor
+   */
+  constructor(updateService) {
+    LOG("Creating Downloader");
+    this.updateService = updateService;
+  }
 
   /**
    * Cancels the active download.
@@ -5615,7 +5781,7 @@ Downloader.prototype = {
    * an nsIIncrementalDownload, this will stop the download, but leaves the
    * data around to allow the transfer to be resumed later.
    */
-  cancel: async function Downloader_cancel(cancelError) {
+  async cancel(cancelError) {
     LOG("Downloader: cancel");
     if (cancelError === undefined) {
       cancelError = Cr.NS_BINDING_ABORTED;
@@ -5664,13 +5830,13 @@ Downloader.prototype = {
         this._request.cancel(cancelError);
       }
     }
-  },
+  }
 
   /**
    * Verify the downloaded file.  We assume that the download is complete at
    * this point.
    */
-  _verifyDownload: function Downloader__verifyDownload() {
+  _verifyDownload() {
     LOG("Downloader:_verifyDownload called");
     if (!this._request) {
       AUSTLMY.pingDownloadCode(
@@ -5695,7 +5861,7 @@ Downloader.prototype = {
 
     LOG("Downloader:_verifyDownload downloaded size == expected size.");
     return true;
-  },
+  }
 
   /**
    * Select the patch to use given the current state of updateDir and the given
@@ -5704,7 +5870,7 @@ Downloader.prototype = {
    *          A nsIUpdate object to select a patch from
    * @return  A nsIUpdatePatch object to download
    */
-  _selectPatch: function Downloader__selectPatch(update) {
+  async _selectPatch(update) {
     // Given an update to download, we will always try to download the patch
     // for a partial update over the patch for a full update.
 
@@ -5762,7 +5928,7 @@ Downloader.prototype = {
       if (update && selectedPatch.type == "complete") {
         // This is a pretty fatal error.  Just bail.
         LOG("Downloader:_selectPatch - failed to apply complete patch!");
-        cleanupDownloadingUpdate();
+        await cleanupDownloadingUpdate();
         return null;
       }
 
@@ -5779,7 +5945,7 @@ Downloader.prototype = {
       selectedPatch = partialPatch;
     }
     if (!selectedPatch) {
-      if (lazy.UM.readyUpdate) {
+      if (lazy.UM.internal.readyUpdate) {
         // If we already have a ready update, we download partials only.
         LOG(
           "Downloader:_selectPatch - not selecting a complete patch because " +
@@ -5806,10 +5972,10 @@ Downloader.prototype = {
       "Downloader:_selectPatch - Patch selected. Assigning update to " +
         "downloadingUpdate."
     );
-    lazy.UM.downloadingUpdate = update;
+    lazy.UM.internal.downloadingUpdate = update;
 
     return selectedPatch;
-  },
+  }
 
   /**
    * Whether or not the user wants to be notified that an update is being
@@ -5820,35 +5986,30 @@ Downloader.prototype = {
       PREF_APP_UPDATE_NOTIFYDURINGDOWNLOAD,
       false
     );
-  },
+  }
 
-  _notifyDownloadStatusObservers:
-    function Downloader_notifyDownloadStatusObservers() {
-      if (this._notifyDuringDownload) {
-        let status = this.updateService.isDownloading ? "downloading" : "idle";
-        Services.obs.notifyObservers(
-          this._update,
-          "update-downloading",
-          status
-        );
-      }
-    },
+  _notifyDownloadStatusObservers() {
+    if (this._notifyDuringDownload) {
+      let status = this.updateService.isDownloading ? "downloading" : "idle";
+      Services.obs.notifyObservers(this._update, "update-downloading", status);
+    }
+  }
 
   /**
    * Whether or not we are currently downloading something.
    */
   get isBusy() {
     return this._request != null || this._pendingRequest != null;
-  },
+  }
 
   get usingBits() {
     return this._pendingRequest != null || this._request instanceof BitsRequest;
-  },
+  }
 
   /**
    * Returns true if the specified patch can be downloaded with BITS.
    */
-  _canUseBits: function Downloader__canUseBits(patch) {
+  _canUseBits(patch) {
     if (getCanUseBits() != "CanUseBits") {
       // This will have printed its own logging. No need to print more.
       return false;
@@ -5863,13 +6024,13 @@ Downloader.prototype = {
     }
     LOG("Downloader:_canUseBits - Patch is able to use BITS download");
     return true;
-  },
+  }
 
   /**
    * Instruct the add-ons manager to start downloading language pack updates in
    * preparation for the current update.
    */
-  _startLangPackUpdates: function Downloader__startLangPackUpdates() {
+  _startLangPackUpdates() {
     if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_LANGPACK_ENABLED, false)) {
       return;
     }
@@ -5912,15 +6073,72 @@ Downloader.prototype = {
       update,
       Promise.race([langPackPromise, timeoutPromise])
     );
-  },
+  }
+
+  /**
+   * Given a patch URL, return a URL possibly modified with extra query
+   * parameters and extra headers.  The extras help identify whether this update
+   * is driven by a regular browsing Firefox or by a background update task.
+   *
+   * @param {string} [patchURL] Unmodified patch URL.
+   * @return { url, extraHeaders }
+   */
+  _maybeWithExtras(patchURL) {
+    let shouldAddExtras = true;
+    if (AppConstants.MOZ_APP_NAME !== "firefox") {
+      shouldAddExtras = false;
+    }
+    if (Services.policies) {
+      let policies = Services.policies.getActivePolicies();
+      if (policies) {
+        if ("AppUpdateURL" in policies) {
+          shouldAddExtras = false;
+        }
+      }
+    }
+
+    if (!shouldAddExtras) {
+      LOG("Downloader:_maybeWithExtras - Not adding extras");
+      return { url: patchURL, extraHeaders: "\r\n" };
+    }
+
+    LOG("Downloader:_maybeWithExtras - Adding extras");
+
+    let modeStr = lazy.gIsBackgroundTaskMode ? "1" : "0";
+    let extraHeaders = `X-BackgroundTaskMode: ${modeStr}\r\n`;
+    let extraParameters = [["backgroundTaskMode", modeStr]];
+
+    if (lazy.gIsBackgroundTaskMode) {
+      const bts = Cc["@mozilla.org/backgroundtasks;1"].getService(
+        Ci.nsIBackgroundTasks
+      );
+      extraHeaders += `X-BackgroundTaskName: ${bts.backgroundTaskName()}\r\n`;
+      extraParameters.push(["backgroundTaskName", bts.backgroundTaskName()]);
+    }
+
+    extraHeaders += "\r\n";
+
+    let url = patchURL;
+    let parsedUrl = URL.parse(url);
+    if (parsedUrl) {
+      for (let [p, v] of extraParameters) {
+        parsedUrl.searchParams.set(p, v);
+      }
+      url = parsedUrl.href;
+    } else {
+      LOG("Downloader:_maybeWithExtras - Failed to parse patch URL!");
+    }
+
+    return { url, extraHeaders };
+  }
 
   /**
    * Download and stage the given update.
    * @param   update
    *          A nsIUpdate object to download a patch for. Cannot be null.
    */
-  downloadUpdate: async function Downloader_downloadUpdate(update) {
-    LOG("UpdateService:downloadUpdate");
+  async downloadUpdate(update) {
+    LOG("Downloader:downloadUpdate");
     if (!update) {
       AUSTLMY.pingDownloadCode(undefined, AUSTLMY.DWNLD_ERR_NO_UPDATE);
       throw Components.Exception("", Cr.NS_ERROR_NULL_POINTER);
@@ -5932,11 +6150,11 @@ Downloader.prototype = {
 
     // This function may return null, which indicates that there are no patches
     // to download.
-    this._patch = this._selectPatch(update);
+    this._patch = await this._selectPatch(update);
     if (!this._patch) {
       LOG("Downloader:downloadUpdate - no patch to download");
       AUSTLMY.pingDownloadCode(undefined, AUSTLMY.DWNLD_ERR_NO_UPDATE_PATCH);
-      return false;
+      return Ci.nsIApplicationUpdateService.DOWNLOAD_FAILURE_GENERIC;
     }
     // The update and the patch implement nsIWritablePropertyBag. Expose that
     // interface immediately after a patch is assigned so that
@@ -5952,7 +6170,7 @@ Downloader.prototype = {
         "Downloader:downloadUpdate - Background update disabled by update " +
           "advertisement"
       );
-      return false;
+      return Ci.nsIApplicationUpdateService.DOWNLOAD_FAILURE_GENERIC;
     }
 
     this.isCompleteUpdate = this._patch.type == "complete";
@@ -5968,13 +6186,28 @@ Downloader.prototype = {
       canUseBits = this._canUseBits(this._patch);
     }
 
+    // When using Firefox and Mozilla's update server, add extra headers and
+    // extra query parameters identifying whether this request is on behalf of a
+    // regular browsing profile (0) or a background task (1).  This helps
+    // understand bandwidth usage of background updates in production.
+    let { url, extraHeaders } = this._maybeWithExtras(this._patch.URL);
+
     if (!canUseBits) {
       this._pendingRequest = null;
 
       let patchFile = updateDir.clone();
       patchFile.append(FILE_UPDATE_MAR);
 
-      if (lazy.gIsBackgroundTaskMode) {
+      // Background updates generally should not fall back to internal (Necko)
+      // downloads: on Windows, they should only use Windows BITS.  In
+      // automation, this pref allows Necko for testing.
+      let allowDownloadsWithoutBITS =
+        Cu.isInAutomation &&
+        Services.prefs.getBoolPref(
+          PREF_APP_UPDATE_BACKGROUND_ALLOWDOWNLOADSWITHOUTBITS,
+          false
+        );
+      if (lazy.gIsBackgroundTaskMode && !allowDownloadsWithoutBITS) {
         // We don't normally run a background update if we can't use BITS, but
         // this branch is possible because we do fall back from BITS failures by
         // attempting an internal download.
@@ -5998,9 +6231,10 @@ Downloader.prototype = {
               "downloader from a background task. Cleaning up downloading " +
               "update."
           );
-          cleanupDownloadingUpdate();
+          await cleanupDownloadingUpdate();
         }
-        return false;
+        return Ci.nsIApplicationUpdateService
+          .DOWNLOAD_FAILURE_CANNOT_RESUME_IN_BACKGROUND;
       }
 
       // The interval is 0 since there is no need to throttle downloads.
@@ -6009,89 +6243,38 @@ Downloader.prototype = {
       LOG(
         "Downloader:downloadUpdate - Starting nsIIncrementalDownload with " +
           "url: " +
-          this._patch.URL +
+          url +
           ", path: " +
           patchFile.path +
           ", interval: " +
           interval
       );
-      let uri = Services.io.newURI(this._patch.URL);
+      let uri = Services.io.newURI(url);
 
       this._request = Cc[
         "@mozilla.org/network/incremental-download;1"
       ].createInstance(Ci.nsIIncrementalDownload);
-      this._request.init(uri, patchFile, DOWNLOAD_CHUNK_SIZE, interval);
+
+      this._request.init(
+        uri,
+        patchFile,
+        DOWNLOAD_CHUNK_SIZE,
+        interval,
+        extraHeaders
+      );
       this._request.start(this, null);
     } else {
-      let noProgressTimeout = BITS_IDLE_NO_PROGRESS_TIMEOUT_SECS;
-      let monitorInterval = BITS_IDLE_POLL_RATE_MS;
-      this._bitsActiveNotifications = false;
-      // The monitor's timeout should be much greater than the longest monitor
-      // poll interval. If the timeout is too short, delay in the pipe to the
-      // update agent might cause BITS to falsely report an error, causing an
-      // unnecessary fallback to nsIIncrementalDownload.
-      let monitorTimeout = Math.max(10 * monitorInterval, 10 * 60 * 1000);
-      if (this.hasDownloadListeners) {
-        noProgressTimeout = BITS_ACTIVE_NO_PROGRESS_TIMEOUT_SECS;
-        monitorInterval = BITS_ACTIVE_POLL_RATE_MS;
-        this._bitsActiveNotifications = true;
-      }
-
-      let updateRootDir = FileUtils.getDir(KEY_UPDROOT, []);
-      try {
-        updateRootDir.create(
-          Ci.nsIFile.DIRECTORY_TYPE,
-          FileUtils.PERMS_DIRECTORY
-        );
-      } catch (ex) {
-        if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
-          throw ex;
-        }
-        // Ignore the exception due to a directory that already exists.
-      }
-
-      let jobName = "MozillaUpdate " + updateRootDir.leafName;
-      let updatePath = updateDir.path;
-      if (!Bits.initialized) {
-        Bits.init(jobName, updatePath, monitorTimeout);
-      }
-
+      this._bitsActiveNotifications = this.hasDownloadListeners;
       this._cancelPromise = null;
 
-      let bitsId = this._patch.getProperty("bitsId");
-      if (bitsId) {
-        LOG(
-          "Downloader:downloadUpdate - Connecting to in-progress download. " +
-            "BITS ID: " +
-            bitsId
-        );
+      this._pendingRequest = this.updateService.makeBitsRequest({
+        activeListeners: this.hasDownloadListeners,
+        bitsId: this._patch.getProperty("bitsId"),
+        observer: this,
+        url,
+        extraHeaders,
+      });
 
-        this._pendingRequest = Bits.monitorDownload(
-          bitsId,
-          monitorInterval,
-          this,
-          null
-        );
-      } else {
-        LOG(
-          "Downloader:downloadUpdate - Starting BITS download with url: " +
-            this._patch.URL +
-            ", updateDir: " +
-            updatePath +
-            ", filename: " +
-            FILE_UPDATE_MAR
-        );
-
-        this._pendingRequest = Bits.startDownload(
-          this._patch.URL,
-          FILE_UPDATE_MAR,
-          Ci.nsIBits.PROXY_PRECONFIG,
-          noProgressTimeout,
-          monitorInterval,
-          this,
-          null
-        );
-      }
       let request;
       try {
         request = await this._pendingRequest;
@@ -6161,7 +6344,7 @@ Downloader.prototype = {
       this._pendingRequest = null;
     }
 
-    if (!lazy.UM.readyUpdate) {
+    if (!lazy.UM.internal.readyUpdate) {
       LOG("Downloader:downloadUpdate - Setting status to downloading");
       writeStatusFile(getReadyUpdateDir(), STATE_DOWNLOADING);
     }
@@ -6189,117 +6372,115 @@ Downloader.prototype = {
 
     this._notifyDownloadStatusObservers();
 
-    return true;
-  },
+    return Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS;
+  }
 
   /**
    * This is run when a download listener is added.
    */
-  onDownloadListenerAdded: function Downloader_onDownloadListenerAdded() {
+  onDownloadListenerAdded() {
     // Increase the status update frequency when someone starts listening
     this._maybeStartActiveNotifications();
-  },
+  }
 
   /**
    * This is run when a download listener is removed.
    */
-  onDownloadListenerRemoved: function Downloader_onDownloadListenerRemoved() {
+  onDownloadListenerRemoved() {
     // Decrease the status update frequency when no one is listening
     if (!this.hasDownloadListeners) {
       this._maybeStopActiveNotifications();
     }
-  },
+  }
 
   get hasDownloadListeners() {
     return this.updateService.hasDownloadListeners;
-  },
+  }
 
   /**
    * This speeds up BITS progress notifications in response to a user watching
    * the notifications.
    */
-  _maybeStartActiveNotifications:
-    async function Downloader__maybeStartActiveNotifications() {
-      if (
-        this.usingBits &&
-        !this._bitsActiveNotifications &&
-        this.hasDownloadListeners &&
+  async _maybeStartActiveNotifications() {
+    if (
+      this.usingBits &&
+      !this._bitsActiveNotifications &&
+      this.hasDownloadListeners &&
+      this._request
+    ) {
+      LOG(
+        "Downloader:_maybeStartActiveNotifications - Starting active " +
+          "notifications"
+      );
+      this._bitsActiveNotifications = true;
+      await Promise.all([
         this._request
-      ) {
-        LOG(
-          "Downloader:_maybeStartActiveNotifications - Starting active " +
-            "notifications"
-        );
-        this._bitsActiveNotifications = true;
-        await Promise.all([
-          this._request
-            .setNoProgressTimeout(BITS_ACTIVE_NO_PROGRESS_TIMEOUT_SECS)
-            .catch(error => {
-              LOG(
-                "Downloader:_maybeStartActiveNotifications - Failed to set " +
-                  "no progress timeout. Error: " +
-                  error
-              );
-            }),
-          this._request
-            .changeMonitorInterval(BITS_ACTIVE_POLL_RATE_MS)
-            .catch(error => {
-              LOG(
-                "Downloader:_maybeStartActiveNotifications - Failed to increase " +
-                  "status update frequency. Error: " +
-                  error
-              );
-            }),
-        ]);
-      }
-    },
+          .setNoProgressTimeout(BITS_ACTIVE_NO_PROGRESS_TIMEOUT_SECS)
+          .catch(error => {
+            LOG(
+              "Downloader:_maybeStartActiveNotifications - Failed to set " +
+                "no progress timeout. Error: " +
+                error
+            );
+          }),
+        this._request
+          .changeMonitorInterval(BITS_ACTIVE_POLL_RATE_MS)
+          .catch(error => {
+            LOG(
+              "Downloader:_maybeStartActiveNotifications - Failed to increase " +
+                "status update frequency. Error: " +
+                error
+            );
+          }),
+      ]);
+    }
+  }
 
   /**
    * This slows down BITS progress notifications in response to a user no longer
    * watching the notifications.
    */
-  _maybeStopActiveNotifications:
-    async function Downloader__maybeStopActiveNotifications() {
-      if (
-        this.usingBits &&
-        this._bitsActiveNotifications &&
-        !this.hasDownloadListeners &&
+  async _maybeStopActiveNotifications() {
+    if (
+      this.usingBits &&
+      this._bitsActiveNotifications &&
+      !this.hasDownloadListeners &&
+      this._request
+    ) {
+      LOG(
+        "Downloader:_maybeStopActiveNotifications - Stopping active " +
+          "notifications"
+      );
+      this._bitsActiveNotifications = false;
+      await Promise.all([
         this._request
-      ) {
-        LOG(
-          "Downloader:_maybeStopActiveNotifications - Stopping active " +
-            "notifications"
-        );
-        this._bitsActiveNotifications = false;
-        await Promise.all([
-          this._request
-            .setNoProgressTimeout(BITS_IDLE_NO_PROGRESS_TIMEOUT_SECS)
-            .catch(error => {
-              LOG(
-                "Downloader:_maybeStopActiveNotifications - Failed to set " +
-                  "no progress timeout: " +
-                  error
-              );
-            }),
-          this._request
-            .changeMonitorInterval(BITS_IDLE_POLL_RATE_MS)
-            .catch(error => {
-              LOG(
-                "Downloader:_maybeStopActiveNotifications - Failed to decrease " +
-                  "status update frequency: " +
-                  error
-              );
-            }),
-        ]);
-      }
-    },
+          .setNoProgressTimeout(BITS_IDLE_NO_PROGRESS_TIMEOUT_SECS)
+          .catch(error => {
+            LOG(
+              "Downloader:_maybeStopActiveNotifications - Failed to set " +
+                "no progress timeout: " +
+                error
+            );
+          }),
+        this._request
+          .changeMonitorInterval(BITS_IDLE_POLL_RATE_MS)
+          .catch(error => {
+            LOG(
+              "Downloader:_maybeStopActiveNotifications - Failed to decrease " +
+                "status update frequency: " +
+                error
+            );
+          }),
+      ]);
+    }
+  }
 
   /**
    * When the async request begins
    * @param   request
    *          The nsIRequest object for the transfer
    */
-  onStartRequest: function Downloader_onStartRequest(request) {
+  onStartRequest(request) {
     if (this.usingBits) {
       LOG("Downloader:onStartRequest");
     } else {
@@ -6319,7 +6500,7 @@ Downloader.prototype = {
     this.updateService.forEachDownloadListener(listener => {
       listener.onStartRequest(request);
     });
-  },
+  }
 
   /**
    * When new data has been downloaded
@@ -6330,7 +6511,7 @@ Downloader.prototype = {
    * @param   maxProgress
    *          The total number of bytes that must be transferred
    */
-  onProgress: function Downloader_onProgress(request, progress, maxProgress) {
+  onProgress(request, progress, maxProgress) {
     LOG("Downloader:onProgress - progress: " + progress + "/" + maxProgress);
 
     if (progress > this._patch.size) {
@@ -6372,7 +6553,7 @@ Downloader.prototype = {
       }
     });
     this.updateService._consecutiveSocketErrors = 0;
-  },
+  }
 
   /**
    * When we have new status text
@@ -6383,7 +6564,7 @@ Downloader.prototype = {
    * @param   statusText
    *          Human readable version of |status|
    */
-  onStatus: function Downloader_onStatus(request, status, statusText) {
+  onStatus(request, status, statusText) {
     LOG(
       "Downloader:onStatus - status: " + status + ", statusText: " + statusText
     );
@@ -6393,7 +6574,7 @@ Downloader.prototype = {
         listener.onStatus(request, status, statusText);
       }
     });
-  },
+  }
 
   /**
    * When data transfer ceases
@@ -6403,7 +6584,7 @@ Downloader.prototype = {
    *          Status code containing the reason for the cessation.
    */
   /* eslint-disable-next-line complexity */
-  onStopRequest: async function Downloader_onStopRequest(request, status) {
+  async onStopRequest(request, status) {
     if (gOnlyDownloadUpdatesThisSession) {
       LOG(
         "Downloader:onStopRequest - End of update download detected and " +
@@ -6505,7 +6686,7 @@ Downloader.prototype = {
         // Clear out any old update before we notify anyone about the new one.
         // It will be invalid in a moment anyways when we call
         // `cleanUpReadyUpdateDir()`.
-        lazy.UM.readyUpdate = null;
+        lazy.UM.internal.readyUpdate = null;
 
         // We're about to clobber the ready update so we can replace it with the
         // downloading update that just finished. We need to let observers know
@@ -6539,11 +6720,16 @@ Downloader.prototype = {
             `Downloader:onStopRequest - Ready to apply. Setting state to ` +
               `"${state}".`
           );
-          writeStatusFile(getReadyUpdateDir(), state);
-          writeVersionFile(getReadyUpdateDir(), this._update.appVersion);
-          this._update.installDate = new Date().getTime();
+          this._update.installDate = Date.now();
           this._update.statusText =
             lazy.gUpdateBundle.GetStringFromName("installPending");
+          writeStatusFile(readyDir, state);
+          writeVersionFile(readyDir, this._update.appVersion);
+          await this.updateService.writeTimestampFile({
+            dir: readyDir,
+            update: this._update,
+            isInitialWrite: true,
+          });
           Services.prefs.setIntPref(PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, 0);
         } else {
           LOG(
@@ -6698,20 +6884,20 @@ Downloader.prototype = {
     if (deleteActiveUpdate) {
       LOG("Downloader:onStopRequest - Clearing downloadingUpdate.");
       this._update.installDate = new Date().getTime();
-      lazy.UM.addUpdateToHistory(lazy.UM.downloadingUpdate);
-      lazy.UM.downloadingUpdate = null;
+      lazy.UM.internal.addUpdateToHistory(lazy.UM.internal.downloadingUpdate);
+      lazy.UM.internal.downloadingUpdate = null;
     } else if (
-      lazy.UM.downloadingUpdate &&
-      lazy.UM.downloadingUpdate.state != state
+      lazy.UM.internal.downloadingUpdate &&
+      lazy.UM.internal.downloadingUpdate.state != state
     ) {
-      lazy.UM.downloadingUpdate.state = state;
+      lazy.UM.internal.downloadingUpdate.state = state;
     }
     if (migratedToReadyUpdate) {
       LOG(
         "Downloader:onStopRequest - Moving downloadingUpdate into readyUpdate"
       );
-      lazy.UM.readyUpdate = lazy.UM.downloadingUpdate;
-      lazy.UM.downloadingUpdate = null;
+      lazy.UM.internal.readyUpdate = lazy.UM.internal.downloadingUpdate;
+      lazy.UM.internal.downloadingUpdate = null;
     }
     lazy.UM.saveUpdates();
 
@@ -6741,13 +6927,13 @@ Downloader.prototype = {
             "Downloader:onStopRequest - BITS download failed. Falling back " +
               "to nsIIncrementalDownload"
           );
-          let success = await this.downloadUpdate(this._update);
-          if (!success) {
+          let result = await this.downloadUpdate(this._update);
+          if (result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS) {
             LOG(
               "Downloader:onStopRequest - Failed to fall back to " +
                 "nsIIncrementalDownload. Cleaning up downloading update."
             );
-            cleanupDownloadingUpdate();
+            await cleanupDownloadingUpdate();
           } else {
             allFailed = false;
           }
@@ -6764,14 +6950,14 @@ Downloader.prototype = {
               "downloading complete update patch"
           );
           this._update.isCompleteUpdate = true;
-          let success = await this.downloadUpdate(this._update);
+          let result = await this.downloadUpdate(this._update);
 
-          if (!success) {
+          if (result != Ci.nsIApplicationUpdateService.DOWNLOAD_SUCCESS) {
             LOG(
               "Downloader:onStopRequest - Failed to fall back to complete " +
                 "patch. Cleaning up downloading update."
             );
-            cleanupDownloadingUpdate();
+            await cleanupDownloadingUpdate();
           } else {
             allFailed = false;
           }
@@ -6936,25 +7122,25 @@ Downloader.prototype = {
       // Prevent leaking the update object (bug 454964)
       this._update = null;
     }
-  },
+  }
 
   /**
    * This function should be called when shutting down so that resources get
    * freed properly.
    */
-  cleanup: async function Downloader_cleanup() {
+  async cleanup() {
     if (this.usingBits) {
       if (this._pendingRequest) {
         await this._pendingRequest;
       }
       this._request.shutdown();
     }
-  },
+  }
 
   /**
    * See nsIInterfaceRequestor.idl
    */
-  getInterface: function Downloader_getInterface(iid) {
+  getInterface(iid) {
     // The network request may require proxy authentication, so provide the
     // default nsIAuthPrompt if requested.
     if (iid.equals(Ci.nsIAuthPrompt)) {
@@ -6963,14 +7149,14 @@ Downloader.prototype = {
       return prompt.QueryInterface(iid);
     }
     throw Components.Exception("", Cr.NS_NOINTERFACE);
-  },
+  }
 
-  QueryInterface: ChromeUtils.generateQI([
-    "nsIRequestObserver",
-    "nsIProgressEventSink",
-    "nsIInterfaceRequestor",
-  ]),
-};
+  QueryInterface = ChromeUtils.generateQI([
+    Ci.nsIRequestObserver,
+    Ci.nsIProgressEventSink,
+    Ci.nsIInterfaceRequestor,
+  ]);
+}
 
 // On macOS, all browser windows can be closed without Firefox exiting. If it
 // is left in this state for a while and an update is pending, we should restart
@@ -7225,7 +7411,7 @@ class RestartOnLastWindowClosed {
     }
 
     LOG("RestartOnLastWindowClosed.#maybeRestartBrowser - Restarting now");
-    Services.telemetry.scalarAdd("update.no_window_auto_restarts", 1);
+    Glean.update.noWindowAutoRestarts.add(1);
     Services.startup.quit(
       Ci.nsIAppStartup.eAttemptQuit |
         Ci.nsIAppStartup.eRestart |

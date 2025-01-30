@@ -5,6 +5,7 @@
 //! Specified types for box properties.
 
 use crate::parser::{Parse, ParserContext};
+#[cfg(feature = "gecko")]
 use crate::properties::{LonghandId, PropertyDeclarationId, PropertyId};
 use crate::values::generics::box_::{
     GenericContainIntrinsicSize, GenericLineClamp, GenericPerspective, GenericVerticalAlign,
@@ -19,17 +20,25 @@ use std::fmt::{self, Write};
 use style_traits::{CssWriter, KeywordsCollectFn, ParseError};
 use style_traits::{SpecifiedValueInfo, StyleParseErrorKind, ToCss};
 
-#[cfg(not(feature = "servo-layout-2020"))]
+#[cfg(not(feature = "servo"))]
 fn flexbox_enabled() -> bool {
     true
 }
+#[cfg(not(feature = "servo"))]
+fn grid_enabled() -> bool {
+    true
+}
 
-#[cfg(feature = "servo-layout-2020")]
+#[cfg(feature = "servo")]
 fn flexbox_enabled() -> bool {
     servo_config::prefs::pref_map()
         .get("layout.flexbox.enabled")
         .as_bool()
         .unwrap_or(false)
+}
+#[cfg(feature = "servo")]
+fn grid_enabled() -> bool {
+    style_config::get_bool("layout.grid.enabled")
 }
 
 /// Defines an element’s display type, which consists of
@@ -42,9 +51,7 @@ pub enum DisplayOutside {
     None = 0,
     Inline,
     Block,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableCaption,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     InternalTable,
     #[cfg(feature = "gecko")]
     InternalRuby,
@@ -55,28 +62,18 @@ pub enum DisplayOutside {
 #[repr(u8)]
 pub enum DisplayInside {
     None = 0,
-    #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
     Contents,
     Flow,
     FlowRoot,
     Flex,
-    #[cfg(feature = "gecko")]
     Grid,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     Table,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableRowGroup,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableColumn,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableColumnGroup,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableHeaderGroup,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableFooterGroup,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableRow,
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     TableCell,
     #[cfg(feature = "gecko")]
     Ruby,
@@ -145,7 +142,6 @@ impl Display {
     /// ::new() inlined so cbindgen can use it
     pub const None: Self =
         Self(((DisplayOutside::None as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::None as u16);
-    #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
     pub const Contents: Self = Self(
         ((DisplayOutside::None as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Contents as u16,
     );
@@ -164,20 +160,15 @@ impl Display {
         Self(((DisplayOutside::Block as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Flex as u16);
     pub const InlineFlex: Self =
         Self(((DisplayOutside::Inline as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Flex as u16);
-    #[cfg(feature = "gecko")]
     pub const Grid: Self =
         Self(((DisplayOutside::Block as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Grid as u16);
-    #[cfg(feature = "gecko")]
     pub const InlineGrid: Self =
         Self(((DisplayOutside::Inline as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Grid as u16);
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const Table: Self =
         Self(((DisplayOutside::Block as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Table as u16);
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const InlineTable: Self = Self(
         ((DisplayOutside::Inline as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Table as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableCaption: Self = Self(
         ((DisplayOutside::TableCaption as u16) << Self::OUTSIDE_SHIFT) | DisplayInside::Flow as u16,
     );
@@ -195,37 +186,30 @@ impl Display {
 
     // Internal table boxes.
 
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableRowGroup: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableRowGroup as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableHeaderGroup: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableHeaderGroup as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableFooterGroup: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableFooterGroup as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableColumn: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableColumn as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableColumnGroup: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableColumnGroup as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableRow: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableRow as u16,
     );
-    #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
     pub const TableCell: Self = Self(
         ((DisplayOutside::InternalTable as u16) << Self::OUTSIDE_SHIFT) |
             DisplayInside::TableCell as u16,
@@ -336,7 +320,6 @@ impl Display {
     pub fn is_atomic_inline_level(&self) -> bool {
         match *self {
             Display::InlineBlock | Display::InlineFlex => true,
-            #[cfg(any(feature = "servo-layout-2013"))]
             Display::InlineTable => true,
             _ => false,
         }
@@ -349,7 +332,6 @@ impl Display {
     pub fn is_item_container(&self) -> bool {
         match self.inside() {
             DisplayInside::Flex => true,
-            #[cfg(feature = "gecko")]
             DisplayInside::Grid => true,
             _ => false,
         }
@@ -373,7 +355,6 @@ impl Display {
     ///
     /// Also used for :root style adjustments.
     pub fn equivalent_block_display(&self, _is_root_element: bool) -> Self {
-        #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
         {
             // Special handling for `contents` and `list-item`s on the root element.
             if _is_root_element && (self.is_contents() || self.is_list_item()) {
@@ -392,7 +373,6 @@ impl Display {
                 Display::from3(DisplayOutside::Block, inside, self.is_list_item())
             },
             DisplayOutside::Block | DisplayOutside::None => *self,
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             _ => Display::Block,
         }
     }
@@ -419,7 +399,6 @@ impl Display {
     #[inline]
     pub fn is_contents(&self) -> bool {
         match *self {
-            #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
             Display::Contents => true,
             _ => false,
         }
@@ -444,30 +423,19 @@ impl DisplayKeyword {
         use self::DisplayKeyword::*;
         Ok(try_match_ident_ignore_ascii_case! { input,
             "none" => Full(Display::None),
-            #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
             "contents" => Full(Display::Contents),
             "inline-block" => Full(Display::InlineBlock),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "inline-table" => Full(Display::InlineTable),
             "-webkit-flex" if flexbox_enabled() => Full(Display::Flex),
             "inline-flex" | "-webkit-inline-flex" if flexbox_enabled() => Full(Display::InlineFlex),
-            #[cfg(feature = "gecko")]
-            "inline-grid" => Full(Display::InlineGrid),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
+            "inline-grid" if grid_enabled() => Full(Display::InlineGrid),
             "table-caption" => Full(Display::TableCaption),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-row-group" => Full(Display::TableRowGroup),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-header-group" => Full(Display::TableHeaderGroup),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-footer-group" => Full(Display::TableFooterGroup),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-column" => Full(Display::TableColumn),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-column-group" => Full(Display::TableColumnGroup),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-row" => Full(Display::TableRow),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table-cell" => Full(Display::TableCell),
             #[cfg(feature = "gecko")]
             "ruby-base" => Full(Display::RubyBase),
@@ -493,12 +461,9 @@ impl DisplayKeyword {
             /// https://drafts.csswg.org/css-display/#typedef-display-inside
             "flow" => Inside(DisplayInside::Flow),
             "flex" if flexbox_enabled() => Inside(DisplayInside::Flex),
-            #[cfg(any(feature = "servo-layout-2020", feature = "gecko"))]
             "flow-root" => Inside(DisplayInside::FlowRoot),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             "table" => Inside(DisplayInside::Table),
-            #[cfg(feature = "gecko")]
-            "grid" => Inside(DisplayInside::Grid),
+            "grid" if grid_enabled() => Inside(DisplayInside::Grid),
             #[cfg(feature = "gecko")]
             "ruby" => Inside(DisplayInside::Ruby),
         })
@@ -517,13 +482,10 @@ impl ToCss for Display {
             Display::InlineBlock => dest.write_str("inline-block"),
             #[cfg(feature = "gecko")]
             Display::WebkitInlineBox => dest.write_str("-webkit-inline-box"),
-            #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
             Display::TableCaption => dest.write_str("table-caption"),
             _ => match (outside, inside) {
-                #[cfg(feature = "gecko")]
                 (DisplayOutside::Inline, DisplayInside::Grid) => dest.write_str("inline-grid"),
                 (DisplayOutside::Inline, DisplayInside::Flex) => dest.write_str("inline-flex"),
-                #[cfg(any(feature = "servo-layout-2013", feature = "gecko"))]
                 (DisplayOutside::Inline, DisplayInside::Table) => dest.write_str("inline-table"),
                 #[cfg(feature = "gecko")]
                 (DisplayOutside::Block, DisplayInside::Ruby) => dest.write_str("block ruby"),
@@ -1062,6 +1024,10 @@ bitflags! {
     }
 }
 
+#[cfg(feature="servo")]
+fn change_bits_for_longhand(longhand: LonghandId) -> WillChangeBits { WillChangeBits::empty() }
+
+#[cfg(feature = "gecko")]
 fn change_bits_for_longhand(longhand: LonghandId) -> WillChangeBits {
     match longhand {
         LonghandId::Opacity => WillChangeBits::OPACITY,
@@ -1284,6 +1250,7 @@ impl Parse for LineClamp {
     Parse,
     PartialEq,
     SpecifiedValueInfo,
+    ToAnimatedValue,
     ToComputedValue,
     ToCss,
     ToResolvedValue,
@@ -1414,12 +1381,26 @@ impl Parse for ContainerName {
 /// A specified value for the `perspective` property.
 pub type Perspective = GenericPerspective<NonNegativeLength>;
 
+/// https://drafts.csswg.org/css-box/#propdef-float
 #[allow(missing_docs)]
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromPrimitive,
+    Hash,
+    MallocSizeOf,
+    Parse,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
 )]
-/// https://drafts.csswg.org/css-box/#propdef-float
+#[repr(u8)]
 pub enum Float {
     Left,
     Right,
@@ -1429,12 +1410,33 @@ pub enum Float {
     InlineEnd,
 }
 
+impl Float {
+    /// Returns true if `self` is not `None`.
+    pub fn is_floating(self) -> bool {
+        self != Self::None
+    }
+}
+
+/// https://drafts.csswg.org/css2/#propdef-clear
 #[allow(missing_docs)]
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromPrimitive,
+    Hash,
+    MallocSizeOf,
+    Parse,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
 )]
-/// https://drafts.csswg.org/css2/#propdef-clear
+#[repr(u8)]
 pub enum Clear {
     None,
     Left,
@@ -1535,6 +1537,9 @@ pub enum Appearance {
     /// For HTML's <input type=number>
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     NumberInput,
+    /// For HTML's <input type=password>
+    #[parse(condition = "ParserContext::chrome_rules_enabled")]
+    PasswordInput,
     /// The progress bar's progress indicator
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     Progresschunk,
@@ -1564,11 +1569,6 @@ pub enum Appearance {
     ScrollbarthumbHorizontal,
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     ScrollbarthumbVertical,
-    /// The scrollbar track.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    ScrollbartrackHorizontal,
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    ScrollbartrackVertical,
     /// The scroll corner
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     Scrollcorner,
@@ -1607,52 +1607,29 @@ pub enum Appearance {
     TabScrollArrowBack,
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     TabScrollArrowForward,
-    /// A toolbar in an application window.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Toolbar,
     /// A single toolbar button (with no associated dropdown).
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     Toolbarbutton,
     /// The dropdown portion of a toolbar button
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     ToolbarbuttonDropdown,
-    /// The toolbox that contains the toolbars.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Toolbox,
     /// A tooltip.
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     Tooltip,
-    /// A listbox or tree widget header
+
+    /// Sidebar appearance.
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treeheader,
-    /// An individual header cell
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treeheadercell,
-    /// A tree item.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treeitem,
-    /// A tree widget branch line
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treeline,
-    /// A tree widget twisty.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treetwisty,
-    /// Open tree widget twisty.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treetwistyopen,
-    /// A tree widget.
-    #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    Treeview,
+    MozSidebar,
 
     /// Mac help button.
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
     MozMacHelpButton,
 
-    /// An appearance value for the root, so that we can get unified toolbar looks (which require a
-    /// transparent gecko background) without really using the whole transparency set-up which
-    /// otherwise loses window borders, see bug 1870481.
+    /// An appearance value for the root, so that we can get tinting and unified toolbar looks
+    /// (which require a transparent gecko background) without really using the whole transparency
+    /// set-up which otherwise loses window borders, see bug 1870481.
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
-    MozMacUnifiedToolbarWindow,
+    MozMacWindow,
 
     /// Windows themed window frame elements.
     #[parse(condition = "ParserContext::chrome_rules_enabled")]
@@ -1721,6 +1698,7 @@ impl BreakBetween {
     /// Parse a legacy break-between value for `page-break-{before,after}`.
     ///
     /// See https://drafts.csswg.org/css-break/#page-break-properties.
+    #[cfg_attr(feature = "servo", allow(unused))]
     #[inline]
     pub(crate) fn parse_legacy<'i>(
         _: &ParserContext,
@@ -1741,6 +1719,7 @@ impl BreakBetween {
     /// Serialize a legacy break-between value for `page-break-*`.
     ///
     /// See https://drafts.csswg.org/css-break/#page-break-properties.
+    #[cfg_attr(feature = "servo", allow(unused))]
     pub(crate) fn to_css_legacy<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
         W: Write,
@@ -1786,6 +1765,7 @@ impl BreakWithin {
     /// Parse a legacy break-between value for `page-break-inside`.
     ///
     /// See https://drafts.csswg.org/css-break/#page-break-properties.
+    #[cfg_attr(feature = "servo", allow(unused))]
     #[inline]
     pub(crate) fn parse_legacy<'i>(
         _: &ParserContext,
@@ -1803,6 +1783,7 @@ impl BreakWithin {
     /// Serialize a legacy break-between value for `page-break-inside`.
     ///
     /// See https://drafts.csswg.org/css-break/#page-break-properties.
+    #[cfg_attr(feature = "servo", allow(unused))]
     pub(crate) fn to_css_legacy<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
         W: Write,

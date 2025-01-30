@@ -37,7 +37,6 @@
 #include "mozilla/TimeStamp.h"
 
 #include "mozilla/gfx/2D.h"
-#include "mozilla/gfx/Scale.h"
 #include "nsComponentManagerUtils.h"
 #include "nsError.h"
 #include "nsIConsoleService.h"
@@ -257,12 +256,11 @@ RasterImage::GetIntrinsicSize(nsSize* aSize) {
 }
 
 //******************************************************************************
-Maybe<AspectRatio> RasterImage::GetIntrinsicRatio() {
+AspectRatio RasterImage::GetIntrinsicRatio() {
   if (mError) {
-    return Nothing();
+    return {};
   }
-
-  return Some(AspectRatio::FromSize(mSize.width, mSize.height));
+  return AspectRatio::FromSize(mSize.width, mSize.height);
 }
 
 NS_IMETHODIMP_(Orientation)
@@ -703,6 +701,9 @@ bool RasterImage::SetMetadata(const ImageMetadata& aMetadata,
     StoreHasSize(true);
   }
 
+  MOZ_ASSERT_IF(mAnimationState && !aFromMetadataDecode,
+                mAnimationState->LoopCount() == aMetadata.GetLoopCount());
+
   if (LoadHasSize() && aMetadata.HasAnimation() && !mAnimationState) {
     // We're becoming animated, so initialize animation stuff.
     mAnimationState.emplace(mAnimationMode);
@@ -743,8 +744,8 @@ bool RasterImage::SetMetadata(const ImageMetadata& aMetadata,
     MOZ_ASSERT(mOrientation.IsIdentity(), "Would need to orient hotspot point");
 
     auto hotspot = aMetadata.GetHotspot();
-    mHotspot.x = std::max(std::min(hotspot.x.value, mSize.width - 1), 0);
-    mHotspot.y = std::max(std::min(hotspot.y.value, mSize.height - 1), 0);
+    mHotspot.x = std::clamp(hotspot.x.value, 0, mSize.width - 1);
+    mHotspot.y = std::clamp(hotspot.y.value, 0, mSize.height - 1);
   }
 
   return true;
@@ -1727,15 +1728,13 @@ void RasterImage::ReportDecoderError() {
 
   if (consoleService && errorObject) {
     nsAutoString msg(u"Image corrupt or truncated."_ns);
-    nsAutoString src;
+    nsAutoCString src;
     if (GetURI()) {
-      nsAutoCString uri;
-      if (!GetSpecTruncatedTo1k(uri)) {
+      if (!GetSpecTruncatedTo1k(src)) {
         msg += u" URI in this note truncated due to length."_ns;
       }
-      CopyUTF8toUTF16(uri, src);
     }
-    if (NS_SUCCEEDED(errorObject->InitWithWindowID(msg, src, u""_ns, 0, 0,
+    if (NS_SUCCEEDED(errorObject->InitWithWindowID(msg, src, 0, 0,
                                                    nsIScriptError::errorFlag,
                                                    "Image", InnerWindowID()))) {
       consoleService->LogMessage(errorObject);

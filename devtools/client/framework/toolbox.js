@@ -5,13 +5,13 @@
 "use strict";
 
 const MAX_ORDINAL = 99;
-const SPLITCONSOLE_ENABLED_PREF = "devtools.toolbox.splitconsoleEnabled";
+const SPLITCONSOLE_OPEN_PREF = "devtools.toolbox.splitconsole.open";
+const SPLITCONSOLE_ENABLED_PREF = "devtools.toolbox.splitconsole.enabled";
 const SPLITCONSOLE_HEIGHT_PREF = "devtools.toolbox.splitconsoleHeight";
 const DEVTOOLS_ALWAYS_ON_TOP = "devtools.toolbox.alwaysOnTop";
 const DISABLE_AUTOHIDE_PREF = "ui.popup.disable_autohide";
 const PSEUDO_LOCALE_PREF = "intl.l10n.pseudo";
 const HOST_HISTOGRAM = "DEVTOOLS_TOOLBOX_HOST";
-const CURRENT_THEME_SCALAR = "devtools.current_theme";
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const REGEX_4XX_5XX = /^[4,5]\d\d$/;
 
@@ -41,8 +41,8 @@ var Startup = Cc["@mozilla.org/devtools/startup-clh;1"].getService(
   Ci.nsISupports
 ).wrappedJSObject;
 
-const { BrowserLoader } = ChromeUtils.import(
-  "resource://devtools/shared/loader/browser-loader.js"
+const { BrowserLoader } = ChromeUtils.importESModule(
+  "resource://devtools/shared/loader/browser-loader.sys.mjs"
 );
 
 const {
@@ -77,10 +77,17 @@ loader.lazyRequireGetter(
   "resource://devtools/shared/commands/target/actions/targets.js",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "TRACER_LOG_METHODS",
+  "resource://devtools/shared/specs/tracer.js",
+  true
+);
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AppConstants: "resource://gre/modules/AppConstants.sys.mjs",
+  TYPES: "resource://devtools/shared/highlighters.mjs",
 });
 loader.lazyRequireGetter(this, "flags", "resource://devtools/shared/flags.js");
 loader.lazyRequireGetter(
@@ -233,6 +240,9 @@ const BOOLEAN_CONFIGURATION_PREFS = {
     name: "pauseOverlay",
     thread: true,
   },
+  "devtools.debugger.features.javascript-tracing": {
+    name: "isTracerFeatureEnabled",
+  },
 };
 
 /**
@@ -281,7 +291,7 @@ function Toolbox(commands, selectedTool, hostType, contentWindow, frameId) {
   this.selectedFrameId = null;
 
   // Number of targets currently paused
-  this._pausedTargets = 0;
+  this._pausedTargets = new Set();
 
   /**
    * KeyShortcuts instance specific to WINDOW host type.
@@ -608,6 +618,18 @@ Toolbox.prototype = {
     );
   },
 
+  /**
+   * Get the enabled split console setting, and if it's not set, set it with updateIsSplitConsoleEnabled
+   * @returns {boolean} devtools.toolbox.splitconsole.enabled option
+   */
+  isSplitConsoleEnabled() {
+    if (typeof this._splitConsoleEnabled !== "boolean") {
+      this.updateIsSplitConsoleEnabled();
+    }
+
+    return this._splitConsoleEnabled;
+  },
+
   get isBrowserToolbox() {
     return this.hostType === Toolbox.HostType.BROWSERTOOLBOX;
   },
@@ -673,9 +695,31 @@ Toolbox.prototype = {
    */
   _onThreadStateChanged(resource) {
     if (resource.state == "paused") {
-      this._pauseToolbox(resource.why.type);
+      this._onTargetPaused(resource.targetFront, resource.why.type);
     } else if (resource.state == "resumed") {
-      this._resumeToolbox();
+      this._onTargetResumed(resource.targetFront);
+    }
+  },
+
+  /**
+   * This listener is called by TracerCommand, sooner than the JSTRACER_STATE resource.
+   * This is called when the frontend toggles the tracer, before the server started interpreting the request.
+   * This allows to open the console before we start receiving traces.
+   */
+  async onTracerToggled() {
+    const { tracerCommand } = this.commands;
+    if (!tracerCommand.isTracingEnabled) {
+      return;
+    }
+    const { logMethod } = this.commands.tracerCommand.getTracingOptions();
+    if (
+      logMethod == TRACER_LOG_METHODS.CONSOLE &&
+      this.currentToolId !== "webconsole"
+    ) {
+      await this.openSplitConsole({ focusConsoleInput: false });
+    } else if (logMethod == TRACER_LOG_METHODS.DEBUGGER_SIDEBAR) {
+      const panel = await this.selectTool("jsdebugger");
+      panel.showTracerSidebar();
     }
   },
 
@@ -689,7 +733,7 @@ Toolbox.prototype = {
     if (!profile) {
       return;
     }
-    const browser = await openProfilerTab();
+    const browser = await openProfilerTab({ defaultPanel: "stack-chart" });
 
     const profileCaptureResult = {
       type: "SUCCESS",
@@ -703,10 +747,16 @@ Toolbox.prototype = {
   },
 
   /**
+   * Called whenever a given target got its execution paused.
+   *
    * Be careful, this method is synchronous, but highlightTool, raise, selectTool
    * are all async.
+   *
+   * @param {TargetFront} targetFront
+   * @param {string} reason
+   *        Reason why the execution paused
    */
-  _pauseToolbox(reason) {
+  _onTargetPaused(targetFront, reason) {
     // Suppress interrupted events by default because the thread is
     // paused/resumed a lot for various actions.
     if (reason === "interrupted") {
@@ -730,15 +780,20 @@ Toolbox.prototype = {
       // Each Target/Thread can be paused only once at a time,
       // so, for each pause, we should have a related resumed event.
       // But we may have multiple targets paused at the same time
-      this._pausedTargets++;
+      this._pausedTargets.add(targetFront);
       this.emit("toolbox-paused");
     }
   },
 
-  _resumeToolbox() {
+  /**
+   * Called whenever a given target got its execution resumed.
+   *
+   * @param {TargetFront} targetFront
+   */
+  _onTargetResumed(targetFront) {
     if (this.isHighlighted("jsdebugger")) {
-      this._pausedTargets--;
-      if (this._pausedTargets == 0) {
+      this._pausedTargets.delete(targetFront);
+      if (this._pausedTargets.size == 0) {
         this.emit("toolbox-resumed");
         this.unhighlightTool("jsdebugger");
       }
@@ -806,6 +861,7 @@ Toolbox.prototype = {
   async _onTargetSelected({ targetFront }) {
     this._updateFrames({ selected: targetFront.actorID });
     this.selectTarget(targetFront.actorID);
+    this._refreshHostTitle();
   },
 
   _onTargetDestroyed({ targetFront }) {
@@ -830,15 +886,16 @@ Toolbox.prototype = {
     // navigations when paused, so lets make sure we resumed if not.
     //
     // We should also resume if a paused non-top-level target is destroyed
-    if (targetFront.isTopLevel || targetFront.threadFront?.paused) {
-      this._resumeToolbox();
+    if (targetFront.isTopLevel || this._pausedTargets.has(targetFront)) {
+      this._onTargetResumed(targetFront);
     }
 
     if (targetFront.targetForm.ignoreSubFrames) {
       this._updateFrames({
         frames: [
           {
-            id: targetFront.actorID,
+            // The Target Front may already be destroyed and `actorID` be null.
+            id: targetFront.persistedActorID,
             destroy: true,
           },
         ],
@@ -933,6 +990,8 @@ Toolbox.prototype = {
       ) {
         watchedResources.push(this.resourceCommand.TYPES.JSTRACER_STATE);
         tracerInitialization = this.commands.tracerCommand.initialize();
+        this.onTracerToggled = this.onTracerToggled.bind(this);
+        this.commands.tracerCommand.on("toggle", this.onTracerToggled);
       }
 
       if (!this.isBrowserToolbox) {
@@ -1038,7 +1097,7 @@ Toolbox.prototype = {
       // Wait until the original tool is selected so that the split
       // console input will receive focus.
       let splitConsolePromise = Promise.resolve();
-      if (Services.prefs.getBoolPref(SPLITCONSOLE_ENABLED_PREF)) {
+      if (Services.prefs.getBoolPref(SPLITCONSOLE_OPEN_PREF)) {
         splitConsolePromise = this.openSplitConsole();
         this.telemetry.addEventProperty(
           this.topWindow,
@@ -1357,6 +1416,7 @@ Toolbox.prototype = {
       connectionType,
       runtimeInfo,
       descriptorType: this._descriptorFront.descriptorType,
+      descriptorName: this._descriptorFront.name,
     };
   },
 
@@ -1486,7 +1546,7 @@ Toolbox.prototype = {
     // Log current theme. The question we want to answer is:
     // "What proportion of users use which themes?"
     const currentTheme = Services.prefs.getCharPref("devtools.theme");
-    this.telemetry.keyedScalarAdd(CURRENT_THEME_SCALAR, currentTheme, 1);
+    Glean.devtools.currentTheme[currentTheme].add(1);
 
     const browserWin = this.topWindow;
     this.telemetry.preparePendingEvent(browserWin, "open", "tools", null, [
@@ -1598,9 +1658,17 @@ Toolbox.prototype = {
       // holding buttons. By default the buttons are placed in the end container.
       isInStartContainer: !!isInStartContainer,
       experimentalURL,
+      getContextMenu() {
+        if (options.getContextMenu) {
+          return options.getContextMenu(toolbox);
+        }
+        return null;
+      },
     };
     if (typeof setup == "function") {
-      const onChange = () => {
+      // Use async function as tracer's definition requires an async function to be passed
+      // for "toggle" event listener.
+      const onChange = async () => {
         button.emit("updatechecked");
       };
       setup(this, onChange);
@@ -1617,7 +1685,7 @@ Toolbox.prototype = {
   },
 
   _splitConsoleOnKeypress(e) {
-    if (e.keyCode !== KeyCodes.DOM_VK_ESCAPE) {
+    if (e.keyCode !== KeyCodes.DOM_VK_ESCAPE || !this.isSplitConsoleEnabled()) {
       return;
     }
 
@@ -2168,7 +2236,7 @@ Toolbox.prototype = {
    */
   _getPickerTooltip() {
     let shortcut = L10N.getStr("toolbox.elementPicker.key");
-    shortcut = KeyShortcuts.parseElectronKey(this.win, shortcut);
+    shortcut = KeyShortcuts.parseElectronKey(shortcut);
     shortcut = KeyShortcuts.stringify(shortcut);
     const shortcutMac = L10N.getStr("toolbox.elementPicker.mac.key");
     const isMac = Services.appinfo.OS === "Darwin";
@@ -2274,8 +2342,8 @@ Toolbox.prototype = {
     // on will-navigate, otherwise we hold on to the stale highlighter
     const hasHighlighters =
       inspectorFront &&
-      (inspectorFront.hasHighlighter("RulersHighlighter") ||
-        inspectorFront.hasHighlighter("MeasuringToolHighlighter"));
+      (inspectorFront.hasHighlighter(lazy.TYPES.RULERS) ||
+        inspectorFront.hasHighlighter(lazy.TYPES.MEASURING));
     if (hasHighlighters) {
       inspectorFront.destroyHighlighters();
       this.component.setToolboxButtons(this.toolbarButtons);
@@ -2348,6 +2416,21 @@ Toolbox.prototype = {
     this.errorCountButton.isVisible =
       this._commandIsVisible(this.errorCountButton) && this._errorCount > 0;
     this.errorCountButton.errorCount = this._errorCount;
+  },
+
+  /**
+   * Setup the _splitConsoleEnabled, reflecting the enabled/disabled state of the Enable Split
+   * Console setting, and close the split console if it's open and the setting is turned off
+   */
+  updateIsSplitConsoleEnabled() {
+    this._splitConsoleEnabled = Services.prefs.getBoolPref(
+      SPLITCONSOLE_ENABLED_PREF,
+      true
+    );
+
+    if (!this._splitConsoleEnabled && this.splitConsole) {
+      this.closeSplitConsole();
+    }
   },
 
   /**
@@ -3013,8 +3096,15 @@ Toolbox.prototype = {
    *          loaded and focused.
    */
   openSplitConsole({ focusConsoleInput = true } = {}) {
+    if (!this.isSplitConsoleEnabled()) {
+      return this.selectTool(
+        "webconsole",
+        "use_in_console_with_disabled_split_console"
+      );
+    }
+
     this._splitConsole = true;
-    Services.prefs.setBoolPref(SPLITCONSOLE_ENABLED_PREF, true);
+    Services.prefs.setBoolPref(SPLITCONSOLE_OPEN_PREF, true);
     this._refreshConsoleDisplay();
 
     // Ensure split console is visible if console was already loaded in background
@@ -3024,6 +3114,9 @@ Toolbox.prototype = {
     }
 
     return this.loadTool("webconsole").then(() => {
+      if (!this.component) {
+        return;
+      }
       this.component.setIsSplitConsoleActive(true);
       this.telemetry.recordEvent("activate", "split_console", null, {
         host: this._getTelemetryHostString(),
@@ -3044,7 +3137,7 @@ Toolbox.prototype = {
    */
   closeSplitConsole() {
     this._splitConsole = false;
-    Services.prefs.setBoolPref(SPLITCONSOLE_ENABLED_PREF, false);
+    Services.prefs.setBoolPref(SPLITCONSOLE_OPEN_PREF, false);
     this._refreshConsoleDisplay();
     this.component.setIsSplitConsoleActive(false);
 
@@ -3179,9 +3272,9 @@ Toolbox.prototype = {
     // issue which can cause loosing outgoing messages/RDP packets, the THREAD_STATE
     // resources for the resumed state might not get received. So let assume it happens
     // make use the UI is the appropriate state.
-    if (this._pausedTargets > 0) {
+    if (this._pausedTargets.size > 0) {
       this.emit("toolbox-resumed");
-      this._pausedTargets = 0;
+      this._pausedTargets.clear();
       if (this.isHighlighted("jsdebugger")) {
         this.unhighlightTool("jsdebugger");
       }
@@ -3228,6 +3321,7 @@ Toolbox.prototype = {
   _refreshHostTitle() {
     let title;
 
+    const { selectedTargetFront } = this.commands.targetCommand;
     if (this.target.isXpcShellTarget) {
       // This will only be displayed for local development and can remain
       // hardcoded in english.
@@ -3241,25 +3335,57 @@ Toolbox.prototype = {
       } else {
         throw new Error("Unsupported scope: " + scope);
       }
-    } else if (this.target.name && this.target.name != this.target.url) {
-      const url = this.target.isWebExtension
-        ? this.target.getExtensionPathName(this.target.url)
-        : getUnicodeUrl(this.target.url);
-      title = L10N.getFormatStr(
-        "toolbox.titleTemplate2",
-        this.target.name,
-        url
-      );
+    } else if (
+      selectedTargetFront.name &&
+      selectedTargetFront.name != selectedTargetFront.url
+    ) {
+      // For Web Extensions, the target name may only be the pathname of the target URL.
+      // In such case, only print the absolute target url.
+      if (
+        this._descriptorFront.isWebExtensionDescriptor &&
+        selectedTargetFront.url.includes(selectedTargetFront.name)
+      ) {
+        title = L10N.getFormatStr(
+          "toolbox.titleTemplate1",
+          getUnicodeUrl(selectedTargetFront.url)
+        );
+      } else {
+        title = L10N.getFormatStr(
+          "toolbox.titleTemplate2",
+          selectedTargetFront.name,
+          getUnicodeUrl(selectedTargetFront.url)
+        );
+      }
     } else {
       title = L10N.getFormatStr(
         "toolbox.titleTemplate1",
-        getUnicodeUrl(this.target.url)
+        getUnicodeUrl(selectedTargetFront.url)
       );
     }
     this.postMessage({
       name: "set-host-title",
       title,
     });
+  },
+
+  /**
+   * For a given URL, return its pathname.
+   * This is handy for Web Extension as it should be the addon ID.
+   *
+   * @param {String} url
+   * @return {String} pathname
+   */
+  getExtensionPathName(url) {
+    if (!URL.canParse(url)) {
+      // Return the url if unable to resolve the pathname.
+      return url;
+    }
+    const parsedURL = new URL(url);
+    // Only moz-extension URL should be shortened into the URL pathname.
+    if (parsedURL.protocol !== "moz-extension:") {
+      return url;
+    }
+    return parsedURL.pathname;
   },
 
   /**
@@ -4129,6 +4255,16 @@ Toolbox.prototype = {
       watchedResources.push(this.resourceCommand.TYPES.NETWORK_EVENT);
     }
 
+    if (
+      Services.prefs.getBoolPref(
+        "devtools.debugger.features.javascript-tracing",
+        false
+      )
+    ) {
+      watchedResources.push(this.resourceCommand.TYPES.JSTRACER_STATE);
+      this.commands.tracerCommand.off("toggle", this.onTracerToggled);
+    }
+
     this.resourceCommand.unwatchResources(watchedResources, {
       onAvailable: this._onResourceAvailable,
     });
@@ -4655,7 +4791,7 @@ Toolbox.prototype = {
       }
 
       if (resourceType === TYPES.CONSOLE_MESSAGE) {
-        const { level } = resource.message;
+        const { level } = resource;
         if (level === "error" || level === "exception" || level === "assert") {
           errors++;
         }

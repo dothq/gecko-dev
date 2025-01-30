@@ -61,6 +61,22 @@ void OffscreenCanvasDisplayHelper::DestroyCanvas() {
   mWorkerRef = nullptr;
 }
 
+bool OffscreenCanvasDisplayHelper::CanElementCaptureStream() const {
+  MutexAutoLock lock(mMutex);
+  return !!mWorkerRef;
+}
+
+bool OffscreenCanvasDisplayHelper::UsingElementCaptureStream() const {
+  MutexAutoLock lock(mMutex);
+
+  if (NS_WARN_IF(!NS_IsMainThread())) {
+    MOZ_ASSERT_UNREACHABLE("Should not call off main-thread!");
+    return !!mCanvasElement;
+  }
+
+  return mCanvasElement && mCanvasElement->UsingCaptureStream();
+}
+
 CanvasContextType OffscreenCanvasDisplayHelper::GetContextType() const {
   MutexAutoLock lock(mMutex);
   return mType;
@@ -76,7 +92,9 @@ void OffscreenCanvasDisplayHelper::UpdateContext(
     OffscreenCanvas* aOffscreenCanvas, RefPtr<ThreadSafeWorkerRef>&& aWorkerRef,
     CanvasContextType aType, const Maybe<int32_t>& aChildId) {
   RefPtr<layers::ImageContainer> imageContainer =
-      MakeRefPtr<layers::ImageContainer>(layers::ImageContainer::ASYNCHRONOUS);
+      MakeRefPtr<layers::ImageContainer>(
+          layers::ImageUsageType::OffscreenCanvas,
+          layers::ImageContainer::ASYNCHRONOUS);
 
   MutexAutoLock lock(mMutex);
 
@@ -116,11 +134,10 @@ void OffscreenCanvasDisplayHelper::FlushForDisplay() {
     return;
   }
 
-  class FlushWorkerRunnable final : public WorkerRunnable {
+  class FlushWorkerRunnable final : public MainThreadWorkerRunnable {
    public:
-    FlushWorkerRunnable(WorkerPrivate* aWorkerPrivate,
-                        OffscreenCanvasDisplayHelper* aDisplayHelper)
-        : WorkerRunnable(aWorkerPrivate, "FlushWorkerRunnable"),
+    explicit FlushWorkerRunnable(OffscreenCanvasDisplayHelper* aDisplayHelper)
+        : MainThreadWorkerRunnable("FlushWorkerRunnable"),
           mDisplayHelper(aDisplayHelper) {}
 
     bool WorkerRun(JSContext*, WorkerPrivate*) override {
@@ -147,13 +164,12 @@ void OffscreenCanvasDisplayHelper::FlushForDisplay() {
 
   // Otherwise we are calling from the main thread during painting to a canvas
   // on a worker thread.
-  auto task = MakeRefPtr<FlushWorkerRunnable>(mWorkerRef->Private(), this);
-  task->Dispatch();
+  auto task = MakeRefPtr<FlushWorkerRunnable>(this);
+  task->Dispatch(mWorkerRef->Private());
 }
 
 bool OffscreenCanvasDisplayHelper::CommitFrameToCompositor(
     nsICanvasRenderingContextInternal* aContext,
-    layers::TextureType aTextureType,
     const Maybe<OffscreenCanvasDisplayData>& aData) {
   auto endTransaction = MakeScopeExit([&]() {
     if (auto* cm = gfx::CanvasManagerChild::Get()) {
@@ -175,12 +191,6 @@ bool OffscreenCanvasDisplayHelper::CommitFrameToCompositor(
   if (aData) {
     mData = aData.ref();
     MaybeQueueInvalidateElement();
-  }
-
-  if (mData.mOwnerId.isSome()) {
-    // No need to update the ImageContainer as the presentation itself is
-    // handled in the compositor process.
-    return true;
   }
 
   if (!mImageContainer) {
@@ -224,7 +234,7 @@ bool OffscreenCanvasDisplayHelper::CommitFrameToCompositor(
       aContext->OnBeforePaintTransaction();
     }
 
-    desc = aContext->PresentFrontBuffer(nullptr, aTextureType);
+    desc = aContext->PresentFrontBuffer(nullptr);
     if (desc) {
       hasRemoteTextureDesc =
           desc->type() ==
@@ -416,9 +426,9 @@ OffscreenCanvasDisplayHelper::GetSurfaceSnapshot() {
 
   class SnapshotWorkerRunnable final : public MainThreadWorkerRunnable {
    public:
-    SnapshotWorkerRunnable(WorkerPrivate* aWorkerPrivate,
-                           OffscreenCanvasDisplayHelper* aDisplayHelper)
-        : MainThreadWorkerRunnable(aWorkerPrivate, "SnapshotWorkerRunnable"),
+    explicit SnapshotWorkerRunnable(
+        OffscreenCanvasDisplayHelper* aDisplayHelper)
+        : MainThreadWorkerRunnable("SnapshotWorkerRunnable"),
           mMonitor("SnapshotWorkerRunnable::mMonitor"),
           mDisplayHelper(aDisplayHelper) {}
 
@@ -496,9 +506,8 @@ OffscreenCanvasDisplayHelper::GetSurfaceSnapshot() {
     originPos = mData.mOriginPos;
     canvasElement = mCanvasElement;
     if (mWorkerRef) {
-      workerRunnable =
-          MakeRefPtr<SnapshotWorkerRunnable>(mWorkerRef->Private(), this);
-      workerRunnable->Dispatch();
+      workerRunnable = MakeRefPtr<SnapshotWorkerRunnable>(this);
+      workerRunnable->Dispatch(mWorkerRef->Private());
     }
   }
 

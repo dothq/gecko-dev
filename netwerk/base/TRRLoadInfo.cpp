@@ -6,6 +6,8 @@
 
 #include "TRRLoadInfo.h"
 #include "mozilla/dom/ClientSource.h"
+#include "mozilla/dom/FeaturePolicy.h"
+#include "mozilla/dom/DOMTypes.h"
 #include "nsContentUtils.h"
 #include "nsIRedirectHistoryEntry.h"
 
@@ -247,6 +249,12 @@ NS_IMETHODIMP
 TRRLoadInfo::SetIsFormSubmission(bool aValue) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
+
+NS_IMETHODIMP
+TRRLoadInfo::GetIsGETRequest(bool* aResult) { return NS_ERROR_NOT_IMPLEMENTED; }
+
+NS_IMETHODIMP
+TRRLoadInfo::SetIsGETRequest(bool aValue) { return NS_ERROR_NOT_IMPLEMENTED; }
 
 NS_IMETHODIMP
 TRRLoadInfo::GetSendCSPViolationEvents(bool* aResult) {
@@ -724,6 +732,13 @@ already_AddRefed<nsIContentSecurityPolicy> TRRLoadInfo::GetCspToInherit() {
   return nullptr;
 }
 
+Maybe<FeaturePolicyInfo> TRRLoadInfo::GetContainerFeaturePolicyInfo() {
+  return Nothing();
+}
+
+void TRRLoadInfo::SetContainerFeaturePolicyInfo(
+    const FeaturePolicyInfo& aContainerFeaturePolicyInfo) {}
+
 NS_IMETHODIMP
 TRRLoadInfo::GetHttpsOnlyStatus(uint32_t* aHttpsOnlyStatus) {
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -753,6 +768,27 @@ TRRLoadInfo::GetHasValidUserGestureActivation(
 NS_IMETHODIMP
 TRRLoadInfo::SetHasValidUserGestureActivation(
     bool aHasValidUserGestureActivation) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetTextDirectiveUserActivation(
+    bool* aTextDirectiveUserActivation) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::SetTextDirectiveUserActivation(bool aTextDirectiveUserActivation) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetIsSameDocumentNavigation(bool* aTextDirectiveUserActivation) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::SetIsSameDocumentNavigation(bool aTextDirectiveUserActivation) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -852,12 +888,51 @@ TRRLoadInfo::SetHasInjectedCookieForCookieBannerHandling(
 }
 
 NS_IMETHODIMP
-TRRLoadInfo::GetWasSchemelessInput(bool* aWasSchemelessInput) {
+TRRLoadInfo::GetSchemelessInput(
+    nsILoadInfo::SchemelessInputType* aSchemelessInput) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
-TRRLoadInfo::SetWasSchemelessInput(bool aWasSchemelessInput) {
+TRRLoadInfo::SetSchemelessInput(
+    nsILoadInfo::SchemelessInputType aSchemelessInput) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetHttpsUpgradeTelemetry(
+    nsILoadInfo::HTTPSUpgradeTelemetryType* aOutHttpsTelemetry) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::SetHttpsUpgradeTelemetry(
+    nsILoadInfo::HTTPSUpgradeTelemetryType aHttpsTelemetry) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetIsNewWindowTarget(bool* aIsNewWindowTarget) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::SetIsNewWindowTarget(bool aIsNewWindowTarget) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetSkipHTTPSUpgrade(bool* aSkipHTTPSUpgrade) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::SetSkipHTTPSUpgrade(bool aSkipHTTPSUpgrade) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+TRRLoadInfo::GetFetchDestination(nsACString& aDestination) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

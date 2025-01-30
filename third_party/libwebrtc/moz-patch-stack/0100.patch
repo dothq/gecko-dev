@@ -1,64 +1,23 @@
-From: Nico Grunbaum <na-g@nostrum.com>
-Date: Wed, 15 Nov 2023 22:33:00 +0000
-Subject: Bug 1863041 - P0 - add device filter control to
- RTCCameraVideoCapturer;r=pehrsons,webrtc-reviewers
+From: Andreas Pehrson <apehrson@mozilla.com>
+Date: Fri, 19 Apr 2024 06:09:00 +0000
+Subject: Bug 1892221 - Initialize VideoCaptureModuleV4L2::_streaming in ctor.
+ r=webrtc-reviewers,dbaker
 
-I have filed this bug upstream: https://bugs.chromium.org/p/webrtc/issues/detail?id=15639
-
-Differential Revision: https://phabricator.services.mozilla.com/D193172
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/91a763d768b74acc9cf4828f91a86df4a7b092ce
+Differential Revision: https://phabricator.services.mozilla.com/D207926
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/00c4bd7039dc8992dd93d4a5948a9260b72ec2a8
 ---
- .../capturer/RTCCameraVideoCapturer.h           |  5 ++++-
- .../capturer/RTCCameraVideoCapturer.m           | 17 +++++++++++++++--
- 2 files changed, 19 insertions(+), 3 deletions(-)
+ modules/video_capture/linux/video_capture_v4l2.cc | 1 +
+ 1 file changed, 1 insertion(+)
 
-diff --git a/sdk/objc/components/capturer/RTCCameraVideoCapturer.h b/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
-index 370bfa70f0..b1f3f64f74 100644
---- a/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
-+++ b/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
-@@ -26,7 +26,10 @@ NS_EXTENSION_UNAVAILABLE_IOS("Camera not available in app extensions.")
- @property(readonly, nonatomic) AVCaptureSession *captureSession;
+diff --git a/modules/video_capture/linux/video_capture_v4l2.cc b/modules/video_capture/linux/video_capture_v4l2.cc
+index db2450a2c7..74af348a6c 100644
+--- a/modules/video_capture/linux/video_capture_v4l2.cc
++++ b/modules/video_capture/linux/video_capture_v4l2.cc
+@@ -62,6 +62,7 @@ VideoCaptureModuleV4L2::VideoCaptureModuleV4L2()
+       _deviceId(-1),
+       _deviceFd(-1),
+       _buffersAllocatedByDevice(-1),
++      _streaming(false),
+       _captureStarted(false),
+       _pool(NULL) {}
  
- // Returns list of available capture devices that support video capture.
--+ (NSArray<AVCaptureDevice *> *)captureDevices;
-++ (NSArray<AVCaptureDevice *> *)captureDevicesWithDeviceTypes:
-+    (NSArray<AVCaptureDeviceType> *)deviceTypes;
-+// Returns list of default capture devices types
-++ (NSArray<AVCaptureDeviceType> *)defaultCaptureDeviceTypes;
- // Returns list of formats that are supported by this class for this device.
- + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device;
- 
-diff --git a/sdk/objc/components/capturer/RTCCameraVideoCapturer.m b/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
-index e7c47b4e99..1361207faf 100644
---- a/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
-+++ b/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
-@@ -117,14 +117,27 @@ const int64_t kNanosecondsPerSecond = 1000000000;
-   [[NSNotificationCenter defaultCenter] removeObserver:self];
- }
- 
--+ (NSArray<AVCaptureDevice *> *)captureDevices {
-++ (NSArray<AVCaptureDevice *> *)captureDevicesWithDeviceTypes:
-+    (NSArray<AVCaptureDeviceType> *)deviceTypes {
-   AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession
--      discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera ]
-+      discoverySessionWithDeviceTypes:deviceTypes
-                             mediaType:AVMediaTypeVideo
-                              position:AVCaptureDevicePositionUnspecified];
-   return session.devices;
- }
- 
-++ (NSArray<AVCaptureDeviceType> *)defaultCaptureDeviceTypes {
-+  NSArray *types = @[ AVCaptureDeviceTypeBuiltInWideAngleCamera ];
-+#if !defined(WEBRTC_IOS)
-+  if (@available(macOS 14.0, *)) {
-+    types = [types arrayByAddingObject:AVCaptureDeviceTypeExternal];
-+  } else {
-+    types = [types arrayByAddingObject:AVCaptureDeviceTypeExternalUnknown];
-+  }
-+#endif
-+  return types;
-+}
-+
- + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device {
-   // Support opening the device in any format. We make sure it's converted to a format we
-   // can handle, if needed, in the method `-setupVideoDataOutput`.

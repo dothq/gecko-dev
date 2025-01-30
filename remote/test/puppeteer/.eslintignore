@@ -50,3 +50,9 @@ third_party/
 packages/ng-schematics/sandbox/**
 packages/ng-schematics/multi/**
 packages/ng-schematics/src/**/files/
+
+# examples
+examples/puppeteer-in-browser/out/**/*
+examples/puppeteer-in-browser/node_modules/**/*
+examples/puppeteer-in-extension/out/**/*
+examples/puppeteer-in-extension/node_modules/**/*

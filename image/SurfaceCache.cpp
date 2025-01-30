@@ -181,7 +181,7 @@ class CachedSurface {
     return aMallocSizeOf(this) + aMallocSizeOf(mProvider.get());
   }
 
-  void InvalidateRecording() { mProvider->InvalidateRecording(); }
+  void InvalidateSurface() { mProvider->InvalidateSurface(); }
 
   // A helper type used by SurfaceCacheImpl::CollectSizeOfSurfaces.
   struct MOZ_STACK_CLASS SurfaceMemoryReport {
@@ -543,13 +543,14 @@ class ImageSurfaceCache {
   bool Invalidate(Function&& aRemoveCallback) {
     // Remove all non-blob recordings from the cache. Invalidate any blob
     // recordings.
-    bool foundRecording = false;
+    bool found = false;
     for (auto iter = mSurfaces.Iter(); !iter.Done(); iter.Next()) {
       NotNull<CachedSurface*> current = WrapNotNull(iter.UserData());
 
+      found = true;
+      current->InvalidateSurface();
+
       if (current->GetSurfaceKey().Flags() & SurfaceFlags::RECORD_BLOB) {
-        foundRecording = true;
-        current->InvalidateRecording();
         continue;
       }
 
@@ -558,7 +559,7 @@ class ImageSurfaceCache {
     }
 
     AfterMaybeRemove();
-    return foundRecording;
+    return found;
   }
 
   IntSize SuggestedSize(const IntSize& aSize) const {
@@ -595,10 +596,9 @@ class ImageSurfaceCache {
       // available. If our guess was too small, don't use factor-of-scaling.
       MOZ_ASSERT(mIsVectorImage);
       factorSize = IntSize(100, 100);
-      Maybe<AspectRatio> aspectRatio = image->GetIntrinsicRatio();
-      if (aspectRatio && *aspectRatio) {
+      if (AspectRatio aspectRatio = image->GetIntrinsicRatio()) {
         factorSize.width =
-            NSToIntRound(aspectRatio->ApplyToFloat(float(factorSize.height)));
+            NSToIntRound(aspectRatio.ApplyToFloat(float(factorSize.height)));
         if (factorSize.IsEmpty()) {
           return aSize;
         }
@@ -1945,6 +1945,7 @@ void SurfaceCache::ReleaseImageOnMainThread(
   // Don't try to dispatch the release after shutdown, we'll just leak the
   // runnable.
   if (AppShutdown::IsInOrBeyond(ShutdownPhase::XPCOMShutdownFinal)) {
+    Unused << aImage;
     return;
   }
 

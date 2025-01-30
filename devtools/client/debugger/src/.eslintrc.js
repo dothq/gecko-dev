@@ -3,7 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 module.exports = {
-  plugins: ["react", "mozilla", "import", "file-header"],
+  plugins: ["react", "mozilla", "import"],
   globals: {
     atob: true,
     btoa: true,
@@ -206,8 +206,6 @@ module.exports = {
     "no-process-exit": 0,
     // Disallow usage of __proto__ property.
     "no-proto": 2,
-    // Disallow declaring the same variable more than once (we use let anyway).
-    "no-redeclare": 2,
     // Disallow multiple spaces in a regular expression literal.
     "no-regex-spaces": 2,
     // Don't restrict usage of specified node modules (not a node environment).
@@ -221,12 +219,6 @@ module.exports = {
     "no-self-compare": 2,
     // Disallow use of comma operator.
     "no-sequences": 2,
-    // Warn about declaration of variables already declared in the outer scope.
-    // This isn't an error because it sometimes is useful to use the same name
-    // in a small helper function rather than having to come up with another
-    // random name.
-    // Still, making this a warning can help people avoid being confused.
-    "no-shadow": 2,
     // Disallow sparse arrays, eg. let arr = [,,2].
     // Array destructuring is fine though:
     // for (let [, breakpointPromise] of aPromises)
@@ -251,8 +243,9 @@ module.exports = {
     // Disallow unreachable statements after a return, throw, continue, or break
     // statement.
     "no-unreachable": 2,
-    // Disallow global and local variables that arent used, but allow unused function arguments.
-    "no-unused-vars": [2, { vars: "all", args: "none" }],
+    // Disallow global and local variables that arent used. Allow unused function arguments
+    // that are prefixed with `_`.
+    "no-unused-vars": [2, { vars: "all", argsIgnorePattern: "^_" }],
     // Allow using variables before they are defined.
     "no-use-before-define": 0,
     // We use var-only-at-top-level instead of no-var as we allow top level
@@ -331,17 +324,6 @@ module.exports = {
     // require assignment operator shorthand where possible or prohibit it
     // entirely
     "operator-assignment": 0,
-
-    "file-header/file-header": [
-      "error",
-      [
-        "This Source Code Form is subject to the terms of the Mozilla Public",
-        "License, v. 2.0. If a copy of the MPL was not distributed with this",
-        "file, You can obtain one at <http://mozilla.org/MPL/2.0/>.",
-      ],
-      "block",
-      ["-\\*-(.*)-\\*-", "eslint(.*)", "vim(.*)"],
-    ],
   },
   settings: {
     jest: {

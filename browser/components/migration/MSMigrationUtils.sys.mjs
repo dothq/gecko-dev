@@ -373,15 +373,14 @@ Bookmarks.prototype = {
   },
 
   async _migrateFolder(aSourceFolder, aDestFolderGuid) {
-    let { bookmarks, favicons } = await this._getBookmarksInFolder(
-      aSourceFolder
-    );
+    let { bookmarks, favicons } =
+      await this._getBookmarksInFolder(aSourceFolder);
     if (!bookmarks.length) {
       return;
     }
 
     await MigrationUtils.insertManyBookmarksWrapper(bookmarks, aDestFolderGuid);
-    MigrationUtils.insertManyFavicons(favicons);
+    MigrationUtils.insertManyFavicons(favicons).catch(console.error);
   },
 
   /**

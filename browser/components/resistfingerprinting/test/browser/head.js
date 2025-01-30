@@ -306,19 +306,28 @@ async function calcMaximumAvailSize(aChromeWidth, aChromeHeight) {
   let availWidth = window.screen.availWidth;
   let availHeight = window.screen.availHeight;
 
-  // Ideally, we would round the window size as 1000x1000. But the available
-  // screen space might not suffice. So, we decide the size according to the
-  // available screen size.
-  let availContentWidth = Math.min(1000, availWidth - chromeUIWidth);
+  // Ideally, we would round the window size as
+  // privacy.window.maxInnerWidth x privacy.window.maxInnerHeight. But the
+  // available screen space might not suffice. So, we decide the size according
+  // to the available screen size.
+  let maxInnerWidth = Services.prefs.getIntPref("privacy.window.maxInnerWidth");
+  let maxInnerHeight = Services.prefs.getIntPref(
+    "privacy.window.maxInnerHeight"
+  );
+
+  let availContentWidth = Math.min(maxInnerWidth, availWidth - chromeUIWidth);
   let availContentHeight;
 
   // If it is GTK window, we would consider the system decorations when we
   // calculating avail content height since the system decorations won't be
   // reported when we get available screen dimensions.
   if (AppConstants.MOZ_WIDGET_GTK) {
-    availContentHeight = Math.min(1000, -40 + availHeight - chromeUIHeight);
+    availContentHeight = Math.min(
+      maxInnerHeight,
+      -40 + availHeight - chromeUIHeight
+    );
   } else {
-    availContentHeight = Math.min(1000, availHeight - chromeUIHeight);
+    availContentHeight = Math.min(maxInnerHeight, availHeight - chromeUIHeight);
   }
 
   // Rounded the desire size to the nearest 200x100.
@@ -372,9 +381,7 @@ async function testWindowOpen(
   aTargetWidth,
   aTargetHeight,
   aMaxAvailWidth,
-  aMaxAvailHeight,
-  aPopupChromeUIWidth,
-  aPopupChromeUIHeight
+  aMaxAvailHeight
 ) {
   // If the target size is greater than the maximum available content size,
   // we set the target size to it.
@@ -687,7 +694,7 @@ async function runActualTest(uri, testFunction, expectedResults, extraData) {
   let filterExtraData = function (x) {
     let banned_keys = ["private_window", "etp_reload", "noopener", "await_uri"];
     return Object.fromEntries(
-      Object.entries(x).filter(([k, v]) => !banned_keys.includes(k))
+      Object.entries(x).filter(([k]) => !banned_keys.includes(k))
     );
   };
 
@@ -743,6 +750,30 @@ async function defaultsTest(
     extraData = {};
   }
   extraData.testDesc = extraData.testDesc || "default";
+  expectedResults.shouldRFPApply = false;
+  if (extraPrefs != undefined) {
+    await SpecialPowers.pushPrefEnv({
+      set: extraPrefs,
+    });
+  }
+  await runActualTest(uri, testFunction, expectedResults, extraData);
+  if (extraPrefs != undefined) {
+    await SpecialPowers.popPrefEnv();
+  }
+}
+
+async function defaultsPBMTest(
+  uri,
+  testFunction,
+  expectedResults,
+  extraData,
+  extraPrefs
+) {
+  if (extraData == undefined) {
+    extraData = {};
+  }
+  extraData.private_window = true;
+  extraData.testDesc = extraData.testDesc || "default PBM window";
   expectedResults.shouldRFPApply = false;
   if (extraPrefs != undefined) {
     await SpecialPowers.pushPrefEnv({
@@ -815,7 +846,10 @@ async function simpleFPPTest(
   await SpecialPowers.pushPrefEnv({
     set: [
       ["privacy.fingerprintingProtection", true],
-      ["privacy.fingerprintingProtection.overrides", "+NavigatorHWConcurrency"],
+      [
+        "privacy.fingerprintingProtection.overrides",
+        "+NavigatorHWConcurrency,+CanvasRandomization",
+      ],
     ].concat(extraPrefs || []),
   });
 
@@ -840,7 +874,10 @@ async function simplePBMFPPTest(
   await SpecialPowers.pushPrefEnv({
     set: [
       ["privacy.fingerprintingProtection.pbmode", true],
-      ["privacy.fingerprintingProtection.overrides", "+HardwareConcurrency"],
+      [
+        "privacy.fingerprintingProtection.overrides",
+        "+NavigatorHWConcurrency,+CanvasRandomization",
+      ],
     ].concat(extraPrefs || []),
   });
 
@@ -849,7 +886,7 @@ async function simplePBMFPPTest(
   await SpecialPowers.popPrefEnv();
 }
 
-async function simpleRFPPBMFPPTest(
+async function RFPPBMFPP_NormalMode_NoProtectionsTest(
   uri,
   testFunction,
   expectedResults,
@@ -862,14 +899,49 @@ async function simpleRFPPBMFPPTest(
   extraData.private_window = false;
   extraData.testDesc =
     extraData.testDesc ||
-    "RFP Enabled in PBM and FPP enabled in Normal Browsing Mode";
+    "RFP Enabled in PBM and FPP enabled in Normal Browsing Mode, Protections Disabled";
   expectedResults.shouldRFPApply = false;
   await SpecialPowers.pushPrefEnv({
     set: [
       ["privacy.resistFingerprinting", false],
       ["privacy.resistFingerprinting.pbmode", true],
       ["privacy.fingerprintingProtection", true],
-      ["privacy.fingerprintingProtection.overrides", "-HardwareConcurrency"],
+      [
+        "privacy.fingerprintingProtection.overrides",
+        "-NavigatorHWConcurrency,-CanvasRandomization",
+      ],
+    ].concat(extraPrefs || []),
+  });
+
+  await runActualTest(uri, testFunction, expectedResults, extraData);
+
+  await SpecialPowers.popPrefEnv();
+}
+
+async function RFPPBMFPP_NormalMode_ProtectionsTest(
+  uri,
+  testFunction,
+  expectedResults,
+  extraData,
+  extraPrefs
+) {
+  if (extraData == undefined) {
+    extraData = {};
+  }
+  extraData.private_window = false;
+  extraData.testDesc =
+    extraData.testDesc ||
+    "RFP Enabled in PBM and FPP enabled in Normal Browsing Mode, Protections Enabled";
+  expectedResults.shouldRFPApply = false;
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["privacy.resistFingerprinting", false],
+      ["privacy.resistFingerprinting.pbmode", true],
+      ["privacy.fingerprintingProtection", true],
+      [
+        "privacy.fingerprintingProtection.overrides",
+        "+NavigatorHWConcurrency,+CanvasRandomization",
+      ],
     ].concat(extraPrefs || []),
   });
 

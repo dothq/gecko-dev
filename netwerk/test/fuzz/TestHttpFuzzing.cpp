@@ -30,8 +30,8 @@ namespace net {
 
 // Target spec and optional proxy type to use, set by the respective
 // initialization function so we can cover all combinations.
-static nsAutoCString httpSpec;
-static nsAutoCString proxyType;
+MOZ_RUNINIT static nsAutoCString httpSpec;
+MOZ_RUNINIT static nsAutoCString proxyType;
 static size_t minSize;
 
 static int FuzzingInitNetworkHttp(int* argc, char*** argv) {
@@ -171,7 +171,7 @@ static int FuzzingRunNetworkHttp(const uint8_t* data, size_t size) {
           nsContentUtils::GetSystemPrincipal(),  // loading principal
           nsContentUtils::GetSystemPrincipal(),  // triggering principal
           nullptr,                               // Context
-          secFlags, nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST,
+          secFlags, nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC,
           Maybe<mozilla::dom::ClientInfo>(),
           Maybe<mozilla::dom::ServiceWorkerDescriptor>(), sandboxFlags);
 
@@ -186,7 +186,7 @@ static int FuzzingRunNetworkHttp(const uint8_t* data, size_t size) {
     } else {
       rv = NS_NewChannel(getter_AddRefs(channel), url,
                          nsContentUtils::GetSystemPrincipal(), secFlags,
-                         nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST,
+                         nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC,
                          nullptr,    // aCookieJarSettings
                          nullptr,    // aPerformanceStorage
                          nullptr,    // loadGroup

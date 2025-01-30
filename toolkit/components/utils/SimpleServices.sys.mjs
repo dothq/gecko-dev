@@ -10,8 +10,6 @@
  * eagerly loaded at startup.
  */
 
-/* globals WebExtensionPolicy */
-
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = {};
@@ -103,7 +101,7 @@ AddonLocalizationConverter.prototype = {
     this.listener = aListener;
   },
 
-  onStartRequest(aRequest) {
+  onStartRequest() {
     this.parts = [];
     this.decoder = new TextDecoder();
   },
@@ -166,11 +164,12 @@ HttpIndexViewer.prototype = {
 
     aChannel.contentType = contentType;
 
-    let contract = Services.catMan.getCategoryEntry(
-      "Gecko-Content-Viewers",
-      contentType
-    );
-    let factory = Cc[contract].getService(Ci.nsIDocumentLoaderFactory);
+    // NOTE: This assumes that both text/html and text/plain will continue to be
+    // handled by nsContentDLF. If this ever changes this logic will need to be
+    // updated.
+    let factory = Cc[
+      "@mozilla.org/content/document-loader-factory;1"
+    ].getService(Ci.nsIDocumentLoaderFactory);
 
     let listener = {};
     let res = factory.createInstance(

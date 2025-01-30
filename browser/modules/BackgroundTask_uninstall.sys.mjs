@@ -12,7 +12,7 @@
 
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
-export async function runBackgroundTask(commandLine) {
+export async function runBackgroundTask() {
   console.log("Running BackgroundTask_uninstall.");
 
   if (AppConstants.platform === "win") {
@@ -27,7 +27,7 @@ export async function runBackgroundTask(commandLine) {
 
   console.log("Cleaning up update files.");
   try {
-    Cc["@mozilla.org/updates/update-manager;1"]
+    await Cc["@mozilla.org/updates/update-manager;1"]
       .getService(Ci.nsIUpdateManager)
       .doUninstallCleanup();
   } catch (ex) {

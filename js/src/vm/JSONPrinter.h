@@ -47,7 +47,7 @@ class JSONPrinter {
 
   void boolProperty(const char* name, bool value);
 
-  void property(const char* name, JSLinearString* value);
+  void property(const char* name, const JSLinearString* value);
   void property(const char* name, const char* value);
   void property(const char* name, int32_t value);
   void property(const char* name, uint32_t value);
@@ -62,7 +62,7 @@ class JSONPrinter {
 
   void formatProperty(const char* name, const char* format, ...)
       MOZ_FORMAT_PRINTF(3, 4);
-  void formatProperty(const char* name, const char* format, va_list ap);
+  void formatPropertyVA(const char* name, const char* format, va_list ap);
 
   void propertyName(const char* name);
 
@@ -86,10 +86,6 @@ class JSONPrinter {
   void endObject();
   void endList();
   void endInlineList();
-
-  // Notify the output that the caller has detected OOM and should transition
-  // to its saw-OOM state.
-  void outOfMemory() { out_.reportOutOfMemory(); }
 
  protected:
   void beginInline();

@@ -41,7 +41,7 @@ class CookiePersistentStorage final : public CookieStorage {
       const nsACString& aHost, const nsACString& aBaseDomain,
       const OriginAttributesPattern& aPattern) override;
 
-  void StaleCookies(const nsTArray<Cookie*>& aCookieList,
+  void StaleCookies(const nsTArray<RefPtr<Cookie>>& aCookieList,
                     int64_t aCurrentTimeInUsec) override;
 
   void Close() override;
@@ -97,6 +97,7 @@ class CookiePersistentStorage final : public CookieStorage {
 
   OpenDBResult TryInitDB(bool aRecreateDB);
   OpenDBResult Read();
+  void MoveUnpartitionedChipsCookies();
 
   nsresult CreateTableWorker(const char* aName);
   nsresult CreateTable();

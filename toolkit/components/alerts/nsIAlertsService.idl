@@ -242,10 +242,6 @@ interface nsIAlertNotification : nsISupports
 [scriptable, uuid(f7a36392-d98b-4141-a7d7-4e46642684e3)]
 interface nsIAlertsService : nsISupports
 {
-  void showPersistentNotification(in AString aPersistentData,
-                                  in nsIAlertNotification aAlert,
-                                  [optional] in nsIObserver aAlertListener);
-
   void showAlert(in nsIAlertNotification aAlert,
                  [optional] in nsIObserver aAlertListener);
   /**
@@ -312,14 +308,14 @@ interface nsIAlertsDoNotDisturb : nsISupports
    * code to show an alert. e.g. on OS X, the system will take care not
    * disrupting a user if we simply create a notification like usual.
    */
-  attribute bool manualDoNotDisturb;
+  attribute boolean manualDoNotDisturb;
 
   /**
    * Toggles a mode for the service to suppress all notifications from
    * being dispatched when sharing the screen via the getMediaDisplay
    * API.
    */
-  attribute bool suppressForScreenSharing;
+  attribute boolean suppressForScreenSharing;
 };
 
 [scriptable, uuid(fc6d7f0a-0cf6-4268-8c71-ab640842b9b1)]

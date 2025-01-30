@@ -40,6 +40,10 @@
 #define SYS_COLOR_MAX 30
 #define SYS_COLOR_COUNT (SYS_COLOR_MAX - SYS_COLOR_MIN + 1)
 
+// Undocumented SPI, see bug 1712669 comment 4.
+#define MOZ_SPI_CURSORSIZE 0x2028
+#define MOZ_SPI_SETCURSORSIZE 0x2029
+
 namespace mozilla::widget::WinRegistry {
 class KeyWatcher;
 }
@@ -57,6 +61,8 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
   bool NativeGetFont(FontID aID, nsString& aFontName,
                      gfxFontStyle& aFontStyle) override;
   char16_t GetPasswordCharacterImpl() override;
+
+  nsresult GetKeyboardLayoutImpl(nsACString& aLayout) override;
 
  private:
   struct TitlebarColors {

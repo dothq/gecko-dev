@@ -5,13 +5,7 @@
 import { html, ifDefined } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 
-const lazy = {};
-ChromeUtils.defineESModuleGetters(lazy, {
-  DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
-});
-
 const SEARCH_DEBOUNCE_RATE_MS = 500;
-const SEARCH_DEBOUNCE_TIMEOUT_MS = 1000;
 
 /**
  * A search box that displays a search icon and is clearable. Updates to the
@@ -20,7 +14,7 @@ const SEARCH_DEBOUNCE_TIMEOUT_MS = 1000;
  *
  * There is no actual searching done here. That needs to be implemented by the
  * `fxview-search-textbox-query` event handler. `searchTabList()` from
- * `helpers.mjs` can be used as a starting point.
+ * `search-helpers.mjs` can be used as a starting point.
  *
  * @property {string} placeholder
  *   The placeholder text for the search box.
@@ -34,6 +28,7 @@ export default class FxviewSearchTextbox extends MozLitElement {
     placeholder: { type: String },
     size: { type: Number },
     pageName: { type: String },
+    autofocus: { type: Boolean },
   };
 
   static queries = {
@@ -42,21 +37,17 @@ export default class FxviewSearchTextbox extends MozLitElement {
   };
 
   #query = "";
+  #searchTimer;
 
-  constructor() {
-    super();
-    this.searchTask = new lazy.DeferredTask(
-      () => this.#dispatchQueryEvent(),
-      SEARCH_DEBOUNCE_RATE_MS,
-      SEARCH_DEBOUNCE_TIMEOUT_MS
-    );
+  firstUpdated() {
+    if (this.autofocus) {
+      this.focus();
+    }
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    if (!this.searchTask?.isFinalized) {
-      this.searchTask?.finalize();
-    }
+    clearTimeout(this.#searchTimer);
   }
 
   focus() {
@@ -78,7 +69,11 @@ export default class FxviewSearchTextbox extends MozLitElement {
    * button.
    */
   onSearch() {
-    this.searchTask?.arm();
+    clearTimeout(this.#searchTimer);
+    this.#searchTimer = setTimeout(
+      () => this.#dispatchQueryEvent(),
+      SEARCH_DEBOUNCE_RATE_MS
+    );
     this.requestUpdate();
   }
 
@@ -103,24 +98,20 @@ export default class FxviewSearchTextbox extends MozLitElement {
         detail: { query: this.#query },
       })
     );
-
-    Services.telemetry.recordEvent(
-      "firefoxview_next",
-      "search_initiated",
-      "search",
-      null,
-      {
+    if (!window.IS_STORYBOOK) {
+      Glean.firefoxviewNext.searchInitiatedSearch.record({
         page: this.pageName,
-      }
-    );
+      });
+    }
   }
 
   render() {
     return html`
     <link rel="stylesheet" href="chrome://browser/content/firefoxview/fxview-search-textbox.css" />
-    <div class="search-container">
+    <div class="search-container" part="container">
       <div class="search-icon"></div>
       <input
+        part="input"
         type="search"
         .placeholder=${ifDefined(this.placeholder)}
         .size=${ifDefined(this.size)}

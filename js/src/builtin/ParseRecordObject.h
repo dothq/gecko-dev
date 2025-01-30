@@ -7,37 +7,53 @@
 #ifndef builtin_ParseRecordObject_h
 #define builtin_ParseRecordObject_h
 
-#include "js/TraceKind.h"
+#include "js/HashTable.h"
+#include "js/TracingAPI.h"
 #include "vm/JSContext.h"
 
 namespace js {
 
 using JSONParseNode = JSString;
 
-class ParseRecordObject {
+class ParseRecordObject : public NativeObject {
+  enum { ParseNodeSlot, ValueSlot, KeySlot, EntriesSlot, SlotCount };
+
  public:
-  JSONParseNode* parseNode;
-  JS::PropertyKey key;
-  Value value;
+  using EntryMap = JSObject;
 
-  ParseRecordObject();
-  ParseRecordObject(Handle<js::JSONParseNode*> parseNode, const Value& val);
-  ParseRecordObject(ParseRecordObject&& other)
-      : parseNode(std::move(other.parseNode)),
-        key(std::move(other.key)),
-        value(std::move(other.value)) {}
+  static const JSClass class_;
 
-  bool isEmpty() const { return value.isUndefined(); }
+  static ParseRecordObject* create(JSContext* cx, const Value& val);
+  static ParseRecordObject* create(JSContext* cx,
+                                   Handle<js::JSONParseNode*> parseNode,
+                                   const Value& val);
 
-  // move assignment
-  ParseRecordObject& operator=(ParseRecordObject&& other) noexcept {
-    parseNode = other.parseNode;
-    key = other.key;
-    value = other.value;
-    return *this;
+  // The source text that was parsed for this record. According to the spec, we
+  // don't track this for objects and arrays, so it will be a null pointer.
+  JSONParseNode* getParseNode() const {
+    const Value& slot = getSlot(ParseNodeSlot);
+    return slot.isUndefined() ? nullptr : slot.toString();
   }
 
-  void trace(JSTracer* trc);
+  // For object members, the member key. For arrays, the index. For JSON
+  // primitives, it will be undefined.
+  JS::PropertyKey getKey(JSContext* cx) const;
+
+  bool setKey(JSContext* cx, const JS::PropertyKey& key);
+
+  // The original value corresponding to this record, used to determine if the
+  // reviver function has modified it.
+  const Value& getValue() const { return getSlot(ValueSlot); }
+
+  void setValue(JS::Handle<JS::Value> value) { setSlot(ValueSlot, value); }
+
+  bool hasValue() const { return !getValue().isUndefined(); }
+
+  // For objects and arrays, the records for the members and elements
+  // (respectively). If there are none, or for JSON primitives, return null.
+  bool getEntries(JSContext* cx, MutableHandle<EntryMap*> entries);
+
+  bool setEntries(JSContext* cx, Handle<EntryMap*> entries);
 };
 
 }  // namespace js

@@ -6,7 +6,6 @@
 
 #include "jit/MIR.h"
 
-#include "mozilla/CheckedInt.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/MathAlgorithms.h"
@@ -24,6 +23,7 @@
 #include "jit/AtomicOperations.h"
 #include "jit/CompileInfo.h"
 #include "jit/KnownClass.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIRGraph.h"
 #include "jit/RangeAnalysis.h"
 #include "jit/VMFunctions.h"
@@ -33,25 +33,22 @@
 #include "js/ScalarType.h"            // js::Scalar::Type
 #include "util/Text.h"
 #include "util/Unicode.h"
+#include "vm/BigIntType.h"
+#include "vm/Float16.h"
 #include "vm/Iteration.h"    // js::NativeIterator
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/Uint8Clamped.h"
-#include "wasm/WasmCode.h"
-#include "wasm/WasmFeatures.h"  // for wasm::ReportSimdAnalysis
 
+#include "vm/BytecodeUtil-inl.h"
 #include "vm/JSAtomUtils-inl.h"  // TypeName
-#include "wasm/WasmInstance-inl.h"
 
 using namespace js;
 using namespace js::jit;
 
 using JS::ToInt32;
 
-using mozilla::CheckedInt;
-using mozilla::DebugOnly;
 using mozilla::IsFloat32Representable;
 using mozilla::IsPowerOfTwo;
-using mozilla::Maybe;
 using mozilla::NumbersAreIdentical;
 
 NON_GC_POINTER_TYPE_ASSERTIONS_GENERATED
@@ -312,6 +309,40 @@ static MConstant* EvaluateConstantOperands(TempAllocator& alloc,
   }
 
   return MConstant::New(alloc, retVal);
+}
+
+static MConstant* EvaluateConstantNaNOperand(MBinaryInstruction* ins) {
+  auto* left = ins->lhs();
+  auto* right = ins->rhs();
+
+  MOZ_ASSERT(IsTypeRepresentableAsDouble(left->type()));
+  MOZ_ASSERT(IsTypeRepresentableAsDouble(right->type()));
+  MOZ_ASSERT(left->type() == ins->type());
+  MOZ_ASSERT(right->type() == ins->type());
+
+  // Don't fold NaN if we can't return a floating point type.
+  if (!IsFloatingPointType(ins->type())) {
+    return nullptr;
+  }
+
+  MOZ_ASSERT(!left->isConstant() || !right->isConstant(),
+             "EvaluateConstantOperands should have handled this case");
+
+  // One operand must be a constant NaN.
+  MConstant* cst;
+  if (left->isConstant()) {
+    cst = left->toConstant();
+  } else if (right->isConstant()) {
+    cst = right->toConstant();
+  } else {
+    return nullptr;
+  }
+  if (!std::isnan(cst->numberToDouble())) {
+    return nullptr;
+  }
+
+  // Fold to constant NaN.
+  return cst;
 }
 
 static MMul* EvaluateExactReciprocal(TempAllocator& alloc, MDiv* ins) {
@@ -689,7 +720,62 @@ MDefinition* MTest::foldsNeedlessControlFlow(TempAllocator& alloc) {
   return MGoto::New(alloc, ifTrue());
 }
 
+// If a test is dominated by either the true or false path of a previous test of
+// the same condition, then the test is redundant and can be converted into a
+// goto true or goto false, respectively.
+MDefinition* MTest::foldsRedundantTest(TempAllocator& alloc) {
+  MBasicBlock* myBlock = this->block();
+  MDefinition* originalInput = getOperand(0);
+
+  // Handle single and double negatives. This ensures that we do not miss a
+  // folding opportunity due to a condition being inverted.
+  MDefinition* newInput = input();
+  bool inverted = false;
+  if (originalInput->isNot()) {
+    newInput = originalInput->toNot()->input();
+    inverted = true;
+    if (originalInput->toNot()->input()->isNot()) {
+      newInput = originalInput->toNot()->input()->toNot()->input();
+      inverted = false;
+    }
+  }
+
+  // The specific order of traversal does not matter. If there are multiple
+  // dominating redundant tests, they will either agree on direction (in which
+  // case we will prune the same way regardless of order), or they will
+  // disagree, in which case we will eventually be marked entirely dead by the
+  // folding of the redundant parent.
+  for (MUseIterator i(newInput->usesBegin()), e(newInput->usesEnd()); i != e;
+       ++i) {
+    if (!i->consumer()->isDefinition()) {
+      continue;
+    }
+    if (!i->consumer()->toDefinition()->isTest()) {
+      continue;
+    }
+    MTest* otherTest = i->consumer()->toDefinition()->toTest();
+    if (otherTest == this) {
+      continue;
+    }
+
+    if (otherTest->ifFalse()->dominates(myBlock)) {
+      // This test cannot be true, so fold to a goto false.
+      return MGoto::New(alloc, inverted ? ifTrue() : ifFalse());
+    }
+    if (otherTest->ifTrue()->dominates(myBlock)) {
+      // This test cannot be false, so fold to a goto true.
+      return MGoto::New(alloc, inverted ? ifFalse() : ifTrue());
+    }
+  }
+
+  return nullptr;
+}
+
 MDefinition* MTest::foldsTo(TempAllocator& alloc) {
+  if (MDefinition* def = foldsRedundantTest(alloc)) {
+    return def;
+  }
+
   if (MDefinition* def = foldsDoubleNegation(alloc)) {
     return def;
   }
@@ -882,7 +968,6 @@ bool MDefinition::hasLiveDefUses() const {
       }
     }
   }
-
   return false;
 }
 
@@ -1067,11 +1152,16 @@ MConstant::MConstant(TempAllocator& alloc, const js::Value& vp)
     case MIRType::Double:
       payload_.d = vp.toDouble();
       break;
-    case MIRType::String:
-      MOZ_ASSERT(!IsInsideNursery(vp.toString()));
-      MOZ_ASSERT(vp.toString()->isLinear());
+    case MIRType::String: {
+      JSString* str = vp.toString();
+      if (str->isAtomRef()) {
+        str = str->atom();
+      }
+      MOZ_ASSERT(!IsInsideNursery(str));
+      MOZ_ASSERT(str->isAtom());
       payload_.str = vp.toString();
       break;
+    }
     case MIRType::Symbol:
       payload_.sym = vp.toSymbol();
       break;
@@ -1169,20 +1259,6 @@ void MConstant::assertInitializedPayload() const {
   }
 }
 #endif
-
-static HashNumber ConstantValueHash(MIRType type, uint64_t payload) {
-  // Build a 64-bit value holding both the payload and the type.
-  static const size_t TypeBits = 8;
-  static const size_t TypeShift = 64 - TypeBits;
-  MOZ_ASSERT(uintptr_t(type) <= (1 << TypeBits) - 1);
-  uint64_t bits = (uint64_t(type) << TypeShift) ^ payload;
-
-  // Fold all 64 bits into the 32-bit result. It's tempting to just discard
-  // half of the bits, as this is just a hash, however there are many common
-  // patterns of values where only the low or the high bits vary, so
-  // discarding either side would lead to excessive hash collisions.
-  return (HashNumber)bits ^ (HashNumber)(bits >> 32);
-}
 
 HashNumber MConstant::valueHash() const {
   static_assert(sizeof(Payload) == sizeof(uint64_t),
@@ -1353,6 +1429,9 @@ bool MConstant::valueToBoolean(bool* res) const {
     case MIRType::Int64:
       *res = toInt64() != 0;
       return true;
+    case MIRType::IntPtr:
+      *res = toIntPtr() != 0;
+      return true;
     case MIRType::Double:
       *res = !std::isnan(toDouble()) && toDouble() != 0.0;
       return true;
@@ -1383,26 +1462,6 @@ bool MConstant::valueToBoolean(bool* res) const {
       MOZ_ASSERT(IsMagicType(type()));
       return false;
   }
-}
-
-HashNumber MWasmFloatConstant::valueHash() const {
-#ifdef ENABLE_WASM_SIMD
-  return ConstantValueHash(type(), u.bits_[0] ^ u.bits_[1]);
-#else
-  return ConstantValueHash(type(), u.bits_[0]);
-#endif
-}
-
-bool MWasmFloatConstant::congruentTo(const MDefinition* ins) const {
-  return ins->isWasmFloatConstant() && type() == ins->type() &&
-#ifdef ENABLE_WASM_SIMD
-         u.bits_[1] == ins->toWasmFloatConstant()->u.bits_[1] &&
-#endif
-         u.bits_[0] == ins->toWasmFloatConstant()->u.bits_[0];
-}
-
-HashNumber MWasmNullConstant::valueHash() const {
-  return ConstantValueHash(MIRType::WasmAnyRef, 0);
 }
 
 #ifdef JS_JITSPEW
@@ -1619,13 +1678,17 @@ WrappedFunction::WrappedFunction(JSFunction* nativeFun, uint16_t nargs,
 
 MCall* MCall::New(TempAllocator& alloc, WrappedFunction* target, size_t maxArgc,
                   size_t numActualArgs, bool construct, bool ignoresReturnValue,
-                  bool isDOMCall, mozilla::Maybe<DOMObjectKind> objectKind) {
+                  bool isDOMCall, mozilla::Maybe<DOMObjectKind> objectKind,
+                  mozilla::Maybe<gc::Heap> initialHeap) {
   MOZ_ASSERT(isDOMCall == objectKind.isSome());
+  MOZ_ASSERT(isDOMCall == initialHeap.isSome());
+
   MOZ_ASSERT(maxArgc >= numActualArgs);
   MCall* ins;
   if (isDOMCall) {
     MOZ_ASSERT(!construct);
-    ins = new (alloc) MCallDOMNative(target, numActualArgs, *objectKind);
+    ins = new (alloc)
+        MCallDOMNative(target, numActualArgs, *objectKind, *initialHeap);
   } else {
     ins =
         new (alloc) MCall(target, numActualArgs, construct, ignoresReturnValue);
@@ -2823,6 +2886,11 @@ MDefinition* MBinaryArithInstruction::foldsTo(TempAllocator& alloc) {
     return folded;
   }
 
+  if (MConstant* folded = EvaluateConstantNaNOperand(this)) {
+    MOZ_ASSERT(!isTruncated());
+    return folded;
+  }
+
   if (mustPreserveNaN_) {
     return this;
   }
@@ -3203,6 +3271,11 @@ MDefinition* MPow::foldsConstantPower(TempAllocator& alloc) {
     return multiply(y, y);
   }
 
+  // Math.pow(x, NaN) == NaN.
+  if (std::isnan(pow)) {
+    return power();
+  }
+
   // No optimization
   return nullptr;
 }
@@ -3215,6 +3288,249 @@ MDefinition* MPow::foldsTo(TempAllocator& alloc) {
     return def;
   }
   return this;
+}
+
+MDefinition* MBigIntPow::foldsTo(TempAllocator& alloc) {
+  auto* base = lhs();
+  MOZ_ASSERT(base->type() == MIRType::BigInt);
+
+  auto* power = rhs();
+  MOZ_ASSERT(power->type() == MIRType::BigInt);
+
+  // |power| must be a constant.
+  if (!power->isConstant()) {
+    return this;
+  }
+
+  int32_t pow;
+  if (BigInt::isInt32(power->toConstant()->toBigInt(), &pow)) {
+    // x ** 1n == x.
+    if (pow == 1) {
+      return base;
+    }
+
+    // x ** 2n == x*x.
+    if (pow == 2) {
+      auto* mul = MBigIntMul::New(alloc, base, base);
+      mul->setBailoutKind(bailoutKind());
+      return mul;
+    }
+  }
+
+  // No optimization
+  return this;
+}
+
+MDefinition* MBigIntAsIntN::foldsTo(TempAllocator& alloc) {
+  auto* bitsDef = bits();
+  if (!bitsDef->isConstant()) {
+    return this;
+  }
+
+  // Negative |bits| throw an error and too large |bits| don't fit into Int64.
+  int32_t bitsInt = bitsDef->toConstant()->toInt32();
+  if (bitsInt < 0 || bitsInt > 64) {
+    return this;
+  }
+
+  // Prefer sign-extension if possible.
+  bool canSignExtend = false;
+  switch (bitsInt) {
+    case 8:
+    case 16:
+    case 32:
+    case 64:
+      canSignExtend = true;
+      break;
+  }
+
+  // Ensure the input is either IntPtr or Int64 typed.
+  auto* inputDef = input();
+  if (inputDef->isIntPtrToBigInt()) {
+    inputDef = inputDef->toIntPtrToBigInt()->input();
+
+    if (!canSignExtend) {
+      auto* int64 = MIntPtrToInt64::New(alloc, inputDef);
+      block()->insertBefore(this, int64);
+      inputDef = int64;
+    }
+  } else if (inputDef->isInt64ToBigInt()) {
+    inputDef = inputDef->toInt64ToBigInt()->input();
+  } else {
+    auto* truncate = MTruncateBigIntToInt64::New(alloc, inputDef);
+    block()->insertBefore(this, truncate);
+    inputDef = truncate;
+  }
+
+  if (inputDef->type() == MIRType::IntPtr) {
+    MOZ_ASSERT(canSignExtend);
+
+    // If |bits| is larger-or-equal to |BigInt::DigitBits|, return the input.
+    if (size_t(bitsInt) >= BigInt::DigitBits) {
+      auto* limited = MIntPtrLimitedTruncate::New(alloc, inputDef);
+      block()->insertBefore(this, limited);
+      inputDef = limited;
+    } else {
+      MOZ_ASSERT(bitsInt < 64);
+
+      // Otherwise extension is the way to go.
+      MSignExtendIntPtr::Mode mode;
+      switch (bitsInt) {
+        case 8:
+          mode = MSignExtendIntPtr::Byte;
+          break;
+        case 16:
+          mode = MSignExtendIntPtr::Half;
+          break;
+        case 32:
+          mode = MSignExtendIntPtr::Word;
+          break;
+      }
+
+      auto* extend = MSignExtendIntPtr::New(alloc, inputDef, mode);
+      block()->insertBefore(this, extend);
+      inputDef = extend;
+    }
+
+    return MIntPtrToBigInt::New(alloc, inputDef);
+  }
+  MOZ_ASSERT(inputDef->type() == MIRType::Int64);
+
+  if (canSignExtend) {
+    // If |bits| is equal to 64, return the input.
+    if (bitsInt == 64) {
+      auto* limited = MInt64LimitedTruncate::New(alloc, inputDef);
+      block()->insertBefore(this, limited);
+      inputDef = limited;
+    } else {
+      MOZ_ASSERT(bitsInt < 64);
+
+      // Otherwise extension is the way to go.
+      MSignExtendInt64::Mode mode;
+      switch (bitsInt) {
+        case 8:
+          mode = MSignExtendInt64::Byte;
+          break;
+        case 16:
+          mode = MSignExtendInt64::Half;
+          break;
+        case 32:
+          mode = MSignExtendInt64::Word;
+          break;
+      }
+
+      auto* extend = MSignExtendInt64::New(alloc, inputDef, mode);
+      block()->insertBefore(this, extend);
+      inputDef = extend;
+    }
+  } else {
+    MOZ_ASSERT(bitsInt < 64);
+
+    uint64_t mask = 0;
+    if (bitsInt > 0) {
+      mask = uint64_t(-1) >> (64 - bitsInt);
+    }
+
+    auto* cst = MConstant::NewInt64(alloc, int64_t(mask));
+    block()->insertBefore(this, cst);
+
+    // Mask off any excess bits.
+    auto* bitAnd = MBitAnd::New(alloc, inputDef, cst, MIRType::Int64);
+    block()->insertBefore(this, bitAnd);
+
+    auto* shift = MConstant::NewInt64(alloc, int64_t(64 - bitsInt));
+    block()->insertBefore(this, shift);
+
+    // Left-shift to make the sign-bit the left-most bit.
+    auto* lsh = MLsh::New(alloc, bitAnd, shift, MIRType::Int64);
+    block()->insertBefore(this, lsh);
+
+    // Right-shift to propagate the sign-bit.
+    auto* rsh = MRsh::New(alloc, lsh, shift, MIRType::Int64);
+    block()->insertBefore(this, rsh);
+
+    inputDef = rsh;
+  }
+
+  return MInt64ToBigInt::New(alloc, inputDef, /* isSigned = */ true);
+}
+
+MDefinition* MBigIntAsUintN::foldsTo(TempAllocator& alloc) {
+  auto* bitsDef = bits();
+  if (!bitsDef->isConstant()) {
+    return this;
+  }
+
+  // Negative |bits| throw an error and too large |bits| don't fit into Int64.
+  int32_t bitsInt = bitsDef->toConstant()->toInt32();
+  if (bitsInt < 0 || bitsInt > 64) {
+    return this;
+  }
+
+  // Ensure the input is Int64 typed.
+  auto* inputDef = input();
+  if (inputDef->isIntPtrToBigInt()) {
+    inputDef = inputDef->toIntPtrToBigInt()->input();
+
+    auto* int64 = MIntPtrToInt64::New(alloc, inputDef);
+    block()->insertBefore(this, int64);
+    inputDef = int64;
+  } else if (inputDef->isInt64ToBigInt()) {
+    inputDef = inputDef->toInt64ToBigInt()->input();
+  } else {
+    auto* truncate = MTruncateBigIntToInt64::New(alloc, inputDef);
+    block()->insertBefore(this, truncate);
+    inputDef = truncate;
+  }
+  MOZ_ASSERT(inputDef->type() == MIRType::Int64);
+
+  if (bitsInt < 64) {
+    uint64_t mask = 0;
+    if (bitsInt > 0) {
+      mask = uint64_t(-1) >> (64 - bitsInt);
+    }
+
+    // Mask off any excess bits.
+    auto* cst = MConstant::NewInt64(alloc, int64_t(mask));
+    block()->insertBefore(this, cst);
+
+    auto* bitAnd = MBitAnd::New(alloc, inputDef, cst, MIRType::Int64);
+    block()->insertBefore(this, bitAnd);
+
+    inputDef = bitAnd;
+  }
+
+  return MInt64ToBigInt::New(alloc, inputDef, /* isSigned = */ false);
+}
+
+bool MBigIntPtrBinaryArithInstruction::isMaybeZero(MDefinition* ins) {
+  MOZ_ASSERT(ins->type() == MIRType::IntPtr);
+  if (ins->isBigIntToIntPtr()) {
+    ins = ins->toBigIntToIntPtr()->input();
+  }
+  if (ins->isConstant()) {
+    if (ins->type() == MIRType::IntPtr) {
+      return ins->toConstant()->toIntPtr() == 0;
+    }
+    MOZ_ASSERT(ins->type() == MIRType::BigInt);
+    return ins->toConstant()->toBigInt()->isZero();
+  }
+  return true;
+}
+
+bool MBigIntPtrBinaryArithInstruction::isMaybeNegative(MDefinition* ins) {
+  MOZ_ASSERT(ins->type() == MIRType::IntPtr);
+  if (ins->isBigIntToIntPtr()) {
+    ins = ins->toBigIntToIntPtr()->input();
+  }
+  if (ins->isConstant()) {
+    if (ins->type() == MIRType::IntPtr) {
+      return ins->toConstant()->toIntPtr() < 0;
+    }
+    MOZ_ASSERT(ins->type() == MIRType::BigInt);
+    return ins->toConstant()->toBigInt()->isNegative();
+  }
+  return true;
 }
 
 MDefinition* MInt32ToIntPtr::foldsTo(TempAllocator& alloc) {
@@ -3306,7 +3622,11 @@ void MDiv::analyzeEdgeCasesForward() {
 }
 
 void MDiv::analyzeEdgeCasesBackward() {
-  if (canBeNegativeZero() && !NeedNegativeZeroCheck(this)) {
+  // In general, canBeNegativeZero_ is only valid for integer divides.
+  // It's fine to access here because we're only using it to avoid
+  // wasting effort to decide whether we can clear an already cleared
+  // flag.
+  if (canBeNegativeZero_ && !NeedNegativeZeroCheck(this)) {
     setCanBeNegativeZero(false);
   }
 }
@@ -3497,6 +3817,7 @@ MIRType MCompare::inputType() {
     case Compare_UInt32:
     case Compare_Int32:
       return MIRType::Int32;
+    case Compare_IntPtr:
     case Compare_UIntPtr:
       return MIRType::IntPtr;
     case Compare_Double:
@@ -3880,6 +4201,43 @@ bool MResumePoint::isRecoverableOperand(MUse* u) const {
   return block()->info().isRecoverableOperand(indexOf(u));
 }
 
+MDefinition* MBigIntToIntPtr::foldsTo(TempAllocator& alloc) {
+  MDefinition* def = input();
+
+  // If the operand converts an IntPtr to BigInt, drop both conversions.
+  if (def->isIntPtrToBigInt()) {
+    return def->toIntPtrToBigInt()->input();
+  }
+
+  // Fold this operation if the input operand is constant.
+  if (def->isConstant()) {
+    BigInt* bigInt = def->toConstant()->toBigInt();
+    intptr_t i;
+    if (BigInt::isIntPtr(bigInt, &i)) {
+      return MConstant::NewIntPtr(alloc, i);
+    }
+  }
+
+  // Fold BigIntToIntPtr(Int64ToBigInt(int64)) to Int64ToIntPtr(int64)
+  if (def->isInt64ToBigInt()) {
+    auto* toBigInt = def->toInt64ToBigInt();
+    return MInt64ToIntPtr::New(alloc, toBigInt->input(), toBigInt->isSigned());
+  }
+
+  return this;
+}
+
+MDefinition* MIntPtrToBigInt::foldsTo(TempAllocator& alloc) {
+  MDefinition* def = input();
+
+  // If the operand converts a BigInt to IntPtr, drop both conversions.
+  if (def->isBigIntToIntPtr()) {
+    return def->toBigIntToIntPtr()->input();
+  }
+
+  return this;
+}
+
 MDefinition* MTruncateBigIntToInt64::foldsTo(TempAllocator& alloc) {
   MDefinition* input = getOperand(0);
 
@@ -3890,6 +4248,16 @@ MDefinition* MTruncateBigIntToInt64::foldsTo(TempAllocator& alloc) {
   // If the operand converts an I64 to BigInt, drop both conversions.
   if (input->isInt64ToBigInt()) {
     return input->getOperand(0);
+  }
+
+  // If the operand is an IntPtr, extend the IntPtr to I64.
+  if (input->isIntPtrToBigInt()) {
+    auto* intPtr = input->toIntPtrToBigInt()->input();
+    if (intPtr->isConstant()) {
+      intptr_t c = intPtr->toConstant()->toIntPtr();
+      return MConstant::NewInt64(alloc, int64_t(c));
+    }
+    return MIntPtrToInt64::New(alloc, intPtr);
   }
 
   // Fold this operation if the input operand is constant.
@@ -3911,6 +4279,17 @@ MDefinition* MToInt64::foldsTo(TempAllocator& alloc) {
   // Unwrap MInt64ToBigInt: MToInt64(MInt64ToBigInt(int64)) = int64.
   if (input->isInt64ToBigInt()) {
     return input->getOperand(0);
+  }
+
+  // Unwrap IntPtrToBigInt:
+  // MToInt64(MIntPtrToBigInt(intptr)) = MIntPtrToInt64(intptr).
+  if (input->isIntPtrToBigInt()) {
+    auto* intPtr = input->toIntPtrToBigInt()->input();
+    if (intPtr->isConstant()) {
+      intptr_t c = intPtr->toConstant()->toIntPtr();
+      return MConstant::NewInt64(alloc, int64_t(c));
+    }
+    return MIntPtrToInt64::New(alloc, intPtr);
   }
 
   // When the input is an Int64 already, just return it.
@@ -3941,8 +4320,7 @@ MDefinition* MToNumberInt32::foldsTo(TempAllocator& alloc) {
         }
         break;
       case MIRType::Boolean:
-        if (conversion() == IntConversionInputKind::Any ||
-            conversion() == IntConversionInputKind::NumbersOrBoolsOnly) {
+        if (conversion() == IntConversionInputKind::Any) {
           return MConstant::New(alloc, Int32Value(cst->toBoolean()));
         }
         break;
@@ -4025,45 +4403,6 @@ MDefinition* MTruncateToInt32::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
-MDefinition* MWasmTruncateToInt32::foldsTo(TempAllocator& alloc) {
-  MDefinition* input = getOperand(0);
-  if (input->type() == MIRType::Int32) {
-    return input;
-  }
-
-  if (input->type() == MIRType::Double && input->isConstant()) {
-    double d = input->toConstant()->toDouble();
-    if (std::isnan(d)) {
-      return this;
-    }
-
-    if (!isUnsigned() && d <= double(INT32_MAX) && d >= double(INT32_MIN)) {
-      return MConstant::New(alloc, Int32Value(ToInt32(d)));
-    }
-
-    if (isUnsigned() && d <= double(UINT32_MAX) && d >= 0) {
-      return MConstant::New(alloc, Int32Value(ToInt32(d)));
-    }
-  }
-
-  if (input->type() == MIRType::Float32 && input->isConstant()) {
-    double f = double(input->toConstant()->toFloat32());
-    if (std::isnan(f)) {
-      return this;
-    }
-
-    if (!isUnsigned() && f <= double(INT32_MAX) && f >= double(INT32_MIN)) {
-      return MConstant::New(alloc, Int32Value(ToInt32(f)));
-    }
-
-    if (isUnsigned() && f <= double(UINT32_MAX) && f >= 0) {
-      return MConstant::New(alloc, Int32Value(ToInt32(f)));
-    }
-  }
-
-  return this;
-}
-
 MDefinition* MWrapInt64ToInt32::foldsTo(TempAllocator& alloc) {
   MDefinition* input = this->input();
   if (input->isConstant()) {
@@ -4127,6 +4466,28 @@ MDefinition* MSignExtendInt64::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
+MDefinition* MSignExtendIntPtr::foldsTo(TempAllocator& alloc) {
+  MDefinition* input = this->input();
+  if (input->isConstant()) {
+    intptr_t c = input->toConstant()->toIntPtr();
+    intptr_t res;
+    switch (mode_) {
+      case Byte:
+        res = intptr_t(int8_t(c & 0xFF));
+        break;
+      case Half:
+        res = intptr_t(int16_t(c & 0xFFFF));
+        break;
+      case Word:
+        res = intptr_t(int32_t(c & 0xFFFFFFFFU));
+        break;
+    }
+    return MConstant::NewIntPtr(alloc, res);
+  }
+
+  return this;
+}
+
 MDefinition* MToDouble::foldsTo(TempAllocator& alloc) {
   MDefinition* input = getOperand(0);
   if (input->isBox()) {
@@ -4177,6 +4538,64 @@ MDefinition* MToFloat32::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
+MDefinition* MToFloat16::foldsTo(TempAllocator& alloc) {
+  MDefinition* in = input();
+  if (in->isBox()) {
+    in = in->toBox()->input();
+  }
+
+  if (in->isConstant()) {
+    auto* cst = in->toConstant();
+    if (cst->isTypeRepresentableAsDouble()) {
+      double num = cst->numberToDouble();
+      return MConstant::NewFloat32(alloc, static_cast<float>(js::float16{num}));
+    }
+  }
+
+  auto isFloat16 = [](auto* def) -> MDefinition* {
+    // ToFloat16(ToDouble(float16)) => float16
+    // ToFloat16(ToFloat32(float16)) => float16
+    if (def->isToDouble()) {
+      def = def->toToDouble()->input();
+    } else if (def->isToFloat32()) {
+      def = def->toToFloat32()->input();
+    }
+
+    // ToFloat16(ToFloat16(x)) => ToFloat16(x)
+    if (def->isToFloat16()) {
+      return def;
+    }
+
+    // ToFloat16(LoadFloat16(x)) => LoadFloat16(x)
+    if (def->isLoadUnboxedScalar() &&
+        def->toLoadUnboxedScalar()->storageType() == Scalar::Float16) {
+      return def;
+    }
+    if (def->isLoadDataViewElement() &&
+        def->toLoadDataViewElement()->storageType() == Scalar::Float16) {
+      return def;
+    }
+    return nullptr;
+  };
+
+  // Fold loads which are guaranteed to return Float16.
+  if (auto* f16 = isFloat16(in)) {
+    return f16;
+  }
+
+  // Fold ToFloat16(ToDouble(float32)) to ToFloat16(float32).
+  // Fold ToFloat16(ToDouble(int32)) to ToFloat16(int32).
+  if (in->isToDouble()) {
+    auto* toDoubleInput = in->toToDouble()->input();
+    if (toDoubleInput->type() == MIRType::Float32 ||
+        toDoubleInput->type() == MIRType::Int32) {
+      return MToFloat16::New(alloc, toDoubleInput);
+    }
+  }
+
+  return this;
+}
+
 MDefinition* MToString::foldsTo(TempAllocator& alloc) {
   MDefinition* in = input();
   if (in->isBox()) {
@@ -4209,34 +4628,48 @@ bool MCompare::tryFoldEqualOperands(bool* result) {
   // However NaN !== NaN is true! So we spend some time trying
   // to eliminate this case.
 
-  if (!IsStrictEqualityOp(jsop())) {
+  if (!IsEqualityOp(jsop())) {
     return false;
   }
 
-  MOZ_ASSERT(
-      compareType_ == Compare_Undefined || compareType_ == Compare_Null ||
-      compareType_ == Compare_Int32 || compareType_ == Compare_UInt32 ||
-      compareType_ == Compare_UInt64 || compareType_ == Compare_Double ||
-      compareType_ == Compare_Float32 || compareType_ == Compare_UIntPtr ||
-      compareType_ == Compare_String || compareType_ == Compare_Object ||
-      compareType_ == Compare_Symbol || compareType_ == Compare_BigInt ||
-      compareType_ == Compare_BigInt_Int32 ||
-      compareType_ == Compare_BigInt_Double ||
-      compareType_ == Compare_BigInt_String);
+  switch (compareType_) {
+    case Compare_Int32:
+    case Compare_UInt32:
+    case Compare_Int64:
+    case Compare_UInt64:
+    case Compare_IntPtr:
+    case Compare_UIntPtr:
+    case Compare_Float32:
+    case Compare_Double:
+    case Compare_String:
+    case Compare_Object:
+    case Compare_Symbol:
+    case Compare_BigInt:
+    case Compare_WasmAnyRef:
+    case Compare_Null:
+    case Compare_Undefined:
+      break;
+    case Compare_BigInt_Int32:
+    case Compare_BigInt_String:
+    case Compare_BigInt_Double:
+      MOZ_CRASH("Expecting different operands for lhs and rhs");
+  }
 
   if (isDoubleComparison() || isFloat32Comparison()) {
     if (!operandsAreNeverNaN()) {
       return false;
     }
+  } else {
+    MOZ_ASSERT(!IsFloatingPointType(lhs()->type()));
   }
 
   lhs()->setGuardRangeBailoutsUnchecked();
 
-  *result = (jsop() == JSOp::StrictEq);
+  *result = (jsop() == JSOp::StrictEq || jsop() == JSOp::Eq);
   return true;
 }
 
-static JSType TypeOfName(JSLinearString* str) {
+static JSType TypeOfName(const JSLinearString* str) {
   static constexpr std::array types = {
       JSTYPE_UNDEFINED, JSTYPE_OBJECT,  JSTYPE_FUNCTION, JSTYPE_STRING,
       JSTYPE_NUMBER,    JSTYPE_BOOLEAN, JSTYPE_SYMBOL,   JSTYPE_BIGINT,
@@ -4255,11 +4688,56 @@ static JSType TypeOfName(JSLinearString* str) {
   return JSTYPE_LIMIT;
 }
 
-static mozilla::Maybe<std::pair<MTypeOfName*, JSType>> IsTypeOfCompare(
-    MCompare* ins) {
+struct TypeOfCompareInput {
+  // The `typeof expr` side of the comparison.
+  // MTypeOfName for JSOp::Typeof/JSOp::TypeofExpr, and
+  // MTypeOf for JSOp::TypeofEq (same pointer as typeOf).
+  MDefinition* typeOfSide;
+
+  // The actual `typeof` operation.
+  MTypeOf* typeOf;
+
+  // The string side of the comparison.
+  JSType type;
+
+  // True if the comparison uses raw JSType (Generated for JSOp::TypeofEq).
+  bool isIntComparison;
+
+  TypeOfCompareInput(MDefinition* typeOfSide, MTypeOf* typeOf, JSType type,
+                     bool isIntComparison)
+      : typeOfSide(typeOfSide),
+        typeOf(typeOf),
+        type(type),
+        isIntComparison(isIntComparison) {}
+};
+
+static mozilla::Maybe<TypeOfCompareInput> IsTypeOfCompare(MCompare* ins) {
   if (!IsEqualityOp(ins->jsop())) {
     return mozilla::Nothing();
   }
+
+  if (ins->compareType() == MCompare::Compare_Int32) {
+    auto* lhs = ins->lhs();
+    auto* rhs = ins->rhs();
+
+    if (ins->type() != MIRType::Boolean || lhs->type() != MIRType::Int32 ||
+        rhs->type() != MIRType::Int32) {
+      return mozilla::Nothing();
+    }
+
+    // NOTE: The comparison is generated inside JIT, and typeof should always
+    //       be in the LHS.
+    if (!lhs->isTypeOf() || !rhs->isConstant()) {
+      return mozilla::Nothing();
+    }
+
+    auto* typeOf = lhs->toTypeOf();
+    auto* constant = rhs->toConstant();
+
+    JSType type = JSType(constant->toInt32());
+    return mozilla::Some(TypeOfCompareInput(typeOf, typeOf, type, true));
+  }
+
   if (ins->compareType() != MCompare::Compare_String) {
     return mozilla::Nothing();
   }
@@ -4280,21 +4758,21 @@ static mozilla::Maybe<std::pair<MTypeOfName*, JSType>> IsTypeOfCompare(
 
   auto* typeOfName =
       lhs->isTypeOfName() ? lhs->toTypeOfName() : rhs->toTypeOfName();
-  MOZ_ASSERT(typeOfName->input()->isTypeOf());
+  auto* typeOf = typeOfName->input()->toTypeOf();
 
   auto* constant = lhs->isConstant() ? lhs->toConstant() : rhs->toConstant();
 
   JSType type = TypeOfName(&constant->toString()->asLinear());
-  return mozilla::Some(std::pair(typeOfName, type));
+  return mozilla::Some(TypeOfCompareInput(typeOfName, typeOf, type, false));
 }
 
 bool MCompare::tryFoldTypeOf(bool* result) {
-  auto typeOfPair = IsTypeOfCompare(this);
-  if (!typeOfPair) {
+  auto typeOfCompare = IsTypeOfCompare(this);
+  if (!typeOfCompare) {
     return false;
   }
-  auto [typeOfName, type] = *typeOfPair;
-  auto* typeOf = typeOfName->input()->toTypeOf();
+  auto* typeOf = typeOfCompare->typeOf;
+  JSType type = typeOfCompare->type;
 
   switch (type) {
     case JSTYPE_BOOLEAN:
@@ -4425,6 +4903,27 @@ static bool FoldComparison(JSOp op, T left, T right) {
   }
 }
 
+static bool FoldBigIntComparison(JSOp op, const BigInt* left, double right) {
+  switch (op) {
+    case JSOp::Lt:
+      return BigInt::lessThan(left, right).valueOr(false);
+    case JSOp::Le:
+      return !BigInt::lessThan(right, left).valueOr(true);
+    case JSOp::Gt:
+      return BigInt::lessThan(right, left).valueOr(false);
+    case JSOp::Ge:
+      return !BigInt::lessThan(left, right).valueOr(true);
+    case JSOp::StrictEq:
+    case JSOp::Eq:
+      return BigInt::equal(left, right);
+    case JSOp::StrictNe:
+    case JSOp::Ne:
+      return !BigInt::equal(left, right);
+    default:
+      MOZ_CRASH("Unexpected op.");
+  }
+}
+
 bool MCompare::evaluateConstantOperands(TempAllocator& alloc, bool* result) {
   if (type() != MIRType::Boolean && type() != MIRType::Int32) {
     return false;
@@ -4545,51 +5044,82 @@ bool MCompare::evaluateConstantOperands(TempAllocator& alloc, bool* result) {
   MConstant* lhs = left->toConstant();
   MConstant* rhs = right->toConstant();
 
-  // Fold away some String equality comparisons.
-  if (lhs->type() == MIRType::String && rhs->type() == MIRType::String) {
-    int32_t comp = 0;  // Default to equal.
-    if (left != right) {
-      comp = CompareStrings(&lhs->toString()->asLinear(),
-                            &rhs->toString()->asLinear());
+  switch (compareType()) {
+    case Compare_Int32:
+    case Compare_Double:
+    case Compare_Float32: {
+      *result =
+          FoldComparison(jsop_, lhs->numberToDouble(), rhs->numberToDouble());
+      return true;
     }
-    *result = FoldComparison(jsop_, comp, 0);
-    return true;
+    case Compare_UInt32: {
+      *result = FoldComparison(jsop_, uint32_t(lhs->toInt32()),
+                               uint32_t(rhs->toInt32()));
+      return true;
+    }
+    case Compare_Int64: {
+      *result = FoldComparison(jsop_, lhs->toInt64(), rhs->toInt64());
+      return true;
+    }
+    case Compare_UInt64: {
+      *result = FoldComparison(jsop_, uint64_t(lhs->toInt64()),
+                               uint64_t(rhs->toInt64()));
+      return true;
+    }
+    case Compare_IntPtr: {
+      *result = FoldComparison(jsop_, lhs->toIntPtr(), rhs->toIntPtr());
+      return true;
+    }
+    case Compare_UIntPtr: {
+      *result = FoldComparison(jsop_, uintptr_t(lhs->toIntPtr()),
+                               uintptr_t(rhs->toIntPtr()));
+      return true;
+    }
+    case Compare_String: {
+      int32_t comp = CompareStrings(&lhs->toString()->asLinear(),
+                                    &rhs->toString()->asLinear());
+      *result = FoldComparison(jsop_, comp, 0);
+      return true;
+    }
+    case Compare_BigInt: {
+      int32_t comp = BigInt::compare(lhs->toBigInt(), rhs->toBigInt());
+      *result = FoldComparison(jsop_, comp, 0);
+      return true;
+    }
+    case Compare_BigInt_Int32:
+    case Compare_BigInt_Double: {
+      *result =
+          FoldBigIntComparison(jsop_, lhs->toBigInt(), rhs->numberToDouble());
+      return true;
+    }
+    case Compare_BigInt_String: {
+      JSLinearString* linear = &rhs->toString()->asLinear();
+      if (!linear->hasIndexValue()) {
+        return false;
+      }
+      *result =
+          FoldBigIntComparison(jsop_, lhs->toBigInt(), linear->getIndexValue());
+      return true;
+    }
+
+    case Compare_Undefined:
+    case Compare_Null:
+    case Compare_Symbol:
+    case Compare_Object:
+    case Compare_WasmAnyRef:
+      return false;
   }
 
-  if (compareType_ == Compare_UInt32) {
-    *result = FoldComparison(jsop_, uint32_t(lhs->toInt32()),
-                             uint32_t(rhs->toInt32()));
-    return true;
-  }
-
-  if (compareType_ == Compare_Int64) {
-    *result = FoldComparison(jsop_, lhs->toInt64(), rhs->toInt64());
-    return true;
-  }
-
-  if (compareType_ == Compare_UInt64) {
-    *result = FoldComparison(jsop_, uint64_t(lhs->toInt64()),
-                             uint64_t(rhs->toInt64()));
-    return true;
-  }
-
-  if (lhs->isTypeRepresentableAsDouble() &&
-      rhs->isTypeRepresentableAsDouble()) {
-    *result =
-        FoldComparison(jsop_, lhs->numberToDouble(), rhs->numberToDouble());
-    return true;
-  }
-
-  return false;
+  MOZ_CRASH("unexpected compare type");
 }
 
 MDefinition* MCompare::tryFoldTypeOf(TempAllocator& alloc) {
-  auto typeOfPair = IsTypeOfCompare(this);
-  if (!typeOfPair) {
+  auto typeOfCompare = IsTypeOfCompare(this);
+  if (!typeOfCompare) {
     return this;
   }
-  auto [typeOfName, type] = *typeOfPair;
-  auto* typeOf = typeOfName->input()->toTypeOf();
+  auto* typeOf = typeOfCompare->typeOf;
+  JSType type = typeOfCompare->type;
 
   auto* input = typeOf->input();
   MOZ_ASSERT(input->type() == MIRType::Value ||
@@ -4621,8 +5151,13 @@ MDefinition* MCompare::tryFoldTypeOf(TempAllocator& alloc) {
   // In that case it'd more efficient to emit MTypeOf compared to MTypeOfIs. We
   // don't yet handle that case, because it'd require a separate optimization
   // pass to correctly detect it.
-  if (typeOfName->hasOneUse()) {
+  if (typeOfCompare->typeOfSide->hasOneUse()) {
     return MTypeOfIs::New(alloc, input, jsop(), type);
+  }
+
+  if (typeOfCompare->isIntComparison) {
+    // Already optimized.
+    return this;
   }
 
   MConstant* cst = MConstant::New(alloc, Int32Value(type));
@@ -4851,6 +5386,278 @@ MDefinition* MCompare::tryFoldStringIndexOf(TempAllocator& alloc) {
   return MNot::New(alloc, startsWith);
 }
 
+MDefinition* MCompare::tryFoldBigInt64(TempAllocator& alloc) {
+  if (compareType() == Compare_BigInt) {
+    auto* left = lhs();
+    MOZ_ASSERT(left->type() == MIRType::BigInt);
+
+    auto* right = rhs();
+    MOZ_ASSERT(right->type() == MIRType::BigInt);
+
+    // At least one operand must be MInt64ToBigInt.
+    if (!left->isInt64ToBigInt() && !right->isInt64ToBigInt()) {
+      return this;
+    }
+
+    // Unwrap MInt64ToBigInt on both sides and perform a Int64 comparison.
+    if (left->isInt64ToBigInt() && right->isInt64ToBigInt()) {
+      auto* lhsInt64 = left->toInt64ToBigInt();
+      auto* rhsInt64 = right->toInt64ToBigInt();
+
+      // Don't optimize if Int64 against Uint64 comparison.
+      if (lhsInt64->isSigned() != rhsInt64->isSigned()) {
+        return this;
+      }
+
+      bool isSigned = lhsInt64->isSigned();
+      auto compareType =
+          isSigned ? MCompare::Compare_Int64 : MCompare::Compare_UInt64;
+      return MCompare::New(alloc, lhsInt64->input(), rhsInt64->input(), jsop_,
+                           compareType);
+    }
+
+    // Optimize IntPtr x Int64 comparison to Int64 x Int64 comparison.
+    if (left->isIntPtrToBigInt() || right->isIntPtrToBigInt()) {
+      auto* int64ToBigInt = left->isInt64ToBigInt() ? left->toInt64ToBigInt()
+                                                    : right->toInt64ToBigInt();
+
+      // Can't optimize when comparing Uint64 against IntPtr.
+      if (!int64ToBigInt->isSigned()) {
+        return this;
+      }
+
+      auto* intPtrToBigInt = left->isIntPtrToBigInt()
+                                 ? left->toIntPtrToBigInt()
+                                 : right->toIntPtrToBigInt();
+
+      auto* intPtrToInt64 = MIntPtrToInt64::New(alloc, intPtrToBigInt->input());
+      block()->insertBefore(this, intPtrToInt64);
+
+      if (left == int64ToBigInt) {
+        left = int64ToBigInt->input();
+        right = intPtrToInt64;
+      } else {
+        left = intPtrToInt64;
+        right = int64ToBigInt->input();
+      }
+      return MCompare::New(alloc, left, right, jsop_, MCompare::Compare_Int64);
+    }
+
+    // The other operand must be a constant.
+    if (!left->isConstant() && !right->isConstant()) {
+      return this;
+    }
+
+    auto* int64ToBigInt = left->isInt64ToBigInt() ? left->toInt64ToBigInt()
+                                                  : right->toInt64ToBigInt();
+    bool isSigned = int64ToBigInt->isSigned();
+
+    auto* constant =
+        left->isConstant() ? left->toConstant() : right->toConstant();
+    auto* bigInt = constant->toBigInt();
+
+    // Extract the BigInt value if representable as Int64/Uint64.
+    mozilla::Maybe<int64_t> value;
+    if (isSigned) {
+      int64_t x;
+      if (BigInt::isInt64(bigInt, &x)) {
+        value = mozilla::Some(x);
+      }
+    } else {
+      uint64_t x;
+      if (BigInt::isUint64(bigInt, &x)) {
+        value = mozilla::Some(static_cast<int64_t>(x));
+      }
+    }
+
+    // The comparison is a constant if the BigInt has too many digits.
+    if (!value) {
+      int32_t repr = bigInt->isNegative() ? -1 : 1;
+
+      bool result;
+      if (left == int64ToBigInt) {
+        result = FoldComparison(jsop_, 0, repr);
+      } else {
+        result = FoldComparison(jsop_, repr, 0);
+      }
+      return MConstant::New(alloc, BooleanValue(result));
+    }
+
+    auto* cst = MConstant::NewInt64(alloc, *value);
+    block()->insertBefore(this, cst);
+
+    auto compareType =
+        isSigned ? MCompare::Compare_Int64 : MCompare::Compare_UInt64;
+    if (left == int64ToBigInt) {
+      return MCompare::New(alloc, int64ToBigInt->input(), cst, jsop_,
+                           compareType);
+    }
+    return MCompare::New(alloc, cst, int64ToBigInt->input(), jsop_,
+                         compareType);
+  }
+
+  if (compareType() == Compare_BigInt_Int32) {
+    auto* left = lhs();
+    MOZ_ASSERT(left->type() == MIRType::BigInt);
+
+    auto* right = rhs();
+    MOZ_ASSERT(right->type() == MIRType::Int32);
+
+    // Optimize MInt64ToBigInt against a constant int32.
+    if (!left->isInt64ToBigInt() || !right->isConstant()) {
+      return this;
+    }
+
+    auto* int64ToBigInt = left->toInt64ToBigInt();
+    bool isSigned = int64ToBigInt->isSigned();
+
+    int32_t constInt32 = right->toConstant()->toInt32();
+
+    // The unsigned comparison against a negative operand is a constant.
+    if (!isSigned && constInt32 < 0) {
+      bool result = FoldComparison(jsop_, 0, constInt32);
+      return MConstant::New(alloc, BooleanValue(result));
+    }
+
+    auto* cst = MConstant::NewInt64(alloc, int64_t(constInt32));
+    block()->insertBefore(this, cst);
+
+    auto compareType =
+        isSigned ? MCompare::Compare_Int64 : MCompare::Compare_UInt64;
+    return MCompare::New(alloc, int64ToBigInt->input(), cst, jsop_,
+                         compareType);
+  }
+
+  return this;
+}
+
+MDefinition* MCompare::tryFoldBigIntPtr(TempAllocator& alloc) {
+  if (compareType() == Compare_BigInt) {
+    auto* left = lhs();
+    MOZ_ASSERT(left->type() == MIRType::BigInt);
+
+    auto* right = rhs();
+    MOZ_ASSERT(right->type() == MIRType::BigInt);
+
+    // At least one operand must be MIntPtrToBigInt.
+    if (!left->isIntPtrToBigInt() && !right->isIntPtrToBigInt()) {
+      return this;
+    }
+
+    // Unwrap MIntPtrToBigInt on both sides and perform an IntPtr comparison.
+    if (left->isIntPtrToBigInt() && right->isIntPtrToBigInt()) {
+      auto* lhsIntPtr = left->toIntPtrToBigInt();
+      auto* rhsIntPtr = right->toIntPtrToBigInt();
+
+      return MCompare::New(alloc, lhsIntPtr->input(), rhsIntPtr->input(), jsop_,
+                           MCompare::Compare_IntPtr);
+    }
+
+    // The other operand must be a constant.
+    if (!left->isConstant() && !right->isConstant()) {
+      return this;
+    }
+
+    auto* intPtrToBigInt = left->isIntPtrToBigInt() ? left->toIntPtrToBigInt()
+                                                    : right->toIntPtrToBigInt();
+
+    auto* constant =
+        left->isConstant() ? left->toConstant() : right->toConstant();
+    auto* bigInt = constant->toBigInt();
+
+    // Extract the BigInt value if representable as intptr_t.
+    intptr_t value;
+    if (!BigInt::isIntPtr(bigInt, &value)) {
+      // The comparison is a constant if the BigInt has too many digits.
+      int32_t repr = bigInt->isNegative() ? -1 : 1;
+
+      bool result;
+      if (left == intPtrToBigInt) {
+        result = FoldComparison(jsop_, 0, repr);
+      } else {
+        result = FoldComparison(jsop_, repr, 0);
+      }
+      return MConstant::New(alloc, BooleanValue(result));
+    }
+
+    auto* cst = MConstant::NewIntPtr(alloc, value);
+    block()->insertBefore(this, cst);
+
+    if (left == intPtrToBigInt) {
+      left = intPtrToBigInt->input();
+      right = cst;
+    } else {
+      left = cst;
+      right = intPtrToBigInt->input();
+    }
+    return MCompare::New(alloc, left, right, jsop_, MCompare::Compare_IntPtr);
+  }
+
+  if (compareType() == Compare_BigInt_Int32) {
+    auto* left = lhs();
+    MOZ_ASSERT(left->type() == MIRType::BigInt);
+
+    auto* right = rhs();
+    MOZ_ASSERT(right->type() == MIRType::Int32);
+
+    // Optimize MIntPtrToBigInt against a constant int32.
+    if (!left->isIntPtrToBigInt() || !right->isConstant()) {
+      return this;
+    }
+
+    auto* cst =
+        MConstant::NewIntPtr(alloc, intptr_t(right->toConstant()->toInt32()));
+    block()->insertBefore(this, cst);
+
+    return MCompare::New(alloc, left->toIntPtrToBigInt()->input(), cst, jsop_,
+                         MCompare::Compare_IntPtr);
+  }
+
+  return this;
+}
+
+MDefinition* MCompare::tryFoldBigInt(TempAllocator& alloc) {
+  if (compareType() != Compare_BigInt) {
+    return this;
+  }
+
+  auto* left = lhs();
+  MOZ_ASSERT(left->type() == MIRType::BigInt);
+
+  auto* right = rhs();
+  MOZ_ASSERT(right->type() == MIRType::BigInt);
+
+  // One operand must be a constant.
+  if (!left->isConstant() && !right->isConstant()) {
+    return this;
+  }
+
+  auto* constant =
+      left->isConstant() ? left->toConstant() : right->toConstant();
+  auto* operand = left->isConstant() ? right : left;
+
+  // The constant must be representable as an Int32.
+  int32_t x;
+  if (!BigInt::isInt32(constant->toBigInt(), &x)) {
+    return this;
+  }
+
+  MConstant* int32Const = MConstant::New(alloc, Int32Value(x));
+  block()->insertBefore(this, int32Const);
+
+  auto op = jsop();
+  if (IsStrictEqualityOp(op)) {
+    // Compare_BigInt_Int32 is only valid for loose comparison.
+    op = op == JSOp::StrictEq ? JSOp::Eq : JSOp::Ne;
+  } else if (operand == right) {
+    // Reverse the comparison operator if the operands were reordered.
+    op = ReverseCompareOp(op);
+  }
+
+  return MCompare::New(alloc, operand, int32Const, op,
+                       MCompare::Compare_BigInt_Int32);
+}
+
 MDefinition* MCompare::foldsTo(TempAllocator& alloc) {
   bool result;
 
@@ -4883,6 +5690,18 @@ MDefinition* MCompare::foldsTo(TempAllocator& alloc) {
     return folded;
   }
 
+  if (MDefinition* folded = tryFoldBigInt64(alloc); folded != this) {
+    return folded;
+  }
+
+  if (MDefinition* folded = tryFoldBigIntPtr(alloc); folded != this) {
+    return folded;
+  }
+
+  if (MDefinition* folded = tryFoldBigInt(alloc); folded != this) {
+    return folded;
+  }
+
   return this;
 }
 
@@ -4895,15 +5714,25 @@ void MCompare::trySpecializeFloat32(TempAllocator& alloc) {
 }
 
 MDefinition* MNot::foldsTo(TempAllocator& alloc) {
-  // Fold if the input is constant
-  if (MConstant* inputConst = input()->maybeConstantValue()) {
-    bool b;
-    if (inputConst->valueToBoolean(&b)) {
-      if (type() == MIRType::Int32 || type() == MIRType::Int64) {
-        return MConstant::New(alloc, Int32Value(!b));
-      }
-      return MConstant::New(alloc, BooleanValue(!b));
+  auto foldConstant = [&alloc](MDefinition* input, MIRType type) -> MConstant* {
+    MConstant* inputConst = input->maybeConstantValue();
+    if (!inputConst) {
+      return nullptr;
     }
+    bool b;
+    if (!inputConst->valueToBoolean(&b)) {
+      return nullptr;
+    }
+    if (type == MIRType::Int32) {
+      return MConstant::New(alloc, Int32Value(!b));
+    }
+    MOZ_ASSERT(type == MIRType::Boolean);
+    return MConstant::New(alloc, BooleanValue(!b));
+  };
+
+  // Fold if the input is constant.
+  if (MConstant* folded = foldConstant(input(), type())) {
+    return folded;
   }
 
   // If the operand of the Not is itself a Not, they cancel out. But we can't
@@ -4926,6 +5755,24 @@ MDefinition* MNot::foldsTo(TempAllocator& alloc) {
   // Not of a symbol is always false.
   if (input()->type() == MIRType::Symbol) {
     return MConstant::New(alloc, BooleanValue(false));
+  }
+
+  // Drop the conversion in `Not(Int64ToBigInt(int64))` to `Not(int64)`.
+  if (input()->isInt64ToBigInt()) {
+    MDefinition* int64 = input()->toInt64ToBigInt()->input();
+    if (MConstant* folded = foldConstant(int64, type())) {
+      return folded;
+    }
+    return MNot::New(alloc, int64);
+  }
+
+  // Drop the conversion in `Not(IntPtrToBigInt(intptr))` to `Not(intptr)`.
+  if (input()->isIntPtrToBigInt()) {
+    MDefinition* intPtr = input()->toIntPtrToBigInt()->input();
+    if (MConstant* folded = foldConstant(intPtr, type())) {
+      return folded;
+    }
+    return MNot::New(alloc, intPtr);
   }
 
   return this;
@@ -5182,667 +6029,6 @@ MDefinition* MLoadFixedSlotAndUnbox::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
-MDefinition* MWasmExtendU32Index::foldsTo(TempAllocator& alloc) {
-  MDefinition* input = this->input();
-  if (input->isConstant()) {
-    return MConstant::NewInt64(
-        alloc, int64_t(uint32_t(input->toConstant()->toInt32())));
-  }
-
-  return this;
-}
-
-MDefinition* MWasmWrapU32Index::foldsTo(TempAllocator& alloc) {
-  MDefinition* input = this->input();
-  if (input->isConstant()) {
-    return MConstant::New(
-        alloc, Int32Value(int32_t(uint32_t(input->toConstant()->toInt64()))));
-  }
-
-  return this;
-}
-
-// Some helpers for folding wasm and/or/xor on int32/64 values.  Rather than
-// duplicating these for 32 and 64-bit values, all folding is done on 64-bit
-// values and masked for the 32-bit case.
-
-const uint64_t Low32Mask = uint64_t(0xFFFFFFFFULL);
-
-// Routines to check and disassemble values.
-
-static bool IsIntegralConstant(const MDefinition* def) {
-  return def->isConstant() &&
-         (def->type() == MIRType::Int32 || def->type() == MIRType::Int64);
-}
-
-static uint64_t GetIntegralConstant(const MDefinition* def) {
-  if (def->type() == MIRType::Int32) {
-    return uint64_t(def->toConstant()->toInt32()) & Low32Mask;
-  }
-  return uint64_t(def->toConstant()->toInt64());
-}
-
-static bool IsIntegralConstantZero(const MDefinition* def) {
-  return IsIntegralConstant(def) && GetIntegralConstant(def) == 0;
-}
-
-static bool IsIntegralConstantOnes(const MDefinition* def) {
-  uint64_t ones = def->type() == MIRType::Int32 ? Low32Mask : ~uint64_t(0);
-  return IsIntegralConstant(def) && GetIntegralConstant(def) == ones;
-}
-
-// Routines to create values.
-static MDefinition* ToIntegralConstant(TempAllocator& alloc, MIRType ty,
-                                       uint64_t val) {
-  switch (ty) {
-    case MIRType::Int32:
-      return MConstant::New(alloc,
-                            Int32Value(int32_t(uint32_t(val & Low32Mask))));
-    case MIRType::Int64:
-      return MConstant::NewInt64(alloc, int64_t(val));
-    default:
-      MOZ_CRASH();
-  }
-}
-
-static MDefinition* ZeroOfType(TempAllocator& alloc, MIRType ty) {
-  return ToIntegralConstant(alloc, ty, 0);
-}
-
-static MDefinition* OnesOfType(TempAllocator& alloc, MIRType ty) {
-  return ToIntegralConstant(alloc, ty, ~uint64_t(0));
-}
-
-MDefinition* MWasmBinaryBitwise::foldsTo(TempAllocator& alloc) {
-  MOZ_ASSERT(op() == Opcode::WasmBinaryBitwise);
-  MOZ_ASSERT(type() == MIRType::Int32 || type() == MIRType::Int64);
-
-  MDefinition* argL = getOperand(0);
-  MDefinition* argR = getOperand(1);
-  MOZ_ASSERT(argL->type() == type() && argR->type() == type());
-
-  // The args are the same (SSA name)
-  if (argL == argR) {
-    switch (subOpcode()) {
-      case SubOpcode::And:
-      case SubOpcode::Or:
-        return argL;
-      case SubOpcode::Xor:
-        return ZeroOfType(alloc, type());
-      default:
-        MOZ_CRASH();
-    }
-  }
-
-  // Both args constant
-  if (IsIntegralConstant(argL) && IsIntegralConstant(argR)) {
-    uint64_t valL = GetIntegralConstant(argL);
-    uint64_t valR = GetIntegralConstant(argR);
-    uint64_t val = valL;
-    switch (subOpcode()) {
-      case SubOpcode::And:
-        val &= valR;
-        break;
-      case SubOpcode::Or:
-        val |= valR;
-        break;
-      case SubOpcode::Xor:
-        val ^= valR;
-        break;
-      default:
-        MOZ_CRASH();
-    }
-    return ToIntegralConstant(alloc, type(), val);
-  }
-
-  // Left arg is zero
-  if (IsIntegralConstantZero(argL)) {
-    switch (subOpcode()) {
-      case SubOpcode::And:
-        return ZeroOfType(alloc, type());
-      case SubOpcode::Or:
-      case SubOpcode::Xor:
-        return argR;
-      default:
-        MOZ_CRASH();
-    }
-  }
-
-  // Right arg is zero
-  if (IsIntegralConstantZero(argR)) {
-    switch (subOpcode()) {
-      case SubOpcode::And:
-        return ZeroOfType(alloc, type());
-      case SubOpcode::Or:
-      case SubOpcode::Xor:
-        return argL;
-      default:
-        MOZ_CRASH();
-    }
-  }
-
-  // Left arg is ones
-  if (IsIntegralConstantOnes(argL)) {
-    switch (subOpcode()) {
-      case SubOpcode::And:
-        return argR;
-      case SubOpcode::Or:
-        return OnesOfType(alloc, type());
-      case SubOpcode::Xor:
-        return MBitNot::New(alloc, argR);
-      default:
-        MOZ_CRASH();
-    }
-  }
-
-  // Right arg is ones
-  if (IsIntegralConstantOnes(argR)) {
-    switch (subOpcode()) {
-      case SubOpcode::And:
-        return argL;
-      case SubOpcode::Or:
-        return OnesOfType(alloc, type());
-      case SubOpcode::Xor:
-        return MBitNot::New(alloc, argL);
-      default:
-        MOZ_CRASH();
-    }
-  }
-
-  return this;
-}
-
-MDefinition* MWasmAddOffset::foldsTo(TempAllocator& alloc) {
-  MDefinition* baseArg = base();
-  if (!baseArg->isConstant()) {
-    return this;
-  }
-
-  if (baseArg->type() == MIRType::Int32) {
-    CheckedInt<uint32_t> ptr = baseArg->toConstant()->toInt32();
-    ptr += offset();
-    if (!ptr.isValid()) {
-      return this;
-    }
-    return MConstant::New(alloc, Int32Value(ptr.value()));
-  }
-
-  MOZ_ASSERT(baseArg->type() == MIRType::Int64);
-  CheckedInt<uint64_t> ptr = baseArg->toConstant()->toInt64();
-  ptr += offset();
-  if (!ptr.isValid()) {
-    return this;
-  }
-  return MConstant::NewInt64(alloc, ptr.value());
-}
-
-bool MWasmAlignmentCheck::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmAlignmentCheck()) {
-    return false;
-  }
-  const MWasmAlignmentCheck* check = ins->toWasmAlignmentCheck();
-  return byteSize_ == check->byteSize() && congruentIfOperandsEqual(check);
-}
-
-MDefinition::AliasType MAsmJSLoadHeap::mightAlias(
-    const MDefinition* def) const {
-  if (def->isAsmJSStoreHeap()) {
-    const MAsmJSStoreHeap* store = def->toAsmJSStoreHeap();
-    if (store->accessType() != accessType()) {
-      return AliasType::MayAlias;
-    }
-    if (!base()->isConstant() || !store->base()->isConstant()) {
-      return AliasType::MayAlias;
-    }
-    const MConstant* otherBase = store->base()->toConstant();
-    if (base()->toConstant()->equals(otherBase)) {
-      return AliasType::MayAlias;
-    }
-    return AliasType::NoAlias;
-  }
-  return AliasType::MayAlias;
-}
-
-bool MAsmJSLoadHeap::congruentTo(const MDefinition* ins) const {
-  if (!ins->isAsmJSLoadHeap()) {
-    return false;
-  }
-  const MAsmJSLoadHeap* load = ins->toAsmJSLoadHeap();
-  return load->accessType() == accessType() && congruentIfOperandsEqual(load);
-}
-
-MDefinition::AliasType MWasmLoadInstanceDataField::mightAlias(
-    const MDefinition* def) const {
-  if (def->isWasmStoreInstanceDataField()) {
-    const MWasmStoreInstanceDataField* store =
-        def->toWasmStoreInstanceDataField();
-    return store->instanceDataOffset() == instanceDataOffset_
-               ? AliasType::MayAlias
-               : AliasType::NoAlias;
-  }
-
-  return AliasType::MayAlias;
-}
-
-MDefinition::AliasType MWasmLoadGlobalCell::mightAlias(
-    const MDefinition* def) const {
-  if (def->isWasmStoreGlobalCell()) {
-    // No globals of different type can alias.  See bug 1467415 comment 3.
-    if (type() != def->toWasmStoreGlobalCell()->value()->type()) {
-      return AliasType::NoAlias;
-    }
-
-    // We could do better here.  We're dealing with two indirect globals.
-    // If at at least one of them is created in this module, then they
-    // can't alias -- in other words they can only alias if they are both
-    // imported.  That would require having a flag on globals to indicate
-    // which are imported.  See bug 1467415 comment 3, 4th rule.
-  }
-
-  return AliasType::MayAlias;
-}
-
-HashNumber MWasmLoadInstanceDataField::valueHash() const {
-  // Same comment as in MWasmLoadInstanceDataField::congruentTo() applies here.
-  HashNumber hash = MDefinition::valueHash();
-  hash = addU32ToHash(hash, instanceDataOffset_);
-  return hash;
-}
-
-bool MWasmLoadInstanceDataField::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmLoadInstanceDataField()) {
-    return false;
-  }
-
-  const MWasmLoadInstanceDataField* other = ins->toWasmLoadInstanceDataField();
-
-  // We don't need to consider the isConstant_ markings here, because
-  // equivalence of offsets implies equivalence of constness.
-  bool sameOffsets = instanceDataOffset_ == other->instanceDataOffset_;
-  MOZ_ASSERT_IF(sameOffsets, isConstant_ == other->isConstant_);
-
-  // We omit checking congruence of the operands.  There is only one
-  // operand, the instance pointer, and it only ever has one value within the
-  // domain of optimization.  If that should ever change then operand
-  // congruence checking should be reinstated.
-  return sameOffsets /* && congruentIfOperandsEqual(other) */;
-}
-
-MDefinition* MWasmLoadInstanceDataField::foldsTo(TempAllocator& alloc) {
-  if (!dependency() || !dependency()->isWasmStoreInstanceDataField()) {
-    return this;
-  }
-
-  MWasmStoreInstanceDataField* store =
-      dependency()->toWasmStoreInstanceDataField();
-  if (!store->block()->dominates(block())) {
-    return this;
-  }
-
-  if (store->instanceDataOffset() != instanceDataOffset()) {
-    return this;
-  }
-
-  if (store->value()->type() != type()) {
-    return this;
-  }
-
-  return store->value();
-}
-
-bool MWasmLoadGlobalCell::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmLoadGlobalCell()) {
-    return false;
-  }
-  const MWasmLoadGlobalCell* other = ins->toWasmLoadGlobalCell();
-  return congruentIfOperandsEqual(other);
-}
-
-#ifdef ENABLE_WASM_SIMD
-MDefinition* MWasmTernarySimd128::foldsTo(TempAllocator& alloc) {
-  if (simdOp() == wasm::SimdOp::V128Bitselect) {
-    if (v2()->op() == MDefinition::Opcode::WasmFloatConstant) {
-      int8_t shuffle[16];
-      if (specializeBitselectConstantMaskAsShuffle(shuffle)) {
-        return BuildWasmShuffleSimd128(alloc, shuffle, v0(), v1());
-      }
-    } else if (canRelaxBitselect()) {
-      return MWasmTernarySimd128::New(alloc, v0(), v1(), v2(),
-                                      wasm::SimdOp::I8x16RelaxedLaneSelect);
-    }
-  }
-  return this;
-}
-
-inline static bool MatchSpecificShift(MDefinition* instr,
-                                      wasm::SimdOp simdShiftOp,
-                                      int shiftValue) {
-  return instr->isWasmShiftSimd128() &&
-         instr->toWasmShiftSimd128()->simdOp() == simdShiftOp &&
-         instr->toWasmShiftSimd128()->rhs()->isConstant() &&
-         instr->toWasmShiftSimd128()->rhs()->toConstant()->toInt32() ==
-             shiftValue;
-}
-
-// Matches MIR subtree that represents PMADDUBSW instruction generated by
-// emscripten. The a and b parameters return subtrees that correspond
-// operands of the instruction, if match is found.
-static bool MatchPmaddubswSequence(MWasmBinarySimd128* lhs,
-                                   MWasmBinarySimd128* rhs, MDefinition** a,
-                                   MDefinition** b) {
-  MOZ_ASSERT(lhs->simdOp() == wasm::SimdOp::I16x8Mul &&
-             rhs->simdOp() == wasm::SimdOp::I16x8Mul);
-  // The emscripten/LLVM produced the following sequence for _mm_maddubs_epi16:
-  //
-  //  return _mm_adds_epi16(
-  //    _mm_mullo_epi16(
-  //      _mm_and_si128(__a, _mm_set1_epi16(0x00FF)),
-  //      _mm_srai_epi16(_mm_slli_epi16(__b, 8), 8)),
-  //    _mm_mullo_epi16(_mm_srli_epi16(__a, 8), _mm_srai_epi16(__b, 8)));
-  //
-  //  This will roughly correspond the following MIR:
-  //    MWasmBinarySimd128[I16x8AddSatS]
-  //      |-- lhs: MWasmBinarySimd128[I16x8Mul]                      (lhs)
-  //      |     |-- lhs: MWasmBinarySimd128WithConstant[V128And]     (op0)
-  //      |     |     |-- lhs: a
-  //      |     |      -- rhs: SimdConstant::SplatX8(0x00FF)
-  //      |      -- rhs: MWasmShiftSimd128[I16x8ShrS]                (op1)
-  //      |           |-- lhs: MWasmShiftSimd128[I16x8Shl]
-  //      |           |     |-- lhs: b
-  //      |           |      -- rhs: MConstant[8]
-  //      |            -- rhs: MConstant[8]
-  //       -- rhs: MWasmBinarySimd128[I16x8Mul]                      (rhs)
-  //            |-- lhs: MWasmShiftSimd128[I16x8ShrU]                (op2)
-  //            |     |-- lhs: a
-  //            |     |-- rhs: MConstant[8]
-  //             -- rhs: MWasmShiftSimd128[I16x8ShrS]                (op3)
-  //                  |-- lhs: b
-  //                   -- rhs: MConstant[8]
-
-  // The I16x8AddSatS and I16x8Mul are commutative, so their operands
-  // may be swapped. Rearrange op0, op1, op2, op3 to be in the order
-  // noted above.
-  MDefinition *op0 = lhs->lhs(), *op1 = lhs->rhs(), *op2 = rhs->lhs(),
-              *op3 = rhs->rhs();
-  if (op1->isWasmBinarySimd128WithConstant()) {
-    // Move MWasmBinarySimd128WithConstant[V128And] as first operand in lhs.
-    std::swap(op0, op1);
-  } else if (op3->isWasmBinarySimd128WithConstant()) {
-    // Move MWasmBinarySimd128WithConstant[V128And] as first operand in rhs.
-    std::swap(op2, op3);
-  }
-  if (op2->isWasmBinarySimd128WithConstant()) {
-    // The lhs and rhs are swapped.
-    // Make MWasmBinarySimd128WithConstant[V128And] to be op0.
-    std::swap(op0, op2);
-    std::swap(op1, op3);
-  }
-  if (op2->isWasmShiftSimd128() &&
-      op2->toWasmShiftSimd128()->simdOp() == wasm::SimdOp::I16x8ShrS) {
-    // The op2 and op3 appears to be in wrong order, swap.
-    std::swap(op2, op3);
-  }
-
-  // Check all instructions SIMD code and constant values for assigned
-  // names op0, op1, op2, op3 (see diagram above).
-  const uint16_t const00FF[8] = {255, 255, 255, 255, 255, 255, 255, 255};
-  if (!op0->isWasmBinarySimd128WithConstant() ||
-      op0->toWasmBinarySimd128WithConstant()->simdOp() !=
-          wasm::SimdOp::V128And ||
-      memcmp(op0->toWasmBinarySimd128WithConstant()->rhs().bytes(), const00FF,
-             16) != 0 ||
-      !MatchSpecificShift(op1, wasm::SimdOp::I16x8ShrS, 8) ||
-      !MatchSpecificShift(op2, wasm::SimdOp::I16x8ShrU, 8) ||
-      !MatchSpecificShift(op3, wasm::SimdOp::I16x8ShrS, 8) ||
-      !MatchSpecificShift(op1->toWasmShiftSimd128()->lhs(),
-                          wasm::SimdOp::I16x8Shl, 8)) {
-    return false;
-  }
-
-  // Check if the instructions arguments that are subtrees match the
-  // a and b assignments. May depend on GVN behavior.
-  MDefinition* maybeA = op0->toWasmBinarySimd128WithConstant()->lhs();
-  MDefinition* maybeB = op3->toWasmShiftSimd128()->lhs();
-  if (maybeA != op2->toWasmShiftSimd128()->lhs() ||
-      maybeB != op1->toWasmShiftSimd128()->lhs()->toWasmShiftSimd128()->lhs()) {
-    return false;
-  }
-
-  *a = maybeA;
-  *b = maybeB;
-  return true;
-}
-
-MDefinition* MWasmBinarySimd128::foldsTo(TempAllocator& alloc) {
-  if (simdOp() == wasm::SimdOp::I8x16Swizzle && rhs()->isWasmFloatConstant()) {
-    // Specialize swizzle(v, constant) as shuffle(mask, v, zero) to trigger all
-    // our shuffle optimizations.  We don't report this rewriting as the report
-    // will be overwritten by the subsequent shuffle analysis.
-    int8_t shuffleMask[16];
-    memcpy(shuffleMask, rhs()->toWasmFloatConstant()->toSimd128().bytes(), 16);
-    for (int i = 0; i < 16; i++) {
-      // Out-of-bounds lanes reference the zero vector; in many cases, the zero
-      // vector is removed by subsequent optimizations.
-      if (shuffleMask[i] < 0 || shuffleMask[i] > 15) {
-        shuffleMask[i] = 16;
-      }
-    }
-    MWasmFloatConstant* zero =
-        MWasmFloatConstant::NewSimd128(alloc, SimdConstant::SplatX4(0));
-    if (!zero) {
-      return nullptr;
-    }
-    block()->insertBefore(this, zero);
-    return BuildWasmShuffleSimd128(alloc, shuffleMask, lhs(), zero);
-  }
-
-  // Specialize var OP const / const OP var when possible.
-  //
-  // As the LIR layer can't directly handle v128 constants as part of its normal
-  // machinery we specialize some nodes here if they have single-use v128
-  // constant arguments.  The purpose is to generate code that inlines the
-  // constant in the instruction stream, using either a rip-relative load+op or
-  // quickly-synthesized constant in a scratch on x64.  There is a general
-  // assumption here that that is better than generating the constant into an
-  // allocatable register, since that register value could not be reused. (This
-  // ignores the possibility that the constant load could be hoisted).
-
-  if (lhs()->isWasmFloatConstant() != rhs()->isWasmFloatConstant() &&
-      specializeForConstantRhs()) {
-    if (isCommutative() && lhs()->isWasmFloatConstant() && lhs()->hasOneUse()) {
-      return MWasmBinarySimd128WithConstant::New(
-          alloc, rhs(), lhs()->toWasmFloatConstant()->toSimd128(), simdOp());
-    }
-
-    if (rhs()->isWasmFloatConstant() && rhs()->hasOneUse()) {
-      return MWasmBinarySimd128WithConstant::New(
-          alloc, lhs(), rhs()->toWasmFloatConstant()->toSimd128(), simdOp());
-    }
-  }
-
-  // Check special encoding for PMADDUBSW.
-  if (canPmaddubsw() && simdOp() == wasm::SimdOp::I16x8AddSatS &&
-      lhs()->isWasmBinarySimd128() && rhs()->isWasmBinarySimd128() &&
-      lhs()->toWasmBinarySimd128()->simdOp() == wasm::SimdOp::I16x8Mul &&
-      rhs()->toWasmBinarySimd128()->simdOp() == wasm::SimdOp::I16x8Mul) {
-    MDefinition *a, *b;
-    if (MatchPmaddubswSequence(lhs()->toWasmBinarySimd128(),
-                               rhs()->toWasmBinarySimd128(), &a, &b)) {
-      return MWasmBinarySimd128::New(alloc, a, b, /* commutative = */ false,
-                                     wasm::SimdOp::MozPMADDUBSW);
-    }
-  }
-
-  return this;
-}
-
-MDefinition* MWasmScalarToSimd128::foldsTo(TempAllocator& alloc) {
-#  ifdef DEBUG
-  auto logging = mozilla::MakeScopeExit([&] {
-    js::wasm::ReportSimdAnalysis("scalar-to-simd128 -> constant folded");
-  });
-#  endif
-  if (input()->isConstant()) {
-    MConstant* c = input()->toConstant();
-    switch (simdOp()) {
-      case wasm::SimdOp::I8x16Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX16(c->toInt32()));
-      case wasm::SimdOp::I16x8Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX8(c->toInt32()));
-      case wasm::SimdOp::I32x4Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX4(c->toInt32()));
-      case wasm::SimdOp::I64x2Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX2(c->toInt64()));
-      default:
-#  ifdef DEBUG
-        logging.release();
-#  endif
-        return this;
-    }
-  }
-  if (input()->isWasmFloatConstant()) {
-    MWasmFloatConstant* c = input()->toWasmFloatConstant();
-    switch (simdOp()) {
-      case wasm::SimdOp::F32x4Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX4(c->toFloat32()));
-      case wasm::SimdOp::F64x2Splat:
-        return MWasmFloatConstant::NewSimd128(
-            alloc, SimdConstant::SplatX2(c->toDouble()));
-      default:
-#  ifdef DEBUG
-        logging.release();
-#  endif
-        return this;
-    }
-  }
-#  ifdef DEBUG
-  logging.release();
-#  endif
-  return this;
-}
-
-template <typename T>
-static bool AllTrue(const T& v) {
-  constexpr size_t count = sizeof(T) / sizeof(*v);
-  static_assert(count == 16 || count == 8 || count == 4 || count == 2);
-  bool result = true;
-  for (unsigned i = 0; i < count; i++) {
-    result = result && v[i] != 0;
-  }
-  return result;
-}
-
-template <typename T>
-static int32_t Bitmask(const T& v) {
-  constexpr size_t count = sizeof(T) / sizeof(*v);
-  constexpr size_t shift = 8 * sizeof(*v) - 1;
-  static_assert(shift == 7 || shift == 15 || shift == 31 || shift == 63);
-  int32_t result = 0;
-  for (unsigned i = 0; i < count; i++) {
-    result = result | int32_t(((v[i] >> shift) & 1) << i);
-  }
-  return result;
-}
-
-MDefinition* MWasmReduceSimd128::foldsTo(TempAllocator& alloc) {
-#  ifdef DEBUG
-  auto logging = mozilla::MakeScopeExit([&] {
-    js::wasm::ReportSimdAnalysis("simd128-to-scalar -> constant folded");
-  });
-#  endif
-  if (input()->isWasmFloatConstant()) {
-    SimdConstant c = input()->toWasmFloatConstant()->toSimd128();
-    int32_t i32Result = 0;
-    switch (simdOp()) {
-      case wasm::SimdOp::V128AnyTrue:
-        i32Result = !c.isZeroBits();
-        break;
-      case wasm::SimdOp::I8x16AllTrue:
-        i32Result = AllTrue(
-            SimdConstant::CreateSimd128((int8_t*)c.bytes()).asInt8x16());
-        break;
-      case wasm::SimdOp::I8x16Bitmask:
-        i32Result = Bitmask(
-            SimdConstant::CreateSimd128((int8_t*)c.bytes()).asInt8x16());
-        break;
-      case wasm::SimdOp::I16x8AllTrue:
-        i32Result = AllTrue(
-            SimdConstant::CreateSimd128((int16_t*)c.bytes()).asInt16x8());
-        break;
-      case wasm::SimdOp::I16x8Bitmask:
-        i32Result = Bitmask(
-            SimdConstant::CreateSimd128((int16_t*)c.bytes()).asInt16x8());
-        break;
-      case wasm::SimdOp::I32x4AllTrue:
-        i32Result = AllTrue(
-            SimdConstant::CreateSimd128((int32_t*)c.bytes()).asInt32x4());
-        break;
-      case wasm::SimdOp::I32x4Bitmask:
-        i32Result = Bitmask(
-            SimdConstant::CreateSimd128((int32_t*)c.bytes()).asInt32x4());
-        break;
-      case wasm::SimdOp::I64x2AllTrue:
-        i32Result = AllTrue(
-            SimdConstant::CreateSimd128((int64_t*)c.bytes()).asInt64x2());
-        break;
-      case wasm::SimdOp::I64x2Bitmask:
-        i32Result = Bitmask(
-            SimdConstant::CreateSimd128((int64_t*)c.bytes()).asInt64x2());
-        break;
-      case wasm::SimdOp::I8x16ExtractLaneS:
-        i32Result =
-            SimdConstant::CreateSimd128((int8_t*)c.bytes()).asInt8x16()[imm()];
-        break;
-      case wasm::SimdOp::I8x16ExtractLaneU:
-        i32Result = int32_t(SimdConstant::CreateSimd128((int8_t*)c.bytes())
-                                .asInt8x16()[imm()]) &
-                    0xFF;
-        break;
-      case wasm::SimdOp::I16x8ExtractLaneS:
-        i32Result =
-            SimdConstant::CreateSimd128((int16_t*)c.bytes()).asInt16x8()[imm()];
-        break;
-      case wasm::SimdOp::I16x8ExtractLaneU:
-        i32Result = int32_t(SimdConstant::CreateSimd128((int16_t*)c.bytes())
-                                .asInt16x8()[imm()]) &
-                    0xFFFF;
-        break;
-      case wasm::SimdOp::I32x4ExtractLane:
-        i32Result =
-            SimdConstant::CreateSimd128((int32_t*)c.bytes()).asInt32x4()[imm()];
-        break;
-      case wasm::SimdOp::I64x2ExtractLane:
-        return MConstant::NewInt64(
-            alloc, SimdConstant::CreateSimd128((int64_t*)c.bytes())
-                       .asInt64x2()[imm()]);
-      case wasm::SimdOp::F32x4ExtractLane:
-        return MWasmFloatConstant::NewFloat32(
-            alloc, SimdConstant::CreateSimd128((float*)c.bytes())
-                       .asFloat32x4()[imm()]);
-      case wasm::SimdOp::F64x2ExtractLane:
-        return MWasmFloatConstant::NewDouble(
-            alloc, SimdConstant::CreateSimd128((double*)c.bytes())
-                       .asFloat64x2()[imm()]);
-      default:
-#  ifdef DEBUG
-        logging.release();
-#  endif
-        return this;
-    }
-    return MConstant::New(alloc, Int32Value(i32Result), MIRType::Int32);
-  }
-#  ifdef DEBUG
-  logging.release();
-#  endif
-  return this;
-}
-#endif  // ENABLE_WASM_SIMD
-
 MDefinition::AliasType MLoadDynamicSlot::mightAlias(
     const MDefinition* def) const {
   if (def->isStoreDynamicSlot()) {
@@ -6034,117 +6220,6 @@ MDefinition* MLoadElement::foldsTo(TempAllocator& alloc) {
   }
 
   return this;
-}
-
-MDefinition* MWasmUnsignedToDouble::foldsTo(TempAllocator& alloc) {
-  if (input()->isConstant()) {
-    return MConstant::New(
-        alloc, DoubleValue(uint32_t(input()->toConstant()->toInt32())));
-  }
-
-  return this;
-}
-
-MDefinition* MWasmUnsignedToFloat32::foldsTo(TempAllocator& alloc) {
-  if (input()->isConstant()) {
-    double dval = double(uint32_t(input()->toConstant()->toInt32()));
-    if (IsFloat32Representable(dval)) {
-      return MConstant::NewFloat32(alloc, float(dval));
-    }
-  }
-
-  return this;
-}
-
-MWasmCallCatchable* MWasmCallCatchable::New(TempAllocator& alloc,
-                                            const wasm::CallSiteDesc& desc,
-                                            const wasm::CalleeDesc& callee,
-                                            const Args& args,
-                                            uint32_t stackArgAreaSizeUnaligned,
-                                            const MWasmCallTryDesc& tryDesc,
-                                            MDefinition* tableIndexOrRef) {
-  MOZ_ASSERT(tryDesc.inTry);
-
-  MWasmCallCatchable* call = new (alloc) MWasmCallCatchable(
-      desc, callee, stackArgAreaSizeUnaligned, tryDesc.tryNoteIndex);
-
-  call->setSuccessor(FallthroughBranchIndex, tryDesc.fallthroughBlock);
-  call->setSuccessor(PrePadBranchIndex, tryDesc.prePadBlock);
-
-  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableIndexOrRef);
-  if (!call->initWithArgs(alloc, call, args, tableIndexOrRef)) {
-    return nullptr;
-  }
-
-  return call;
-}
-
-MWasmCallCatchable* MWasmCallCatchable::NewBuiltinInstanceMethodCall(
-    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
-    const wasm::SymbolicAddress builtin, wasm::FailureMode failureMode,
-    const ABIArg& instanceArg, const Args& args,
-    uint32_t stackArgAreaSizeUnaligned, const MWasmCallTryDesc& tryDesc) {
-  auto callee = wasm::CalleeDesc::builtinInstanceMethod(builtin);
-  MWasmCallCatchable* call = MWasmCallCatchable::New(
-      alloc, desc, callee, args, stackArgAreaSizeUnaligned, tryDesc, nullptr);
-  if (!call) {
-    return nullptr;
-  }
-
-  MOZ_ASSERT(instanceArg != ABIArg());
-  call->instanceArg_ = instanceArg;
-  call->builtinMethodFailureMode_ = failureMode;
-  return call;
-}
-
-MWasmCallUncatchable* MWasmCallUncatchable::New(
-    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
-    const wasm::CalleeDesc& callee, const Args& args,
-    uint32_t stackArgAreaSizeUnaligned, MDefinition* tableIndexOrRef) {
-  MWasmCallUncatchable* call =
-      new (alloc) MWasmCallUncatchable(desc, callee, stackArgAreaSizeUnaligned);
-
-  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableIndexOrRef);
-  if (!call->initWithArgs(alloc, call, args, tableIndexOrRef)) {
-    return nullptr;
-  }
-
-  return call;
-}
-
-MWasmCallUncatchable* MWasmCallUncatchable::NewBuiltinInstanceMethodCall(
-    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
-    const wasm::SymbolicAddress builtin, wasm::FailureMode failureMode,
-    const ABIArg& instanceArg, const Args& args,
-    uint32_t stackArgAreaSizeUnaligned) {
-  auto callee = wasm::CalleeDesc::builtinInstanceMethod(builtin);
-  MWasmCallUncatchable* call = MWasmCallUncatchable::New(
-      alloc, desc, callee, args, stackArgAreaSizeUnaligned, nullptr);
-  if (!call) {
-    return nullptr;
-  }
-
-  MOZ_ASSERT(instanceArg != ABIArg());
-  call->instanceArg_ = instanceArg;
-  call->builtinMethodFailureMode_ = failureMode;
-  return call;
-}
-
-MWasmReturnCall* MWasmReturnCall::New(TempAllocator& alloc,
-                                      const wasm::CallSiteDesc& desc,
-                                      const wasm::CalleeDesc& callee,
-                                      const Args& args,
-                                      uint32_t stackArgAreaSizeUnaligned,
-                                      MDefinition* tableIndexOrRef) {
-  MWasmReturnCall* call =
-      new (alloc) MWasmReturnCall(desc, callee, stackArgAreaSizeUnaligned);
-
-  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableIndexOrRef);
-  if (!call->initWithArgs(alloc, call, args, tableIndexOrRef)) {
-    return nullptr;
-  }
-
-  return call;
 }
 
 void MSqrt::trySpecializeFloat32(TempAllocator& alloc) {
@@ -6769,6 +6844,38 @@ MDefinition* MMegamorphicLoadSlotByValue::foldsTo(TempAllocator& alloc) {
   return result;
 }
 
+MDefinition* MMegamorphicLoadSlotByValuePermissive::foldsTo(
+    TempAllocator& alloc) {
+  MDefinition* input = idVal();
+  if (input->isBox()) {
+    input = input->toBox()->input();
+  }
+
+  MDefinition* result = this;
+
+  if (input->isConstant()) {
+    MConstant* constant = input->toConstant();
+    if (constant->type() == MIRType::Symbol) {
+      PropertyKey id = PropertyKey::Symbol(constant->toSymbol());
+      result = MMegamorphicLoadSlotPermissive::New(alloc, object(), id);
+    }
+
+    if (constant->type() == MIRType::String) {
+      JSString* str = constant->toString();
+      if (str->isAtom() && !str->asAtom().isIndex()) {
+        PropertyKey id = PropertyKey::NonIntAtom(str);
+        result = MMegamorphicLoadSlotPermissive::New(alloc, object(), id);
+      }
+    }
+  }
+
+  if (result != this) {
+    result->toMegamorphicLoadSlotPermissive()->stealResumePoint(this);
+  }
+
+  return result;
+}
+
 bool MMegamorphicLoadSlot::congruentTo(const MDefinition* ins) const {
   if (!ins->isMegamorphicLoadSlot()) {
     return false;
@@ -7187,6 +7294,16 @@ AliasSet MLoadWrapperTarget::getAliasSet() const {
   return AliasSet::Load(AliasSet::Any);
 }
 
+bool MLoadWrapperTarget::congruentTo(const MDefinition* ins) const {
+  if (!ins->isLoadWrapperTarget()) {
+    return false;
+  }
+  if (ins->toLoadWrapperTarget()->fallible() != fallible()) {
+    return false;
+  }
+  return congruentIfOperandsEqual(ins);
+}
+
 AliasSet MGuardHasGetterSetter::getAliasSet() const {
   return AliasSet::Load(AliasSet::ObjectFields);
 }
@@ -7324,26 +7441,10 @@ AliasSet MMapObjectSize::getAliasSet() const {
   return AliasSet::Load(AliasSet::MapOrSetHashTable);
 }
 
-MIonToWasmCall* MIonToWasmCall::New(TempAllocator& alloc,
-                                    WasmInstanceObject* instanceObj,
-                                    const wasm::FuncExport& funcExport) {
-  const wasm::FuncType& funcType =
-      instanceObj->instance().metadata().getFuncExportType(funcExport);
-  const wasm::ValTypeVector& results = funcType.results();
-  MIRType resultType = MIRType::Value;
-  // At the JS boundary some wasm types must be represented as a Value, and in
-  // addition a void return requires an Undefined value.
-  if (results.length() > 0 && !results[0].isEncodedAsJSValueOnEscape()) {
-    MOZ_ASSERT(results.length() == 1,
-               "multiple returns not implemented for inlined Wasm calls");
-    resultType = results[0].toMIRType();
-  }
-
-  auto* ins = new (alloc) MIonToWasmCall(instanceObj, resultType, funcExport);
-  if (!ins->init(alloc, funcType.args().length())) {
-    return nullptr;
-  }
-  return ins;
+AliasSet MDateFillLocalTimeSlots::getAliasSet() const {
+  // Reads and stores fixed slots. Additional reads from DateTimeInfo don't need
+  // to be tracked, because they don't interact with other alias set states.
+  return AliasSet::Store(AliasSet::FixedSlot);
 }
 
 MBindFunction* MBindFunction::New(TempAllocator& alloc, MDefinition* target,
@@ -7355,14 +7456,6 @@ MBindFunction* MBindFunction::New(TempAllocator& alloc, MDefinition* target,
   ins->initOperand(0, target);
   return ins;
 }
-
-#ifdef DEBUG
-bool MIonToWasmCall::isConsistentFloat32Use(MUse* use) const {
-  const wasm::FuncType& funcType =
-      instance()->metadata().getFuncExportType(funcExport_);
-  return funcType.args()[use->index()].kind() == wasm::ValType::F32;
-}
-#endif
 
 MCreateInlinedArgumentsObject* MCreateInlinedArgumentsObject::New(
     TempAllocator& alloc, MDefinition* callObj, MDefinition* callee,
@@ -7618,6 +7711,17 @@ MDefinition* MArrayLength::foldsTo(TempAllocator& alloc) {
   MObjectKeysLength* keysLength = MObjectKeysLength::New(alloc, noproxy);
   keysLength->stealResumePoint(keys->toObjectKeys());
 
+  // Set the dependency of the newly created instruction. Unfortunately
+  // MObjectKeys (keys) is an instruction with a Store(Any) alias set, as it
+  // could be used with proxies which can re-enter JavaScript.
+  //
+  // Thus, the loadDependency field of MObjectKeys is null. On the other hand
+  // MObjectKeysLength has a Load alias set. Thus, instead of reconstructing the
+  // Alias Analysis by updating every instructions which depends on MObjectKeys
+  // and finding the matching store instruction, we reuse the MObjectKeys as any
+  // store instruction, despite it being marked as recovered-on-bailout.
+  keysLength->setDependency(keys);
+
   return keysLength;
 }
 
@@ -7702,86 +7806,4 @@ bool MInt32ToStringWithBase::congruentTo(const MDefinition* ins) const {
     return false;
   }
   return congruentIfOperandsEqual(ins);
-}
-
-bool MWasmShiftSimd128::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmShiftSimd128()) {
-    return false;
-  }
-  return ins->toWasmShiftSimd128()->simdOp() == simdOp_ &&
-         congruentIfOperandsEqual(ins);
-}
-
-bool MWasmShuffleSimd128::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmShuffleSimd128()) {
-    return false;
-  }
-  return ins->toWasmShuffleSimd128()->shuffle().equals(&shuffle_) &&
-         congruentIfOperandsEqual(ins);
-}
-
-bool MWasmUnarySimd128::congruentTo(const MDefinition* ins) const {
-  if (!ins->isWasmUnarySimd128()) {
-    return false;
-  }
-  return ins->toWasmUnarySimd128()->simdOp() == simdOp_ &&
-         congruentIfOperandsEqual(ins);
-}
-
-#ifdef ENABLE_WASM_SIMD
-MWasmShuffleSimd128* jit::BuildWasmShuffleSimd128(TempAllocator& alloc,
-                                                  const int8_t* control,
-                                                  MDefinition* lhs,
-                                                  MDefinition* rhs) {
-  SimdShuffle s =
-      AnalyzeSimdShuffle(SimdConstant::CreateX16(control), lhs, rhs);
-  switch (s.opd) {
-    case SimdShuffle::Operand::LEFT:
-      // When SimdShuffle::Operand is LEFT the right operand is not used,
-      // lose reference to rhs.
-      rhs = lhs;
-      break;
-    case SimdShuffle::Operand::RIGHT:
-      // When SimdShuffle::Operand is RIGHT the left operand is not used,
-      // lose reference to lhs.
-      lhs = rhs;
-      break;
-    default:
-      break;
-  }
-  return MWasmShuffleSimd128::New(alloc, lhs, rhs, s);
-}
-#endif  // ENABLE_WASM_SIMD
-
-static MDefinition* FoldTrivialWasmCasts(TempAllocator& alloc,
-                                         wasm::RefType sourceType,
-                                         wasm::RefType destType) {
-  // Upcasts are trivially valid.
-  if (wasm::RefType::isSubTypeOf(sourceType, destType)) {
-    return MConstant::New(alloc, Int32Value(1), MIRType::Int32);
-  }
-
-  // If two types are completely disjoint, then all casts between them are
-  // impossible.
-  if (!wasm::RefType::castPossible(destType, sourceType)) {
-    return MConstant::New(alloc, Int32Value(0), MIRType::Int32);
-  }
-
-  return nullptr;
-}
-
-MDefinition* MWasmRefIsSubtypeOfAbstract::foldsTo(TempAllocator& alloc) {
-  MDefinition* folded = FoldTrivialWasmCasts(alloc, sourceType(), destType());
-  if (folded) {
-    return folded;
-  }
-  return this;
-}
-
-MDefinition* MWasmRefIsSubtypeOfConcrete::foldsTo(TempAllocator& alloc) {
-  MDefinition* folded = FoldTrivialWasmCasts(alloc, sourceType(), destType());
-  if (folded) {
-    return folded;
-  }
-  return this;
 }

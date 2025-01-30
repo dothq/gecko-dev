@@ -235,7 +235,8 @@ void WebRenderImageData::CreateAsyncImageWebRenderCommands(
 void WebRenderImageData::CreateImageClientIfNeeded() {
   if (!mImageClient) {
     mImageClient = ImageClient::CreateImageClient(
-        CompositableType::IMAGE, WrBridge(), TextureFlags::DEFAULT);
+        CompositableType::IMAGE, ImageUsageType::WebRenderImageData, WrBridge(),
+        TextureFlags::DEFAULT);
     if (!mImageClient) {
       return;
     }
@@ -399,22 +400,13 @@ void WebRenderCanvasData::SetImageContainer(ImageContainer* aImageContainer) {
 
 ImageContainer* WebRenderCanvasData::GetImageContainer() {
   if (!mContainer) {
-    mContainer = MakeAndAddRef<ImageContainer>();
+    mContainer = MakeAndAddRef<ImageContainer>(ImageUsageType::Canvas,
+                                               ImageContainer::SYNCHRONOUS);
   }
   return mContainer;
 }
 
 void WebRenderCanvasData::ClearImageContainer() { mContainer = nullptr; }
-
-WebRenderRemoteData::WebRenderRemoteData(RenderRootStateManager* aManager,
-                                         nsDisplayItem* aItem)
-    : WebRenderUserData(aManager, aItem) {}
-
-WebRenderRemoteData::~WebRenderRemoteData() {
-  if (mRemoteBrowser) {
-    mRemoteBrowser->UpdateEffects(mozilla::dom::EffectsInfo::FullyHidden());
-  }
-}
 
 void DestroyWebRenderUserDataTable(WebRenderUserDataTable* aTable) {
   for (const auto& value : aTable->Values()) {

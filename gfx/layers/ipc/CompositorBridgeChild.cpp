@@ -18,8 +18,7 @@
 #include "mozilla/layers/CanvasChild.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/layers/PTextureChild.h"
-#include "mozilla/layers/TextureClient.h"      // for TextureClient
-#include "mozilla/layers/TextureClientPool.h"  // for TextureClientPool
+#include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/layers/SyncObject.h"  // for SyncObjectClient
 #include "mozilla/gfx/CanvasManagerChild.h"
@@ -80,6 +79,7 @@ CompositorBridgeChild::CompositorBridgeChild(CompositorManagerChild* aManager)
       mCanSend(false),
       mActorDestroyed(false),
       mPaused(false),
+      mForceSyncFlushRendering(false),
       mThread(NS_GetCurrentThread()),
       mProcessToken(0),
       mSectionAllocator(nullptr) {
@@ -134,10 +134,6 @@ void CompositorBridgeChild::Destroy() {
   // let's make sure there is still a reference to keep this alive whatever
   // happens.
   RefPtr<CompositorBridgeChild> selfRef = this;
-
-  for (size_t i = 0; i < mTexturePools.Length(); i++) {
-    mTexturePools[i]->Destroy();
-  }
 
   if (mSectionAllocator) {
     delete mSectionAllocator;
@@ -275,9 +271,6 @@ bool CompositorBridgeChild::CompositorIsInGPUProcess() {
 mozilla::ipc::IPCResult CompositorBridgeChild::RecvDidComposite(
     const LayersId& aId, const nsTArray<TransactionId>& aTransactionIds,
     const TimeStamp& aCompositeStart, const TimeStamp& aCompositeEnd) {
-  // Hold a reference to keep texture pools alive.  See bug 1387799
-  const auto texturePools = mTexturePools.Clone();
-
   for (const auto& id : aTransactionIds) {
     if (mLayerManager) {
       MOZ_ASSERT(!aId.IsValid());
@@ -291,10 +284,6 @@ mozilla::ipc::IPCResult CompositorBridgeChild::RecvDidComposite(
         child->DidComposite(id, aCompositeStart, aCompositeEnd);
       }
     }
-  }
-
-  for (size_t i = 0; i < texturePools.Length(); i++) {
-    texturePools[i]->ReturnDeferredClients();
   }
 
   return IPC_OK();
@@ -365,6 +354,22 @@ bool CompositorBridgeChild::SendFlushRendering(
     return false;
   }
   return PCompositorBridgeChild::SendFlushRendering(aReasons);
+}
+
+bool CompositorBridgeChild::SendFlushRenderingAsync(
+    const wr::RenderReasons& aReasons) {
+  if (mForceSyncFlushRendering) {
+    return SendFlushRendering(aReasons);
+  }
+  if (!mCanSend) {
+    return false;
+  }
+  return PCompositorBridgeChild::SendFlushRenderingAsync(aReasons);
+}
+
+void CompositorBridgeChild::SetForceSyncFlushRendering(
+    bool aForceSyncFlushRendering) {
+  mForceSyncFlushRendering = aForceSyncFlushRendering;
 }
 
 bool CompositorBridgeChild::SendStartFrameTimeRecording(

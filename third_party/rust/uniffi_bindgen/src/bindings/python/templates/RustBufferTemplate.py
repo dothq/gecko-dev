@@ -1,21 +1,25 @@
 
 class _UniffiRustBuffer(ctypes.Structure):
     _fields_ = [
-        ("capacity", ctypes.c_int32),
-        ("len", ctypes.c_int32),
+        ("capacity", ctypes.c_uint64),
+        ("len", ctypes.c_uint64),
         ("data", ctypes.POINTER(ctypes.c_char)),
     ]
 
     @staticmethod
+    def default():
+        return _UniffiRustBuffer(0, 0, None)
+
+    @staticmethod
     def alloc(size):
-        return _rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_alloc().name() }}, size)
+        return _uniffi_rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_alloc().name() }}, size)
 
     @staticmethod
     def reserve(rbuf, additional):
-        return _rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_reserve().name() }}, rbuf, additional)
+        return _uniffi_rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_reserve().name() }}, rbuf, additional)
 
     def free(self):
-        return _rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_free().name() }}, self)
+        return _uniffi_rust_call(_UniffiLib.{{ ci.ffi_rustbuffer_free().name() }}, self)
 
     def __str__(self):
         return "_UniffiRustBuffer(capacity={}, len={}, data={})".format(
@@ -136,9 +140,6 @@ class _UniffiRustBufferStream:
 
     def read_double(self):
         return self._unpack_from(8, ">d")
-
-    def read_c_size_t(self):
-        return self._unpack_from(ctypes.sizeof(ctypes.c_size_t) , "@N")
 
 class _UniffiRustBufferBuilder:
     """

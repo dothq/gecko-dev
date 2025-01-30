@@ -74,8 +74,7 @@ RefPtr<GenericPromise> KeyValueStorage::Init() {
 
   nsString path;
   profileDir->GetPath(path);
-  keyValueService->GetOrCreate(callback, NS_ConvertUTF16toUTF8(path),
-                               mDatabaseName);
+  keyValueService->GetOrCreate(callback, path, mDatabaseName);
   return callback->Ensure();
 }
 
@@ -94,7 +93,7 @@ class VoidCallback final : public nsIKeyValueVoidCallback {
     mResultPromise.Reject(NS_ERROR_FAILURE, __func__);
     return NS_OK;
   }
-  RefPtr<GenericPromise> Ensure(const char* aMethodName) {
+  RefPtr<GenericPromise> Ensure(StaticString aMethodName) {
     return mResultPromise.Ensure(aMethodName);
   }
 

@@ -182,7 +182,8 @@ std::pair<TestCaseState, WideTestCase> kStrMatches16[] = {
 
 constexpr const char* kRequiredArgs[] = {"aleph", "beth"};
 
-std::pair<TestCaseState, std::vector<const char*>> const kCommandLines[] = {
+MOZ_RUNINIT std::pair<TestCaseState,
+                      std::vector<const char*>> const kCommandLines[] = {
     // the basic admissible forms
     {PASS, {"-osint", "-aleph", "http://www.example.com/"}},
     {PASS, {"-osint", "-beth", "http://www.example.com/"}},
@@ -254,29 +255,35 @@ constexpr static char const* const kOptionalArgs[] = {"mozilla", "allizom"};
 // Test cases marked PASS should pass iff the above optional parameters are
 // permitted. (Test cases marked FAIL should fail regardless, and are only
 // grouped here for convenience and semantic coherence.)
-std::pair<TestCaseState, std::vector<const char*>> kCommandLinesOpt[] = {
-    // one permitted optional argument
-    {PASS, {"-osint", "-mozilla", "-aleph", "http://www.example.com/"}},
-    {PASS, {"-osint", "-allizom", "-aleph", "http://www.example.com/"}},
+MOZ_RUNINIT std::pair<TestCaseState, std::vector<const char*>>
+    kCommandLinesOpt[] = {
+        // one permitted optional argument
+        {PASS, {"-osint", "-mozilla", "-aleph", "http://www.example.com/"}},
+        {PASS, {"-osint", "-allizom", "-aleph", "http://www.example.com/"}},
 
-    // multiple permitted optional arguments
-    {PASS,
-     {"-osint", "-mozilla", "-allizom", "-aleph", "http://www.example.com/"}},
-    {PASS,
-     {"-osint", "-allizom", "-mozilla", "-aleph", "http://www.example.com/"}},
+        // multiple permitted optional arguments
+        {PASS,
+         {"-osint", "-mozilla", "-allizom", "-aleph",
+          "http://www.example.com/"}},
+        {PASS,
+         {"-osint", "-allizom", "-mozilla", "-aleph",
+          "http://www.example.com/"}},
 
-    // optional arguments in the wrong place
-    {FAIL, {"-mozilla", "-osint", "-aleph", "http://www.example.com/"}},
-    {FAIL, {"-osint", "-aleph", "-mozilla", "http://www.example.com/"}},
-    {FAIL, {"-osint", "-aleph", "http://www.example.com/", "-mozilla"}},
+        // optional arguments in the wrong place
+        {FAIL, {"-mozilla", "-osint", "-aleph", "http://www.example.com/"}},
+        {FAIL, {"-osint", "-aleph", "-mozilla", "http://www.example.com/"}},
+        {FAIL, {"-osint", "-aleph", "http://www.example.com/", "-mozilla"}},
 
-    // optional arguments in both right and wrong places
-    {FAIL,
-     {"-mozilla", "-osint", "-allizom", "-aleph", "http://www.example.com/"}},
-    {FAIL,
-     {"-osint", "-allizom", "-aleph", "-mozilla", "http://www.example.com/"}},
-    {FAIL,
-     {"-osint", "-allizom", "-aleph", "http://www.example.com/", "-mozilla"}},
+        // optional arguments in both right and wrong places
+        {FAIL,
+         {"-mozilla", "-osint", "-allizom", "-aleph",
+          "http://www.example.com/"}},
+        {FAIL,
+         {"-osint", "-allizom", "-aleph", "-mozilla",
+          "http://www.example.com/"}},
+        {FAIL,
+         {"-osint", "-allizom", "-aleph", "http://www.example.com/",
+          "-mozilla"}},
 };
 
 enum WithOptionalState : bool {
@@ -304,11 +311,11 @@ bool TestCommandLineImpl(CommandLine const& cl,
 void TestCommandLine(TestCaseState expectation, CommandLine const& cl,
                      WithOptionalState withOptional) {
   EXPECT_EQ(TestCommandLineImpl<char>(cl, withOptional), expectation)
-      << "cl is: " << cl << std::endl
+      << "cl is: " << cl << "\n"
       << "withOptional is: " << bool(withOptional);
 #ifdef XP_WIN
   EXPECT_EQ(TestCommandLineImpl<wchar_t>(cl, withOptional), expectation)
-      << "cl is: " << cl << std::endl
+      << "cl is: " << cl << "\n"
       << "withOptional is: " << bool(withOptional);
 #endif
 }

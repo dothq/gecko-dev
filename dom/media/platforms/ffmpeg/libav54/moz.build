@@ -6,7 +6,9 @@
 
 UNIFIED_SOURCES += [
     '../FFmpegAudioDecoder.cpp',
+    '../FFmpegAudioEncoder.cpp',
     '../FFmpegDataDecoder.cpp',
+    "../FFmpegDataEncoder.cpp",
     '../FFmpegDecoderModule.cpp',
     '../FFmpegEncoderModule.cpp',
     '../FFmpegVideoDecoder.cpp',
@@ -23,6 +25,8 @@ if CONFIG['CC_TYPE'] == 'clang':
   CXXFLAGS += [
     '-Wno-unknown-attributes',
   ]
+
+include("/ipc/chromium/chromium-config.mozbuild")
 
 LOCAL_INCLUDES += [
   "/media/libyuv/libyuv/include",

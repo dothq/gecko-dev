@@ -14,7 +14,7 @@ use std::borrow::Cow;
 /// };
 ///
 /// let mut types = TypeSection::new();
-/// types.function(vec![], vec![ValType::I32]);
+/// types.ty().function(vec![], vec![ValType::I32]);
 ///
 /// let mut functions = FunctionSection::new();
 /// let type_index = 0;
@@ -83,11 +83,13 @@ impl CodeSection {
     /// into a new code section encoder:
     ///
     /// ```
+    /// # use wasmparser::{BinaryReader, CodeSectionReader};
     /// //                  id, size, # entries, entry
     /// let code_section = [10, 6,    1,         4, 0, 65, 0, 11];
     ///
     /// // Parse the code section.
-    /// let reader = wasmparser::CodeSectionReader::new(&code_section, 0).unwrap();
+    /// let reader = BinaryReader::new(&code_section, 0);
+    /// let reader = CodeSectionReader::new(reader).unwrap();
     /// let body = reader.into_iter().next().unwrap().unwrap();
     /// let body_range = body.range();
     ///
@@ -235,6 +237,45 @@ impl Function {
     pub fn byte_len(&self) -> usize {
         self.bytes.len()
     }
+
+    /// Unwraps and returns the raw byte encoding of this function.
+    ///
+    /// This encoding doesn't include the variable-width size field
+    /// that `encode` will write before the added bytes. As such, its
+    /// length will match the return value of [`byte_len`].
+    ///
+    /// # Use Case
+    ///
+    /// This raw byte form is suitable for later using with
+    /// [`CodeSection::raw`]. Note that it *differs* from what results
+    /// from [`Function::encode`] precisely due to the *lack* of the
+    /// length prefix; [`CodeSection::raw`] will use this. Using
+    /// [`Function::encode`] instead produces bytes that cannot be fed
+    /// into other wasm-encoder types without stripping off the length
+    /// prefix, which is awkward and error-prone.
+    ///
+    /// This method combined with [`CodeSection::raw`] may be useful
+    /// together if one wants to save the result of function encoding
+    /// and use it later: for example, caching the result of some code
+    /// generation process.
+    ///
+    /// For example:
+    ///
+    /// ```
+    /// # use wasm_encoder::{CodeSection, Function, Instruction};
+    /// let mut f = Function::new([]);
+    /// f.instruction(&Instruction::End);
+    /// let bytes = f.into_raw_body();
+    /// // (save `bytes` somewhere for later use)
+    /// let mut code = CodeSection::new();
+    /// code.raw(&bytes[..]);
+    ///
+    /// assert_eq!(2, bytes.len());  // Locals count, then `end`
+    /// assert_eq!(3, code.byte_len()); // Function length byte, function body
+    /// ```
+    pub fn into_raw_body(self) -> Vec<u8> {
+        self.bytes
+    }
 }
 
 impl Encode for Function {
@@ -271,6 +312,34 @@ impl Encode for MemArg {
             self.memory_index.encode(sink);
             self.offset.encode(sink);
         }
+    }
+}
+
+/// The memory ordering for atomic instructions.
+///
+/// For an in-depth explanation of memory orderings, see the C++ documentation
+/// for [`memory_order`] or the Rust documentation for [`atomic::Ordering`].
+///
+/// [`memory_order`]: https://en.cppreference.com/w/cpp/atomic/memory_order
+/// [`atomic::Ordering`]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html
+#[derive(Clone, Copy, Debug)]
+pub enum Ordering {
+    /// For a load, it acquires; this orders all operations before the last
+    /// "releasing" store. For a store, it releases; this orders all operations
+    /// before it at the next "acquiring" load.
+    AcqRel,
+    /// Like `AcqRel` but all threads see all sequentially consistent operations
+    /// in the same order.
+    SeqCst,
+}
+
+impl Encode for Ordering {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        let flag: u8 = match self {
+            Ordering::SeqCst => 0,
+            Ordering::AcqRel => 1,
+        };
+        sink.push(flag);
     }
 }
 
@@ -320,14 +389,14 @@ pub enum Instruction<'a> {
     Call(u32),
     CallRef(u32),
     CallIndirect {
-        ty: u32,
-        table: u32,
+        type_index: u32,
+        table_index: u32,
     },
     ReturnCallRef(u32),
     ReturnCall(u32),
     ReturnCallIndirect {
-        ty: u32,
-        table: u32,
+        type_index: u32,
+        table_index: u32,
     },
     TryTable(BlockType, Cow<'a, [Catch]>),
     Throw(u32),
@@ -980,6 +1049,186 @@ pub enum Instruction<'a> {
     I64AtomicRmw8CmpxchgU(MemArg),
     I64AtomicRmw16CmpxchgU(MemArg),
     I64AtomicRmw32CmpxchgU(MemArg),
+
+    // More atomic instructions (the shared-everything-threads proposal)
+    GlobalAtomicGet {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicSet {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwAdd {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwSub {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwAnd {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwOr {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwXor {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwXchg {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    GlobalAtomicRmwCmpxchg {
+        ordering: Ordering,
+        global_index: u32,
+    },
+    TableAtomicGet {
+        ordering: Ordering,
+        table_index: u32,
+    },
+    TableAtomicSet {
+        ordering: Ordering,
+        table_index: u32,
+    },
+    TableAtomicRmwXchg {
+        ordering: Ordering,
+        table_index: u32,
+    },
+    TableAtomicRmwCmpxchg {
+        ordering: Ordering,
+        table_index: u32,
+    },
+    StructAtomicGet {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicGetS {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicGetU {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicSet {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwAdd {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwSub {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwAnd {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwOr {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwXor {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwXchg {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    StructAtomicRmwCmpxchg {
+        ordering: Ordering,
+        struct_type_index: u32,
+        field_index: u32,
+    },
+    ArrayAtomicGet {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicGetS {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicGetU {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicSet {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwAdd {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwSub {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwAnd {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwOr {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwXor {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwXchg {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    ArrayAtomicRmwCmpxchg {
+        ordering: Ordering,
+        array_type_index: u32,
+    },
+    RefI31Shared,
+    // Stack switching
+    ContNew(u32),
+    ContBind {
+        argument_index: u32,
+        result_index: u32,
+    },
+    Suspend(u32),
+    Resume {
+        cont_type_index: u32,
+        resume_table: Cow<'a, [Handle]>,
+    },
+    ResumeThrow {
+        cont_type_index: u32,
+        tag_index: u32,
+        resume_table: Cow<'a, [Handle]>,
+    },
+    Switch {
+        cont_type_index: u32,
+        tag_index: u32,
+    },
+
+    // Wide Arithmetic
+    I64Add128,
+    I64Sub128,
+    I64MulWideS,
+    I64MulWideU,
 }
 
 impl Encode for Instruction<'_> {
@@ -1051,10 +1300,13 @@ impl Encode for Instruction<'_> {
                 sink.push(0x14);
                 ty.encode(sink);
             }
-            Instruction::CallIndirect { ty, table } => {
+            Instruction::CallIndirect {
+                type_index,
+                table_index,
+            } => {
                 sink.push(0x11);
-                ty.encode(sink);
-                table.encode(sink);
+                type_index.encode(sink);
+                table_index.encode(sink);
             }
             Instruction::ReturnCallRef(ty) => {
                 sink.push(0x15);
@@ -1065,10 +1317,13 @@ impl Encode for Instruction<'_> {
                 sink.push(0x12);
                 f.encode(sink);
             }
-            Instruction::ReturnCallIndirect { ty, table } => {
+            Instruction::ReturnCallIndirect {
+                type_index,
+                table_index,
+            } => {
                 sink.push(0x13);
-                ty.encode(sink);
-                table.encode(sink);
+                type_index.encode(sink);
+                table_index.encode(sink);
             }
             Instruction::Delegate(l) => {
                 sink.push(0x18);
@@ -2787,7 +3042,7 @@ impl Encode for Instruction<'_> {
                 0x113u32.encode(sink);
             }
 
-            // Atmoic instructions from the thread proposal
+            // Atomic instructions from the thread proposal
             Instruction::MemoryAtomicNotify(memarg) => {
                 sink.push(0xFE);
                 sink.push(0x00);
@@ -3123,6 +3378,407 @@ impl Encode for Instruction<'_> {
                 sink.push(0x4E);
                 memarg.encode(sink);
             }
+
+            // Atomic instructions from the shared-everything-threads proposal
+            Instruction::GlobalAtomicGet {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x4F);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicSet {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x50);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwAdd {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x51);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwSub {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x52);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwAnd {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x53);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwOr {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x54);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwXor {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x55);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwXchg {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x56);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::GlobalAtomicRmwCmpxchg {
+                ordering,
+                global_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x57);
+                ordering.encode(sink);
+                global_index.encode(sink);
+            }
+            Instruction::TableAtomicGet {
+                ordering,
+                table_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x58);
+                ordering.encode(sink);
+                table_index.encode(sink);
+            }
+            Instruction::TableAtomicSet {
+                ordering,
+                table_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x59);
+                ordering.encode(sink);
+                table_index.encode(sink);
+            }
+            Instruction::TableAtomicRmwXchg {
+                ordering,
+                table_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5A);
+                ordering.encode(sink);
+                table_index.encode(sink);
+            }
+            Instruction::TableAtomicRmwCmpxchg {
+                ordering,
+                table_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5B);
+                ordering.encode(sink);
+                table_index.encode(sink);
+            }
+            Instruction::StructAtomicGet {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5C);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicGetS {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5D);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicGetU {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5E);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicSet {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x5F);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwAdd {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x60);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwSub {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x61);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwAnd {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x62);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwOr {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x63);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwXor {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x64);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwXchg {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x65);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::StructAtomicRmwCmpxchg {
+                ordering,
+                struct_type_index,
+                field_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x66);
+                ordering.encode(sink);
+                struct_type_index.encode(sink);
+                field_index.encode(sink);
+            }
+            Instruction::ArrayAtomicGet {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x67);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicGetS {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x68);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicGetU {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x69);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicSet {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6A);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwAdd {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6B);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwSub {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6C);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwAnd {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6D);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwOr {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6E);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwXor {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x6F);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwXchg {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x70);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::ArrayAtomicRmwCmpxchg {
+                ordering,
+                array_type_index,
+            } => {
+                sink.push(0xFE);
+                sink.push(0x71);
+                ordering.encode(sink);
+                array_type_index.encode(sink);
+            }
+            Instruction::RefI31Shared => {
+                sink.push(0xFE);
+                sink.push(0x72);
+            }
+            Instruction::ContNew(type_index) => {
+                sink.push(0xE0);
+                type_index.encode(sink);
+            }
+            Instruction::ContBind {
+                argument_index,
+                result_index,
+            } => {
+                sink.push(0xE1);
+                argument_index.encode(sink);
+                result_index.encode(sink);
+            }
+            Instruction::Suspend(tag_index) => {
+                sink.push(0xE2);
+                tag_index.encode(sink);
+            }
+            Instruction::Resume {
+                cont_type_index,
+                ref resume_table,
+            } => {
+                sink.push(0xE3);
+                cont_type_index.encode(sink);
+                resume_table.encode(sink);
+            }
+            Instruction::ResumeThrow {
+                cont_type_index,
+                tag_index,
+                ref resume_table,
+            } => {
+                sink.push(0xE4);
+                cont_type_index.encode(sink);
+                tag_index.encode(sink);
+                resume_table.encode(sink);
+            }
+            Instruction::Switch {
+                cont_type_index,
+                tag_index,
+            } => {
+                sink.push(0xE5);
+                cont_type_index.encode(sink);
+                tag_index.encode(sink);
+            }
+            Instruction::I64Add128 => {
+                sink.push(0xFC);
+                19u32.encode(sink);
+            }
+            Instruction::I64Sub128 => {
+                sink.push(0xFC);
+                20u32.encode(sink);
+            }
+            Instruction::I64MulWideS => {
+                sink.push(0xFC);
+                21u32.encode(sink);
+            }
+            Instruction::I64MulWideU => {
+                sink.push(0xFC);
+                22u32.encode(sink);
+            }
         }
     }
 }
@@ -3161,10 +3817,33 @@ impl Encode for Catch {
     }
 }
 
+#[derive(Clone, Debug)]
+#[allow(missing_docs)]
+pub enum Handle {
+    OnLabel { tag: u32, label: u32 },
+    OnSwitch { tag: u32 },
+}
+
+impl Encode for Handle {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        match self {
+            Handle::OnLabel { tag, label } => {
+                sink.push(0x00);
+                tag.encode(sink);
+                label.encode(sink);
+            }
+            Handle::OnSwitch { tag } => {
+                sink.push(0x01);
+                tag.encode(sink);
+            }
+        }
+    }
+}
+
 /// A constant expression.
 ///
 /// Usable in contexts such as offsets or initializers.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConstExpr {
     bytes: Vec<u8>,
 }
@@ -3186,6 +3865,11 @@ impl ConstExpr {
         let mut bytes = vec![];
         insn.encode(&mut bytes);
         Self { bytes }
+    }
+
+    fn with_insn(mut self, insn: Instruction) -> Self {
+        insn.encode(&mut self.bytes);
+        self
     }
 
     /// Create a constant expression containing a single `global.get` instruction.
@@ -3227,100 +3911,96 @@ impl ConstExpr {
     pub fn v128_const(value: i128) -> Self {
         Self::new_insn(Instruction::V128Const(value))
     }
+
+    /// Add a `global.get` instruction to this constant expression.
+    pub fn with_global_get(self, index: u32) -> Self {
+        self.with_insn(Instruction::GlobalGet(index))
+    }
+
+    /// Add a `ref.null` instruction to this constant expression.
+    pub fn with_ref_null(self, ty: HeapType) -> Self {
+        self.with_insn(Instruction::RefNull(ty))
+    }
+
+    /// Add a `ref.func` instruction to this constant expression.
+    pub fn with_ref_func(self, func: u32) -> Self {
+        self.with_insn(Instruction::RefFunc(func))
+    }
+
+    /// Add an `i32.const` instruction to this constant expression.
+    pub fn with_i32_const(self, value: i32) -> Self {
+        self.with_insn(Instruction::I32Const(value))
+    }
+
+    /// Add an `i64.const` instruction to this constant expression.
+    pub fn with_i64_const(self, value: i64) -> Self {
+        self.with_insn(Instruction::I64Const(value))
+    }
+
+    /// Add a `f32.const` instruction to this constant expression.
+    pub fn with_f32_const(self, value: f32) -> Self {
+        self.with_insn(Instruction::F32Const(value))
+    }
+
+    /// Add a `f64.const` instruction to this constant expression.
+    pub fn with_f64_const(self, value: f64) -> Self {
+        self.with_insn(Instruction::F64Const(value))
+    }
+
+    /// Add a `v128.const` instruction to this constant expression.
+    pub fn with_v128_const(self, value: i128) -> Self {
+        self.with_insn(Instruction::V128Const(value))
+    }
+
+    /// Add an `i32.add` instruction to this constant expression.
+    pub fn with_i32_add(self) -> Self {
+        self.with_insn(Instruction::I32Add)
+    }
+
+    /// Add an `i32.sub` instruction to this constant expression.
+    pub fn with_i32_sub(self) -> Self {
+        self.with_insn(Instruction::I32Sub)
+    }
+
+    /// Add an `i32.mul` instruction to this constant expression.
+    pub fn with_i32_mul(self) -> Self {
+        self.with_insn(Instruction::I32Mul)
+    }
+
+    /// Add an `i64.add` instruction to this constant expression.
+    pub fn with_i64_add(self) -> Self {
+        self.with_insn(Instruction::I64Add)
+    }
+
+    /// Add an `i64.sub` instruction to this constant expression.
+    pub fn with_i64_sub(self) -> Self {
+        self.with_insn(Instruction::I64Sub)
+    }
+
+    /// Add an `i64.mul` instruction to this constant expression.
+    pub fn with_i64_mul(self) -> Self {
+        self.with_insn(Instruction::I64Mul)
+    }
+
+    /// Returns the function, if any, referenced by this global.
+    pub fn get_ref_func(&self) -> Option<u32> {
+        let prefix = *self.bytes.get(0)?;
+        // 0xd2 == `ref.func` opcode, and if that's found then load the leb
+        // corresponding to the function index.
+        if prefix != 0xd2 {
+            return None;
+        }
+        leb128::read::unsigned(&mut &self.bytes[1..])
+            .ok()?
+            .try_into()
+            .ok()
+    }
 }
 
 impl Encode for ConstExpr {
     fn encode(&self, sink: &mut Vec<u8>) {
         sink.extend(&self.bytes);
         Instruction::End.encode(sink);
-    }
-}
-
-/// An error when converting a `wasmparser::ConstExpr` into a
-/// `wasm_encoder::ConstExpr`.
-#[cfg(feature = "wasmparser")]
-#[derive(Debug)]
-pub enum ConstExprConversionError {
-    /// There was an error when parsing the const expression.
-    ParseError(wasmparser::BinaryReaderError),
-
-    /// The const expression is invalid: not actually constant or something like
-    /// that.
-    Invalid,
-
-    /// There was a type reference that was canonicalized and no longer
-    /// references an index into a module's types space, so we cannot encode it
-    /// into a Wasm binary again.
-    CanonicalizedTypeReference,
-}
-
-#[cfg(feature = "wasmparser")]
-impl std::fmt::Display for ConstExprConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ParseError(_e) => {
-                write!(f, "There was an error when parsing the const expression")
-            }
-            Self::Invalid => write!(f, "The const expression was invalid"),
-            Self::CanonicalizedTypeReference => write!(
-                f,
-                "There was a canonicalized type reference without type index information"
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "wasmparser")]
-impl std::error::Error for ConstExprConversionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ParseError(e) => Some(e),
-            Self::Invalid | Self::CanonicalizedTypeReference => None,
-        }
-    }
-}
-
-#[cfg(feature = "wasmparser")]
-impl<'a> TryFrom<wasmparser::ConstExpr<'a>> for ConstExpr {
-    type Error = ConstExprConversionError;
-
-    fn try_from(const_expr: wasmparser::ConstExpr) -> Result<Self, Self::Error> {
-        let mut ops = const_expr.get_operators_reader().into_iter();
-
-        let result = match ops.next() {
-            Some(Ok(wasmparser::Operator::I32Const { value })) => ConstExpr::i32_const(value),
-            Some(Ok(wasmparser::Operator::I64Const { value })) => ConstExpr::i64_const(value),
-            Some(Ok(wasmparser::Operator::F32Const { value })) => {
-                ConstExpr::f32_const(value.bits() as _)
-            }
-            Some(Ok(wasmparser::Operator::F64Const { value })) => {
-                ConstExpr::f64_const(value.bits() as _)
-            }
-            Some(Ok(wasmparser::Operator::V128Const { value })) => {
-                ConstExpr::v128_const(i128::from_le_bytes(*value.bytes()))
-            }
-            Some(Ok(wasmparser::Operator::RefNull { hty })) => ConstExpr::ref_null(
-                HeapType::try_from(hty)
-                    .map_err(|_| ConstExprConversionError::CanonicalizedTypeReference)?,
-            ),
-            Some(Ok(wasmparser::Operator::RefFunc { function_index })) => {
-                ConstExpr::ref_func(function_index)
-            }
-            Some(Ok(wasmparser::Operator::GlobalGet { global_index })) => {
-                ConstExpr::global_get(global_index)
-            }
-
-            // TODO: support the extended-const proposal.
-            Some(Ok(_op)) => return Err(ConstExprConversionError::Invalid),
-
-            Some(Err(e)) => return Err(ConstExprConversionError::ParseError(e)),
-            None => return Err(ConstExprConversionError::Invalid),
-        };
-
-        match (ops.next(), ops.next()) {
-            (Some(Ok(wasmparser::Operator::End)), None) => Ok(result),
-            _ => Err(ConstExprConversionError::Invalid),
-        }
     }
 }
 
@@ -3351,5 +4031,24 @@ mod tests {
         ]);
 
         assert_eq!(f1.bytes, f2.bytes)
+    }
+
+    #[test]
+    fn func_raw_bytes() {
+        use super::*;
+
+        let mut f = Function::new([(1, ValType::I32), (1, ValType::F32)]);
+        f.instruction(&Instruction::End);
+        let mut code_from_func = CodeSection::new();
+        code_from_func.function(&f);
+        let bytes = f.into_raw_body();
+        let mut code_from_raw = CodeSection::new();
+        code_from_raw.raw(&bytes[..]);
+
+        let mut c1 = vec![];
+        code_from_func.encode(&mut c1);
+        let mut c2 = vec![];
+        code_from_raw.encode(&mut c2);
+        assert_eq!(c1, c2);
     }
 }

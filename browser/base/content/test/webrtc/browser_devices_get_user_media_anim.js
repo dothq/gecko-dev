@@ -58,7 +58,7 @@ var gTests = [
         );
         is(
           gBrowser.selectedTab.getAttribute("sharing"),
-          "",
+          null,
           "the new tab doesn't have the 'sharing' attribute"
         );
         is(
@@ -89,7 +89,7 @@ var gTests = [
         await TestUtils.waitForCondition(() => !tab.getAttribute("sharing"));
         is(
           tab.getAttribute("sharing"),
-          "",
+          null,
           "the tab no longer has the 'sharing' attribute after closing the stream"
         );
       }
@@ -97,6 +97,10 @@ var gTests = [
       await getStreamAndCheckBackgroundAnim(true, true, "camera");
       await getStreamAndCheckBackgroundAnim(false, true, "camera");
       await getStreamAndCheckBackgroundAnim(true, false, "microphone");
+
+      let browser = gBrowser.selectedBrowser;
+      PermissionTestUtils.remove(browser.currentURI, "camera");
+      PermissionTestUtils.remove(browser.currentURI, "microphone");
     },
   },
 ];

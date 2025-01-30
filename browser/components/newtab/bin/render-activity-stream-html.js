@@ -57,7 +57,7 @@ function templateHTML(options) {
    - License, v. 2.0. If a copy of the MPL was not distributed with this file,
    - You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -66,6 +66,7 @@ function templateHTML(options) {
       content="default-src 'none'; object-src 'none'; script-src resource: chrome:; connect-src https:; img-src https: data: blob: chrome:; style-src 'unsafe-inline';"
     />
     <meta name="color-scheme" content="light dark" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-l10n-id="newtab-page-title"></title>
     <link
       rel="icon"
@@ -94,6 +95,16 @@ function templateHTML(options) {
       async
       type="module"
       src="chrome://global/content/elements/moz-toggle.mjs"
+    ></script>
+    <script
+      async
+      type="module"
+      src="chrome://global/content/elements/moz-button.mjs"
+    ></script>
+    <script
+      async
+      type="module"
+      src="chrome://global/content/elements/moz-button-group.mjs"
     ></script>
   </body>
 </html>
@@ -164,12 +175,12 @@ async function main() {
       flags: {
         addonPath: {
           type: "string",
-          alias: "a",
+          shortFlag: "a",
           default: DEFAULT_OPTIONS.addonPath,
         },
         baseUrl: {
           type: "string",
-          alias: "b",
+          shortFlag: "b",
           default: DEFAULT_OPTIONS.baseUrl,
         },
       },

@@ -6,11 +6,11 @@
 
 #include "Animation.h"
 
+#include "mozilla/Likely.h"
 #include "nsIFrame.h"
 #include "AnimationUtils.h"
 #include "mozAutoDocUpdate.h"
 #include "mozilla/dom/AnimationBinding.h"
-#include "mozilla/dom/AnimationPlaybackEvent.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
 #include "mozilla/dom/DocumentTimeline.h"
@@ -644,7 +644,8 @@ void Animation::Cancel(PostRestyleMode aPostRestyle) {
     }
     ResetFinishedPromise();
 
-    QueuePlaybackEvent(u"cancel"_ns, GetTimelineCurrentTimeAsTimeStamp());
+    QueuePlaybackEvent(nsGkAtoms::oncancel,
+                       GetTimelineCurrentTimeAsTimeStamp());
   }
 
   StickyTimeDuration activeTime =
@@ -802,7 +803,7 @@ void Animation::CommitStyles(ErrorResult& aRv) {
     return;
   }
 
-  if (target.mPseudoType != PseudoStyleType::NotPseudo) {
+  if (!target.mPseudoRequest.IsNotPseudo()) {
     return aRv.ThrowNoModificationAllowedError(
         "Can't commit styles of a pseudo-element");
   }
@@ -926,12 +927,13 @@ void Animation::SetCurrentTimeAsDouble(const Nullable<double>& aCurrentTime,
 
 void Animation::Tick(AnimationTimeline::TickState& aTickState) {
   if (Pending()) {
-    // Finish pending if we can, but make sure we've seen one existing tick, or
-    // we've requested to get started via SetPendingReadyTime.
-    if (!mPendingReadyTime.IsNull() || mSawTickWhilePending) {
+    if (!mPendingReadyTime.IsNull()) {
       TryTriggerNow();
+    } else if (MOZ_LIKELY(mTimeline)) {
+      // Makes sure that we trigger the animation on the next tick but,
+      // importantly, with this tick's timestamp.
+      mPendingReadyTime = mTimeline->GetCurrentTimeAsTimeStamp();
     }
-    mSawTickWhilePending = true;
   }
 
   UpdateTiming(SeekFlag::NoSeek, SyncNotifyFlag::Sync);
@@ -1187,10 +1189,12 @@ void Animation::Remove() {
   UpdateEffect(PostRestyleMode::IfNeeded);
   PostUpdate();
 
-  QueuePlaybackEvent(u"remove"_ns, GetTimelineCurrentTimeAsTimeStamp());
+  QueuePlaybackEvent(nsGkAtoms::onremove, GetTimelineCurrentTimeAsTimeStamp());
 }
 
-bool Animation::HasLowerCompositeOrderThan(const Animation& aOther) const {
+bool Animation::HasLowerCompositeOrderThan(
+    const Maybe<EventContext>& aContext, const Animation& aOther,
+    const Maybe<EventContext>& aOtherContext) const {
   // 0. Object-equality case
   if (&aOther == this) {
     return false;
@@ -1199,14 +1203,20 @@ bool Animation::HasLowerCompositeOrderThan(const Animation& aOther) const {
   // 1. CSS Transitions sort lowest
   {
     auto asCSSTransitionForSorting =
-        [](const Animation& anim) -> const CSSTransition* {
+        [](const Animation& anim,
+           const Maybe<EventContext>& aContext) -> const CSSTransition* {
       const CSSTransition* transition = anim.AsCSSTransition();
-      return transition && transition->IsTiedToMarkup() ? transition : nullptr;
+      return transition && (aContext || transition->IsTiedToMarkup())
+                 ? transition
+                 : nullptr;
     };
-    auto thisTransition = asCSSTransitionForSorting(*this);
-    auto otherTransition = asCSSTransitionForSorting(aOther);
+    const auto* const thisTransition =
+        asCSSTransitionForSorting(*this, aContext);
+    const auto* const otherTransition =
+        asCSSTransitionForSorting(aOther, aOtherContext);
     if (thisTransition && otherTransition) {
-      return thisTransition->HasLowerCompositeOrderThan(*otherTransition);
+      return thisTransition->HasLowerCompositeOrderThan(
+          aContext, *otherTransition, aOtherContext);
     }
     if (thisTransition || otherTransition) {
       // Cancelled transitions no longer have an owning element. To be strictly
@@ -1264,8 +1274,9 @@ void Animation::WillComposeStyle() {
   }
 }
 
-void Animation::ComposeStyle(StyleAnimationValueMap& aComposeResult,
-                             const nsCSSPropertyIDSet& aPropertiesToSkip) {
+void Animation::ComposeStyle(
+    StyleAnimationValueMap& aComposeResult,
+    const InvertibleAnimatedPropertyIDSet& aPropertiesToSkip) {
   if (!mEffect) {
     return;
   }
@@ -1351,17 +1362,21 @@ void Animation::NotifyEffectTargetUpdated() {
   MaybeScheduleReplacementCheck();
 }
 
-static bool EnsurePaintIsScheduled(Document& aDoc) {
+static TimeStamp EnsurePaintIsScheduled(Document& aDoc) {
   PresShell* presShell = aDoc.GetPresShell();
   if (!presShell) {
-    return false;
+    return {};
   }
   nsIFrame* rootFrame = presShell->GetRootFrame();
   if (!rootFrame) {
-    return false;
+    return {};
   }
   rootFrame->SchedulePaintWithoutInvalidatingObservers();
-  return rootFrame->PresContext()->RefreshDriver()->IsInRefresh();
+  auto* rd = rootFrame->PresContext()->RefreshDriver();
+  if (!rd->IsInRefresh()) {
+    return {};
+  }
+  return rd->MostRecentRefresh(/* aEnsureTimerStarted = */ false);
 }
 
 // https://drafts.csswg.org/web-animations/#play-an-animation
@@ -1453,7 +1468,6 @@ void Animation::PlayNoUpdate(ErrorResult& aRv, LimitBehavior aLimitBehavior) {
 
   mPendingState = PendingState::PlayPending;
   mPendingReadyTime = {};
-  mSawTickWhilePending = false;
   if (Document* doc = GetRenderedDocument()) {
     if (HasFiniteTimeline()) {
       // Always schedule a task even if we would like to let this animation
@@ -1464,7 +1478,7 @@ void Animation::PlayNoUpdate(ErrorResult& aRv, LimitBehavior aLimitBehavior) {
       doc->GetOrCreateScrollTimelineAnimationTracker()->AddPending(*this);
     }
     // Make sure to try to schedule a tick.
-    mSawTickWhilePending = EnsurePaintIsScheduled(*doc);
+    mPendingReadyTime = EnsurePaintIsScheduled(*doc);
   }
 
   UpdateTiming(SeekFlag::NoSeek, SyncNotifyFlag::Async);
@@ -1515,14 +1529,12 @@ void Animation::Pause(ErrorResult& aRv) {
 
   mPendingState = PendingState::PausePending;
   mPendingReadyTime = {};
-  mSawTickWhilePending = false;
-
   // See the relevant PlayPending code for comments.
   if (Document* doc = GetRenderedDocument()) {
     if (HasFiniteTimeline()) {
       doc->GetOrCreateScrollTimelineAnimationTracker()->AddPending(*this);
     }
-    mSawTickWhilePending = EnsurePaintIsScheduled(*doc);
+    mPendingReadyTime = EnsurePaintIsScheduled(*doc);
   }
 
   UpdateTiming(SeekFlag::NoSeek, SyncNotifyFlag::Async);
@@ -1866,10 +1878,11 @@ void Animation::DoFinishNotificationImmediately(MicroTaskRunnable* aAsync) {
 
   MaybeResolveFinishedPromise();
 
-  QueuePlaybackEvent(u"finish"_ns, AnimationTimeToTimeStamp(EffectEnd()));
+  QueuePlaybackEvent(nsGkAtoms::onfinish,
+                     AnimationTimeToTimeStamp(EffectEnd()));
 }
 
-void Animation::QueuePlaybackEvent(const nsAString& aName,
+void Animation::QueuePlaybackEvent(nsAtom* aOnEvent,
                                    TimeStamp&& aScheduledEventTime) {
   // Use document for timing.
   // https://drafts.csswg.org/web-animations-1/#document-for-timing
@@ -1883,20 +1896,19 @@ void Animation::QueuePlaybackEvent(const nsAString& aName,
     return;
   }
 
-  AnimationPlaybackEventInit init;
-  if (aName.EqualsLiteral("finish") || aName.EqualsLiteral("remove")) {
-    init.mCurrentTime = GetCurrentTimeAsDouble();
+  Nullable<double> currentTime;
+  if (aOnEvent == nsGkAtoms::onfinish || aOnEvent == nsGkAtoms::onremove) {
+    currentTime = GetCurrentTimeAsDouble();
   }
+
+  Nullable<double> timelineTime;
   if (mTimeline) {
-    init.mTimelineTime = mTimeline->GetCurrentTimeAsDouble();
+    timelineTime = mTimeline->GetCurrentTimeAsDouble();
   }
 
-  RefPtr<AnimationPlaybackEvent> event =
-      AnimationPlaybackEvent::Constructor(this, aName, init);
-  event->SetTrusted(true);
-
-  presContext->AnimationEventDispatcher()->QueueEvent(AnimationEventInfo(
-      std::move(event), std::move(aScheduledEventTime), this));
+  presContext->AnimationEventDispatcher()->QueueEvent(
+      AnimationEventInfo(aOnEvent, currentTime, timelineTime,
+                         std::move(aScheduledEventTime), this));
 }
 
 bool Animation::IsRunningOnCompositor() const {

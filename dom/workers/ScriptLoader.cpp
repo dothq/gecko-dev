@@ -243,10 +243,6 @@ void LoadAllScripts(WorkerPrivate* aWorkerPrivate,
   // even if the debugged worker is a Module.
   if (aWorkerPrivate->WorkerType() == WorkerType::Module &&
       aWorkerScriptType != DebuggerScript) {
-    if (!StaticPrefs::dom_workers_modules_enabled()) {
-      aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-      return;
-    }
     MOZ_ASSERT(aIsMainScript);
     // Module Load
     RefPtr<JS::loader::ScriptLoadRequest> mainScript = loader->GetMainScript();
@@ -295,25 +291,28 @@ class ChannelGetterRunnable final : public WorkerMainThreadRunnable {
 
   virtual bool MainThreadRun() override {
     AssertIsOnMainThread();
+    MOZ_ASSERT(mWorkerRef);
+
+    WorkerPrivate* workerPrivate = mWorkerRef->Private();
 
     // Initialize the WorkerLoadInfo principal to our triggering principal
     // before doing anything else.  Normally we do this in the WorkerPrivate
     // Constructor, but we can't do so off the main thread when creating
     // a nested worker.  So do it here instead.
-    mLoadInfo.mLoadingPrincipal = mWorkerPrivate->GetPrincipal();
+    mLoadInfo.mLoadingPrincipal = workerPrivate->GetPrincipal();
     MOZ_DIAGNOSTIC_ASSERT(mLoadInfo.mLoadingPrincipal);
 
     mLoadInfo.mPrincipal = mLoadInfo.mLoadingPrincipal;
 
     // Figure out our base URI.
-    nsCOMPtr<nsIURI> baseURI = mWorkerPrivate->GetBaseURI();
+    nsCOMPtr<nsIURI> baseURI = workerPrivate->GetBaseURI();
     MOZ_ASSERT(baseURI);
 
     // May be null.
-    nsCOMPtr<Document> parentDoc = mWorkerPrivate->GetDocument();
+    nsCOMPtr<Document> parentDoc = workerPrivate->GetDocument();
 
-    mLoadInfo.mLoadGroup = mWorkerPrivate->GetLoadGroup();
-    mLoadInfo.mCookieJarSettings = mWorkerPrivate->CookieJarSettings();
+    mLoadInfo.mLoadGroup = workerPrivate->GetLoadGroup();
+    mLoadInfo.mCookieJarSettings = workerPrivate->CookieJarSettings();
 
     // Nested workers use default uri encoding.
     nsCOMPtr<nsIURI> url;
@@ -328,7 +327,7 @@ class ChannelGetterRunnable final : public WorkerMainThreadRunnable {
         ReferrerInfo::CreateForFetch(mLoadInfo.mLoadingPrincipal, nullptr);
     mLoadInfo.mReferrerInfo =
         static_cast<ReferrerInfo*>(referrerInfo.get())
-            ->CloneWithNewPolicy(mWorkerPrivate->GetReferrerPolicy());
+            ->CloneWithNewPolicy(workerPrivate->GetReferrerPolicy());
 
     mResult = workerinternals::ChannelFromScriptURLMainThread(
         mLoadInfo.mLoadingPrincipal, parentDoc, mLoadInfo.mLoadGroup, url,
@@ -512,14 +511,8 @@ already_AddRefed<WorkerScriptLoader> WorkerScriptLoader::Create(
   nsIGlobalObject* global = self->GetGlobal();
   self->mController = global->GetController();
 
-  if (!StaticPrefs::dom_workers_modules_enabled()) {
-    return self.forget();
-  }
-
   // Set up the module loader, if it has not been initialzied yet.
-  if (!aWorkerPrivate->IsServiceWorker()) {
-    self->InitModuleLoader();
-  }
+  self->InitModuleLoader();
 
   return self.forget();
 }
@@ -700,10 +693,6 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
     // implementation, so we are defaulting the fetchOptions object defined
     // above. This behavior is handled fully in GetModuleSecFlags.
 
-    if (!StaticPrefs::dom_workers_modules_enabled()) {
-      mRv.ThrowTypeError("Modules in workers are currently disallowed.");
-      return nullptr;
-    }
     RefPtr<WorkerModuleLoader::ModuleLoaderBase> moduleLoader =
         GetGlobal()->GetModuleLoader(nullptr);
 
@@ -718,13 +707,16 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
     nsCOMPtr<nsIURI> referrer =
         mWorkerRef->Private()->GetReferrerInfo()->GetOriginalReferrer();
 
+    RefPtr<JS::loader::VisitedURLSet> visitedSet =
+        ModuleLoadRequest::NewVisitedSetForTopLevelImport(
+            uri, JS::ModuleType::JavaScript);
+
     // Part of Step 2. This sets the Top-level flag to true
     request = new ModuleLoadRequest(
-        uri, referrerPolicy, fetchOptions, SRIMetadata(), referrer, loadContext,
-        true,  /* is top level */
-        false, /* is dynamic import */
-        moduleLoader, ModuleLoadRequest::NewVisitedSetForTopLevelImport(uri),
-        nullptr);
+        uri, JS::ModuleType::JavaScript, referrerPolicy, fetchOptions,
+        SRIMetadata(), referrer, loadContext, true, /* is top level */
+        false,                                      /* is dynamic import */
+        moduleLoader, visitedSet, nullptr);
   }
 
   // Set the mURL, it will be used for error handling and debugging.
@@ -1027,6 +1019,18 @@ nsresult WorkerScriptLoader::LoadScript(
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
+
+    // Set the IsInThirdPartyContext for the channel's loadInfo according to the
+    // partitionKey of the principal. The worker is foreign if it's using
+    // partitioned principal, i.e. the partitionKey is not empty. In this case,
+    // we need to set the bit to the channel's loadInfo.
+    if (!principal->OriginAttributesRef().mPartitionKey.IsEmpty()) {
+      nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
+      rv = loadInfo->SetIsInThirdPartyContext(true);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return rv;
+      }
+    }
   }
 
   // Associate any originating stack with the channel.
@@ -1044,11 +1048,18 @@ nsresult WorkerScriptLoader::LoadScript(
   // For each debugger script, a non-debugger script load of the same script
   // should have occured prior that processed the headers.
   if (!IsDebuggerScript()) {
-    headerProcessor = MakeRefPtr<ScriptResponseHeaderProcessor>(
-        mWorkerRef->Private(),
-        loadContext->IsTopLevel() && !IsDynamicImport(request),
+    JS::ModuleType moduleType = request->IsModuleRequest()
+                                    ? request->AsModuleRequest()->mModuleType
+                                    : JS::ModuleType::JavaScript;
+
+    bool requiresStrictMimeCheck =
         GetContentPolicyType(request) ==
-            nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS);
+            nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS ||
+        request->IsModuleRequest();
+
+    headerProcessor = MakeRefPtr<ScriptResponseHeaderProcessor>(
+        mWorkerRef, loadContext->IsTopLevel() && !IsDynamicImport(request),
+        requiresStrictMimeCheck, moduleType);
   }
 
   nsCOMPtr<nsIStreamLoader> loader;
@@ -1065,8 +1076,8 @@ nsresult WorkerScriptLoader::LoadScript(
     // This flag reflects the fact that if the worker is created under a
     // third-party context.
     nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
-    loadInfo->SetIsThirdPartyContextToTopWindow(
-        mWorkerRef->Private()->IsThirdPartyContextToTopWindow());
+    loadInfo->SetIsInThirdPartyContext(
+        mWorkerRef->Private()->IsThirdPartyContext());
 
     Maybe<ClientInfo> clientInfo;
     clientInfo.emplace(loadContext->mClientInfo.ref());
@@ -1233,8 +1244,7 @@ bool WorkerScriptLoader::EvaluateScript(JSContext* aCx,
   }
 
   RefPtr<JS::loader::ClassicScript> classicScript = nullptr;
-  if (StaticPrefs::dom_workers_modules_enabled() &&
-      !mWorkerRef->Private()->IsServiceWorker()) {
+  if (!mWorkerRef->Private()->IsServiceWorker()) {
     // We need a LoadedScript to be associated with the JSScript in order to
     // correctly resolve the referencing private for dynamic imports. In turn
     // this allows us to correctly resolve the BaseURL.
@@ -1643,7 +1653,8 @@ void ScriptLoaderRunnable::DispatchProcessPendingRequests() {
         Span<RefPtr<ThreadSafeRequestHandle>>{maybeRangeToExecute->first,
                                               maybeRangeToExecute->second});
 
-    if (!runnable->Dispatch() && mScriptLoader->mSyncLoopTarget) {
+    if (!runnable->Dispatch(mWorkerRef->Private()) &&
+        mScriptLoader->mSyncLoopTarget) {
       MOZ_ASSERT(false, "This should never fail!");
     }
   }
@@ -1653,8 +1664,7 @@ ScriptExecutorRunnable::ScriptExecutorRunnable(
     WorkerScriptLoader* aScriptLoader, WorkerPrivate* aWorkerPrivate,
     nsISerialEventTarget* aSyncLoopTarget,
     Span<RefPtr<ThreadSafeRequestHandle>> aLoadedRequests)
-    : MainThreadWorkerSyncRunnable(aWorkerPrivate, aSyncLoopTarget,
-                                   "ScriptExecutorRunnable"),
+    : MainThreadWorkerSyncRunnable(aSyncLoopTarget, "ScriptExecutorRunnable"),
       mScriptLoader(aScriptLoader),
       mLoadedRequests(aLoadedRequests) {}
 
@@ -1839,7 +1849,7 @@ nsresult ChannelFromScriptURLWorkerThread(
       aParent, aScriptURL, aWorkerType, aCredentials, aLoadInfo);
 
   ErrorResult rv;
-  getter->Dispatch(Canceling, rv);
+  getter->Dispatch(aParent, Canceling, rv);
   if (rv.Failed()) {
     NS_ERROR("Failed to dispatch!");
     return rv.StealNSResult();
@@ -1856,12 +1866,6 @@ void ReportLoadError(ErrorResult& aRv, nsresult aLoadResult,
                       NS_ConvertUTF16toUTF8(aScriptURL).get());
 
   switch (aLoadResult) {
-    case NS_ERROR_FILE_NOT_FOUND:
-    case NS_ERROR_NOT_AVAILABLE:
-    case NS_ERROR_CORRUPTED_CONTENT:
-      aRv.Throw(NS_ERROR_DOM_NETWORK_ERR);
-      break;
-
     case NS_ERROR_MALFORMED_URI:
     case NS_ERROR_DOM_SYNTAX_ERR:
       aRv.ThrowSyntaxError(err);
@@ -1877,7 +1881,7 @@ void ReportLoadError(ErrorResult& aRv, nsresult aLoadResult,
       // make it impossible for consumers to realize that our error was
       // NS_BINDING_ABORTED.
       aRv.Throw(aLoadResult);
-      return;
+      break;
 
     case NS_ERROR_DOM_BAD_URI:
       // This is actually a security error.
@@ -1885,15 +1889,16 @@ void ReportLoadError(ErrorResult& aRv, nsresult aLoadResult,
       aRv.ThrowSecurityError(err);
       break;
 
+    case NS_ERROR_FILE_NOT_FOUND:
+    case NS_ERROR_NOT_AVAILABLE:
+    case NS_ERROR_CORRUPTED_CONTENT:
+    case NS_ERROR_DOM_NETWORK_ERR:
+    // For lack of anything better, go ahead and throw a NetworkError here.
+    // We don't want to throw a JS exception, because for toplevel script
+    // loads that would get squelched.
     default:
-      // For lack of anything better, go ahead and throw a NetworkError here.
-      // We don't want to throw a JS exception, because for toplevel script
-      // loads that would get squelched.
-      aRv.ThrowNetworkError(nsPrintfCString(
-          "Failed to load worker script at %s (nsresult = 0x%" PRIx32 ")",
-          NS_ConvertUTF16toUTF8(aScriptURL).get(),
-          static_cast<uint32_t>(aLoadResult)));
-      return;
+      aRv.Throw(NS_ERROR_DOM_NETWORK_ERR);
+      break;
   }
 }
 

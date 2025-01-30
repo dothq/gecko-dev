@@ -23,7 +23,10 @@ let suggestionsEngine;
 let defaultEngine;
 
 add_setup(async function () {
-  suggestionsEngine = await SearchTestUtils.promiseNewSearchEngine({
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.scotchBonnet.enableOverride", false]],
+  });
+  suggestionsEngine = await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + SUGGESTIONS_ENGINE_NAME,
   });
 

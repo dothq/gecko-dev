@@ -11,6 +11,7 @@
 #include "nsIUploadChannel.h"
 #include "nsIURI.h"
 #include "nsIUrlClassifierDBService.h"
+#include "nsUrlClassifierDBService.h"
 #include "nsIUrlClassifierRemoteSettingsService.h"
 #include "nsUrlClassifierUtils.h"
 #include "nsNetUtil.h"
@@ -550,7 +551,7 @@ nsresult nsUrlClassifierStreamUpdater::AddRequestBody(
       do_CreateInstance(NS_STRINGINPUTSTREAM_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = strStream->SetData(aRequestBody.BeginReading(), aRequestBody.Length());
+  rv = strStream->SetByteStringData(aRequestBody);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIUploadChannel> uploadChannel = do_QueryInterface(mChannel, &rv);
@@ -577,6 +578,11 @@ nsUrlClassifierStreamUpdater::OnStartRequest(nsIRequest* request) {
   bool downloadError = false;
   nsAutoCString strStatus;
   nsresult status = NS_OK;
+
+  if (nsUrlClassifierDBService::ShutdownHasStarted()) {
+    LOG(("Aborting since the DB service is shutting down"));
+    return NS_ERROR_ABORT;
+  }
 
   // Only update if we got http success header
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(request);
@@ -674,6 +680,11 @@ nsUrlClassifierStreamUpdater::OnDataAvailable(nsIRequest* request,
 
   LOG(("OnDataAvailable (%d bytes)", aLength));
 
+  if (nsUrlClassifierDBService::ShutdownHasStarted()) {
+    LOG(("Aborting since the DB service is shutting down"));
+    return NS_ERROR_ABORT;
+  }
+
   if (aSourceOffset > MAX_FILE_SIZE) {
     LOG((
         "OnDataAvailable::Abort because exceeded the maximum file size(%" PRIu64
@@ -709,6 +720,11 @@ nsUrlClassifierStreamUpdater::OnStopRequest(nsIRequest* request,
   }
 
   nsresult rv;
+
+  if (nsUrlClassifierDBService::ShutdownHasStarted()) {
+    LOG(("Aborting since the DB service is shutting down"));
+    return NS_ERROR_ABORT;
+  }
 
   if (NS_SUCCEEDED(aStatus)) {
     // Success, finish this stream and move on to the next.

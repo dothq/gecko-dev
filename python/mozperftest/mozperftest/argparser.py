@@ -29,6 +29,8 @@ FLAVORS = (
     "xpcshell",
     "webpagetest",
     "mochitest",
+    "custom-script",
+    "alert",
 )
 
 
@@ -86,6 +88,41 @@ class Options:
             "default": "today",
             "help": "Used in multi-commit testing, it specifies the day to get test builds from. "
             "Must follow the format `YYYY.MM.DD` or be `today` or `yesterday`.",
+        },
+        "--binary": {
+            "type": str,
+            "default": None,
+            "help": (
+                "The binary that needs to be tested (note that some layers "
+                "may use a custom approach for the binary specification)."
+            ),
+        },
+        "--app": {
+            "type": str,
+            "default": "firefox",
+            "choices": [
+                "firefox",
+                "chrome-m",
+                "chrome",
+                "fennec",
+                "geckoview",
+                "fenix",
+                "refbrow",
+                "focus",
+            ],
+            "help": (
+                "Shorthand name of application that is being tested. "
+                "Used in perfherder data, and other layers such as the "
+                "BinarySetup layer for getting the binary path, and version."
+            ),
+        },
+        "--gecko-profile": {
+            "action": "store_true",
+            "default": False,
+            "help": (
+                "Run tests with gecko profiling enabled (assumes test layer "
+                "has implemented it)."
+            ),
         },
     }
 

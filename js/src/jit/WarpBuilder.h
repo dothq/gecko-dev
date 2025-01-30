@@ -11,6 +11,7 @@
 
 #include "ds/InlineTable.h"
 #include "jit/JitContext.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/WarpBuilderShared.h"
 #include "jit/WarpSnapshot.h"
@@ -36,8 +37,6 @@ namespace jit {
   _(SetElemSuper)                        \
   _(StrictSetPropSuper)                  \
   _(StrictSetElemSuper)                  \
-  /* Compound assignment */              \
-  _(GetBoundName)                        \
   /* Generators / Async (bug 1317690) */ \
   _(IsGenClosing)                        \
   _(Resume)                              \

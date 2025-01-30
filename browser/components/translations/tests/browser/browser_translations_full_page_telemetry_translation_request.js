@@ -40,6 +40,8 @@ add_task(async function test_translations_telemetry_manual_translation() {
   );
 
   await FullPageTranslationsTestUtils.openPanel({
+    expectedFromLanguage: "es",
+    expectedToLanguage: "en",
     onOpenPanel: FullPageTranslationsTestUtils.assertPanelViewDefault,
   });
 
@@ -47,11 +49,11 @@ add_task(async function test_translations_telemetry_manual_translation() {
     downloadHandler: resolveDownloads,
   });
 
-  await FullPageTranslationsTestUtils.assertPageIsTranslated(
-    "es",
-    "en",
-    runInPage
-  );
+  await FullPageTranslationsTestUtils.assertPageIsTranslated({
+    fromLanguage: "es",
+    toLanguage: "en",
+    runInPage,
+  });
 
   await TestTranslationsTelemetry.assertCounter(
     "RequestCount",
@@ -69,12 +71,12 @@ add_task(async function test_translations_telemetry_manual_translation() {
   await TestTranslationsTelemetry.assertEvent(Glean.translationsPanel.open, {
     expectedEventCount: 1,
     expectNewFlowId: true,
-    finalValuePredicates: [
-      value => value.extra.auto_show === "false",
-      value => value.extra.view_name === "defaultView",
-      value => value.extra.opened_from === "translationsButton",
-      value => value.extra.document_language === "es",
-    ],
+    assertForMostRecentEvent: {
+      auto_show: false,
+      view_name: "defaultView",
+      opened_from: "translationsButton",
+      document_language: "es",
+    },
   });
   await TestTranslationsTelemetry.assertEvent(
     Glean.translationsPanel.translateButton,
@@ -87,18 +89,26 @@ add_task(async function test_translations_telemetry_manual_translation() {
     expectedEventCount: 1,
     expectNewFlowId: false,
   });
+  await TestTranslationsTelemetry.assertLabeledCounter(
+    Glean.translations.requestCount,
+    [
+      ["full_page", 1],
+      ["select", 0],
+    ]
+  );
   await TestTranslationsTelemetry.assertEvent(
     Glean.translations.translationRequest,
     {
       expectedEventCount: 1,
       expectNewFlowId: false,
-      finalValuePredicates: [
-        value => value.extra.from_language === "es",
-        value => value.extra.to_language === "en",
-        value => value.extra.auto_translate === "false",
-        value => value.extra.document_language === "es",
-        value => value.extra.top_preferred_language === "en",
-      ],
+      assertForMostRecentEvent: {
+        from_language: "es",
+        to_language: "en",
+        auto_translate: false,
+        document_language: "es",
+        top_preferred_language: "en-US",
+        request_target: "full_page",
+      },
     }
   );
 
@@ -120,11 +130,11 @@ add_task(async function test_translations_telemetry_auto_translation() {
     downloadHandler: resolveDownloads,
   });
 
-  await FullPageTranslationsTestUtils.assertPageIsTranslated(
-    "es",
-    "en",
-    runInPage
-  );
+  await FullPageTranslationsTestUtils.assertPageIsTranslated({
+    fromLanguage: "es",
+    toLanguage: "en",
+    runInPage,
+  });
 
   await TestTranslationsTelemetry.assertCounter(
     "RequestCount",
@@ -151,18 +161,26 @@ add_task(async function test_translations_telemetry_auto_translation() {
   await TestTranslationsTelemetry.assertEvent(Glean.translationsPanel.close, {
     expectedEventCount: 0,
   });
+  await TestTranslationsTelemetry.assertLabeledCounter(
+    Glean.translations.requestCount,
+    [
+      ["full_page", 1],
+      ["select", 0],
+    ]
+  );
   await TestTranslationsTelemetry.assertEvent(
     Glean.translations.translationRequest,
     {
       expectedEventCount: 1,
       expectNewFlowId: true,
-      finalValuePredicates: [
-        value => value.extra.from_language === "es",
-        value => value.extra.to_language === "en",
-        value => value.extra.auto_translate === "true",
-        value => value.extra.document_language === "es",
-        value => value.extra.top_preferred_language === "en",
-      ],
+      assertForMostRecentEvent: {
+        from_language: "es",
+        to_language: "en",
+        auto_translate: true,
+        document_language: "es",
+        top_preferred_language: "en-US",
+        request_target: "full_page",
+      },
     }
   );
 

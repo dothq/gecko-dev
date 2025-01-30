@@ -1,3 +1,6 @@
+/**
+ * @suppress
+ */
 public object FfiConverterUShort: FfiConverter<UShort, Short> {
     override fun lift(value: Short): UShort {
         return value.toUShort()
@@ -11,7 +14,7 @@ public object FfiConverterUShort: FfiConverter<UShort, Short> {
         return value.toShort()
     }
 
-    override fun allocationSize(value: UShort) = 2
+    override fun allocationSize(value: UShort) = 2UL
 
     override fun write(value: UShort, buf: ByteBuffer) {
         buf.putShort(value.toShort())

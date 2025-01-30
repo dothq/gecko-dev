@@ -21,7 +21,7 @@ from gecko_taskgraph.test.conftest import FakeParameters
 from gecko_taskgraph.transforms import job
 from gecko_taskgraph.transforms.job import run_task  # noqa: F401
 from gecko_taskgraph.transforms.job.common import add_cache
-from gecko_taskgraph.transforms.task import payload_builders
+from gecko_taskgraph.transforms.task import group_name_variant, payload_builders
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -37,7 +37,7 @@ TASK_DEFAULTS = {
 
 @pytest.fixture(scope="module")
 def config():
-    graph_config = load_graph_config(os.path.join(GECKO, "taskcluster", "ci"))
+    graph_config = load_graph_config(os.path.join(GECKO, "taskcluster"))
     params = FakeParameters(
         {
             "base_repository": "http://hg.example.com",
@@ -83,10 +83,34 @@ def transform(monkeypatch, config):
 
 
 @pytest.mark.parametrize(
+    "groupSymbol,description",
+    [
+        pytest.param("M", "Mochitests", id="no_variants"),
+        pytest.param(
+            "M-spi-nw",
+            "Mochitests with networking on socket process enabled",
+            id="spi-nw variant",
+        ),
+        pytest.param(
+            "M-spi-nw-http3",
+            "Mochitests with networking on socket process enabled with http3 server",
+            id="spi-nw and http3 variants",
+        ),
+        pytest.param("M-fake", "", id="invalid group name"),
+    ],
+    ids=lambda t: t["worker-type"],
+)
+def test_group_name(config, groupSymbol, description):
+    group_names = config.graph_config["treeherder"]["group-names"]
+    generated_description = group_name_variant(group_names, groupSymbol)
+    assert description == generated_description
+
+
+@pytest.mark.parametrize(
     "task",
     [
         {"worker-type": "b-linux"},
-        {"worker-type": "t-win10-64-hw"},
+        {"worker-type": "win11-64-2009-hw"},
     ],
     ids=lambda t: t["worker-type"],
 )

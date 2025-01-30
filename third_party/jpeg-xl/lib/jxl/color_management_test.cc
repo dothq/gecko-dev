@@ -5,9 +5,10 @@
 
 #include <jxl/cms.h>
 #include <jxl/cms_interface.h>
-#include <stdint.h>
+#include <jxl/memory_manager.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +30,7 @@
 #include "lib/jxl/image_metadata.h"
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/image_test_utils.h"
+#include "lib/jxl/test_memory_manager.h"
 #include "lib/jxl/test_utils.h"
 #include "lib/jxl/testing.h"
 
@@ -59,17 +61,20 @@ struct Globals {
 
  private:
   Globals() {
+    JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
     in_gray = GenerateGray();
     in_color = GenerateColor();
-    JXL_ASSIGN_OR_DIE(out_gray, ImageF::Create(kWidth, 1));
-    JXL_ASSIGN_OR_DIE(out_color, ImageF::Create(kWidth * 3, 1));
+    JXL_TEST_ASSIGN_OR_DIE(out_gray, ImageF::Create(memory_manager, kWidth, 1));
+    JXL_TEST_ASSIGN_OR_DIE(out_color,
+                           ImageF::Create(memory_manager, kWidth * 3, 1));
 
     c_native = ColorEncoding::LinearSRGB(/*is_gray=*/false);
     c_gray = ColorEncoding::LinearSRGB(/*is_gray=*/true);
   }
 
   static ImageF GenerateGray() {
-    JXL_ASSIGN_OR_DIE(ImageF gray, ImageF::Create(kWidth, 1));
+    JXL_TEST_ASSIGN_OR_DIE(
+        ImageF gray, ImageF::Create(jxl::test::MemoryManager(), kWidth, 1));
     float* JXL_RESTRICT row = gray.Row(0);
     // Increasing left to right
     for (uint32_t x = 0; x < kWidth; ++x) {
@@ -79,7 +84,9 @@ struct Globals {
   }
 
   static ImageF GenerateColor() {
-    JXL_ASSIGN_OR_DIE(ImageF image, ImageF::Create(kWidth * 3, 1));
+    JXL_TEST_ASSIGN_OR_DIE(
+        ImageF image,
+        ImageF::Create(jxl::test::MemoryManager(), kWidth * 3, 1));
     float* JXL_RESTRICT interleaved = image.Row(0);
     std::fill(interleaved, interleaved + kWidth * 3, 0.0f);
 
@@ -147,7 +154,7 @@ class ColorManagementTest
     // Most are lower; reached 3E-7 with D60 AP0.
     double max_rel = 4E-7;
     if (c.IsGray()) max_rel = 2E-5;
-    JXL_ASSERT_OK(VerifyRelativeError(in, *out, max_l1, max_rel, _));
+    JXL_TEST_ASSERT_OK(VerifyRelativeError(in, *out, max_l1, max_rel, _));
   }
 };
 JXL_GTEST_INSTANTIATE_TEST_SUITE_P(ColorManagementTestInstantiation,
@@ -223,7 +230,9 @@ TEST_F(ColorManagementTest, sRGBChromaticity) {
   const ColorEncoding sRGB = ColorEncoding::SRGB();
   EXPECT_CIEXY_NEAR(sRGB.GetWhitePoint(), CIExy(0.3127, 0.3290), 1e-4);
   PrimariesCIExy srgb_primaries = {{0.64, 0.33}, {0.30, 0.60}, {0.15, 0.06}};
-  EXPECT_PRIMARIES_NEAR(sRGB.GetPrimaries(), srgb_primaries, 1e-4);
+  PrimariesCIExy p;
+  ASSERT_TRUE(sRGB.GetPrimaries(p));
+  EXPECT_PRIMARIES_NEAR(p, srgb_primaries, 1e-4);
 }
 
 TEST_F(ColorManagementTest, D2700Chromaticity) {
@@ -239,7 +248,9 @@ TEST_F(ColorManagementTest, D2700Chromaticity) {
   // same as for sRGB. It is the PCS-relative chromaticities that would be
   // different.
   PrimariesCIExy srgb_primaries = {{0.64, 0.33}, {0.30, 0.60}, {0.15, 0.06}};
-  EXPECT_PRIMARIES_NEAR(sRGB_D2700.GetPrimaries(), srgb_primaries, 1e-4);
+  PrimariesCIExy p;
+  ASSERT_TRUE(sRGB_D2700.GetPrimaries(p));
+  EXPECT_PRIMARIES_NEAR(p, srgb_primaries, 1e-4);
 }
 
 TEST_F(ColorManagementTest, D2700ToSRGB) {
@@ -341,6 +352,7 @@ TEST_F(ColorManagementTest, HlgOotf) {
 }
 
 TEST_F(ColorManagementTest, XYBProfile) {
+  JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
   ColorEncoding c_xyb;
   c_xyb.SetColorSpace(ColorSpace::kXYB);
   c_xyb.SetRenderingIntent(RenderingIntent::kPerceptual);
@@ -356,8 +368,9 @@ TEST_F(ColorManagementTest, XYBProfile) {
 
   ImageMetadata metadata;
   metadata.color_encoding = c_native;
-  ImageBundle ib(&metadata);
-  JXL_ASSIGN_OR_DIE(Image3F native, Image3F::Create(kNumColors, 1));
+  ImageBundle ib(memory_manager, &metadata);
+  JXL_TEST_ASSIGN_OR_DIE(Image3F native,
+                         Image3F::Create(memory_manager, kNumColors, 1));
   float mul = 1.0f / (kGridDim - 1);
   for (size_t ir = 0, x = 0; ir < kGridDim; ++ir) {
     for (size_t ig = 0; ig < kGridDim; ++ig) {
@@ -368,13 +381,15 @@ TEST_F(ColorManagementTest, XYBProfile) {
       }
     }
   }
-  ib.SetFromImage(std::move(native), c_native);
+  ASSERT_TRUE(ib.SetFromImage(std::move(native), c_native));
   const Image3F& in = *ib.color();
-  JXL_ASSIGN_OR_DIE(Image3F opsin, Image3F::Create(kNumColors, 1));
-  JXL_CHECK(ToXYB(ib, nullptr, &opsin, cms, nullptr));
+  JXL_TEST_ASSIGN_OR_DIE(Image3F opsin,
+                         Image3F::Create(memory_manager, kNumColors, 1));
+  ASSERT_TRUE(ToXYB(ib, nullptr, &opsin, cms, nullptr));
 
-  JXL_ASSIGN_OR_DIE(Image3F opsin2, Image3F::Create(kNumColors, 1));
-  CopyImageTo(opsin, &opsin2);
+  JXL_TEST_ASSIGN_OR_DIE(Image3F opsin2,
+                         Image3F::Create(memory_manager, kNumColors, 1));
+  ASSERT_TRUE(CopyImageTo(opsin, &opsin2));
   ScaleXYB(&opsin2);
 
   float* src = xform.BufSrc(0);
@@ -387,7 +402,8 @@ TEST_F(ColorManagementTest, XYBProfile) {
   float* dst = xform.BufDst(0);
   ASSERT_TRUE(xform.Run(0, src, dst, kNumColors));
 
-  JXL_ASSIGN_OR_DIE(Image3F out, Image3F::Create(kNumColors, 1));
+  JXL_TEST_ASSIGN_OR_DIE(Image3F out,
+                         Image3F::Create(memory_manager, kNumColors, 1));
   for (size_t i = 0; i < kNumColors; ++i) {
     for (size_t c = 0; c < 3; ++c) {
       out.PlaneRow(c, 0)[i] = dst[3 * i + c];
@@ -417,7 +433,7 @@ TEST_F(ColorManagementTest, XYBProfile) {
       }
     }
   }
-  static float kMaxError[3] = {9e-4, 4e-4, 5e-4};
+  static float kMaxError[3] = {8.7e-4, 4.4e-4, 5.2e-4};
   printf("Maximum errors:\n");
   for (size_t c = 0; c < 3; ++c) {
     debug_print_color(max_err_i[c]);
@@ -434,7 +450,7 @@ TEST_F(ColorManagementTest, GoldenXYBCube) {
       for (size_t ib = 0; ib < 2; ++ib) {
         const jxl::cms::ColorCube0D& out_f = cube[ix][iy][ib];
         for (int i = 0; i < 3; ++i) {
-          int32_t val = static_cast<int32_t>(0.5f + 65535 * out_f[i]);
+          int32_t val = static_cast<int32_t>(std::lroundf(65535 * out_f[i]));
           ASSERT_TRUE(val >= 0 && val <= 65535);
           actual.push_back(val);
         }

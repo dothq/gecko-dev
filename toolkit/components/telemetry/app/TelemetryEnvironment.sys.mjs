@@ -9,8 +9,10 @@ import { TelemetryUtils } from "resource://gre/modules/TelemetryUtils.sys.mjs";
 import { ObjectUtils } from "resource://gre/modules/ObjectUtils.sys.mjs";
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { UpdateUtils } from "resource://gre/modules/UpdateUtils.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const Utils = TelemetryUtils;
+const PREF_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 
 import {
   AddonManager,
@@ -32,6 +34,15 @@ ChromeUtils.defineLazyGetter(lazy, "fxAccounts", () => {
     "resource://gre/modules/FxAccounts.sys.mjs"
   ).getFxAccountsSingleton();
 });
+
+if (AppConstants.MOZ_UPDATER) {
+  XPCOMUtils.defineLazyServiceGetter(
+    lazy,
+    "UpdateServiceStub",
+    "@mozilla.org/updates/update-service-stub;1",
+    "nsIApplicationUpdateServiceStub"
+  );
+}
 
 // The maximum length of a string (e.g. description) in the addons section.
 const MAX_ADDON_STRING_LENGTH = 100;
@@ -231,7 +242,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["browser.shell.checkDefaultBrowser", { what: RECORD_PREF_VALUE }],
   ["browser.search.region", { what: RECORD_PREF_VALUE }],
   ["browser.search.suggest.enabled", { what: RECORD_PREF_VALUE }],
-  ["browser.search.widget.inNavBar", { what: RECORD_DEFAULTPREF_VALUE }],
   ["browser.startup.homepage", { what: RECORD_PREF_STATE }],
   ["browser.startup.page", { what: RECORD_PREF_VALUE }],
   ["browser.urlbar.autoFill", { what: RECORD_DEFAULTPREF_VALUE }],
@@ -327,6 +337,10 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["media.gmp-widevinecdm.visible", { what: RECORD_PREF_VALUE }],
   ["media.gmp-manager.lastCheck", { what: RECORD_PREF_VALUE }],
   ["media.gmp-manager.lastEmptyCheck", { what: RECORD_PREF_VALUE }],
+  [
+    "network.http.microsoft-entra-sso.enabled",
+    { what: RECORD_DEFAULTPREF_VALUE },
+  ],
   ["network.http.windows-sso.enabled", { what: RECORD_PREF_VALUE }],
   ["network.proxy.autoconfig_url", { what: RECORD_PREF_STATE }],
   ["network.proxy.http", { what: RECORD_PREF_STATE }],
@@ -346,18 +360,22 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["security.pki.mitm_detected", { what: RECORD_PREF_VALUE }],
   ["security.mixed_content.block_active_content", { what: RECORD_PREF_VALUE }],
   ["security.mixed_content.block_display_content", { what: RECORD_PREF_VALUE }],
+  ["security.mls.enabled", { what: RECORD_PREF_VALUE }],
   ["security.tls.version.enable-deprecated", { what: RECORD_PREF_VALUE }],
   ["signon.management.page.breach-alerts.enabled", { what: RECORD_PREF_VALUE }],
   ["signon.autofillForms", { what: RECORD_PREF_VALUE }],
   ["signon.generation.enabled", { what: RECORD_PREF_VALUE }],
   ["signon.rememberSignons", { what: RECORD_PREF_VALUE }],
   ["signon.firefoxRelay.feature", { what: RECORD_PREF_VALUE }],
-  ["toolkit.telemetry.pioneerId", { what: RECORD_PREF_STATE }],
   [
     "widget.content.gtk-high-contrast.enabled",
     { what: RECORD_DEFAULTPREF_VALUE },
   ],
   ["xpinstall.signatures.required", { what: RECORD_PREF_VALUE }],
+  [
+    "xpinstall.signatures.weakSignaturesTemporarilyAllowed",
+    { what: RECORD_PREF_VALUE },
+  ],
   ["nimbus.debug", { what: RECORD_PREF_VALUE }],
 ]);
 
@@ -837,6 +855,7 @@ EnvironmentAddonBuilder.prototype = {
             hasBinaryComponents: false,
             installDay: Utils.millisecondsToDays(installDate.getTime()),
             signedState: addon.signedState,
+            signedTypes: JSON.stringify(addon.signedTypes),
             quarantineIgnoredByApp: enforceBoolean(
               addon.quarantineIgnoredByApp
             ),
@@ -890,6 +909,8 @@ EnvironmentAddonBuilder.prototype = {
         hasBinaryComponents: false,
         installDay: Utils.millisecondsToDays(installDate.getTime()),
         updateDay: Utils.millisecondsToDays(updateDate.getTime()),
+        signedState: theme.signedState,
+        signedTypes: JSON.stringify(theme.signedTypes),
       };
     }
 
@@ -1606,14 +1627,16 @@ EnvironmentCache.prototype = {
       e10sEnabled: Services.appinfo.browserTabsRemoteAutostart,
       e10sMultiProcesses: Services.appinfo.maxWebProcessCount,
       fissionEnabled: Services.appinfo.fissionAutostart,
-      telemetryEnabled: Utils.isTelemetryEnabled,
+      telemetryEnabled:
+        Services.prefs.getBoolPref(PREF_TELEMETRY_ENABLED, false) === true,
       locale: getBrowserLocale(),
       // We need to wait for browser-delayed-startup-finished to ensure that the locales
       // have settled, once that's happened we can get the intl data directly.
       intl: Policy._intlLoaded ? getIntlSettings() : {},
       update: {
         channel: updateChannel,
-        enabled: !Services.policies || Services.policies.isAllowed("appUpdate"),
+        enabled:
+          AppConstants.MOZ_UPDATER && !lazy.UpdateServiceStub.updateDisabled,
       },
       userPrefs: this._getPrefData(),
       sandbox: this._getSandboxData(),
@@ -1667,6 +1690,7 @@ EnvironmentCache.prototype = {
     let creationDate = await profileAccessor.created;
     let resetDate = await profileAccessor.reset;
     let firstUseDate = await profileAccessor.firstUse;
+    let recoveredFromBackup = await profileAccessor.recoveredFromBackup;
 
     this._currentEnvironment.profile.creationDate =
       Utils.millisecondsToDays(creationDate);
@@ -1677,6 +1701,10 @@ EnvironmentCache.prototype = {
     if (firstUseDate) {
       this._currentEnvironment.profile.firstUseDate =
         Utils.millisecondsToDays(firstUseDate);
+    }
+    if (recoveredFromBackup) {
+      this._currentEnvironment.profile.recoveredFromBackup =
+        Utils.millisecondsToDays(recoveredFromBackup);
     }
   },
 
@@ -2010,6 +2038,8 @@ EnvironmentCache.prototype = {
       Headless: getGfxField("isHeadless", null),
       EmbeddedInFirefoxReality: getGfxField("EmbeddedInFirefoxReality", null),
       TargetFrameRate: getGfxField("TargetFrameRate", null),
+      textScaleFactor: getGfxField("textScaleFactor", null),
+
       // The following line is disabled due to main thread jank and will be enabled
       // again as part of bug 1154500.
       // DWriteVersion: getGfxField("DWriteVersion", null),
@@ -2102,6 +2132,11 @@ EnvironmentCache.prototype = {
   },
 
   _onEnvironmentChange(what, oldEnvironment) {
+    ChromeUtils.addProfilerMarker(
+      "EnvironmentChange",
+      { category: "Telemetry" },
+      what
+    );
     this._log.trace("_onEnvironmentChange for " + what);
 
     // We are already skipping change events in _checkChanges if there is a pending change task running.

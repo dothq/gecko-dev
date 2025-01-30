@@ -5,6 +5,7 @@
 
 #include "NotificationController.h"
 
+#include "CssAltContent.h"
 #include "DocAccessible-inl.h"
 #include "DocAccessibleChild.h"
 #include "LocalAccessible-inl.h"
@@ -202,6 +203,20 @@ bool NotificationController::QueueMutationEvent(AccTreeMutationEvent* aEvent) {
     }
   }
 
+  if (aEvent->GetEventType() == nsIAccessibleEvent::EVENT_HIDE ||
+      aEvent->GetEventType() == nsIAccessibleEvent::EVENT_SHOW) {
+    LocalAccessible* target = aEvent->GetAccessible();
+    // We need to do this here while the relation is still intact. During the
+    // tick, where we we call PushNameOrDescriptionChange, it will be too late
+    // since we will already have unparented the label and severed the relation.
+    if (PushNameOrDescriptionChangeToRelations(target,
+                                               RelationType::LABEL_FOR) ||
+        PushNameOrDescriptionChangeToRelations(target,
+                                               RelationType::DESCRIPTION_FOR)) {
+      ScheduleProcessing();
+    }
+  }
+
   // We need to fire a reorder event after all of the events targeted at shown
   // or hidden children of a container.  So either queue a new one, or move an
   // existing one to the end of the queue if the container already has a
@@ -212,12 +227,6 @@ bool NotificationController::QueueMutationEvent(AccTreeMutationEvent* aEvent) {
     reorder = new AccReorderEvent(container);
     container->SetReorderEventTarget(true);
     mMutationMap.PutEvent(reorder);
-
-    // Since this is the first child of container that is changing, the name
-    // and/or description of dependent Accessibles may be changing.
-    if (PushNameOrDescriptionChange(aEvent)) {
-      ScheduleProcessing();
-    }
   } else {
     AccReorderEvent* event = downcast_accEvent(
         mMutationMap.GetEvent(container, EventMap::ReorderEvent));
@@ -477,7 +486,7 @@ void NotificationController::ScheduleProcessing() {
 // NotificationCollector: protected
 
 bool NotificationController::IsUpdatePending() {
-  return mPresShell->IsLayoutFlushObserver() ||
+  return mPresShell->ObservingStyleFlushes() ||
          mObservingState == eRefreshProcessingForUpdate || WaitingForParent() ||
          mContentInsertions.Count() != 0 || mNotifications.Length() != 0 ||
          !mTextArray.IsEmpty() ||
@@ -648,6 +657,13 @@ void NotificationController::ProcessMutationEvents() {
       nsEventShell::FireEvent(event);
       if (!mDocument) {
         return;
+      }
+
+      // The mutation in the container can change its name, or an ancestor's
+      // name. A labelled/described by relation would also need to be notified
+      // if this is the case.
+      if (PushNameOrDescriptionChange(event)) {
+        ScheduleProcessing();
       }
 
       LocalAccessible* target = event->GetAccessible();
@@ -823,6 +839,14 @@ void NotificationController::WillRefresh(mozilla::TimeStamp aTime) {
       }
 #endif
 
+      if (CssAltContent(textNode)) {
+        // A11y doesn't care about the text rendered by layout if there is CSS
+        // content alt text. We skip this here rather than when the update is
+        // queued because the TextLeafAccessible might not exist yet and we
+        // might need to create it below.
+        continue;
+      }
+
       TextUpdater::Run(mDocument, textAcc->AsTextLeaf(), text.mString);
       continue;
     }
@@ -983,6 +1007,12 @@ void NotificationController::WillRefresh(mozilla::TimeStamp aTime) {
   CoalesceMutationEvents();
   ProcessMutationEvents();
 
+  // ProcessMutationEvents for content process documents merely queues mutation
+  // events. Send those events in a batch now if applicable.
+  if (mDocument && mDocument->IPCDoc()) {
+    mDocument->IPCDoc()->SendQueuedMutationEvents();
+  }
+
   // When firing mutation events, mObservingState is set to
   // eRefreshProcessing. Any calls to ScheduleProcessing() that
   // occur before mObservingState is reset will be dropped because we only
@@ -1003,6 +1033,13 @@ void NotificationController::WillRefresh(mozilla::TimeStamp aTime) {
   }
 
   ProcessEventQueue();
+
+  // There should not be any more mutation events in the mutation event queue.
+  // ProcessEventQueue should have sent all of them.
+  if (mDocument && mDocument->IPCDoc()) {
+    MOZ_ASSERT(mDocument->IPCDoc()->MutationEventQueueLength() == 0,
+               "Mutation event queue is non-empty.");
+  }
 
   if (IPCAccessibilityActive()) {
     size_t newDocCount = newChildDocs.Length();

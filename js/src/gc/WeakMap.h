@@ -13,7 +13,6 @@
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
 #include "gc/Tracer.h"
-#include "gc/Zone.h"
 #include "gc/ZoneAllocator.h"
 #include "js/HashTable.h"
 #include "js/HeapAPI.h"
@@ -140,6 +139,10 @@ class WeakMapBase : public mozilla::LinkedListElement<WeakMapBase> {
   static bool checkMarkingForZone(JS::Zone* zone);
 #endif
 
+#ifdef JSGC_HASH_TABLE_CHECKS
+  static void checkWeakMapsAfterMovingGC(JS::Zone* zone);
+#endif
+
  protected:
   // Instance member functions called by the above. Instantiations of WeakMap
   // override these with definitions appropriate for their Key and Value types.
@@ -150,14 +153,14 @@ class WeakMapBase : public mozilla::LinkedListElement<WeakMapBase> {
   virtual void clearAndCompact() = 0;
 
   // We have a key that, if it or its delegate is marked, may lead to a WeakMap
-  // value getting marked. Insert it or its delegate (if any) into the
-  // appropriate zone's gcEphemeronEdges or gcNurseryEphemeronEdges.
-  [[nodiscard]] bool addImplicitEdges(gc::MarkColor mapColor, gc::Cell* key,
-                                      gc::Cell* delegate,
-                                      gc::TenuredCell* value);
-  [[nodiscard]] bool addEphemeronTableEntries(gc::MarkColor mapColor,
-                                              gc::Cell* key, gc::Cell* value,
-                                              gc::Cell* maybeValue);
+  // value getting marked. Insert the necessary edges into the appropriate
+  // zone's gcEphemeronEdges or gcNurseryEphemeronEdges tables.
+  [[nodiscard]] bool addEphemeronEdgesForEntry(gc::MarkColor mapColor,
+                                               gc::Cell* key,
+                                               gc::Cell* delegate,
+                                               gc::TenuredCell* value);
+  [[nodiscard]] bool addEphemeronEdge(gc::MarkColor color, gc::Cell* src,
+                                      gc::Cell* dst);
 
   virtual bool markEntries(GCMarker* marker) = 0;
 
@@ -170,6 +173,10 @@ class WeakMapBase : public mozilla::LinkedListElement<WeakMapBase> {
   virtual bool allowKeysInOtherZones() const { return false; }
   friend bool gc::CheckWeakMapEntryMarking(const WeakMapBase*, gc::Cell*,
                                            gc::Cell*);
+#endif
+
+#ifdef JSGC_HASH_TABLE_CHECKS
+  virtual void checkAfterMovingGC() const = 0;
 #endif
 
   // Object that this weak map is part of, if any.
@@ -329,6 +336,10 @@ class WeakMap
 #ifdef JS_GC_ZEAL
   bool checkMarking() const override;
 #endif
+
+#ifdef JSGC_HASH_TABLE_CHECKS
+  void checkAfterMovingGC() const override;
+#endif
 };
 
 using ObjectValueWeakMap = WeakMap<HeapPtr<JSObject*>, HeapPtr<Value>>;
@@ -355,17 +366,10 @@ class ObjectWeakMap {
   }
 
   ObjectValueWeakMap& valueMap() { return map; }
-
-#ifdef JSGC_HASH_TABLE_CHECKS
-  void checkAfterMovingGC();
-#endif
 };
 
 // Get the hash from the Symbol.
-[[nodiscard]] HashNumber GetHash(JS::Symbol* sym);
-
-// Return true if the hashes of two Symbols match.
-[[nodiscard]] bool HashMatch(JS::Symbol* key, JS::Symbol* lookup);
+HashNumber GetSymbolHash(JS::Symbol* sym);
 
 // NB: The specialization works based on pointer equality and not on JS Value
 // semantics, and it will assert if the Value's isGCThing() is false.
@@ -380,27 +384,27 @@ struct StableCellHasher<HeapPtr<Value>> {
 
   static bool maybeGetHash(const Lookup& l, HashNumber* hashOut) {
     if (l.isSymbol()) {
-      *hashOut = GetHash(l.toSymbol());
+      *hashOut = GetSymbolHash(l.toSymbol());
       return true;
     }
     return StableCellHasher<gc::Cell*>::maybeGetHash(l.toGCThing(), hashOut);
   }
   static bool ensureHash(const Lookup& l, HashNumber* hashOut) {
     if (l.isSymbol()) {
-      *hashOut = GetHash(l.toSymbol());
+      *hashOut = GetSymbolHash(l.toSymbol());
       return true;
     }
     return StableCellHasher<gc::Cell*>::ensureHash(l.toGCThing(), hashOut);
   }
   static HashNumber hash(const Lookup& l) {
     if (l.isSymbol()) {
-      return GetHash(l.toSymbol());
+      return GetSymbolHash(l.toSymbol());
     }
     return StableCellHasher<gc::Cell*>::hash(l.toGCThing());
   }
   static bool match(const Key& k, const Lookup& l) {
     if (l.isSymbol()) {
-      return HashMatch(k.toSymbol(), l.toSymbol());
+      return k.toSymbol() == l.toSymbol();
     }
     return StableCellHasher<gc::Cell*>::match(k.toGCThing(), l.toGCThing());
   }

@@ -11,41 +11,25 @@ namespace mozilla::uniffi {
 
 using dom::ArrayBuffer;
 
-OwnedRustBuffer::OwnedRustBuffer(const RustBuffer& aBuf) {
-  mBuf = aBuf;
-  MOZ_ASSERT(IsValid());
-}
+OwnedRustBuffer::OwnedRustBuffer(const RustBuffer& aBuf) : mBuf(aBuf) {}
 
-Result<OwnedRustBuffer, nsCString> OwnedRustBuffer::FromArrayBuffer(
+OwnedRustBuffer OwnedRustBuffer::FromArrayBuffer(
     const ArrayBuffer& aArrayBuffer) {
   return aArrayBuffer.ProcessData(
       [](const Span<uint8_t>& aData,
-         JS::AutoCheckCannotGC&&) -> Result<OwnedRustBuffer, nsCString> {
-        if (aData.Length() > INT32_MAX) {
-          return Err("Input ArrayBuffer is too large"_ns);
-        }
+         JS::AutoCheckCannotGC&&) -> OwnedRustBuffer {
+        uint64_t bufLen = aData.Length();
 
         RustCallStatus status{};
-        RustBuffer buf = uniffi_rustbuffer_alloc(
-            static_cast<int32_t>(aData.Length()), &status);
-        buf.len = aData.Length();
-        if (status.code != 0) {
-          if (status.error_buf.data) {
-            auto message = nsCString("uniffi_rustbuffer_alloc: ");
-            message.Append(nsDependentCSubstring(
-                reinterpret_cast<char*>(status.error_buf.data),
-                status.error_buf.len));
-            RustCallStatus status2{};
-            uniffi_rustbuffer_free(status.error_buf, &status2);
-            MOZ_RELEASE_ASSERT(status2.code == 0,
-                               "Freeing a rustbuffer should never fail");
-            return Err(message);
-          }
+        RustBuffer buf =
+            uniffi_rustbuffer_alloc(static_cast<uint64_t>(bufLen), &status);
+        buf.len = bufLen;
 
-          return Err("Unknown error allocating rust buffer"_ns);
-        }
-
-        memcpy(buf.data, aData.Elements(), buf.len);
+        // uniffi_rustbuffer_alloc cannot fail within gecko as we build with
+        // `panic=abort`, and allocations default to infallible.
+        MOZ_RELEASE_ASSERT(status.code == 0,
+                           "uniffi_rustbuffer_alloc cannot fail in Gecko");
+        memcpy(buf.data, aData.Elements(), bufLen);
         return OwnedRustBuffer(buf);
       });
 }
@@ -81,17 +65,22 @@ RustBuffer OwnedRustBuffer::IntoRustBuffer() {
   return rv;
 }
 
-JSObject* OwnedRustBuffer::IntoArrayBuffer(JSContext* cx) {
-  JS::Rooted<JSObject*> obj(cx);
-  {
-    int32_t len = mBuf.len;
-    void* data = mBuf.data;
-    auto userData = MakeUnique<OwnedRustBuffer>(std::move(*this));
-    UniquePtr<void, JS::BufferContentsDeleter> dataPtr{
-        data, {&ArrayBufferFreeFunc, userData.release()}};
-    obj = JS::NewExternalArrayBuffer(cx, len, std::move(dataPtr));
+void OwnedRustBuffer::IntoArrayBuffer(JSContext* aCx,
+                                      JS::MutableHandle<JSObject*> aResult,
+                                      ErrorResult& aError) {
+  auto len = mBuf.len;
+  void* data = mBuf.data;
+  auto userData = MakeUnique<OwnedRustBuffer>(std::move(*this));
+  UniquePtr<void, JS::BufferContentsDeleter> dataPtr{
+      data, {&ArrayBufferFreeFunc, userData.release()}};
+
+  JS::Rooted<JSObject*> obj(
+      aCx, JS::NewExternalArrayBuffer(aCx, len, std::move(dataPtr)));
+  if (!obj) {
+    aError.NoteJSContextException(aCx);
+    return;
   }
-  return obj;
+  aResult.set(obj);
 }
 
 void OwnedRustBuffer::ArrayBufferFreeFunc(void* contents, void* userData) {

@@ -77,7 +77,8 @@ function saveURL(
   aCookieJarSettings,
   aSourceDocument,
   aIsContentWindowPrivate,
-  aPrincipal
+  aPrincipal,
+  aSaveCompleteCallback
 ) {
   internalSave(
     aURL,
@@ -95,7 +96,8 @@ function saveURL(
     aSkipPrompt,
     null,
     aIsContentWindowPrivate,
-    aPrincipal
+    aPrincipal,
+    aSaveCompleteCallback
   );
 }
 
@@ -119,6 +121,19 @@ function saveBrowser(aBrowser, aSkipPrompt, aBrowsingContext = null) {
         throw new Error("Must have an nsIWebBrowserPersistDocument!");
       }
 
+      // If we are downloading a document that is saving as a URL, we should use
+      // a principal constructed from the document URL. This is important for
+      // documents whose URL is different that their principal, e.g files in the
+      // JSON viewer.
+      let principal = null;
+      if (document.principal?.spec == "resource://devtools/client/jsonview/") {
+        let ssm = Services.scriptSecurityManager;
+        principal = ssm.createContentPrincipal(
+          makeURI(document.documentURI),
+          document.principal.originAttributes
+        );
+      }
+
       internalSave(
         document.documentURI,
         null, // originalURL
@@ -133,7 +148,9 @@ function saveBrowser(aBrowser, aSkipPrompt, aBrowsingContext = null) {
         document.cookieJarSettings,
         document,
         aSkipPrompt,
-        document.cacheKey
+        document.cacheKey,
+        undefined,
+        principal
       );
     },
     onError(status) {
@@ -256,6 +273,8 @@ XPCOMUtils.defineConstant(this, "kSaveAsType_Text", kSaveAsType_Text);
  *        This parameter is provided when neither aDocument nor
  *        aInitiatingDocument is provided. Used to determine what level of
  *        privilege to load the URI with.
+ * @param aSaveCompleteCallback [optional]
+ *        A callback function to call when the save is complete.
  */
 function internalSave(
   aURL,
@@ -273,7 +292,8 @@ function internalSave(
   aSkipPrompt,
   aCacheKey,
   aIsContentWindowPrivate,
-  aPrincipal
+  aPrincipal,
+  aSaveCompleteCallback
 ) {
   if (aSkipPrompt == undefined) {
     aSkipPrompt = false;
@@ -331,6 +351,7 @@ function internalSave(
     promiseTargetFile(fpParams, aSkipPrompt, relatedURI)
       .then(aDialogAccepted => {
         if (!aDialogAccepted) {
+          aSaveCompleteCallback?.();
           return;
         }
 
@@ -389,6 +410,7 @@ function internalSave(
       contentPolicyType,
       cookieJarSettings: aCookieJarSettings,
       isPrivate,
+      saveCompleteCallback: aSaveCompleteCallback,
     };
 
     // Start the actual save process
@@ -432,6 +454,8 @@ function internalSave(
  *        If true, the document will always be refetched from the server
  * @param persistArgs.isPrivate
  *        Indicates whether this is taking place in a private browsing context.
+ * @param persistArgs.saveCompleteCallback [optional]
+ *        A callback function to call when the save is complete.
  */
 function internalPersist(persistArgs) {
   var persist = makeWebBrowserPersist();
@@ -467,6 +491,13 @@ function internalPersist(persistArgs) {
     persistArgs.sourceReferrerInfo
   );
   persist.progressListener = new DownloadListener(window, tr);
+  const { saveCompleteCallback } = persistArgs;
+  if (saveCompleteCallback) {
+    tr.downloadPromise
+      .then(aDownload => aDownload.whenSucceeded())
+      .catch(console.error)
+      .finally(saveCompleteCallback);
+  }
 
   if (persistArgs.sourceDocument) {
     // Saving a Document, not a URI:
@@ -1180,10 +1211,10 @@ function openURL(aURL) {
     var appstartup = Services.startup;
 
     var loadListener = {
-      onStartRequest: function ll_start(aRequest) {
+      onStartRequest: function ll_start() {
         appstartup.enterLastWindowClosingSurvivalArea();
       },
-      onStopRequest: function ll_stop(aRequest, aStatusCode) {
+      onStopRequest: function ll_stop() {
         appstartup.exitLastWindowClosingSurvivalArea();
       },
       QueryInterface: ChromeUtils.generateQI([
@@ -1194,13 +1225,13 @@ function openURL(aURL) {
     loadgroup.groupObserver = loadListener;
 
     var uriListener = {
-      doContent(ctype, preferred, request, handler) {
+      doContent() {
         return false;
       },
-      isPreferred(ctype, desired) {
+      isPreferred() {
         return false;
       },
-      canHandleContent(ctype, preferred, desired) {
+      canHandleContent() {
         return false;
       },
       loadCookie: null,

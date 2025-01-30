@@ -19,6 +19,7 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   CreditCard: "resource://gre/modules/CreditCard.sys.mjs",
   formAutofillStorage: "resource://autofill/FormAutofillStorage.sys.mjs",
+  OSKeyStore: "resource://gre/modules/OSKeyStore.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "log", () =>
@@ -475,9 +476,29 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
         ];
         break;
       case "address":
-        data = ["address-level2", "address-level1", "postal-code"].map(
-          field => [field, this.oldRecord[field], this.newRecord[field]]
-        );
+        data = [
+          [
+            "address-level2",
+            this.oldRecord["address-level2"],
+            this.newRecord["address-level2"],
+          ],
+          [
+            "address-level1",
+            FormAutofillUtils.getAbbreviatedSubregionName(
+              this.oldRecord["address-level1"],
+              this.oldRecord.country
+            ) || this.oldRecord["address-level1"],
+            FormAutofillUtils.getAbbreviatedSubregionName(
+              this.newRecord["address-level1"],
+              this.newRecord.country
+            ) || this.newRecord["address-level1"],
+          ],
+          [
+            "postal-code",
+            this.oldRecord["postal-code"],
+            this.newRecord["postal-code"],
+          ],
+        ];
         break;
       case "name":
       case "country":
@@ -789,16 +810,15 @@ export class AddressEditDoorhanger extends AutofillDoorhanger {
 
     input.setAttribute("id", inputId);
 
-    const value = this.newRecord[fieldName] ?? "";
     if (popup) {
-      const menuitem = Array.from(popup.childNodes).find(
-        item =>
-          item.label.toLowerCase() === value?.toLowerCase() ||
-          item.value.toLowerCase() === value?.toLowerCase()
-      );
-      input.selectedItem = menuitem;
+      input.selectedItem =
+        FormAutofillUtils.findAddressSelectOptionWithMenuPopup(
+          popup,
+          this.newRecord,
+          fieldName
+        );
     } else {
-      input.value = value;
+      input.value = this.newRecord[fieldName] ?? "";
     }
 
     div.appendChild(input);
@@ -1280,7 +1300,17 @@ export let FormAutofillPrompter = {
     flowId,
     { oldRecord, newRecord }
   ) {
+    if (!browser) {
+      return;
+    }
+
     const showUpdateDoorhanger = !!Object.keys(oldRecord).length;
+
+    lazy.log.debug(
+      `Show the ${
+        showUpdateDoorhanger ? "update" : "save"
+      } credit card doorhanger`
+    );
 
     const { ownerGlobal: win } = browser;
     win.MozXULElement.insertFTLIfNeeded(
@@ -1302,7 +1332,7 @@ export let FormAutofillPrompter = {
       return;
     }
 
-    if (!(await FormAutofillUtils.ensureLoggedIn()).authenticated) {
+    if (!(await lazy.OSKeyStore.ensureLoggedIn(false)).authenticated) {
       lazy.log.warn("User canceled encryption login");
       return;
     }
@@ -1332,6 +1362,10 @@ export let FormAutofillPrompter = {
     flowId,
     { oldRecord, newRecord }
   ) {
+    if (!browser) {
+      return;
+    }
+
     const showUpdateDoorhanger = !!Object.keys(oldRecord).length;
 
     lazy.log.debug(
@@ -1339,7 +1373,6 @@ export let FormAutofillPrompter = {
     );
 
     const { ownerGlobal: win } = browser;
-    await win.ensureCustomElements("moz-support-link");
     win.MozXULElement.insertFTLIfNeeded(
       "toolkit/formautofill/formAutofill.ftl"
     );

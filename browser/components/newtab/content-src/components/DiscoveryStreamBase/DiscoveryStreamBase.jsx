@@ -18,6 +18,7 @@ import React from "react";
 import { SectionTitle } from "content-src/components/DiscoveryStreamComponents/SectionTitle/SectionTitle";
 import { selectLayoutRender } from "content-src/lib/selectLayoutRender";
 import { TopSites } from "content-src/components/TopSites/TopSites";
+import { CardSections } from "../DiscoveryStreamComponents/CardSections/CardSections";
 
 const ALLOWED_CSS_URL_PREFIXES = [
   "chrome://",
@@ -164,7 +165,7 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             privacyNoticeURL={component.properties.privacyNoticeURL}
           />
         );
-      case "CollectionCardGrid":
+      case "CollectionCardGrid": {
         const { DiscoveryStream } = this.props;
         return (
           <CollectionCardGrid
@@ -178,7 +179,25 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             dispatch={this.props.dispatch}
           />
         );
-      case "CardGrid":
+      }
+      case "CardGrid": {
+        const sectionsEnabled =
+          this.props.Prefs.values["discoverystream.sections.enabled"];
+        if (sectionsEnabled) {
+          return (
+            <CardSections
+              feed={component.feed}
+              data={component.data}
+              dispatch={this.props.dispatch}
+              type={component.type}
+              firstVisibleTimestamp={this.props.firstVisibleTimestamp}
+              is_collection={true}
+              ctaButtonSponsors={component.properties.ctaButtonSponsors}
+              ctaButtonVariant={component.properties.ctaButtonVariant}
+              spocMessageVariant={component.properties.spocMessageVariant}
+            />
+          );
+        }
         return (
           <CardGrid
             title={component.header && component.header.title}
@@ -200,8 +219,10 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             editorsPicksHeader={component.properties.editorsPicksHeader}
             recentSavesEnabled={this.props.DiscoveryStream.recentSavesEnabled}
             hideDescriptions={this.props.DiscoveryStream.hideDescriptions}
+            firstVisibleTimestamp={this.props.firstVisibleTimestamp}
           />
         );
+      }
       case "HorizontalRule":
         return <HorizontalRule />;
       case "PrivacyLink":
@@ -226,7 +247,11 @@ export class _DiscoveryStreamBase extends React.PureComponent {
       prefs: this.props.Prefs.values,
       locale,
     });
+    const sectionsEnabled =
+      this.props.Prefs.values["discoverystream.sections.enabled"];
     const { config } = this.props.DiscoveryStream;
+    const topicSelectionEnabled =
+      this.props.Prefs.values["discoverystream.topicSelection.enabled"];
 
     // Allow rendering without extracting special components
     if (!config.collapsible) {
@@ -302,6 +327,7 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             {
               width: 12,
               components: [topSites],
+              sectionType: "topsites",
             },
           ])}
         {sponsoredCollection &&
@@ -324,6 +350,8 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             title={sectionTitle}
             subTitle={subTitle}
             mayHaveSponsoredStories={mayHaveSponsoredStories}
+            mayHaveTopicsSelection={topicSelectionEnabled}
+            sectionsEnabled={sectionsEnabled}
             spocMessageVariant={message?.properties?.spocMessageVariant}
             eventSource="CARDGRID"
           >
@@ -349,8 +377,12 @@ export class _DiscoveryStreamBase extends React.PureComponent {
 
   renderLayout(layoutRender) {
     const styles = [];
+    let [data] = layoutRender;
+    // Add helper class for topsites
+    const topsitesClass = data.sectionType ? "ds-layout-topsites" : "";
+
     return (
-      <div className="discovery-stream ds-layout">
+      <div className={`discovery-stream ds-layout ${topsitesClass}`}>
         {layoutRender.map((row, rowIndex) => (
           <div
             key={`row-${rowIndex}`}
@@ -384,6 +416,6 @@ export const DiscoveryStreamBase = connect(state => ({
   DiscoveryStream: state.DiscoveryStream,
   Prefs: state.Prefs,
   Sections: state.Sections,
-  document: global.document,
+  document: globalThis.document,
   App: state.App,
 }))(_DiscoveryStreamBase);

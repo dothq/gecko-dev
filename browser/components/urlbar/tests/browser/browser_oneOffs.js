@@ -16,12 +16,17 @@ ChromeUtils.defineLazyGetter(this, "oneOffSearchButtons", () => {
   return UrlbarTestUtils.getOneOffSearchButtons(window);
 });
 
+// The oneoffs are disabled within scotchBonnet so for most of the
+// time we want to filter out the actions search mode.
+let filterActionsMode = action =>
+  action.source != UrlbarUtils.RESULT_SOURCE.ACTIONS;
+
 add_setup(async function () {
   gMaxResults = Services.prefs.getIntPref("browser.urlbar.maxRichResults");
 
   // Add a search suggestion engine and move it to the front so that it appears
   // as the first one-off.
-  engine = await SearchTestUtils.promiseNewSearchEngine({
+  engine = await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + TEST_ENGINE_BASENAME,
   });
   await Services.search.moveEngine(engine, 0);
@@ -30,7 +35,7 @@ add_setup(async function () {
     set: [
       ["browser.search.separatePrivateDefault.ui.enabled", false],
       ["browser.urlbar.suggest.quickactions", false],
-      ["browser.urlbar.shortcuts.quickactions", true],
+      ["browser.urlbar.scotchBonnet.enableOverride", false],
     ],
   });
 
@@ -141,9 +146,8 @@ add_task(async function topSites() {
   );
 
   // There's one top sites result, the page with a lot of visits from init.
-  let resultURL = UrlbarTestUtils.trimURL(
-    "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - 1)
-  );
+  let resultURL =
+    "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - 1);
   Assert.equal(UrlbarTestUtils.getResultCount(window), 1, "Result count");
 
   Assert.equal(
@@ -220,9 +224,7 @@ add_task(async function editedView() {
     assertState(
       i + 1,
       -1,
-      UrlbarTestUtils.trimURL(
-        "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - i - 1)
-      )
+      "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - i - 1)
     );
     Assert.ok(
       !BrowserTestUtils.isVisible(heuristicResult.element.action),
@@ -272,9 +274,7 @@ add_task(async function editedView() {
     assertState(
       i + 1,
       -1,
-      UrlbarTestUtils.trimURL(
-        "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - i - 1)
-      )
+      "http://example.com/browser_urlbarOneOffs.js/?" + (gMaxResults - i - 1)
     );
     Assert.ok(
       !BrowserTestUtils.isVisible(heuristicResult.element.action),
@@ -822,8 +822,8 @@ add_task(async function individualLocalShortcutsHidden() {
     Assert.ok(buttons.length, "Sanity check: Local shortcuts exist");
 
     let otherModes = UrlbarUtils.LOCAL_SEARCH_MODES.filter(
-      m => m.source != source
-    );
+      filterActionsMode
+    ).filter(m => m.source != source);
     Assert.equal(
       buttons.length,
       otherModes.length,
@@ -911,7 +911,7 @@ add_task(async function localShortcutsShownWhenEnginesHidden() {
 
   Assert.equal(
     oneOffSearchButtons.localButtons.length,
-    UrlbarUtils.LOCAL_SEARCH_MODES.length,
+    UrlbarUtils.LOCAL_SEARCH_MODES.filter(filterActionsMode).length,
     "All local shortcuts are visible"
   );
 
@@ -943,7 +943,7 @@ async function doLocalShortcutsShownTest() {
   await rebuildPromise;
 
   let buttons = oneOffSearchButtons.localButtons;
-  Assert.equal(buttons.length, 4, "Expected number of local shortcuts");
+  Assert.equal(buttons.length, 3, "Expected number of local shortcuts");
 
   let expectedSource;
   let seenIDs = new Set();
@@ -962,9 +962,6 @@ async function doLocalShortcutsShownTest() {
         break;
       case "urlbar-engine-one-off-item-history":
         expectedSource = UrlbarUtils.RESULT_SOURCE.HISTORY;
-        break;
-      case "urlbar-engine-one-off-item-actions":
-        expectedSource = UrlbarUtils.RESULT_SOURCE.ACTIONS;
         break;
       default:
         Assert.ok(false, `Unexpected local shortcut ID: ${button.id}`);

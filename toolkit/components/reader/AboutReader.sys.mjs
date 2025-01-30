@@ -8,6 +8,7 @@ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 const lazy = {};
 let gScrollPositions = new Map();
+let lastSelectedTheme = "auto";
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AsyncPrefs: "resource://gre/modules/AsyncPrefs.sys.mjs",
@@ -24,15 +25,61 @@ ChromeUtils.defineLazyGetter(
   "pluralRules",
   () => new Services.intl.PluralRules(undefined)
 );
+ChromeUtils.defineLazyGetter(
+  lazy,
+  "l10n",
+  () => new Localization(["toolkit/about/aboutReader.ftl"], true)
+);
 
-const COLORSCHEME_L10N_IDS = {
-  light: "about-reader-color-scheme-light",
-  dark: "about-reader-color-scheme-dark",
-  sepia: "about-reader-color-scheme-sepia",
-  auto: "about-reader-color-scheme-auto",
+const FONT_TYPE_L10N_IDS = {
+  serif: "about-reader-font-type-serif",
+  "sans-serif": "about-reader-font-type-sans-serif",
+  monospace: "about-reader-font-type-monospace",
 };
 
-Services.telemetry.setEventRecordingEnabled("readermode", true);
+const FONT_WEIGHT_L10N_IDS = {
+  light: "about-reader-font-weight-light",
+  regular: "about-reader-font-weight-regular",
+  bold: "about-reader-font-weight-bold",
+};
+
+const DEFAULT_TEXT_LAYOUT = {
+  fontSize: 5,
+  fontType: "sans-serif",
+  fontWeight: "regular",
+  contentWidth: 3,
+  lineSpacing: 4,
+  characterSpacing: 1,
+  wordSpacing: 1,
+  textAlignment: "start",
+};
+
+const COLORSCHEME_L10N_IDS = {
+  auto: "about-reader-color-auto-theme",
+  light: "about-reader-color-light-theme",
+  dark: "about-reader-color-dark-theme",
+  sepia: "about-reader-color-sepia-theme",
+  contrast: "about-reader-color-contrast-theme",
+  gray: "about-reader-color-gray-theme",
+};
+
+const CUSTOM_THEME_COLOR_INPUTS = [
+  "foreground",
+  "background",
+  "unvisited-links",
+  "visited-links",
+  "selection-highlight",
+];
+
+const COLORS_MENU_TABS = ["fxtheme", "customtheme"];
+
+const DEFAULT_COLORS = {
+  background: "#FFFFFF",
+  foreground: "#14151A",
+  "unvisited-links": "#0060DF",
+  "visited-links": "#321C64",
+  "selection-highlight": "#FFFFCC",
+};
 
 const zoomOnCtrl =
   Services.prefs.getIntPref("mousewheel.with_control.action", 3) == 3;
@@ -120,7 +167,9 @@ export var AboutReader = function (
   );
 
   doc.addEventListener("mousedown", this);
+  doc.addEventListener("keydown", this);
   doc.addEventListener("click", this);
+  doc.addEventListener("blur", this, true);
   doc.addEventListener("touchstart", this);
 
   win.addEventListener("pagehide", this);
@@ -147,9 +196,17 @@ export var AboutReader = function (
   // we're ready for any external setup, send a signal for that.
   this._actor.sendAsyncMessage("Reader:OnSetup");
 
+  // set up segmented tab controls for colors menu.
+  this._setupColorsTabs(
+    COLORS_MENU_TABS,
+    this._handleColorsTabClick.bind(this)
+  );
+
+  // fetch color scheme values from prefs.
   let colorSchemeValues = JSON.parse(
     Services.prefs.getCharPref("reader.color_scheme.values")
   );
+
   let colorSchemeOptions = colorSchemeValues.map(value => ({
     l10nId: COLORSCHEME_L10N_IDS[value],
     groupName: "color-scheme",
@@ -164,37 +221,198 @@ export var AboutReader = function (
     colorScheme,
     this._setColorSchemePref.bind(this)
   );
+
+  this._setupCustomColors(
+    CUSTOM_THEME_COLOR_INPUTS,
+    "custom-colors-selection",
+    "about-reader-custom-colors"
+  );
+
+  this._setupButton(
+    "custom-colors-reset-button",
+    this._resetCustomColors.bind(this)
+  );
+
+  this._handleThemeFocus();
+
   this._setColorSchemePref(colorScheme);
 
-  let fontTypeOptions = [
+  // Differentiates between the tick mark labels for width vs spacing controls
+  // for localization purposes.
+  const [standardSpacingLabel, wideSpacingLabel] = lazy.l10n.formatMessagesSync(
+    [
+      "about-reader-slider-label-spacing-standard",
+      "about-reader-slider-label-spacing-wide",
+    ]
+  );
+
+  let contentWidthSliderOptions = {
+    min: 1,
+    max: 9,
+    ticks: 9,
+    tickLabels: `[]`,
+    l10nId: "about-reader-content-width-label",
+    icon: "chrome://global/skin/reader/content-width-20.svg",
+    telemetryId: "content-width-slider",
+  };
+
+  let lineSpacingSliderOptions = {
+    min: 1,
+    max: 9,
+    ticks: 9,
+    tickLabels: `[]`,
+    l10nId: "about-reader-line-spacing-label",
+    icon: "chrome://global/skin/reader/line-spacing-20.svg",
+    telemetryId: "line-spacing-slider",
+  };
+
+  let characterSpacingSliderOptions = {
+    min: 1,
+    max: 9,
+    ticks: 9,
+    tickLabels: `["${standardSpacingLabel.value}", "${wideSpacingLabel.value}"]`,
+    l10nId: "about-reader-character-spacing-label",
+    icon: "chrome://global/skin/reader/character-spacing-20.svg",
+    telemetryId: "character-spacing-slider",
+  };
+
+  let wordSpacingSliderOptions = {
+    min: 1,
+    max: 9,
+    ticks: 9,
+    tickLabels: `["${standardSpacingLabel.value}", "${wideSpacingLabel.value}"]`,
+    l10nId: "about-reader-word-spacing-label",
+    icon: "chrome://global/skin/reader/word-spacing-20.svg",
+    telemetryId: "word-spacing-slider",
+  };
+
+  let textAlignmentOptions = [
     {
-      l10nId: "about-reader-font-type-sans-serif",
-      groupName: "font-type",
-      value: "sans-serif",
-      itemClass: "sans-serif-button",
+      l10nId: "about-reader-text-alignment-left",
+      groupName: "text-alignment",
+      value: "left",
+      itemClass: "left-align-button",
     },
     {
-      l10nId: "about-reader-font-type-serif",
-      groupName: "font-type",
-      value: "serif",
-      itemClass: "serif-button",
+      l10nId: "about-reader-text-alignment-center",
+      groupName: "text-alignment",
+      value: "center",
+      itemClass: "center-align-button",
+    },
+    {
+      l10nId: "about-reader-text-alignment-right",
+      groupName: "text-alignment",
+      value: "right",
+      itemClass: "right-align-button",
     },
   ];
 
-  let fontType = Services.prefs.getCharPref("reader.font_type");
-  this._setupSegmentedButton(
-    "font-type-buttons",
-    fontTypeOptions,
+  // If the page is rtl, reverse order of text alignment options.
+  if (isAppLocaleRTL) {
+    textAlignmentOptions = textAlignmentOptions.reverse();
+  }
+
+  let selectorFontTypeValues = ["sans-serif", "serif", "monospace"];
+  try {
+    selectorFontTypeValues = JSON.parse(
+      Services.prefs.getCharPref("reader.font_type.values")
+    );
+  } catch (e) {
+    console.error(
+      "There was an error fetching the font type values pref: ",
+      e.message
+    );
+  }
+  let fontType = Services.prefs.getCharPref("reader.font_type", "sans-serif");
+  this._setupSelector(
+    "font-type",
+    selectorFontTypeValues,
     fontType,
-    this._setFontType.bind(this)
+    this._setFontTypeSelector.bind(this),
+    FONT_TYPE_L10N_IDS
   );
-  this._setFontType(fontType);
+  this._setFontTypeSelector(fontType);
+
+  let fontWeightValues = ["regular", "light", "bold"];
+  try {
+    fontWeightValues = JSON.parse(
+      Services.prefs.getCharPref("reader.font_weight.values")
+    );
+  } catch (e) {
+    console.error(
+      "There was an error fetching the font weight values pref: ",
+      e.message
+    );
+  }
+  let fontWeight = Services.prefs.getCharPref("reader.font_weight", "regular");
+  this._setupSelector(
+    "font-weight",
+    fontWeightValues,
+    fontWeight,
+    this._setFontWeight.bind(this),
+    FONT_WEIGHT_L10N_IDS
+  );
+  this._setFontWeight(fontWeight);
+
+  let contentWidth = Services.prefs.getIntPref("reader.content_width", 3);
+  this._setupSlider(
+    "content-width",
+    contentWidthSliderOptions,
+    contentWidth,
+    this._setContentWidth.bind(this)
+  );
+  this._setContentWidth(contentWidth);
+
+  let lineSpacing = Services.prefs.getIntPref("reader.line_height", 4);
+  this._setupSlider(
+    "line-spacing",
+    lineSpacingSliderOptions,
+    lineSpacing,
+    this._setLineSpacing.bind(this)
+  );
+  this._setLineSpacing(lineSpacing);
+
+  let characterSpacing = Services.prefs.getIntPref(
+    "reader.character_spacing",
+    1
+  );
+  this._setupSlider(
+    "character-spacing",
+    characterSpacingSliderOptions,
+    characterSpacing,
+    this._setCharacterSpacing.bind(this)
+  );
+  this._setCharacterSpacing(characterSpacing);
+
+  let wordSpacing = Services.prefs.getIntPref("reader.word_spacing", 1);
+  this._setupSlider(
+    "word-spacing",
+    wordSpacingSliderOptions,
+    wordSpacing,
+    this._setWordSpacing.bind(this)
+  );
+  this._setWordSpacing(wordSpacing);
+
+  let textAlignment = Services.prefs.getCharPref(
+    "reader.text_alignment",
+    "start"
+  );
+  this._setupSegmentedButton(
+    "text-alignment-buttons",
+    textAlignmentOptions,
+    textAlignment,
+    this._setTextAlignment.bind(this)
+  );
+  this._setTextAlignment(textAlignment);
+
+  this._setupButton(
+    "text-layout-reset-button",
+    this._resetTextLayout.bind(this)
+  );
+
+  this._handleTextLayoutFocus();
 
   this._setupFontSizeButtons();
-
-  this._setupContentWidthButtons();
-
-  this._setupLineHeightButtons();
 
   if (win.speechSynthesis && Services.prefs.getBoolPref("narrate.enabled")) {
     new lazy.NarrateControls(win, this._languagePromise);
@@ -332,6 +550,16 @@ AboutReader.prototype = {
   },
 
   handleEvent(aEvent) {
+    // To avoid buttons that are programmatically clicked being counted twice,
+    // and account for controls that don't fire click events, define a set of
+    // blur only telemetry ids.
+    const blurTelemetryIds = new Set([
+      "colors-menu-custom-tab",
+      "left-align-button",
+      "font-type-selector",
+      "font-weight-selector",
+    ]);
+
     if (!aEvent.isTrusted) {
       return;
     }
@@ -350,27 +578,39 @@ AboutReader.prototype = {
           this._closeDropdowns();
         }
         break;
-      case "click":
-        const buttonLabel =
+      case "keydown":
+        if (aEvent.keyCode == 27) {
+          this._closeDropdowns();
+        }
+        break;
+      case "click": {
+        let clickTelemetryId =
           target.attributes.getNamedItem(`data-telemetry-id`)?.value;
 
-        if (buttonLabel) {
-          Services.telemetry.recordEvent(
-            "readermode",
-            "button",
-            "click",
-            null,
-            {
-              label: buttonLabel,
-            }
-          );
+        if (clickTelemetryId && !blurTelemetryIds.has(clickTelemetryId)) {
+          Glean.readermode.buttonClick.record({
+            label: clickTelemetryId,
+          });
         }
 
         if (target.classList.contains("dropdown-toggle")) {
           this._toggleDropdownClicked(aEvent);
         }
         break;
-      case "scroll":
+      }
+      case "blur":
+        if (HTMLElement.isInstance(target)) {
+          let blurTelemetryId =
+            target.attributes.getNamedItem(`data-telemetry-id`)?.value;
+
+          if (blurTelemetryId && blurTelemetryIds.has(blurTelemetryId)) {
+            Glean.readermode.buttonClick.record({
+              label: blurTelemetryId,
+            });
+          }
+        }
+        break;
+      case "scroll": {
         let lastHeight = this._lastHeight;
         let { windowUtils } = this._win;
         this._lastHeight = windowUtils.getBoundsWithoutFlushing(
@@ -378,17 +618,20 @@ AboutReader.prototype = {
         ).height;
         // Only close dropdowns if the scroll events are not a result of line
         // height / font-size changes that caused a page height change.
-        if (lastHeight == this._lastHeight) {
+        // Prevent dropdowns from closing when scrolling within the popup.
+        let mouseInDropdown = !!this._doc.querySelector(".dropdown.open:hover");
+        if (lastHeight == this._lastHeight && !mouseInDropdown) {
           this._closeDropdowns(true);
         }
 
         break;
+      }
       case "resize":
         this._updateImageMargins();
         this._scheduleToolbarOverlapHandler();
         break;
 
-      case "wheel":
+      case "wheel": {
         let doZoom =
           (aEvent.ctrlKey && zoomOnCtrl) || (aEvent.metaKey && zoomOnMeta);
         if (!doZoom) {
@@ -417,6 +660,7 @@ AboutReader.prototype = {
           this._changeFontSize(-1);
         }
         break;
+      }
 
       case "pagehide":
         this._closeDropdowns();
@@ -433,7 +677,7 @@ AboutReader.prototype = {
 
         break;
 
-      case "change":
+      case "change": {
         let colorScheme;
         if (this.forcedColorsMediaList.matches) {
           colorScheme = "hcm";
@@ -448,6 +692,7 @@ AboutReader.prototype = {
         this._setColorScheme(colorScheme);
 
         break;
+      }
     }
   },
 
@@ -488,8 +733,8 @@ AboutReader.prototype = {
   },
 
   _setupFontSizeButtons() {
-    let plusButton = this._doc.querySelector(".plus-button");
-    let minusButton = this._doc.querySelector(".minus-button");
+    let plusButton = this._doc.querySelector(".text-size-plus-button");
+    let minusButton = this._doc.querySelector(".text-size-minus-button");
 
     let currentSize = Services.prefs.getIntPref("reader.font_size");
     this._setFontSize(currentSize);
@@ -501,7 +746,6 @@ AboutReader.prototype = {
         if (!event.isTrusted) {
           return;
         }
-        event.stopPropagation();
         this._changeFontSize(+1);
       },
       true
@@ -513,7 +757,6 @@ AboutReader.prototype = {
         if (!event.isTrusted) {
           return;
         }
-        event.stopPropagation();
         this._changeFontSize(-1);
       },
       true
@@ -521,12 +764,9 @@ AboutReader.prototype = {
   },
 
   _updateFontSizeButtonControls() {
-    let plusButton = this._doc.querySelector(".plus-button");
-    let minusButton = this._doc.querySelector(".minus-button");
-
     let currentSize = this._fontSize;
-    let fontValue = this._doc.querySelector(".font-size-value");
-    fontValue.textContent = currentSize;
+    let plusButton = this._doc.querySelector(".text-size-plus-button");
+    let minusButton = this._doc.querySelector(".text-size-minus-button");
 
     if (currentSize === this.FONT_SIZE_MIN) {
       minusButton.setAttribute("disabled", true);
@@ -548,170 +788,229 @@ AboutReader.prototype = {
     this._scheduleToolbarOverlapHandler();
   },
 
+  _setupSelector(id, options, initialValue, callback, l10nIds) {
+    let doc = this._doc;
+    let selector = doc.getElementById(`${id}-selector`);
+
+    options.forEach(option => {
+      let selectorOption = doc.createElement("option");
+      let presetl10nId = l10nIds[option];
+      if (presetl10nId) {
+        doc.l10n.setAttributes(selectorOption, presetl10nId);
+      } else {
+        selectorOption.text = option;
+      }
+      selectorOption.value = option;
+      selector.appendChild(selectorOption);
+      if (option == initialValue) {
+        selectorOption.setAttribute("selected", true);
+      }
+    });
+
+    selector.addEventListener("change", e => {
+      callback(e.target.value);
+    });
+  },
+
+  _setFontTypeSelector(newFontType) {
+    this._doc.documentElement.style.setProperty(
+      "--font-family",
+      newFontType.includes(" ") ? `"${newFontType}"` : newFontType
+    );
+
+    lazy.AsyncPrefs.set("reader.font_type", newFontType);
+  },
+
+  _setFontWeight(newFontWeight) {
+    if (newFontWeight === "light") {
+      this._doc.documentElement.style.setProperty("--font-weight", "lighter");
+    } else if (newFontWeight === "regular") {
+      this._doc.documentElement.style.setProperty("--font-weight", "normal");
+    } else if (newFontWeight === "bold") {
+      this._doc.documentElement.style.setProperty("--font-weight", "bolder");
+    }
+
+    lazy.AsyncPrefs.set("reader.font_weight", newFontWeight);
+  },
+
+  _setupSlider(id, options, initialValue, callback) {
+    let doc = this._doc;
+    let slider = doc.createElement("moz-slider");
+
+    slider.setAttribute("min", options.min);
+    slider.setAttribute("max", options.max);
+    slider.setAttribute("value", initialValue);
+    slider.setAttribute("ticks", options.ticks);
+    slider.setAttribute("tick-labels", options.tickLabels);
+    slider.setAttribute("data-l10n-id", options.l10nId);
+    slider.setAttribute("data-l10n-attrs", "label");
+    slider.setAttribute("slider-icon", options.icon);
+    slider.setAttribute("data-telemetry-id", options.telemetryId);
+
+    slider.addEventListener("slider-changed", e => {
+      callback(e.detail);
+    });
+
+    let sliderContainer = doc.getElementById(`${id}-slider`);
+    sliderContainer.appendChild(slider);
+  },
+
   _setContentWidth(newContentWidth) {
-    this._contentWidth = newContentWidth;
-    this._displayContentWidth(newContentWidth);
-    let width = 20 + 5 * (this._contentWidth - 1) + "em";
+    // We map the slider range [1-9] to 20-60em.
+    let width = 20 + 5 * (newContentWidth - 1) + "em";
     this._doc.body.style.setProperty("--content-width", width);
     this._scheduleToolbarOverlapHandler();
-    return lazy.AsyncPrefs.set("reader.content_width", this._contentWidth);
-  },
-
-  _displayContentWidth(currentContentWidth) {
-    let contentWidthValue = this._doc.querySelector(".content-width-value");
-    contentWidthValue.textContent = currentContentWidth;
-  },
-
-  _setupContentWidthButtons() {
-    const CONTENT_WIDTH_MIN = 1;
-    const CONTENT_WIDTH_MAX = 9;
-
-    let currentContentWidth = Services.prefs.getIntPref("reader.content_width");
-    currentContentWidth = Math.max(
-      CONTENT_WIDTH_MIN,
-      Math.min(CONTENT_WIDTH_MAX, currentContentWidth)
+    return lazy.AsyncPrefs.set(
+      "reader.content_width",
+      parseInt(newContentWidth)
     );
+  },
 
-    this._displayContentWidth(currentContentWidth);
+  _setLineSpacing(newLineSpacing) {
+    // We map the slider range [1-9] to 1-2.6em.
+    let spacing = 1 + 0.2 * (newLineSpacing - 1) + "em";
+    this._containerElement.style.setProperty("--line-height", spacing);
+    return lazy.AsyncPrefs.set("reader.line_height", parseInt(newLineSpacing));
+  },
 
-    let plusButton = this._doc.querySelector(".content-width-plus-button");
-    let minusButton = this._doc.querySelector(".content-width-minus-button");
+  _setCharacterSpacing(newCharSpacing) {
+    // We map the slider range [1-9] to 0-0.24em.
+    let spacing = (newCharSpacing - 1) * 0.03;
+    this._containerElement.style.setProperty(
+      "--letter-spacing",
+      `${parseFloat(spacing).toFixed(2)}em`
+    );
+    lazy.AsyncPrefs.set("reader.character_spacing", parseInt(newCharSpacing));
+  },
 
-    function updateControls() {
-      if (currentContentWidth === CONTENT_WIDTH_MIN) {
-        minusButton.setAttribute("disabled", true);
-      } else {
-        minusButton.removeAttribute("disabled");
-      }
-      if (currentContentWidth === CONTENT_WIDTH_MAX) {
-        plusButton.setAttribute("disabled", true);
-      } else {
-        plusButton.removeAttribute("disabled");
-      }
+  _setWordSpacing(newWordSpacing) {
+    // We map the slider range [1-9] to 0-0.4em.
+    let spacing = (newWordSpacing - 1) * 0.05;
+    this._containerElement.style.setProperty(
+      "--word-spacing",
+      `${parseFloat(spacing).toFixed(2)}em`
+    );
+    lazy.AsyncPrefs.set("reader.word_spacing", parseInt(newWordSpacing));
+  },
+
+  _setTextAlignment(newTextAlignment) {
+    if (this._textAlignment === newTextAlignment) {
+      return false;
     }
 
-    updateControls();
-    this._setContentWidth(currentContentWidth);
+    const blockImageMarginRight = {
+      left: "auto",
+      center: "auto",
+      right: "0",
+      start: "unset",
+    };
 
-    plusButton.addEventListener(
-      "click",
-      event => {
-        if (!event.isTrusted) {
-          return;
-        }
-        event.stopPropagation();
+    const blockImageMarginLeft = {
+      left: "0",
+      center: "auto",
+      right: "auto",
+      start: "unset",
+    };
 
-        if (currentContentWidth >= CONTENT_WIDTH_MAX) {
-          return;
-        }
-
-        currentContentWidth++;
-        updateControls();
-        this._setContentWidth(currentContentWidth);
-      },
-      true
-    );
-
-    minusButton.addEventListener(
-      "click",
-      event => {
-        if (!event.isTrusted) {
-          return;
-        }
-        event.stopPropagation();
-
-        if (currentContentWidth <= CONTENT_WIDTH_MIN) {
-          return;
-        }
-
-        currentContentWidth--;
-        updateControls();
-        this._setContentWidth(currentContentWidth);
-      },
-      true
-    );
-  },
-
-  _setLineHeight(newLineHeight) {
-    this._displayLineHeight(newLineHeight);
-    let height = 1 + 0.2 * (newLineHeight - 1) + "em";
-    this._containerElement.style.setProperty("--line-height", height);
-    return lazy.AsyncPrefs.set("reader.line_height", newLineHeight);
-  },
-
-  _displayLineHeight(currentLineHeight) {
-    let lineHeightValue = this._doc.querySelector(".line-height-value");
-    lineHeightValue.textContent = currentLineHeight;
-  },
-
-  _setupLineHeightButtons() {
-    const LINE_HEIGHT_MIN = 1;
-    const LINE_HEIGHT_MAX = 9;
-
-    let currentLineHeight = Services.prefs.getIntPref("reader.line_height");
-    currentLineHeight = Math.max(
-      LINE_HEIGHT_MIN,
-      Math.min(LINE_HEIGHT_MAX, currentLineHeight)
-    );
-
-    this._displayLineHeight(currentLineHeight);
-
-    let plusButton = this._doc.querySelector(".line-height-plus-button");
-    let minusButton = this._doc.querySelector(".line-height-minus-button");
-
-    function updateControls() {
-      if (currentLineHeight === LINE_HEIGHT_MIN) {
-        minusButton.setAttribute("disabled", true);
+    if (newTextAlignment === "start") {
+      let startAlignButton;
+      if (isAppLocaleRTL) {
+        startAlignButton = this._doc.querySelector(".right-align-button");
       } else {
-        minusButton.removeAttribute("disabled");
+        startAlignButton = this._doc.querySelector(".left-align-button");
       }
-      if (currentLineHeight === LINE_HEIGHT_MAX) {
-        plusButton.setAttribute("disabled", true);
-      } else {
-        plusButton.removeAttribute("disabled");
-      }
+      startAlignButton.click();
     }
 
-    updateControls();
-    this._setLineHeight(currentLineHeight);
-
-    plusButton.addEventListener(
-      "click",
-      event => {
-        if (!event.isTrusted) {
-          return;
-        }
-        event.stopPropagation();
-
-        if (currentLineHeight >= LINE_HEIGHT_MAX) {
-          return;
-        }
-
-        currentLineHeight++;
-        updateControls();
-        this._setLineHeight(currentLineHeight);
-      },
-      true
+    this._containerElement.style.setProperty(
+      "--text-alignment",
+      newTextAlignment
     );
 
-    minusButton.addEventListener(
-      "click",
-      event => {
-        if (!event.isTrusted) {
-          return;
-        }
-        event.stopPropagation();
-
-        if (currentLineHeight <= LINE_HEIGHT_MIN) {
-          return;
-        }
-
-        currentLineHeight--;
-        updateControls();
-        this._setLineHeight(currentLineHeight);
-      },
-      true
+    this._containerElement.style.setProperty(
+      "--block-img-margin-right",
+      blockImageMarginRight[newTextAlignment]
     );
+
+    this._containerElement.style.setProperty(
+      "--block-img-margin-left",
+      blockImageMarginLeft[newTextAlignment]
+    );
+
+    lazy.AsyncPrefs.set("reader.text_alignment", newTextAlignment);
+    return true;
+  },
+
+  async _resetTextLayout() {
+    let doc = this._doc;
+    const initial = DEFAULT_TEXT_LAYOUT;
+    const changeEvent = new Event("change", { bubbles: true });
+
+    this._resetFontSize();
+    let plusButton = this._doc.querySelector(".text-size-plus-button");
+    let minusButton = this._doc.querySelector(".text-size-minus-button");
+    plusButton.removeAttribute("disabled");
+    minusButton.removeAttribute("disabled");
+
+    let fontType = doc.getElementById("font-type-selector");
+    fontType.value = initial.fontType;
+    fontType.dispatchEvent(changeEvent);
+
+    let fontWeight = doc.getElementById("font-weight-selector");
+    fontWeight.value = initial.fontWeight;
+    fontWeight.dispatchEvent(changeEvent);
+
+    let contentWidth = doc.querySelector("#content-width-slider moz-slider");
+    contentWidth.setAttribute("value", initial.contentWidth);
+    this._setContentWidth(initial.contentWidth);
+
+    let lineSpacing = doc.querySelector("#line-spacing-slider moz-slider");
+    lineSpacing.setAttribute("value", initial.lineSpacing);
+    this._setLineSpacing(initial.lineSpacing);
+
+    let characterSpacing = doc.querySelector(
+      "#character-spacing-slider moz-slider"
+    );
+    characterSpacing.setAttribute("value", initial.characterSpacing);
+    this._setCharacterSpacing(initial.characterSpacing);
+
+    let wordSpacing = doc.querySelector("#word-spacing-slider moz-slider");
+    wordSpacing.setAttribute("value", initial.wordSpacing);
+    this._setWordSpacing(initial.wordSpacing);
+
+    this._setTextAlignment(initial.textAlignment);
+  },
+
+  _handleTextLayoutFocus() {
+    // Retain focus inside the menu panel.
+    let doc = this._doc;
+    let accordion = doc.querySelector("#about-reader-advanced-layout");
+    let advancedHeader = doc.querySelector(".accordion-header");
+    let textResetButton = doc.querySelector(".text-layout-reset-button");
+    let textFirstFocusable = doc.querySelector(".text-size-minus-button");
+
+    textResetButton.addEventListener("keydown", e => {
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        textFirstFocusable.focus();
+      }
+    });
+    advancedHeader.addEventListener("keydown", e => {
+      if (!accordion.hasAttribute("open") && e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        textFirstFocusable.focus();
+      }
+    });
+    textFirstFocusable.addEventListener("keydown", e => {
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        if (accordion.hasAttribute("open")) {
+          textResetButton.focus();
+        } else {
+          advancedHeader.focus();
+        }
+      }
+    });
   },
 
   _setColorScheme(newColorScheme) {
@@ -738,31 +1037,196 @@ AboutReader.prototype = {
       this._colorScheme = "hcm";
     }
 
+    if (this._colorScheme == "custom") {
+      const colorInputs = this._doc.querySelectorAll("color-input");
+      colorInputs.forEach(input => {
+        // Set document body styles to pref values.
+        let property = input.getAttribute("prop-name");
+        let pref = `reader.custom_colors.${property}`;
+        let customColor = Services.prefs.getStringPref(pref, "");
+        // If customColor is truthy, set the value from pref.
+        if (customColor) {
+          let cssProp = `--custom-theme-${property}`;
+          this._doc.body.style.setProperty(cssProp, customColor);
+        }
+      });
+    }
+
     bodyClasses.add(this._colorScheme);
   },
 
-  // Pref values include "dark", "light", "sepia", and "auto"
-  _setColorSchemePref(colorSchemePref) {
+  // Pref values include "auto", "dark", "light", "sepia",
+  // "gray", "contrast", and "custom"
+  _setColorSchemePref(colorSchemePref, fromInputEvent = false) {
+    if (this._colorScheme == "custom" && fromInputEvent) {
+      // The input event for the last selected radio button is fired
+      // upon loading a reader article in the same session. To prevent it
+      // from overwriting custom colors, we return false.
+      lastSelectedTheme = colorSchemePref;
+      return false;
+    }
     this._setColorScheme(colorSchemePref);
 
     lazy.AsyncPrefs.set("reader.color_scheme", colorSchemePref);
+    return true;
   },
 
-  _setFontType(newFontType) {
-    if (this._fontType === newFontType) {
+  _handleColorsTabClick(option) {
+    let doc = this._doc;
+    let deck = doc.querySelector("named-deck");
+    if (option == deck.getAttribute("selected-view")) {
       return;
     }
 
-    let bodyClasses = this._doc.body.classList;
+    if (option == "customtheme") {
+      this._setColorSchemePref("custom");
+      lazy.AsyncPrefs.set("reader.color_scheme", "custom");
 
-    if (this._fontType) {
-      bodyClasses.remove(this._fontType);
+      // Store the last selected preset theme button.
+      const colorSchemePresets = doc.querySelector(".color-scheme-buttons");
+      const labels = colorSchemePresets.querySelectorAll("label");
+      labels.forEach(label => {
+        if (label.hasAttribute("checked")) {
+          lastSelectedTheme = label.className.split("-")[0];
+        }
+      });
+    } else if (option == "fxtheme") {
+      this._setColorSchemePref(lastSelectedTheme);
+      lazy.AsyncPrefs.set("reader.color_scheme", lastSelectedTheme);
+      // set the last selected button to checked.
+      const colorSchemePresets = doc.querySelector(".color-scheme-buttons");
+      const labels = colorSchemePresets.querySelectorAll("label");
+      labels.forEach(label => {
+        if (label.className == `${lastSelectedTheme}-button`) {
+          label.setAttribute("checked", "true");
+          label.previousElementSibling.setAttribute("checked", "true");
+        }
+      });
+    }
+  },
+
+  _setupColorsTabs(options, callback) {
+    let doc = this._doc;
+    let colorScheme = Services.prefs.getCharPref("reader.color_scheme");
+    for (let option of options) {
+      let tabButton = doc.getElementById(`tabs-deck-button-${option}`);
+      // Open custom theme tab if color scheme is set to custom.
+      if (option == "customtheme" && colorScheme == "custom") {
+        tabButton.click();
+      }
+      tabButton.addEventListener(
+        "click",
+        function (aEvent) {
+          if (!aEvent.isTrusted) {
+            return;
+          }
+
+          callback(option);
+        },
+        true
+      );
+    }
+  },
+
+  _setupColorInput(prop) {
+    let doc = this._doc;
+    let input = doc.createElement("color-input");
+    input.setAttribute("prop-name", prop);
+    let labelL10nId = `about-reader-custom-colors-${prop}`;
+    input.setAttribute("data-l10n-id", labelL10nId);
+
+    let pref = `reader.custom_colors.${prop}`;
+    let customColor = Services.prefs.getStringPref(pref, "");
+    // Set the swatch color from prefs if one has been set.
+    if (customColor) {
+      input.setAttribute("color", customColor);
+    } else {
+      let defaultColor = DEFAULT_COLORS[prop];
+      input.setAttribute("color", defaultColor);
     }
 
-    this._fontType = newFontType;
-    bodyClasses.add(this._fontType);
+    // Attach event listener to update the pref and page colors on input.
+    input.addEventListener("color-picked", e => {
+      const cssPropToUpdate = `--custom-theme-${prop}`;
+      this._doc.body.style.setProperty(cssPropToUpdate, e.detail);
 
-    lazy.AsyncPrefs.set("reader.font_type", this._fontType);
+      const prefToUpdate = `reader.custom_colors.${prop}`;
+      lazy.AsyncPrefs.set(prefToUpdate, e.detail);
+    });
+
+    return input;
+  },
+
+  _setupCustomColors(options, id) {
+    let doc = this._doc;
+    const list = doc.getElementsByClassName(id)[0];
+
+    for (let option of options) {
+      let listItem = doc.createElement("li");
+      let colorInput = this._setupColorInput(option);
+      listItem.appendChild(colorInput);
+      list.appendChild(listItem);
+    }
+  },
+
+  _resetCustomColors() {
+    // Need to reset prefs, page colors, and color inputs.
+    const colorInputs = this._doc.querySelectorAll("color-input");
+    colorInputs.forEach(input => {
+      let property = input.getAttribute("prop-name");
+      let pref = `reader.custom_colors.${property}`;
+      lazy.AsyncPrefs.set(pref, "");
+
+      // Set css props to empty strings so they use fallback value.
+      let cssProp = `--custom-theme-${property}`;
+      this._doc.body.style.setProperty(cssProp, "");
+
+      let defaultColor = DEFAULT_COLORS[property];
+      input.setAttribute("color", defaultColor);
+    });
+  },
+
+  _handleThemeFocus() {
+    // Retain focus inside the menu panel.
+    let doc = this._doc;
+    let themeButtons = doc.querySelector(".color-scheme-buttons");
+    let defaultThemeFirstFocusable = doc.querySelector(
+      "#tabs-deck-button-fxtheme"
+    );
+    let themeResetButton = doc.querySelector(".custom-colors-reset-button");
+    let customThemeFirstFocusable = doc.querySelector(
+      "#tabs-deck-button-customtheme"
+    );
+
+    themeButtons.addEventListener("keydown", e => {
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        defaultThemeFirstFocusable.focus();
+      }
+    });
+    themeResetButton.addEventListener("keydown", e => {
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        customThemeFirstFocusable.focus();
+      }
+    });
+    defaultThemeFirstFocusable.addEventListener("keydown", e => {
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        let themeLabels = themeButtons.getElementsByTagName("label");
+        for (const label of themeLabels) {
+          if (label.hasAttribute("checked")) {
+            doc.querySelector(`.${label.className}`).focus();
+          }
+        }
+      }
+    });
+    customThemeFirstFocusable.addEventListener("keydown", e => {
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        themeResetButton.focus();
+      }
+    });
   },
 
   async _loadArticle(docContentType = "document") {
@@ -778,6 +1242,7 @@ AboutReader.prototype = {
       try {
         article = await ReaderMode.downloadAndParseDocument(
           url,
+          { ...this._doc.nodePrincipal?.originAttributes },
           docContentType
         );
       } catch (e) {
@@ -1073,6 +1538,7 @@ AboutReader.prototype = {
       radioButton.type = "radio";
       radioButton.classList.add("radio-button");
       radioButton.name = option.groupName;
+      radioButton.setAttribute("data-telemetry-id", option.itemClass);
       segmentedButton.appendChild(radioButton);
 
       let item = doc.createElement("label");
@@ -1094,14 +1560,17 @@ AboutReader.prototype = {
             label.removeAttribute("checked");
           }
 
-          aEvent.target.nextElementSibling.setAttribute("checked", "true");
-          callback(option.value);
+          let setOption = callback(option.value, true);
+          if (setOption) {
+            aEvent.target.setAttribute("checked", "true");
+            aEvent.target.nextElementSibling.setAttribute("checked", "true");
+          }
         },
         true
       );
 
       if (option.value === initialValue) {
-        radioButton.checked = true;
+        radioButton.setAttribute("checked", "true");
         item.setAttribute("checked", "true");
       }
     }
@@ -1143,7 +1612,7 @@ AboutReader.prototype = {
   /*
    * If the ReaderView banner font-dropdown is closed, open it.
    */
-  _openDropdown(dropdown, window) {
+  _openDropdown(dropdown) {
     if (dropdown.classList.contains("open")) {
       return;
     }

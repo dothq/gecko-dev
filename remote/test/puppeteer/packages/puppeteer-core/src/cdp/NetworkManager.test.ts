@@ -37,7 +37,7 @@ class MockCDPSession extends EventEmitter<CDPSessionEvents> {
 describe('NetworkManager', () => {
   it('should process extra info on multiple redirects', async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -477,7 +477,7 @@ describe('NetworkManager', () => {
   });
   it(`should handle "double pause" (crbug.com/1196004) Fetch.requestPaused events for the same Network.requestWillBeSent event`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -561,7 +561,7 @@ describe('NetworkManager', () => {
   });
   it(`should handle Network.responseReceivedExtraInfo event after Network.responseReceived event (github.com/puppeteer/puppeteer/issues/8234)`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -678,7 +678,7 @@ describe('NetworkManager', () => {
 
   it(`should resolve the response once the late responseReceivedExtraInfo event arrives`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -829,7 +829,7 @@ describe('NetworkManager', () => {
 
   it(`should send responses for iframe that don't receive loadingFinished event`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -992,7 +992,7 @@ describe('NetworkManager', () => {
 
   it(`should send responses for iframe that don't receive loadingFinished event`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -1137,7 +1137,7 @@ describe('NetworkManager', () => {
 
   it(`should handle cached redirects`, async () => {
     const mockCDPSession = new MockCDPSession();
-    const manager = new NetworkManager(true, {
+    const manager = new NetworkManager({
       frame(): CdpFrame | null {
         return null;
       },
@@ -1216,7 +1216,10 @@ describe('NetworkManager', () => {
       statusCode: 200,
       headersText:
         'HTTP/1.1 200 OK\\r\\nContent-Type: text/html; charset=utf-8\\r\\nCache-Control: max-age=5\\r\\nDate: Wed, 05 Apr 2023 12:39:13 GMT\\r\\nConnection: keep-alive\\r\\nKeep-Alive: timeout=5\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n',
-      cookiePartitionKey: 'http://localhost',
+      cookiePartitionKey: {
+        topLevelSite: 'http://localhost',
+        hasCrossSiteAncestor: false,
+      },
       cookiePartitionKeyOpaque: false,
     });
 
@@ -1359,7 +1362,10 @@ describe('NetworkManager', () => {
       statusCode: 302,
       headersText:
         'HTTP/1.1 302 Found\\r\\nLocation: http://localhost:3000/#from-redirect\\r\\nDate: Wed, 05 Apr 2023 12:39:13 GMT\\r\\nConnection: keep-alive\\r\\nKeep-Alive: timeout=5\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n',
-      cookiePartitionKey: 'http://localhost',
+      cookiePartitionKey: {
+        topLevelSite: 'http://localhost',
+        hasCrossSiteAncestor: false,
+      },
       cookiePartitionKeyOpaque: false,
     });
     mockCDPSession.emit('Network.requestWillBeSent', {
@@ -1525,7 +1531,10 @@ describe('NetworkManager', () => {
       statusCode: 302,
       headersText:
         'HTTP/1.1 302 Found\\r\\nLocation: http://localhost:3000/#from-redirect\\r\\nDate: Wed, 05 Apr 2023 12:39:13 GMT\\r\\nConnection: keep-alive\\r\\nKeep-Alive: timeout=5\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n',
-      cookiePartitionKey: 'http://localhost',
+      cookiePartitionKey: {
+        topLevelSite: 'http://localhost',
+        hasCrossSiteAncestor: false,
+      },
       cookiePartitionKeyOpaque: false,
     });
     mockCDPSession.emit('Network.loadingFinished', {

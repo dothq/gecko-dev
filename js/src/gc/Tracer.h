@@ -122,10 +122,12 @@ bool TraceWeakMapKeyInternal(JSTracer* trc, Zone* zone, T* thingp,
 
 #ifdef DEBUG
 void AssertRootMarkingPhase(JSTracer* trc);
-void AssertShouldMarkInZone(GCMarker* marker, gc::Cell* thing);
+template <typename T>
+void AssertShouldMarkInZone(GCMarker* marker, T* thing);
 #else
 inline void AssertRootMarkingPhase(JSTracer* trc) {}
-inline void AssertShouldMarkInZone(GCMarker* marker, gc::Cell* thing) {}
+template <typename T>
+void AssertShouldMarkInZone(GCMarker* marker, T* thing) {}
 #endif
 
 }  // namespace gc
@@ -252,6 +254,14 @@ inline void TraceManuallyBarrieredEdge(JSTracer* trc, T* thingp,
   gc::TraceEdgeInternal(trc, gc::ConvertToBase(thingp), name);
 }
 
+template <typename T>
+inline void TraceManuallyBarrieredNullableEdge(JSTracer* trc, T* thingp,
+                                               const char* name) {
+  if (InternalBarrierMethods<T>::isMarkable(*thingp)) {
+    gc::TraceEdgeInternal(trc, gc::ConvertToBase(thingp), name);
+  }
+}
+
 // Trace through a weak edge. If *thingp is not marked at the end of marking,
 // it is replaced by nullptr, and this method will return false to indicate that
 // the edge no longer exists.
@@ -276,6 +286,7 @@ struct TraceWeakResult {
 
   bool isLive() const { return live_; }
   bool isDead() const { return !live_; }
+  bool wasMoved() const { return isLive() && final_ != initial_; }
 
   MOZ_IMPLICIT operator bool() const { return isLive(); }
 

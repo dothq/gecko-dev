@@ -7,6 +7,7 @@
 use app_units::Au;
 use cssparser::ToCss as CssparserToCss;
 use cssparser::{serialize_string, ParseError, Parser, Token, UnicodeRange};
+#[cfg(feature = "gecko")]
 use nsstring::nsCString;
 use servo_arc::Arc;
 use std::fmt::{self, Write};
@@ -45,7 +46,7 @@ use std::fmt::{self, Write};
 /// * `#[css(represents_keyword)]` can be used on bool fields in order to
 ///   serialize the field name if the field is true, or nothing otherwise.  It
 ///   also collects those keywords for `SpecifiedValueInfo`.
-/// * `#[css(bitflags(single="", mixed="", validate="", overlapping_bits)]` can
+/// * `#[css(bitflags(single="", mixed="", validate_mixed="", overlapping_bits)]` can
 ///   be used to derive parse / serialize / etc on bitflags. The rules for parsing
 ///   bitflags are the following:
 ///
@@ -67,8 +68,10 @@ use std::fmt::{self, Write};
 ///
 ///       But `bar baz` will be valid, as they don't share bits, and so would
 ///       `foo` with any other flag, or `bazz` on its own.
-///    * `overlapping_bits` enables some tracking during serialization of mixed
-///       flags to avoid serializing variants that can subsume other variants.
+///    * `validate_mixed` can be used to reject invalid mixed combinations, and also to simplify
+///      the type or add default ones if needed.
+///    * `overlapping_bits` enables some tracking during serialization of mixed flags to avoid
+///       serializing variants that can subsume other variants.
 ///       In the example above, you could do:
 ///         mixed="foo,bazz,bar,baz", overlapping_bits
 ///       to ensure that if bazz is serialized, bar and baz aren't, even though
@@ -243,8 +246,9 @@ where
         Self { inner, separator }
     }
 
+    /// Serialize the CSS Value with the specific serialization function.
     #[inline]
-    fn write_item<F>(&mut self, f: F) -> fmt::Result
+    pub fn write_item<F>(&mut self, f: F) -> fmt::Result
     where
         F: FnOnce(&mut CssWriter<'b, W>) -> fmt::Result,
     {
@@ -385,11 +389,11 @@ impl Separator for Space {
     where
         F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>,
     {
-        input.skip_whitespace(); // Unnecessary for correctness, but may help try() rewind less.
+        input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
         let mut results = vec![parse_one(input)?];
         loop {
-            input.skip_whitespace(); // Unnecessary for correctness, but may help try() rewind less.
-            if let Ok(item) = input.try(&mut parse_one) {
+            input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
+            if let Ok(item) = input.try_parse(&mut parse_one) {
                 results.push(item);
             } else {
                 return Ok(results);
@@ -410,14 +414,14 @@ impl Separator for CommaWithSpace {
     where
         F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>,
     {
-        input.skip_whitespace(); // Unnecessary for correctness, but may help try() rewind less.
+        input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
         let mut results = vec![parse_one(input)?];
         loop {
-            input.skip_whitespace(); // Unnecessary for correctness, but may help try() rewind less.
+            input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
             let comma_location = input.current_source_location();
-            let comma = input.try(|i| i.expect_comma()).is_ok();
-            input.skip_whitespace(); // Unnecessary for correctness, but may help try() rewind less.
-            if let Ok(item) = input.try(&mut parse_one) {
+            let comma = input.try_parse(|i| i.expect_comma()).is_ok();
+            input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
+            if let Ok(item) = input.try_parse(&mut parse_one) {
                 results.push(item);
             } else if comma {
                 return Err(comma_location.new_unexpected_token_error(Token::Comma));

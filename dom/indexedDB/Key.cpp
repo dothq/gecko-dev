@@ -8,11 +8,11 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <stdint.h>          // for UINT32_MAX, uintptr_t
-#include "js/Array.h"        // JS::NewArrayObject
-#include "js/ArrayBuffer.h"  // JS::{IsArrayBufferObject,NewArrayBuffer{,WithContents},GetArrayBufferLengthAndData}
+#include <stdint.h>    // for UINT32_MAX, uintptr_t
+#include "js/Array.h"  // JS::NewArrayObject
+#include "js/ArrayBuffer.h"  // JS::{IsArrayBufferObject,NewArrayBuffer{,WithContents}}
 #include "js/Date.h"
-#include "js/experimental/TypedData.h"  // JS_IsArrayBufferViewObject, JS_GetObjectAsArrayBufferView
+#include "js/experimental/TypedData.h"  // JS::ArrayBufferOrView
 #include "js/MemoryFunctions.h"
 #include "js/Object.h"              // JS::GetBuiltinClass
 #include "js/PropertyAndElement.h"  // JS_DefineElement, JS_GetProperty, JS_GetPropertyById, JS_HasOwnProperty, JS_HasOwnPropertyById
@@ -29,6 +29,7 @@
 #include "mozilla/dom/indexedDB/Key.h"
 #include "mozilla/dom/quota/QuotaCommon.h"
 #include "mozilla/dom/quota/ResultExtensions.h"
+#include "mozilla/dom/TypedArray.h"
 #include "mozIStorageStatement.h"
 #include "mozIStorageValueArray.h"
 #include "nsJSUtils.h"
@@ -102,6 +103,7 @@ IDBResult<Ok, IDBSpecialValue::Invalid> ConvertArrayValueToKey(
   aPolicy.EndSubkeyList();
   return Ok();
 }
+
 }  // namespace
 
 /*
@@ -434,9 +436,9 @@ IDBResult<Ok, IDBSpecialValue::Invalid> Key::EncodeJSValInternal(
     }
 
     // If `input` is a buffer source type
-    if (JS::IsArrayBufferObject(object) || JS_IsArrayBufferViewObject(object)) {
-      const bool isViewObject = JS_IsArrayBufferViewObject(object);
-      return EncodeBinary(object, isViewObject, aTypeOffset);
+    if (JS::ArrayBufferOrView arrayBufferOrView =
+            JS::ArrayBufferOrView::fromObject(object)) {
+      return EncodeBinary(arrayBufferOrView, aTypeOffset);
     }
 
     // If IsArray(`input`)
@@ -518,13 +520,13 @@ nsresult Key::DecodeJSValInternal(const EncodedDataType*& aPos,
   } else if (*aPos - aTypeOffset == eFloat) {
     aVal.setDouble(DecodeNumber(aPos, aEnd));
   } else if (*aPos - aTypeOffset == eBinary) {
-    JSObject* binary = DecodeBinary(aPos, aEnd, aCx);
-    if (!binary) {
+    JSObject* arrayBufferObject = DecodeBinary(aPos, aEnd, aCx);
+    if (!arrayBufferObject) {
       IDB_REPORT_INTERNAL_ERR();
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
-    aVal.setObject(*binary);
+    aVal.setObject(*arrayBufferObject);
   } else {
     MOZ_ASSERT_UNREACHABLE("Unknown key type!");
   }
@@ -552,7 +554,10 @@ Result<Ok, nsresult> Key::EncodeString(const nsAString& aString,
 template <typename T>
 Result<Ok, nsresult> Key::EncodeString(const Span<const T> aInput,
                                        uint8_t aTypeOffset) {
-  return EncodeAsString(aInput, eString + aTypeOffset);
+  // aInput actually has no invalidatable pointers, but create a nogc token
+  // anyway just to satisfy the API.
+  JS::AutoCheckCannotGC nogc;
+  return EncodeAsString(aInput, std::move(nogc), eString + aTypeOffset);
 }
 
 // nsCString maximum length is limited by INT32_MAX.
@@ -560,8 +565,54 @@ Result<Ok, nsresult> Key::EncodeString(const Span<const T> aInput,
 #define KEY_MAXIMUM_BUFFER_LENGTH \
   ::mozilla::detail::nsTStringLengthStorage<char>::kMax
 
+void Key::ReserveAutoIncrementKey(bool aFirstOfArray) {
+  // Allocate memory for the new size
+  uint32_t oldLen = mBuffer.Length();
+  char* buffer;
+  if (!mBuffer.GetMutableData(&buffer, oldLen + 1 + sizeof(double))) {
+    return;
+  }
+
+  // Remember the offset of the buffer to be updated later.
+  mAutoIncrementKeyOffsets.AppendElement(oldLen + 1);
+
+  // Fill the type.
+  buffer += oldLen;
+  *(buffer++) = aFirstOfArray ? (eMaxType + eFloat) : eFloat;
+
+  // Fill up with 0xFF to reserve the buffer in fixed size because the encoded
+  // string could be trimmed if ended with padding zeros.
+  mozilla::BigEndian::writeUint64(buffer, UINT64_MAX);
+}
+
+void Key::MaybeUpdateAutoIncrementKey(int64_t aKey) {
+  if (mAutoIncrementKeyOffsets.IsEmpty()) {
+    return;
+  }
+
+  for (uint32_t offset : mAutoIncrementKeyOffsets) {
+    char* buffer;
+    MOZ_ALWAYS_TRUE(mBuffer.GetMutableData(&buffer));
+    buffer += offset;
+    WriteDoubleToUint64(buffer, double(aKey));
+  }
+
+  TrimBuffer();
+}
+
+void Key::WriteDoubleToUint64(char* aBuffer, double aValue) {
+  MOZ_ASSERT(aBuffer);
+
+  uint64_t bits = BitwiseCast<uint64_t>(aValue);
+  const uint64_t signbit = FloatingPoint<double>::kSignBit;
+  uint64_t number = bits & signbit ? (-bits) : (bits | signbit);
+
+  mozilla::BigEndian::writeUint64(aBuffer, number);
+}
+
 template <typename T>
 Result<Ok, nsresult> Key::EncodeAsString(const Span<const T> aInput,
+                                         JS::AutoCheckCannotGC&& aNoGC,
                                          uint8_t aType) {
   // Please note that the input buffer can either be based on two-byte UTF-16
   // values or on arbitrary single byte binary values. Only the first case
@@ -603,6 +654,7 @@ Result<Ok, nsresult> Key::EncodeAsString(const Span<const T> aInput,
 
   char* buffer;
   if (!mBuffer.GetMutableData(&buffer, size)) {
+    aNoGC.reset();  // Done with aInput
     IDB_REPORT_INTERNAL_ERR();
     return Err(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
   }
@@ -640,6 +692,8 @@ Result<Ok, nsresult> Key::EncodeAsString(const Span<const T> aInput,
                    [](auto value) { return value + ONE_BYTE_ADJUST; });
     buffer += inputLen;
   }
+
+  aNoGC.reset();  // Done with aInput
 
   // Write end marker
   *(buffer++) = eTerminator;
@@ -681,7 +735,15 @@ Result<Ok, nsresult> Key::EncodeLocaleString(const nsAString& aString,
 nsresult Key::DecodeJSVal(const EncodedDataType*& aPos,
                           const EncodedDataType* aEnd, JSContext* aCx,
                           JS::MutableHandle<JS::Value> aVal) {
-  return DecodeJSValInternal(aPos, aEnd, aCx, 0, aVal, 0);
+  // If DecodeJSValInternal errors out and leaves a pending exception, then
+  // clear the exception on aCx here and return an error nsresult, which will
+  // be turned into a new JS exception that reflects that this operation failed
+  // (rather than using the initial exception, which was probably an
+  // information-less OOM).
+  QM_TRY(MOZ_TO_RESULT(DecodeJSValInternal(aPos, aEnd, aCx, 0, aVal, 0)),
+         QM_PROPAGATE, [aCx](const auto&) { JS_ClearPendingException(aCx); });
+
+  return NS_OK;
 }
 
 // static
@@ -797,13 +859,8 @@ Result<Ok, nsresult> Key::EncodeNumber(double aFloat, uint8_t aType) {
 
   *(buffer++) = aType;
 
-  uint64_t bits = BitwiseCast<uint64_t>(aFloat);
-  // Note: The subtraction from 0 below is necessary to fix
-  // MSVC build warning C4146 (negating an unsigned value).
-  const uint64_t signbit = FloatingPoint<double>::kSignBit;
-  uint64_t number = bits & signbit ? (0 - bits) : (bits | signbit);
+  WriteDoubleToUint64(buffer, aFloat);
 
-  mozilla::BigEndian::writeUint64(buffer, number);
   return Ok();
 }
 
@@ -829,23 +886,63 @@ double Key::DecodeNumber(const EncodedDataType*& aPos,
   return BitwiseCast<double>(bits);
 }
 
-Result<Ok, nsresult> Key::EncodeBinary(JSObject* aObject, bool aIsViewObject,
-                                       uint8_t aTypeOffset) {
-  uint8_t* bufferData;
-  size_t bufferLength;
+template <typename F>
+static Result<Ok, nsresult> ProcessArrayBufferOrView(
+    const JS::ArrayBufferOrView& aArrayBufferOrView, F&& aCallback) {
+  JSObject* object = aArrayBufferOrView.asObjectUnbarriered();
 
-  // We must use JS::GetObjectAsArrayBuffer()/JS_GetObjectAsArrayBufferView()
-  // instead of js::GetArrayBufferLengthAndData(). The object might be wrapped,
-  // the former will handle the wrapped case, the later won't.
-  if (aIsViewObject) {
-    bool unused;
-    JS_GetObjectAsArrayBufferView(aObject, &bufferLength, &unused, &bufferData);
-  } else {
-    JS::GetObjectAsArrayBuffer(aObject, &bufferLength, &bufferData);
+  mozilla::dom::ArrayBufferView arrayBufferView;
+  if (arrayBufferView.Init(object)) {
+    return arrayBufferView.ProcessData</* AllowLargeTypedArrays */ true>(
+        std::forward<F>(aCallback));
   }
 
-  return EncodeAsString(Span{bufferData, bufferLength}.AsConst(),
-                        eBinary + aTypeOffset);
+  mozilla::dom::ArrayBuffer arrayBuffer;
+  if (arrayBuffer.Init(object)) {
+    return arrayBuffer.ProcessData</* AllowLargeTypedArrays */ true>(
+        std::forward<F>(aCallback));
+  }
+
+  MOZ_CRASH("ArrayBufferOrView must be ArrayBuffer or ArrayBufferView!");
+}
+
+Result<Ok, nsresult> Key::EncodeBinary(
+    const JS::ArrayBufferOrView& aArrayBufferOrView, uint8_t aTypeOffset) {
+  // We can't exactly mimic the steps for "getting a copy of the bytes held by
+  // the buffer source" because for safety reasons, we have to use higher level
+  // APIs for accessing array buffer or array buffer view data.
+  // Also, EncodeAsString needs to encode the data anyway (making a copy), so
+  // doing a plain extra copy first would be inefficient.
+
+  // https://webidl.spec.whatwg.org/#dfn-get-buffer-source-copy
+  // 7. If IsDetachedBuffer(jsArrayBuffer) is true, then return the empty
+  // byte sequence.
+  //
+  // Note: As the web platform tests assume, and as has been discussed at
+  // https://github.com/w3c/IndexedDB/issues/417 - we are better off by
+  // throwing a DataCloneError. The spec language is about to be revised.
+  if (aArrayBufferOrView.isDetached()) {
+    return Err(NS_ERROR_DOM_INDEXEDDB_DATA_ERR);
+  }
+
+  // 1. Let aData be the result of getting the bytes held by the buffer source
+  //    input.
+  // 2. Return a new key with type binary and value aData.
+  //
+  // Note: The wording of the steps has been adjusted to reflect implementation
+  // specifics which are described above.
+  return ProcessArrayBufferOrView(
+      aArrayBufferOrView,
+      [aTypeOffset, this](
+          const Span<uint8_t>& aData,
+          JS::AutoCheckCannotGC&& aNoGC) -> Result<Ok, nsresult> {
+        if (aData.LengthBytes() > INT32_MAX) {
+          return Err(NS_ERROR_DOM_INDEXEDDB_DATA_ERR);
+        }
+
+        return EncodeAsString((const Span<const uint8_t>)aData,
+                              std::move(aNoGC), eBinary + aTypeOffset);
+      });
 }
 
 // static

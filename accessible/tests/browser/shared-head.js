@@ -354,6 +354,9 @@ function wrapWithIFrame(doc, options = {}) {
     if (doc.endsWith("html")) {
       srcURL.searchParams.append("file", `${CURRENT_FILE_DIR}${doc}`);
     } else {
+      // document-builder.sjs can't handle non-ASCII characters. Convert them
+      // to HTML character entities; e.g. &#8226;.
+      doc = doc.replace(/[\u00A0-\u2666]/g, c => `&#${c.charCodeAt(0)}`);
       srcURL.searchParams.append(
         "html",
         `<!doctype html>
@@ -381,6 +384,10 @@ function wrapWithIFrame(doc, options = {}) {
     }
 
     src = `data:${mimeType};charset=utf-8,${encodeURIComponent(doc)}`;
+  }
+
+  if (options.urlSuffix) {
+    src += options.urlSuffix;
   }
 
   iframeAttrs = {
@@ -424,33 +431,74 @@ function snippetToURL(doc, options = {}) {
     </html>`
   );
 
-  return `data:text/html;charset=utf-8,${encodedDoc}`;
+  let url = `data:text/html;charset=utf-8,${encodedDoc}`;
+  if (!gIsIframe && options.urlSuffix) {
+    url += options.urlSuffix;
+  }
+  return url;
 }
 
+const CacheDomain = {
+  None: 0,
+  NameAndDescription: 0x1 << 0,
+  Value: 0x1 << 1,
+  Bounds: 0x1 << 2,
+  Resolution: 0x1 << 3,
+  Text: 0x1 << 4,
+  DOMNodeIDAndClass: 0x1 << 5,
+  State: 0x1 << 6,
+  GroupInfo: 0x1 << 7,
+  Actions: 0x1 << 8,
+  Style: 0x1 << 9,
+  TransformMatrix: 0x1 << 10,
+  ScrollPosition: 0x1 << 11,
+  Table: 0x1 << 12,
+  TextOffsetAttributes: 0x1 << 13,
+  Viewport: 0x1 << 14,
+  ARIA: 0x1 << 15,
+  Relations: 0x1 << 16,
+  InnerHTML: 0x1 << 17,
+  TextBounds: 0x1 << 18,
+  All: ~0x0,
+};
+
 function accessibleTask(doc, task, options = {}) {
-  return async function () {
+  const wrapped = async function () {
+    let cacheDomains;
+    if (!("cacheDomains" in options)) {
+      cacheDomains = CacheDomain.All;
+    } else {
+      // The DOMNodeIDAndClass domain is required for the tests to initialize.
+      cacheDomains = options.cacheDomains | CacheDomain.DOMNodeIDAndClass;
+    }
+
+    // Set the required cache domains for the test. Note that this also
+    // instantiates the accessibility service if it hasn't been already, since
+    // gAccService is defined lazily.
+    gAccService.setCacheDomains(cacheDomains);
+
     gIsRemoteIframe = options.remoteIframe;
     gIsIframe = options.iframe || gIsRemoteIframe;
+    const urlSuffix = options.urlSuffix || "";
     let url;
     if (options.chrome && doc.endsWith("html")) {
       // Load with a chrome:// URL so this loads as a chrome document in the
       // parent process.
-      url = `${CURRENT_DIR}${doc}`;
+      url = `${CURRENT_DIR}${doc}${urlSuffix}`;
     } else if (doc.endsWith("html") && !gIsIframe) {
-      url = `${CURRENT_CONTENT_DIR}${doc}`;
+      url = `${CURRENT_CONTENT_DIR}${doc}${urlSuffix}`;
     } else {
       url = snippetToURL(doc, options);
     }
 
     registerCleanupFunction(() => {
+      // XXX Bug 1906779: This will run once for each call to addAccessibleTask,
+      // but only after the entire test file has completed. This doesn't make
+      // sense and almost certainly wasn't the intent.
       for (let observer of Services.obs.enumerateObservers(
         "accessible-event"
       )) {
         Services.obs.removeObserver(observer, "accessible-event");
-      }
-      if (gPythonSocket) {
-        // Remove any globals set by Python code run in this test.
-        runPython(`__reset__`);
       }
     });
 
@@ -558,7 +606,25 @@ function accessibleTask(doc, task, options = {}) {
         );
       }
     );
+
+    if (gPythonSocket) {
+      // Remove any globals set by Python code run in this test. We do this here
+      // rather than using registerCleanupFunction because
+      // registerCleanupFunction runs after all tests in the file, whereas we
+      // need this to run after each task.
+      await runPython(`__reset__`);
+    }
   };
+  // Propagate the name of the task function to our wrapper function so it shows
+  // up in test run output. For example:
+  // 0:39.16 INFO Entering test bound testProtected
+  // Even if the name is empty, we still propagate it here to override the
+  // implicit "wrapped" name derived from the assignment at the top of this
+  // function.
+  // The "name" property of functions is not writable, but we can override that
+  // using Object.defineProperty.
+  Object.defineProperty(wrapped, "name", { value: task.name });
+  return wrapped;
 }
 
 /**
@@ -597,6 +663,12 @@ function accessibleTask(doc, task, options = {}) {
  *           body
  *         - {Object} iframeDocBodyAttrs
  *           a set of attributes to be applied to a iframe content document body
+ *         - {String} urlSuffix
+ *           String to append to the document URL. For example, this could be
+ *           "#test" to scroll to the "test" id in the document.
+ *         - {CacheDomain} cacheDomains
+ *           The set of cache domains that should be present at the start of the
+ *           test. If not set, all cache domains will be present.
  */
 function addAccessibleTask(doc, task, options = {}) {
   const {

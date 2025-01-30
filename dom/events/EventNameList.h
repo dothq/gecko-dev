@@ -150,7 +150,6 @@
 
 EVENT(abort, eImageAbort, EventNameType_All, eBasicEventClass)
 EVENT(beforetoggle, eBeforeToggle, EventNameType_HTMLXUL, eBasicEventClass)
-EVENT(bounce, eMarqueeBounce, EventNameType_HTMLMarqueeOnly, eBasicEventClass)
 EVENT(cancel, eCancel, EventNameType_HTMLXUL, eBasicEventClass)
 EVENT(canplay, eCanPlay, EventNameType_HTML, eBasicEventClass)
 EVENT(canplaythrough, eCanPlayThrough, EventNameType_HTML, eBasicEventClass)
@@ -159,11 +158,13 @@ EVENT(CheckboxStateChange, eFormCheckboxStateChange, EventNameType_None,
       eBasicEventClass)
 EVENT(RadioStateChange, eFormRadioStateChange, EventNameType_None,
       eBasicEventClass)
-EVENT(auxclick, eMouseAuxClick, EventNameType_All, eMouseEventClass)
-EVENT(click, eMouseClick, EventNameType_All, eMouseEventClass)
+EVENT(auxclick, ePointerAuxClick, EventNameType_All, ePointerEventClass)
+EVENT(click, ePointerClick, EventNameType_All, ePointerEventClass)
 EVENT(close, eClose, EventNameType_HTMLXUL, eBasicEventClass)
+EVENT(contentvisibilityautostatechange, eContentVisibilityAutoStateChange,
+      EventNameType_All, eBasicEventClass)
 EVENT(contextmenu, eContextMenu,
-      EventNameType_HTMLXUL | EventNameType_SVGGraphic, eMouseEventClass)
+      EventNameType_HTMLXUL | EventNameType_SVGGraphic, ePointerEventClass)
 NON_IDL_EVENT(mouselongtap, eMouseLongTap, EventNameType_HTMLXUL,
               eMouseEventClass)
 EVENT(cuechange, eCueChange, EventNameType_All, eBasicEventClass)
@@ -178,8 +179,8 @@ EVENT(dragstart, eDragStart, EventNameType_HTMLXUL, eDragEventClass)
 EVENT(drop, eDrop, EventNameType_HTMLXUL, eDragEventClass)
 EVENT(durationchange, eDurationChange, EventNameType_HTML, eBasicEventClass)
 EVENT(emptied, eEmptied, EventNameType_HTML, eBasicEventClass)
+EVENT(encrypted, eEncrypted, EventNameType_HTMLMedia, eBasicEventClass)
 EVENT(ended, eEnded, EventNameType_HTML, eBasicEventClass)
-EVENT(finish, eMarqueeFinish, EventNameType_HTMLMarqueeOnly, eBasicEventClass)
 EVENT(formdata, eFormData, EventNameType_HTML, eBasicEventClass)
 EVENT(fullscreenchange, eFullscreenChange, EventNameType_HTML, eBasicEventClass)
 EVENT(fullscreenerror, eFullscreenError, EventNameType_HTML, eBasicEventClass)
@@ -227,6 +228,8 @@ EVENT(gotpointercapture, ePointerGotCapture, EventNameType_All,
 EVENT(lostpointercapture, ePointerLostCapture, EventNameType_All,
       ePointerEventClass)
 EVENT(selectstart, eSelectStart, EventNameType_HTMLXUL, eBasicEventClass)
+NON_IDL_EVENT(textInput, eLegacyTextInput, EventNameType_None,
+              eLegacyTextEventClass)
 
 EVENT(contextlost, eContextLost, EventNameType_HTML, eBasicEventClass)
 EVENT(contextrestored, eContextRestored, EventNameType_HTML, eBasicEventClass)
@@ -246,13 +249,13 @@ EVENT(seeking, eSeeking, EventNameType_HTML, eBasicEventClass)
 EVENT(select, eFormSelect, EventNameType_HTMLXUL, eBasicEventClass)
 EVENT(slotchange, eSlotChange, EventNameType_All, eBasicEventClass)
 EVENT(stalled, eStalled, EventNameType_HTML, eBasicEventClass)
-EVENT(start, eMarqueeStart, EventNameType_HTMLMarqueeOnly, eBasicEventClass)
 EVENT(submit, eFormSubmit, EventNameType_HTMLXUL, eBasicEventClass)
 EVENT(suspend, eSuspend, EventNameType_HTML, eBasicEventClass)
 EVENT(timeupdate, eTimeUpdate, EventNameType_HTML, eBasicEventClass)
 EVENT(toggle, eToggle, EventNameType_HTML, eBasicEventClass)
 EVENT(volumechange, eVolumeChange, EventNameType_HTML, eBasicEventClass)
 EVENT(waiting, eWaiting, EventNameType_HTML, eBasicEventClass)
+EVENT(waitingforkey, eWaitingForKey, EventNameType_HTMLMedia, eBasicEventClass)
 EVENT(wheel, eWheel, EventNameType_All, eWheelEventClass)
 EVENT(copy, eCopy, EventNameType_HTMLXUL | EventNameType_SVGGraphic,
       eClipboardEventClass)

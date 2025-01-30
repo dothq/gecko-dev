@@ -6,17 +6,27 @@
  */
 
 #include "include/core/SkData.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPathTypes.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkScalar.h"
 #include "include/private/SkPathRef.h"
-#include "include/private/base/SkMath.h"
-#include "include/private/base/SkPathEnums.h"
+#include "include/private/base/SkAssert.h"
+#include "include/private/base/SkDebug.h"
+#include "include/private/base/SkPoint_impl.h"
 #include "include/private/base/SkTPin.h"
 #include "include/private/base/SkTo.h"
+#include "src/base/SkAutoMalloc.h"
 #include "src/base/SkBuffer.h"
 #include "src/base/SkSafeMath.h"
+#include "src/core/SkPathEnums.h"
 #include "src/core/SkPathPriv.h"
 #include "src/core/SkRRectPriv.h"
 
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
 
 enum SerializationOffsets {
     kType_SerializationShift = 28,       // requires 4 bits
@@ -142,23 +152,6 @@ sk_sp<SkData> SkPath::serialize() const {
 //////////////////////////////////////////////////////////////////////////////////////////////////
 // reading
 
-size_t SkPath::readFromMemory(const void* storage, size_t length) {
-    SkRBuffer buffer(storage, length);
-    uint32_t packed;
-    if (!buffer.readU32(&packed)) {
-        return 0;
-    }
-    unsigned version = extract_version(packed);
-    if (version < kMin_Version || version > kCurrent_Version) {
-        return 0;
-    }
-
-    if (version == kJustPublicData_Version || version == kVerbsAreStoredForward_Version) {
-        return this->readFromMemory_EQ4Or5(storage, length);
-    }
-    return 0;
-}
-
 size_t SkPath::readAsRRect(const void* storage, size_t length) {
     SkRBuffer buffer(storage, length);
     uint32_t packed;
@@ -197,16 +190,18 @@ size_t SkPath::readAsRRect(const void* storage, size_t length) {
     return buffer.pos();
 }
 
-size_t SkPath::readFromMemory_EQ4Or5(const void* storage, size_t length) {
+size_t SkPath::readFromMemory(const void* storage, size_t length) {
     SkRBuffer buffer(storage, length);
     uint32_t packed;
     if (!buffer.readU32(&packed)) {
         return 0;
     }
+    unsigned version = extract_version(packed);
 
-    bool verbsAreReversed = true;
-    if (extract_version(packed) == kVerbsAreStoredForward_Version) {
-        verbsAreReversed = false;
+    const bool verbsAreForward = (version == kVerbsAreStoredForward_Version);
+    if (!verbsAreForward && version != kJustPublicData_Version) SK_UNLIKELY {
+        // Old/unsupported version.
+        return 0;
     }
 
     switch (extract_serializationtype(packed)) {
@@ -218,80 +213,47 @@ size_t SkPath::readFromMemory_EQ4Or5(const void* storage, size_t length) {
             return 0;
     }
 
-    int32_t pts, cnx, vbs;
-    if (!buffer.readS32(&pts) || !buffer.readS32(&cnx) || !buffer.readS32(&vbs)) {
+    // To minimize the number of reads done a structure with the counts is used.
+    struct {
+      int32_t pts, cnx, vbs;
+    } counts;
+    if (!buffer.read(&counts, sizeof(counts))) {
         return 0;
     }
 
-    const SkPoint* points = buffer.skipCount<SkPoint>(pts);
-    const SkScalar* conics = buffer.skipCount<SkScalar>(cnx);
-    const uint8_t* verbs = buffer.skipCount<uint8_t>(vbs);
+    const SkPoint* points = buffer.skipCount<SkPoint>(counts.pts);
+    const SkScalar* conics = buffer.skipCount<SkScalar>(counts.cnx);
+    const uint8_t* verbs = buffer.skipCount<uint8_t>(counts.vbs);
     buffer.skipToAlign4();
     if (!buffer.isValid()) {
         return 0;
     }
     SkASSERT(buffer.pos() <= length);
 
-#define CHECK_POINTS_CONICS(p, c)       \
-    do {                                \
-        if (p && ((pts -= p) < 0)) {    \
-            return 0;                   \
-        }                               \
-        if (c && ((cnx -= c) < 0)) {    \
-            return 0;                   \
-        }                               \
-    } while (0)
-
-    int verbsStep = 1;
-    if (verbsAreReversed) {
-        verbs += vbs - 1;
-        verbsStep = -1;
-    }
-
-    SkPath tmp;
-    tmp.setFillType(extract_filltype(packed));
-    {
-      // Reserve the exact number of verbs and points needed.
-      SkPathRef::Editor(&tmp.fPathRef, vbs, pts);
-    }
-    for (int i = 0; i < vbs; ++i) {
-        switch (*verbs) {
-            case kMove_Verb:
-                CHECK_POINTS_CONICS(1, 0);
-                tmp.moveTo(*points++);
-                break;
-            case kLine_Verb:
-                CHECK_POINTS_CONICS(1, 0);
-                tmp.lineTo(*points++);
-                break;
-            case kQuad_Verb:
-                CHECK_POINTS_CONICS(2, 0);
-                tmp.quadTo(points[0], points[1]);
-                points += 2;
-                break;
-            case kConic_Verb:
-                CHECK_POINTS_CONICS(2, 1);
-                tmp.conicTo(points[0], points[1], *conics++);
-                points += 2;
-                break;
-            case kCubic_Verb:
-                CHECK_POINTS_CONICS(3, 0);
-                tmp.cubicTo(points[0], points[1], points[2]);
-                points += 3;
-                break;
-            case kClose_Verb:
-                tmp.close();
-                break;
-            default:
-                return 0;   // bad verb
+    if (counts.vbs == 0) {
+        if (counts.pts == 0 && counts.cnx == 0) {
+            reset();
+            setFillType(extract_filltype(packed));
+            return buffer.pos();
         }
-        verbs += verbsStep;
-    }
-#undef CHECK_POINTS_CONICS
-    if (pts || cnx) {
-        return 0;   // leftover points and/or conics
+        // No verbs but points and/or conic weights is a not a valid path.
+        return 0;
     }
 
-    *this = std::move(tmp);
+    SkAutoMalloc reversedStorage;
+    if (!verbsAreForward) SK_UNLIKELY {
+      uint8_t* tmpVerbs = (uint8_t*)reversedStorage.reset(counts.vbs);
+        for (int i = 0; i < counts.vbs; ++i) {
+            tmpVerbs[i] = verbs[counts.vbs - i - 1];
+        }
+        verbs = tmpVerbs;
+    }
+
+    SkPathVerbAnalysis analysis = sk_path_analyze_verbs(verbs, counts.vbs);
+    if (!analysis.valid || analysis.points != counts.pts || analysis.weights != counts.cnx) {
+        return 0;
+    }
+    *this = SkPathPriv::MakePath(analysis, points, verbs, counts.vbs, conics,
+                                 extract_filltype(packed), false);
     return buffer.pos();
 }

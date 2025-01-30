@@ -6,7 +6,9 @@ use log::LevelFilter;
 
 use crate::net::PingUploader;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// The default server pings are sent to.
 pub(crate) const DEFAULT_GLEAN_ENDPOINT: &str = "https://incoming.telemetry.mozilla.org";
@@ -40,12 +42,22 @@ pub struct Configuration {
     pub log_level: Option<LevelFilter>,
     /// The rate pings may be uploaded before they are throttled.
     pub rate_limit: Option<crate::PingRateLimit>,
-    /// (Experimental) Whether to add a wallclock timestamp to all events.
+    /// Whether to add a wallclock timestamp to all events.
     pub enable_event_timestamps: bool,
     /// An experimentation identifier derived by the application to be sent with all pings, it should
     /// be noted that this has an underlying StringMetric and so should conform to the limitations that
     /// StringMetric places on length, etc.
     pub experimentation_id: Option<String>,
+    /// Whether to enable internal pings. Default: true
+    pub enable_internal_pings: bool,
+    /// A ping schedule map.
+    /// Maps a ping name to a list of pings to schedule along with it.
+    /// Only used if the ping's own ping schedule list is empty.
+    pub ping_schedule: HashMap<String, Vec<String>>,
+    /// Write count threshold when to auto-flush. `0` disables it.
+    pub ping_lifetime_threshold: usize,
+    /// After what time to auto-flush. 0 disables it.
+    pub ping_lifetime_max_time: Duration,
 }
 
 /// Configuration builder.
@@ -86,12 +98,22 @@ pub struct Builder {
     /// Optional: The internal ping upload rate limit.
     /// Default: `None`
     pub rate_limit: Option<crate::PingRateLimit>,
-    /// (Experimental) Whether to add a wallclock timestamp to all events.
+    /// Whether to add a wallclock timestamp to all events.
     pub enable_event_timestamps: bool,
     /// An experimentation identifier derived by the application to be sent with all pings, it should
     /// be noted that this has an underlying StringMetric and so should conform to the limitations that
     /// StringMetric places on length, etc.
     pub experimentation_id: Option<String>,
+    /// Whether to enable internal pings. Default: true
+    pub enable_internal_pings: bool,
+    /// A ping schedule map.
+    /// Maps a ping name to a list of pings to schedule along with it.
+    /// Only used if the ping's own ping schedule list is empty.
+    pub ping_schedule: HashMap<String, Vec<String>>,
+    /// Write count threshold when to auto-flush. `0` disables it.
+    pub ping_lifetime_threshold: usize,
+    /// After what time to auto-flush. 0 disables it.
+    pub ping_lifetime_max_time: Duration,
 }
 
 impl Builder {
@@ -115,6 +137,10 @@ impl Builder {
             rate_limit: None,
             enable_event_timestamps: true,
             experimentation_id: None,
+            enable_internal_pings: true,
+            ping_schedule: HashMap::new(),
+            ping_lifetime_threshold: 0,
+            ping_lifetime_max_time: Duration::ZERO,
         }
     }
 
@@ -134,6 +160,10 @@ impl Builder {
             rate_limit: self.rate_limit,
             enable_event_timestamps: self.enable_event_timestamps,
             experimentation_id: self.experimentation_id,
+            enable_internal_pings: self.enable_internal_pings,
+            ping_schedule: self.ping_schedule,
+            ping_lifetime_threshold: self.ping_lifetime_threshold,
+            ping_lifetime_max_time: self.ping_lifetime_max_time,
         }
     }
 
@@ -182,6 +212,30 @@ impl Builder {
     /// Set whether to add a wallclock timestamp to all events (experimental).
     pub fn with_experimentation_id(mut self, value: String) -> Self {
         self.experimentation_id = Some(value);
+        self
+    }
+
+    /// Set whether to enable internal pings.
+    pub fn with_internal_pings(mut self, value: bool) -> Self {
+        self.enable_internal_pings = value;
+        self
+    }
+
+    /// Set the ping schedule map.
+    pub fn with_ping_schedule(mut self, value: HashMap<String, Vec<String>>) -> Self {
+        self.ping_schedule = value;
+        self
+    }
+
+    /// Write count threshold when to auto-flush. `0` disables it.
+    pub fn with_ping_lifetime_threshold(mut self, value: usize) -> Self {
+        self.ping_lifetime_threshold = value;
+        self
+    }
+
+    /// After what time to auto-flush. 0 disables it.
+    pub fn with_ping_lifetime_max_time(mut self, value: Duration) -> Self {
+        self.ping_lifetime_max_time = value;
         self
     }
 }

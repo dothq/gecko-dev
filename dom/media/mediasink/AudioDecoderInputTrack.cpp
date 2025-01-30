@@ -176,7 +176,7 @@ void AudioDecoderInputTrack::DispatchPushBatchedDataIfNeeded() {
         }
         PushBatchedDataIfNeeded();
       },
-      []() { MOZ_DIAGNOSTIC_ASSERT(false); });
+      []() { MOZ_DIAGNOSTIC_CRASH("DispatchPushBatchedDataIfNeeded reject"); });
 }
 
 void AudioDecoderInputTrack::PushBatchedDataIfNeeded() {
@@ -621,6 +621,9 @@ void AudioDecoderInputTrack::EnsureTimeStretcher() {
   AssertOnGraphThread();
   if (!mTimeStretcher) {
     mTimeStretcher = new RLBoxSoundTouch();
+    MOZ_RELEASE_ASSERT(mTimeStretcher);
+    MOZ_RELEASE_ASSERT(mTimeStretcher->Init());
+
     mTimeStretcher->setSampleRate(Graph()->GraphRate());
     mTimeStretcher->setChannels(GetChannelCountForTimeStretcher());
     mTimeStretcher->setPitch(1.0);

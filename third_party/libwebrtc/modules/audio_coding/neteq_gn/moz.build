@@ -18,15 +18,15 @@ DEFINES["WEBRTC_MOZILLA_BUILD"] = True
 DEFINES["WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS"] = "0"
 DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 
@@ -44,6 +44,7 @@ UNIFIED_SOURCES += [
     "/third_party/libwebrtc/modules/audio_coding/neteq/cross_correlation.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/decision_logic.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/decoder_database.cc",
+    "/third_party/libwebrtc/modules/audio_coding/neteq/delay_constraints.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/delay_manager.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/dsp_helper.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/dtmf_buffer.cc",
@@ -58,7 +59,6 @@ UNIFIED_SOURCES += [
     "/third_party/libwebrtc/modules/audio_coding/neteq/packet.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/packet_arrival_history.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/packet_buffer.cc",
-    "/third_party/libwebrtc/modules/audio_coding/neteq/post_decode_vad.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/preemptive_expand.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/random_vector.cc",
     "/third_party/libwebrtc/modules/audio_coding/neteq/red_payload_splitter.cc",

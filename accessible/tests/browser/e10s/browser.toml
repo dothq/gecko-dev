@@ -10,15 +10,12 @@ support-files = [
   "doc_treeupdate_whitespace.html",
   "fonts/Ahem.sjs",
   "!/accessible/tests/browser/shared-head.js",
-  "!/accessible/tests/browser/*.jsm",
   "!/accessible/tests/mochitest/*.js",
   "!/accessible/tests/mochitest/events/slow_image.sjs",
   "!/accessible/tests/mochitest/letters.gif",
   "!/accessible/tests/mochitest/moz.png",
 ]
 prefs = [
-  "javascript.options.asyncstack_capture_debuggee_only=false",
-  "dom.element.popover.enabled=true",
   "accessibility.ARIAElementReflection.enabled=true"
 ]
 
@@ -32,6 +29,7 @@ prefs = [
 ["browser_caching_description.js"]
 
 ["browser_caching_document_props.js"]
+https_first_disabled = true
 
 ["browser_caching_domnodeid.js"]
 

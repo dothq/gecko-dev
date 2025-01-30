@@ -1,4 +1,3 @@
-// |reftest| skip -- set-methods is not supported
 // Copyright (C) 2023 Anthony Frehner and Kevin Gibbons. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---
@@ -18,8 +17,6 @@ assert.throws(
   TypeError,
   () => {
     new Set.prototype.isSupersetOf();
-  },
-  "`new Set.prototype.isSupersetOf()` throws TypeError"
-);
+  });
 
 reportCompare(0, 0);

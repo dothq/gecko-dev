@@ -232,16 +232,13 @@ add_task(async function test_import_chromefavicon() {
   });
 
   info("Set favicon");
-  await new Promise(resolve => {
-    PlacesUtils.favicons.setAndFetchFaviconForPage(
-      PAGE_URI,
-      CHROME_FAVICON_URI,
-      true,
-      PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-      resolve,
-      Services.scriptSecurityManager.getSystemPrincipal()
-    );
-  });
+  let dataURL =
+    await PlacesTestUtils.getFaviconDataURLFromNetwork(CHROME_FAVICON_URI);
+  await PlacesTestUtils.setFaviconForPage(
+    PAGE_URI,
+    CHROME_FAVICON_URI,
+    dataURL
+  );
 
   let data = await new Promise(resolve => {
     PlacesUtils.favicons.getFaviconDataForPage(
@@ -266,16 +263,13 @@ add_task(async function test_import_chromefavicon() {
 
   info("Set favicon");
   // Change the favicon to check it's really imported again later.
-  await new Promise(resolve => {
-    PlacesUtils.favicons.setAndFetchFaviconForPage(
-      PAGE_URI,
-      CHROME_FAVICON_URI_2,
-      true,
-      PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-      resolve,
-      Services.scriptSecurityManager.getSystemPrincipal()
-    );
-  });
+  let dataURL_2 =
+    await PlacesTestUtils.getFaviconDataURLFromNetwork(CHROME_FAVICON_URI_2);
+  await PlacesTestUtils.setFaviconForPage(
+    PAGE_URI,
+    CHROME_FAVICON_URI_2,
+    dataURL_2
+  );
 
   info("import from html");
   await PlacesUtils.bookmarks.eraseEverything();
@@ -366,13 +360,14 @@ function checkItem(aExpected, aNode) {
         case "url":
           Assert.equal(aNode.uri, aExpected.url);
           break;
-        case "icon":
+        case "icon": {
           let { data } = await getFaviconDataForPage(aExpected.url);
           let base64Icon =
             "data:image/png;base64," +
             base64EncodeString(String.fromCharCode.apply(String, data));
           Assert.ok(base64Icon == aExpected.icon);
           break;
+        }
         case "keyword": {
           let entry = await PlacesUtils.keywords.fetch({ url: aNode.uri });
           Assert.equal(entry.keyword, aExpected.keyword);
@@ -383,7 +378,7 @@ function checkItem(aExpected, aNode) {
           Assert.equal(entry.postData, aExpected.postData);
           break;
         }
-        case "charset":
+        case "charset": {
           let pageInfo = await PlacesUtils.history.fetch(aNode.uri, {
             includeAnnotations: true,
           });
@@ -392,10 +387,11 @@ function checkItem(aExpected, aNode) {
             aExpected.charset
           );
           break;
+        }
         case "feedUrl":
           // No more supported.
           break;
-        case "children":
+        case "children": {
           let folder = aNode.QueryInterface(
             Ci.nsINavHistoryContainerResultNode
           );
@@ -409,6 +405,7 @@ function checkItem(aExpected, aNode) {
 
           folder.containerOpen = false;
           break;
+        }
         default:
           throw new Error("Unknown property");
       }

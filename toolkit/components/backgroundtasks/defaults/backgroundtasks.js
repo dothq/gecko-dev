@@ -55,4 +55,7 @@ pref("app.update.background.automaticRestartEnabled", true);
 pref("app.update.background.automaticRestartEnabled", false);
 #endif
 
-pref("defaultAgent.cppFallback.enabled", false);
+#if defined(ENABLE_TESTS)
+  // Test prefs to verify background tasks override gecko prefs correctly.
+  pref("toolkit.backgroundtasks.tests.geckoPrefsOverriden", 28);
+#endif

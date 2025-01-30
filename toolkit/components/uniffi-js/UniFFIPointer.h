@@ -33,18 +33,18 @@ class UniFFIPointer final : public nsISupports, public nsWrapperCache {
 
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
-  nsISupports* GetParentObject() { return nullptr; }
+  nsISupports* GetParentObject() {
+    return xpc::NativeGlobal(xpc::PrivilegedJunkScope());
+  }
 
   /**
-   * returns the raw pointer `UniFFIPointer` holds
-   * This is safe because:
-   * - The pointer was allocated in Rust as a reference counted `Arc<T>`
-   * - Rust cloned the pointer without destructing it when passed into C++
-   * - Eventually, when the destructor of `UniFFIPointer` runs, we return
-   * ownership to Rust, which then decrements the count and deallocates the
-   * memory the pointer points to.
+   * Clone the raw pointer that `UniFFIPointer` holds
+   *
+   * Use this when lowering the pointer to pass it across the FFI, for example:
+   *   - When calling a method
+   *   - When passing the object as an argument to a function
    */
-  void* GetPtr() const;
+  void* ClonePtr() const;
 
   /**
    * Returns true if the pointer type `this` holds is the same as the argument

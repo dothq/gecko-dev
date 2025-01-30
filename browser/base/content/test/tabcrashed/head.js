@@ -4,6 +4,11 @@ const { TelemetryTestUtils } = ChromeUtils.importESModule(
   "resource://testing-common/TelemetryTestUtils.sys.mjs"
 );
 
+/* eslint-disable mozilla/no-redeclare-with-import-autofix */
+const { ContentTaskUtils } = ChromeUtils.importESModule(
+  "resource://testing-common/ContentTaskUtils.sys.mjs"
+);
+
 /**
  * Returns a Promise that resolves once a crash report has
  * been submitted. This function will also test the crash
@@ -78,6 +83,16 @@ function promiseCrashReport(expectedExtra = {}) {
   })();
 }
 
+function promiseCrashReportFail() {
+  return (async function () {
+    info("Starting wait on crash-report-status");
+    await TestUtils.topicObserved("crash-report-status", (unused, data) => {
+      return data == "failed";
+    });
+    info("Topic observed!");
+  })();
+}
+
 /**
  * For an nsIPropertyBag, returns the value for a given
  * key.
@@ -117,7 +132,7 @@ async function setupLocalCrashReportServer() {
   // reports.  This test needs them enabled.  The test also needs a mock
   // report server, and fortunately one is already set up by toolkit/
   // crashreporter/test/Makefile.in.  Assign its URL to MOZ_CRASHREPORTER_URL,
-  // which CrashSubmit.jsm uses as a server override.
+  // which CrashSubmit.sys.mjs uses as a server override.
   let noReport = Services.env.get("MOZ_CRASHREPORTER_NO_REPORT");
   let serverUrl = Services.env.get("MOZ_CRASHREPORTER_URL");
   Services.env.set("MOZ_CRASHREPORTER_NO_REPORT", "");
@@ -135,7 +150,7 @@ async function setupLocalCrashReportServer() {
  */
 function prepareNoDump() {
   let originalGetDumpID = TabCrashHandler.getDumpID;
-  TabCrashHandler.getDumpID = function (browser) {
+  TabCrashHandler.getDumpID = function () {
     return null;
   };
   registerCleanupFunction(() => {
@@ -151,16 +166,28 @@ function setBuildidMatchDontSendEnv() {
 }
 
 function unsetBuildidMatchDontSendEnv() {
-  info("Setting " + kBuildidMatchEnv + "=0");
+  info("Unsetting " + kBuildidMatchEnv);
   Services.env.set(kBuildidMatchEnv, "0");
 }
 
+const kBuildidMismatchEnv = "MOZ_FORCE_BUILDID_MISMATCH";
+
+function setBuildidMismatchEnv() {
+  info("Setting " + kBuildidMismatchEnv + "=1");
+  Services.env.set(kBuildidMismatchEnv, "1");
+}
+
+function unsetBuildidMismatchEnv() {
+  info("Unsetting " + kBuildidMismatchEnv);
+  Services.env.set(kBuildidMismatchEnv, "0");
+}
+
 function getEventPromise(eventName, eventKind) {
-  return new Promise(function (resolve, reject) {
+  return new Promise(function (resolve) {
     info("Installing event listener (" + eventKind + ")");
     window.addEventListener(
       eventName,
-      event => {
+      () => {
         ok(true, "Received " + eventName + " (" + eventKind + ") event");
         info("Call resolve() for " + eventKind + " event");
         resolve();
@@ -169,15 +196,6 @@ function getEventPromise(eventName, eventKind) {
     );
     info("Installed event listener (" + eventKind + ")");
   });
-}
-
-async function ensureBuildID() {
-  let profD = Services.dirsvc.get("GreD", Ci.nsIFile);
-  let platformIniOrig = await IOUtils.readUTF8(
-    PathUtils.join(profD.path, "platform.ini")
-  );
-  let buildID = Services.appinfo.platformBuildID;
-  return platformIniOrig.indexOf(buildID) > 0;
 }
 
 async function openNewTab(forceCrash) {
@@ -211,9 +229,47 @@ async function closeTab(tab) {
   BrowserTestUtils.removeTab(tab);
 }
 
-function getFalsePositiveTelemetry() {
-  const scalars = TelemetryTestUtils.getProcessScalars("parent");
-  return scalars["dom.contentprocess.buildID_mismatch_false_positive"];
+const kInterval = 100; /* ms */
+const kRetries = 5;
+
+/**
+ * This function waits until utility scalars are reported into the
+ * scalar snapshot.
+ */
+async function waitForProcessScalars(name) {
+  await ContentTaskUtils.waitForCondition(
+    () => {
+      const scalars = TelemetryTestUtils.getProcessScalars("parent");
+      return Object.keys(scalars).includes(name);
+    },
+    `Waiting for ${name} scalars to have been set`,
+    kInterval,
+    kRetries
+  );
+}
+
+async function getTelemetry(name) {
+  try {
+    await waitForProcessScalars(name);
+    const scalars = TelemetryTestUtils.getProcessScalars("parent");
+    return scalars[name];
+  } catch (ex) {
+    const msg = `Waiting for ${name} scalars to have been set`;
+    if (ex.indexOf(msg) === 0) {
+      return undefined;
+    }
+    throw ex;
+  }
+}
+
+async function getFalsePositiveTelemetry() {
+  return await getTelemetry(
+    "dom.contentprocess.buildID_mismatch_false_positive"
+  );
+}
+
+async function getTrueMismatchTelemetry() {
+  return await getTelemetry("dom.contentprocess.buildID_mismatch");
 }
 
 // The logic bound to dom.ipc.processPrelaunch.enabled will react to value

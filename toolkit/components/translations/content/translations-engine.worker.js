@@ -6,6 +6,7 @@
 
 /**
  * @typedef {import("../translations").Bergamot} Bergamot
+ * @typedef {import("../translations").TranslationModelPayload} TranslationModelPayload
  * @typedef {import("../translations").LanguageTranslationModelFiles} LanguageTranslationModelFiles
  */
 
@@ -44,6 +45,81 @@ const MODEL_FILE_ALIGNMENTS = {
 };
 
 /**
+ * This regex matches the whitespace before and after a text, so that it is preserved.
+ */
+const WHITESPACE_REGEX = /^(\s*)(.*?)(\s*)$/s;
+//                                         /s  Include newlines in .*
+//                         (^^^)     (^^^)     Match the whitespace at the beginning and end.
+//                              (^^^)          Non-greedily match the text (including newlines).
+
+/**
+ * At the time of writing, the Intl.Segmenter has a less-than-ideal segmentation pattern when
+ * a Left Double Quotation Mark (U+201C) is preceded by a full-width punctuation mark, in which
+ * it fails to segment the quotation mark with the sentence it logically belongs to.
+ *
+ * Example Source Text:
+ *   - 这是第一句话。“这是第二句话。”
+ *
+ * Expected Segmentation:
+ *   - Object { index: 0, segment: 这是第一句话。 }
+ *   - Object { index: 7, segment: “这是第二句话。” }
+ *
+ * Actual Segmentation:
+ *   - Object { index: 0, segment: 这是第一句话。“ }
+ *   - Object { index: 8, segment: 这是第二句话。” }
+ *
+ * By inserting a space between the full-width punctuation and the Left Double Quotation Mark,
+ * we can trick the segmenter into breaking the sentence at the correct location.
+ *
+ * This code may be able to be removed with further upstream improvements to Intl.Segmenter.
+ * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/Segmenter
+ */
+const FULL_WIDTH_PUNCTUATION_REGEX = /([。！？])“/g;
+
+/**
+ * A list of languages that utilize full-width punctuation as described by the regex above.
+ * https://www.unicode.org/charts/PDF/U3000.pdf
+ *
+ * @see {FULL_WIDTH_PUNCTUATION_REGEX}
+ */
+const FULL_WIDTH_PUNCTUATION_LANGUAGE_TAGS = ["ja", "ko", "zh"];
+
+/**
+ * Do any cleaning steps for the text that are required before sending it into
+ * the translation engine.
+ *
+ * @param {string} sourceLanguage - The BCP-47 language tag for the source language.
+ * @param {string} sourceText - The source text to be cleaned.
+ * @returns {{ whitespaceBefore: string, whitespaceAfter: string, cleanedSourceText: string }}
+ */
+function cleanText(sourceLanguage, sourceText) {
+  // Whitespace at the beginning or end can confuse translations, but can affect the
+  // presentation of the final result.
+  const result = WHITESPACE_REGEX.exec(sourceText);
+  if (!result) {
+    throw new Error("The whitespace regex should always return a result.");
+  }
+  const whitespaceBefore = result[1];
+  const whitespaceAfter = result[3];
+  let cleanedSourceText = result[2];
+
+  // Remove any soft hyphens, as they will break tokenization.
+  cleanedSourceText = cleanedSourceText.replaceAll("\u00AD", "");
+
+  if (FULL_WIDTH_PUNCTUATION_LANGUAGE_TAGS.includes(sourceLanguage)) {
+    // Add a space to full-width punctuation when it precedes a Left Double Quotation Mark
+    // (U+201C) to trick the Intl.Segmenter algorithm into breaking a sentence there.
+    /** @see {FULL_WIDTH_PUNCTUATION_REGEX} for a detailed description. */
+    cleanedSourceText = cleanedSourceText.replaceAll(
+      FULL_WIDTH_PUNCTUATION_REGEX,
+      "$1 “"
+    );
+  }
+
+  return { whitespaceBefore, whitespaceAfter, cleanedSourceText };
+}
+
+/**
  * Initialize the engine, and get it ready to handle translation requests.
  * The "initialize" message must be received before any other message handling
  * requests will be processed.
@@ -80,7 +156,8 @@ async function handleInitializationMessage({ data }) {
       // The engine is testing mode, and no Bergamot wasm is available.
       engine = new MockedEngine(fromLanguage, toLanguage);
     } else {
-      const { bergamotWasmArrayBuffer, languageModelFiles } = enginePayload;
+      const { bergamotWasmArrayBuffer, translationModelPayloads } =
+        enginePayload;
       const bergamot = await BergamotUtils.initializeWasm(
         bergamotWasmArrayBuffer
       );
@@ -88,7 +165,7 @@ async function handleInitializationMessage({ data }) {
         fromLanguage,
         toLanguage,
         bergamot,
-        languageModelFiles
+        translationModelPayloads
       );
     }
 
@@ -130,21 +207,34 @@ function handleMessages(engine) {
 
       switch (data.type) {
         case "translation-request": {
-          const { sourceText, messageId, isHTML, innerWindowId } = data;
+          const {
+            sourceText,
+            messageId,
+            translationId,
+            isHTML,
+            innerWindowId,
+          } = data;
           if (discardPromise) {
             // Wait for messages to be discarded if there are any.
             await discardPromise;
           }
           try {
+            const { whitespaceBefore, whitespaceAfter, cleanedSourceText } =
+              cleanText(engine.fromLanguage, sourceText);
+
             // Add a translation to the work queue, and when it returns, post the message
             // back. The translation may never return if the translations are discarded
             // before it have time to be run. In this case this await is just never
             // resolved, and the postMessage is never run.
-            const targetText = await engine.translate(
-              sourceText,
+            let targetText = await engine.translate(
+              cleanedSourceText,
               isHTML,
-              innerWindowId
+              innerWindowId,
+              translationId
             );
+
+            // Ensure the whitespace is retained.
+            targetText = whitespaceBefore + targetText + whitespaceAfter;
 
             // This logging level can be very verbose and slow, so only do it under the
             // "Trace" level, which is the most verbose. Set the logging level to "Info" to avoid
@@ -159,6 +249,7 @@ function handleMessages(engine) {
             postMessage({
               type: "translation-response",
               targetText,
+              translationId,
               messageId,
             });
           } catch (error) {
@@ -197,6 +288,13 @@ function handleMessages(engine) {
           });
           break;
         }
+        case "cancel-single-translation": {
+          engine.discardSingleTranslation(
+            data.innerWindowId,
+            data.translationId
+          );
+          break;
+        }
         default:
           console.warn("Unknown message type:", data.type);
       }
@@ -223,14 +321,9 @@ class Engine {
    * @param {string} fromLanguage
    * @param {string} toLanguage
    * @param {Bergamot} bergamot
-   * @param {Array<LanguageTranslationModelFiles>} languageTranslationModelFiles
+   * @param {Array<TranslationModelPayload>} translationModelPayloads
    */
-  constructor(
-    fromLanguage,
-    toLanguage,
-    bergamot,
-    languageTranslationModelFiles
-  ) {
+  constructor(fromLanguage, toLanguage, bergamot, translationModelPayloads) {
     /** @type {string} */
     this.fromLanguage = fromLanguage;
     /** @type {string} */
@@ -238,11 +331,11 @@ class Engine {
     /** @type {Bergamot} */
     this.bergamot = bergamot;
     /** @type {Bergamot["TranslationModel"][]} */
-    this.languageTranslationModels = languageTranslationModelFiles.map(
-      languageTranslationModelFiles =>
+    this.languageTranslationModels = translationModelPayloads.map(
+      translationModelPayload =>
         BergamotUtils.constructSingleTranslationModel(
           bergamot,
-          languageTranslationModelFiles
+          translationModelPayload
         )
     );
 
@@ -263,11 +356,12 @@ class Engine {
    * @param {string} sourceText
    * @param {boolean} isHTML
    * @param {number} innerWindowId - This is required
+   * @param {number} translationId
    *
    * @returns {Promise<string>}sourceText
    */
-  translate(sourceText, isHTML, innerWindowId) {
-    return this.#getWorkQueue(innerWindowId).runTask(() =>
+  translate(sourceText, isHTML, innerWindowId, translationId) {
+    return this.#getWorkQueue(innerWindowId).runTask(translationId, () =>
       this.#syncTranslate(sourceText, isHTML, innerWindowId)
     );
   }
@@ -310,6 +404,20 @@ class Engine {
   }
 
   /**
+   * Cancels any in-progress translations by removing the work queue.
+   *
+   * @param {number} innerWindowId
+   * @param {number} translationId
+   */
+  discardSingleTranslation(innerWindowId, translationId) {
+    const workQueue = this.#workQueues.get(innerWindowId);
+    if (workQueue) {
+      trace("Discarding translation with translationId", translationId);
+      workQueue.cancelTask(translationId);
+    }
+  }
+
+  /**
    * Run the translation models to perform a translation. This
    * blocks the worker thread until it is completed.
    *
@@ -321,7 +429,6 @@ class Engine {
   #syncTranslate(sourceText, isHTML, innerWindowId) {
     const startTime = performance.now();
     let response;
-    sourceText = sourceText.trim();
     const { messages, options } = BergamotUtils.getTranslationArgs(
       this.bergamot,
       sourceText,
@@ -380,27 +487,26 @@ class BergamotUtils {
    * Construct a single translation model.
    *
    * @param {Bergamot} bergamot
-   * @param {LanguageTranslationModelFiles} languageTranslationModelFiles
+   * @param {TranslationModelPayload} translationModelPayload
    * @returns {Bergamot["TranslationModel"]}
    */
-  static constructSingleTranslationModel(
-    bergamot,
-    languageTranslationModelFiles
-  ) {
+  static constructSingleTranslationModel(bergamot, translationModelPayload) {
     log(`Constructing translation model.`);
+    const { sourceLanguage, targetLanguage, languageModelFiles } =
+      translationModelPayload;
 
     const { model, lex, vocab, qualityModel, srcvocab, trgvocab } =
-      BergamotUtils.allocateModelMemory(
-        bergamot,
-        languageTranslationModelFiles
-      );
+      BergamotUtils.allocateModelMemory(bergamot, languageModelFiles);
 
     // Transform the bytes to mb, like "10.2mb"
     const getMemory = memory => `${Math.floor(memory.size() / 100_000) / 10}mb`;
 
     let memoryLog = `Model memory sizes in wasm heap:`;
     memoryLog += `\n  Model: ${getMemory(model)}`;
-    memoryLog += `\n  Shortlist: ${getMemory(lex)}`;
+
+    if (lex) {
+      memoryLog += `\n  Shortlist: ${getMemory(lex)}`;
+    }
 
     // Set up the vocab list, which could either be a single "vocab" model, or a
     // "srcvocab" and "trgvocab" pair.
@@ -434,10 +540,11 @@ class BergamotUtils {
       "cpu-threads": "0",
       quiet: "true",
       "quiet-translation": "true",
-      "gemm-precision":
-        languageTranslationModelFiles.model.record.name.endsWith("intgemm8.bin")
-          ? "int8shiftAll"
-          : "int8shiftAlphaAll",
+      "gemm-precision": languageModelFiles.model.record.name.endsWith(
+        "intgemm8.bin"
+      )
+        ? "int8shiftAll"
+        : "int8shiftAlphaAll",
       alignment: "soft",
     });
 
@@ -445,9 +552,11 @@ class BergamotUtils {
     log(memoryLog);
 
     return new bergamot.TranslationModel(
+      sourceLanguage,
+      targetLanguage,
       config,
       model,
-      lex,
+      lex ?? null,
       vocabList,
       qualityModel ?? null
     );
@@ -458,16 +567,14 @@ class BergamotUtils {
    * to. This function copies over the model blobs into this memory space.
    *
    * @param {Bergamot} bergamot
-   * @param {LanguageTranslationModelFiles} languageTranslationModelFiles
+   * @param {LanguageTranslationModelFiles} languageModelFiles
    * @returns {LanguageTranslationModelFilesAligned}
    */
-  static allocateModelMemory(bergamot, languageTranslationModelFiles) {
+  static allocateModelMemory(bergamot, languageModelFiles) {
     /** @type {LanguageTranslationModelFilesAligned} */
     const results = {};
 
-    for (const [fileType, file] of Object.entries(
-      languageTranslationModelFiles
-    )) {
+    for (const [fileType, file] of Object.entries(languageModelFiles)) {
       const alignment = MODEL_FILE_ALIGNMENTS[fileType];
       if (!alignment) {
         throw new Error(`Unknown file type: "${fileType}"`);
@@ -561,14 +668,13 @@ class BergamotUtils {
    * JS objects need to be translated into wasm objects to configure the translation engine.
    *
    * @param {Bergamot} bergamot
-   * @param {string[]} sourceText
+   * @param {string} sourceText
    * @returns {{ messages: Bergamot["VectorString"], options: Bergamot["VectorResponseOptions"] }}
    */
   static getTranslationArgs(bergamot, sourceText, isHTML) {
     const messages = new bergamot.VectorString();
     const options = new bergamot.VectorResponseOptions();
 
-    sourceText = sourceText.trim();
     // Empty paragraphs break the translation.
     if (sourceText) {
       messages.push_back(sourceText);
@@ -625,8 +731,13 @@ class WorkQueue {
   #TIME_BUDGET = 100; // ms
   #RUN_IMMEDIATELY_COUNT = 20;
 
-  /** @type {Array<{task: Function, resolve: Function}>} */
-  #tasks = [];
+  /**
+   * This is the list of work to be done. While it is a Map, it is treated as a FIFO
+   * queue, but with work that can be canceled via the translationId.
+   *
+   * @type {Map<number, {task: Function, resolve: Function}>}
+   */
+  #tasksByTranslationId = new Map();
   #isRunning = false;
   #isWorkCancelled = false;
   #runImmediately = this.#RUN_IMMEDIATELY_COUNT;
@@ -641,11 +752,12 @@ class WorkQueue {
   /**
    * Run the task and return the result.
    *
-   * @template {T}
+   * @template {any} T
+   * @param {number} translationId
    * @param {() => T} task
    * @returns {Promise<T>}
    */
-  runTask(task) {
+  runTask(translationId, task) {
     if (this.#runImmediately > 0) {
       // Run the first N translations immediately, most likely these are the user-visible
       // translations on the page, as they are sent in first. The setTimeout of 0 can
@@ -654,9 +766,16 @@ class WorkQueue {
       return Promise.resolve(task());
     }
     return new Promise((resolve, reject) => {
-      this.#tasks.push({ task, resolve, reject });
+      this.#tasksByTranslationId.set(translationId, { task, resolve, reject });
       this.#run().catch(error => console.error(error));
     });
+  }
+
+  /**
+   * @param {number} translationId
+   */
+  cancelTask(translationId) {
+    this.#tasksByTranslationId.delete(translationId);
   }
 
   /**
@@ -682,7 +801,7 @@ class WorkQueue {
       );
     };
 
-    while (this.#tasks.length !== 0) {
+    while (this.#tasksByTranslationId.size) {
       if (this.#isWorkCancelled) {
         // The work was already cancelled.
         break;
@@ -702,12 +821,20 @@ class WorkQueue {
       }
 
       // Check this between every `await`.
-      if (this.#isWorkCancelled || !this.#tasks.length) {
+      if (this.#isWorkCancelled || !this.#tasksByTranslationId.size) {
         break;
       }
 
       tasksInBatch++;
-      const { task, resolve, reject } = this.#tasks.shift();
+
+      // Treat the `this.#tasksByTranslationId` Map as a FIFO queue, and take the oldest
+      // item out by manually using the `entries()` iterator.
+      const [translationId, taskAndResolvers] = this.#tasksByTranslationId
+        .entries()
+        .next().value;
+      const { task, resolve, reject } = taskAndResolvers;
+      this.#tasksByTranslationId.delete(translationId);
+
       try {
         const result = await task();
 
@@ -727,7 +854,7 @@ class WorkQueue {
 
   async cancelWork() {
     this.#isWorkCancelled = true;
-    this.#tasks = [];
+    this.#tasksByTranslationId = new Map();
     await new Promise(resolve => setTimeout(resolve, 0));
     this.#isWorkCancelled = false;
   }

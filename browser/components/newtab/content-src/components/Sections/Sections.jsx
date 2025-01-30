@@ -2,10 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import { Card, PlaceholderCard } from "content-src/components/Card/Card";
 import { CollapsibleSection } from "content-src/components/CollapsibleSection/CollapsibleSection";
 import { ComponentPerfTimer } from "content-src/components/ComponentPerfTimer/ComponentPerfTimer";
@@ -14,7 +11,6 @@ import { connect } from "react-redux";
 import { MoreRecommendations } from "content-src/components/MoreRecommendations/MoreRecommendations";
 import { PocketLoggedInCta } from "content-src/components/PocketLoggedInCta/PocketLoggedInCta";
 import React from "react";
-import { Topics } from "content-src/components/Topics/Topics";
 import { TopSites } from "content-src/components/TopSites/TopSites";
 
 const VISIBLE = "visible";
@@ -33,7 +29,7 @@ export class Section extends React.PureComponent {
     let cardsPerRow = CARDS_PER_ROW_DEFAULT;
     if (
       props.compactCards &&
-      global.matchMedia(`(min-width: 1072px)`).matches
+      globalThis.matchMedia(`(min-width: 1072px)`).matches
     ) {
       // If the section has compact cards and the viewport is wide enough, we show
       // 4 columns instead of 3.
@@ -171,7 +167,6 @@ export class Section extends React.PureComponent {
       title,
       rows,
       Pocket,
-      topics,
       emptyState,
       dispatch,
       compactCards,
@@ -197,26 +192,10 @@ export class Section extends React.PureComponent {
     const { pocketCta, isUserLoggedIn } = Pocket || {};
     const { useCta } = pocketCta || {};
 
-    // Don't display anything until we have a definitve result from Pocket,
-    // to avoid a flash of logged out state while we render.
-    const isPocketLoggedInDefined =
-      isUserLoggedIn === true || isUserLoggedIn === false;
-
-    const hasTopics = topics && !!topics.length;
-
     const shouldShowPocketCta =
       id === "topstories" && useCta && isUserLoggedIn === false;
 
-    // Show topics only for top stories and if it has loaded with topics.
-    // The classs .top-stories-bottom-container ensures content doesn't shift as things load.
-    const shouldShowTopics =
-      id === "topstories" &&
-      hasTopics &&
-      ((useCta && isUserLoggedIn === true) ||
-        (!useCta && isPocketLoggedInDefined));
-
-    // We use topics to determine language support for read more.
-    const shouldShowReadMore = read_more_endpoint && hasTopics;
+    const shouldShowReadMore = read_more_endpoint;
 
     const realRows = rows.slice(0, maxCards);
 
@@ -298,12 +277,6 @@ export class Section extends React.PureComponent {
           )}
           {id === "topstories" && (
             <div className="top-stories-bottom-container">
-              {shouldShowTopics && (
-                <div className="wrapper-topics">
-                  <Topics topics={this.props.topics} />
-                </div>
-              )}
-
               {shouldShowPocketCta && (
                 <div className="wrapper-cta">
                   <PocketLoggedInCta />
@@ -326,7 +299,7 @@ export class Section extends React.PureComponent {
 }
 
 Section.defaultProps = {
-  document: global.document,
+  document: globalThis.document,
   rows: [],
   emptyState: {},
   pref: {},

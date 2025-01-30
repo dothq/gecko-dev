@@ -21,6 +21,9 @@ process-type-extension = Extension
 # process used to open file:// URLs
 process-type-file = Local File
 
+# process used to instantiate new child processes
+process-type-forkserver = Fork Server
+
 # process used to isolate a webpage from other web pages
 # to improve security
 process-type-webisolated = Isolated Web Content
@@ -48,6 +51,9 @@ process-type-socket = Socket
 
 # process used to decode media
 process-type-rdd = RDD
+
+# process used to run inference
+process-type-inference = Inference
 
 # process used to run some IPC actor in their own sandbox
 process-type-utility = Sandboxed IPC Actor

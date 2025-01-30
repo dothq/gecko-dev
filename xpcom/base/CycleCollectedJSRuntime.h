@@ -272,7 +272,7 @@ class CycleCollectedJSRuntime {
 
   // Trace gray JS roots until budget is exceeded and return whether we
   // finished.
-  static bool TraceGrayJS(JSTracer* aTracer, js::SliceBudget& budget,
+  static bool TraceGrayJS(JSTracer* aTracer, JS::SliceBudget& budget,
                           void* aData);
 
   static void GCCallback(JSContext* aContext, JSGCStatus aStatus,
@@ -289,16 +289,16 @@ class CycleCollectedJSRuntime {
   static void* BeforeWaitCallback(uint8_t* aMemory);
   static void AfterWaitCallback(void* aCookie);
 
-  virtual void TraceNativeBlackRoots(JSTracer* aTracer){};
+  virtual void TraceNativeBlackRoots(JSTracer* aTracer) {};
 
 #ifdef NS_BUILD_REFCNT_LOGGING
   void TraceAllNativeGrayRoots(JSTracer* aTracer);
 #endif
 
   bool TraceNativeGrayRoots(JSTracer* aTracer, JSHolderMap::WhichHolders aWhich,
-                            js::SliceBudget& aBudget);
+                            JS::SliceBudget& aBudget);
   bool TraceJSHolders(JSTracer* aTracer, JSHolderMap::Iter& aIter,
-                      js::SliceBudget& aBudget);
+                      JS::SliceBudget& aBudget);
 
  public:
   enum DeferredFinalizeType {
@@ -414,7 +414,7 @@ class CycleCollectedJSRuntime {
   // storage), because we do not want to keep it alive.  nsWrapperCache handles
   // this for us via its "object moved" handling.
   void NurseryWrapperAdded(nsWrapperCache* aCache);
-  void JSObjectsTenured();
+  void JSObjectsTenured(JS::GCContext* aGCContext);
 
   void DeferredFinalize(DeferredFinalizeAppendFunction aAppendFunc,
                         DeferredFinalizeFunction aFunc, void* aThing);
@@ -473,8 +473,9 @@ class CycleCollectedJSRuntime {
   OOMState mLargeAllocationFailureState;
 
   static const size_t kSegmentSize = 512;
-  SegmentedVector<nsWrapperCache*, kSegmentSize, InfallibleAllocPolicy>
-      mNurseryObjects;
+  using NurseryObjectsVector =
+      SegmentedVector<nsWrapperCache*, kSegmentSize, InfallibleAllocPolicy>;
+  NurseryObjectsVector mNurseryObjects;
 
   nsTHashSet<JS::Zone*> mZonesWaitingForGC;
 
@@ -501,7 +502,7 @@ class CycleCollectedJSRuntime {
     // complicated garbage-collection scenarios, e.g. a JSContext being killed
     // while we still hold onto an exception thrown from it.
     struct ErrorDetails {
-      nsString mFilename;
+      nsCString mFilename;
       nsString mMessage;
       nsString mStack;
       JSExnType mType;

@@ -1,5 +1,8 @@
 {%- let inner_type_name = inner_type|type_name(ci) %}
 
+/**
+ * @suppress
+ */
 public object {{ ffi_converter_name }}: FfiConverterRustBuffer<List<{{ inner_type_name }}>> {
     override fun read(buf: ByteBuffer): List<{{ inner_type_name }}> {
         val len = buf.getInt()
@@ -8,15 +11,15 @@ public object {{ ffi_converter_name }}: FfiConverterRustBuffer<List<{{ inner_typ
         }
     }
 
-    override fun allocationSize(value: List<{{ inner_type_name }}>): Int {
-        val sizeForLength = 4
+    override fun allocationSize(value: List<{{ inner_type_name }}>): ULong {
+        val sizeForLength = 4UL
         val sizeForItems = value.map { {{ inner_type|allocation_size_fn }}(it) }.sum()
         return sizeForLength + sizeForItems
     }
 
     override fun write(value: List<{{ inner_type_name }}>, buf: ByteBuffer) {
         buf.putInt(value.size)
-        value.forEach {
+        value.iterator().forEach {
             {{ inner_type|write_fn }}(it, buf)
         }
     }

@@ -28,7 +28,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.sys.mjs",
   DragPositionManager: "resource:///modules/DragPositionManager.sys.mjs",
-  SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
   URILoadingHelper: "resource:///modules/URILoadingHelper.sys.mjs",
 });
 ChromeUtils.defineLazyGetter(lazy, "gWidgetsBundle", function () {
@@ -63,14 +62,14 @@ var gTab;
 function closeGlobalTab() {
   let win = gTab.ownerGlobal;
   if (win.gBrowser.browsers.length == 1) {
-    win.BrowserOpenTab();
+    win.BrowserCommands.openTab();
   }
   win.gBrowser.removeTab(gTab, { animate: true });
   gTab = null;
 }
 
 var gTabsProgressListener = {
-  onLocationChange(aBrowser, aWebProgress, aRequest, aLocation, aFlags) {
+  onLocationChange(aBrowser, aWebProgress, aRequest, aLocation) {
     // Tear down customize mode when the customize mode tab loads some other page.
     // Customize mode will be re-entered if "about:blank" is loaded again, so
     // don't tear down in this case.
@@ -117,6 +116,9 @@ export function CustomizeMode(aWindow) {
       container.lastChild
     );
   }
+
+  this._attachEventListeners();
+
   // There are two palettes - there's the palette that can be overlayed with
   // toolbar items in browser.xhtml. This is invisible, and never seen by the
   // user. Then there's the visible palette, which gets populated and displayed
@@ -169,13 +171,13 @@ CustomizeMode.prototype = {
     "cmd_newNavigatorTabNoEvent",
     "cmd_close",
     "cmd_closeWindow",
+    "cmd_minimizeWindow",
     "cmd_quitApplication",
     "View:FullScreen",
     "Browser:NextTab",
     "Browser:PrevTab",
     "Browser:NewUserContextTab",
     "Tools:PrivateBrowsing",
-    "minimizeWindow",
     "zoomWindow",
   ]),
 
@@ -221,7 +223,6 @@ CustomizeMode.prototype = {
     gTab = aTab;
 
     gTab.setAttribute("customizemode", "true");
-    lazy.SessionStore.persistTabAttribute("customizemode");
 
     if (gTab.linkedPanel) {
       gTab.linkedBrowser.stop();
@@ -349,7 +350,7 @@ CustomizeMode.prototype = {
       document.getElementById("mainPopupSet").appendChild(panelContextMenu);
       panelHolder.appendChild(window.PanelUI.overflowFixedList);
 
-      window.PanelUI.overflowFixedList.setAttribute("customizing", true);
+      window.PanelUI.overflowFixedList.toggleAttribute("customizing", true);
       window.PanelUI.menuButton.disabled = true;
       document.getElementById("nav-bar-overflow-button").disabled = true;
 
@@ -362,13 +363,13 @@ CustomizeMode.prototype = {
 
       this._wrapToolbarItemSync(CustomizableUI.AREA_TABSTRIP);
 
-      this.document.documentElement.setAttribute("customizing", true);
+      this.document.documentElement.toggleAttribute("customizing", true);
 
       let customizableToolbars = document.querySelectorAll(
         "toolbar[customizable=true]:not([autohide=true], [collapsed=true])"
       );
       for (let toolbar of customizableToolbars) {
-        toolbar.setAttribute("customizing", true);
+        toolbar.toggleAttribute("customizing", true);
       }
 
       this._updateOverflowPanelArrowOffset();
@@ -663,7 +664,7 @@ CustomizeMode.prototype = {
     });
   },
 
-  async addToToolbar(aNode, aReason) {
+  async addToToolbar(aNode) {
     aNode = this._getCustomizableChildForNode(aNode);
     if (aNode.localName == "toolbarpaletteitem" && aNode.firstElementChild) {
       aNode = aNode.firstElementChild;
@@ -1271,26 +1272,22 @@ CustomizeMode.prototype = {
 
   _onToolbarVisibilityChange(aEvent) {
     let toolbar = aEvent.target;
-    if (
-      aEvent.detail.visible &&
-      toolbar.getAttribute("customizable") == "true"
-    ) {
-      toolbar.setAttribute("customizing", "true");
-    } else {
-      toolbar.removeAttribute("customizing");
-    }
+    toolbar.toggleAttribute(
+      "customizing",
+      aEvent.detail.visible && toolbar.getAttribute("customizable") == "true"
+    );
     this._onUIChange();
   },
 
-  onWidgetMoved(aWidgetId, aArea, aOldPosition, aNewPosition) {
+  onWidgetMoved() {
     this._onUIChange();
   },
 
-  onWidgetAdded(aWidgetId, aArea, aPosition) {
+  onWidgetAdded() {
     this._onUIChange();
   },
 
-  onWidgetRemoved(aWidgetId, aArea) {
+  onWidgetRemoved() {
     this._onUIChange();
   },
 
@@ -1378,7 +1375,7 @@ CustomizeMode.prototype = {
   },
 
   openAddonsManagerThemes() {
-    this.window.BrowserOpenAddonsMgr("addons://list/theme");
+    this.window.BrowserAddonUI.openAddonsMgr("addons://list/theme");
   },
 
   getMoreThemes(aEvent) {
@@ -1649,7 +1646,7 @@ CustomizeMode.prototype = {
     delete this.paletteDragHandler;
   },
 
-  observe(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic) {
     switch (aTopic) {
       case "nsPref:changed":
         this._updateResetButton();
@@ -1677,7 +1674,7 @@ CustomizeMode.prototype = {
   },
 
   _canDrawInTitlebar() {
-    return this.window.TabsInTitlebar.systemSupported;
+    return this.window.CustomTitlebar.systemSupported;
   },
 
   _ensureCustomizationPanels() {
@@ -1686,6 +1683,128 @@ CustomizeMode.prototype = {
 
     let wrapper = this.$("customModeWrapper");
     wrapper.replaceWith(wrapper.content);
+  },
+
+  _attachEventListeners() {
+    let container = this.$("customization-container");
+
+    container.addEventListener("command", event => {
+      switch (event.target.id) {
+        case "customization-titlebar-visibility-checkbox":
+          // NB: because command fires after click, by the time we've fired, the checkbox binding
+          //     will already have switched the button's state, so this is correct:
+          this.toggleTitlebar(event.target.checked);
+          break;
+        case "customization-uidensity-menuitem-compact":
+        case "customization-uidensity-menuitem-normal":
+        case "customization-uidensity-menuitem-touch":
+          this.setUIDensity(event.target.mode);
+          break;
+        case "customization-uidensity-autotouchmode-checkbox":
+          this.updateAutoTouchMode(event.target.checked);
+          break;
+        case "whimsy-button":
+          this.togglePong(event.target.checked);
+          break;
+        case "customization-touchbar-button":
+          this.customizeTouchBar();
+          break;
+        case "customization-undo-reset-button":
+          this.undoReset();
+          break;
+        case "customization-reset-button":
+          this.reset();
+          break;
+        case "customization-done-button":
+          this.exit();
+          break;
+      }
+    });
+
+    container.addEventListener("popupshowing", event => {
+      switch (event.target.id) {
+        case "customization-toolbar-menu":
+          this.window.ToolbarContextMenu.onViewToolbarsPopupShowing(event);
+          break;
+        case "customization-uidensity-menu":
+          this.onUIDensityMenuShowing();
+          break;
+      }
+    });
+
+    let updateDensity = event => {
+      switch (event.target.id) {
+        case "customization-uidensity-menuitem-compact":
+        case "customization-uidensity-menuitem-normal":
+        case "customization-uidensity-menuitem-touch":
+          this.updateUIDensity(event.target.mode);
+      }
+    };
+    let densityMenu = this.document.getElementById(
+      "customization-uidensity-menu"
+    );
+    densityMenu.addEventListener("focus", updateDensity);
+    densityMenu.addEventListener("mouseover", updateDensity);
+
+    let resetDensity = event => {
+      switch (event.target.id) {
+        case "customization-uidensity-menuitem-compact":
+        case "customization-uidensity-menuitem-normal":
+        case "customization-uidensity-menuitem-touch":
+          this.resetUIDensity();
+      }
+    };
+    densityMenu.addEventListener("blur", resetDensity);
+    densityMenu.addEventListener("mouseout", resetDensity);
+
+    this.$("customization-lwtheme-link").addEventListener("click", () => {
+      this.openAddonsManagerThemes();
+    });
+
+    this.$(kPaletteItemContextMenu).addEventListener("popupshowing", event => {
+      this.onPaletteContextMenuShowing(event);
+    });
+
+    this.$(kPaletteItemContextMenu).addEventListener("command", event => {
+      switch (event.target.id) {
+        case "customizationPaletteItemContextMenuAddToToolbar":
+          this.addToToolbar(
+            event.target.parentNode.triggerNode,
+            "palette-context"
+          );
+          break;
+        case "customizationPaletteItemContextMenuAddToPanel":
+          this.addToPanel(
+            event.target.parentNode.triggerNode,
+            "palette-context"
+          );
+          break;
+      }
+    });
+
+    let autohidePanel = this.$(kDownloadAutohidePanelId);
+    autohidePanel.addEventListener("popupshown", event => {
+      this._downloadPanelAutoHideTimeout = this.window.setTimeout(
+        () => event.target.hidePopup(),
+        4000
+      );
+    });
+    autohidePanel.addEventListener("mouseover", () => {
+      this.window.clearTimeout(this._downloadPanelAutoHideTimeout);
+    });
+    autohidePanel.addEventListener("mouseout", event => {
+      this._downloadPanelAutoHideTimeout = this.window.setTimeout(
+        () => event.target.hidePopup(),
+        2000
+      );
+    });
+    autohidePanel.addEventListener("popuphidden", () => {
+      this.window.clearTimeout(this._downloadPanelAutoHideTimeout);
+    });
+
+    this.$(kDownloadAutohideCheckboxId).addEventListener("command", event => {
+      this.onDownloadsAutoHideChange(event);
+    });
   },
 
   _updateTitlebarCheckbox() {
@@ -2329,7 +2448,7 @@ CustomizeMode.prototype = {
     }
   },
 
-  _setGridDragActive(aDragOverNode, aDraggedItem, aValue) {
+  _setGridDragActive(aDragOverNode, aDraggedItem) {
     let targetArea = this._getCustomizableParent(aDragOverNode);
     let draggedWrapper = this.$("wrapper-" + aDraggedItem.id);
     let originArea = this._getCustomizableParent(draggedWrapper);
@@ -2428,7 +2547,7 @@ CustomizeMode.prototype = {
     return aElement.closest(areas.map(a => "#" + CSS.escape(a)).join(","));
   },
 
-  _getDragOverNode(aEvent, aAreaElement, aAreaType, aDraggedItemId) {
+  _getDragOverNode(aEvent, aAreaElement, aAreaType) {
     let expectedParent =
       CustomizableUI.getCustomizationTarget(aAreaElement) || aAreaElement;
     if (!expectedParent.contains(aEvent.target)) {
@@ -2472,7 +2591,7 @@ CustomizeMode.prototype = {
     doc.documentElement.setAttribute("customizing-movingItem", true);
     let item = this._getWrapper(aEvent.target);
     if (item) {
-      item.setAttribute("mousedown", "true");
+      item.toggleAttribute("mousedown", true);
     }
   },
 

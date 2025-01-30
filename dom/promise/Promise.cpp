@@ -108,8 +108,13 @@ already_AddRefed<Promise> Promise::CreateInfallible(
   RefPtr<Promise> p = new Promise(aGlobal);
   IgnoredErrorResult rv;
   p->CreateWrapper(rv, aPropagateUserInteraction);
-  if (rv.Failed() && rv.ErrorCodeIs(NS_ERROR_OUT_OF_MEMORY)) {
-    MOZ_CRASH("Out of memory");
+  if (rv.Failed()) {
+    if (rv.ErrorCodeIs(NS_ERROR_OUT_OF_MEMORY)) {
+      NS_ABORT_OOM(0);  // (0 meaning unknown size)
+    }
+    if (rv.ErrorCodeIs(NS_ERROR_NOT_INITIALIZED)) {
+      MOZ_CRASH("Failed to create promise wrapper for unknown non-OOM reason");
+    }
   }
 
   // We may have failed to init the wrapper here, because nsIGlobalObject had
@@ -292,8 +297,10 @@ void Promise::CreateWrapper(
   JSContext* cx = jsapi.cx();
   mPromiseObj = JS::NewPromiseObject(cx, nullptr);
   if (!mPromiseObj) {
+    nsresult error = JS_IsThrowingOutOfMemory(cx) ? NS_ERROR_OUT_OF_MEMORY
+                                                  : NS_ERROR_NOT_INITIALIZED;
     JS_ClearPendingException(cx);
-    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+    aRv.Throw(error);
     return;
   }
   if (aPropagateUserInteraction == ePropagateUserInteraction) {
@@ -719,12 +726,11 @@ void Promise::MaybeRejectWithClone(JSContext* aCx,
 
 // A WorkerRunnable to resolve/reject the Promise on the worker thread.
 // Calling thread MUST hold PromiseWorkerProxy's mutex before creating this.
-class PromiseWorkerProxyRunnable final : public WorkerRunnable {
+class PromiseWorkerProxyRunnable final : public WorkerThreadRunnable {
  public:
   PromiseWorkerProxyRunnable(PromiseWorkerProxy* aPromiseWorkerProxy,
                              PromiseWorkerProxy::RunCallbackFunc aFunc)
-      : WorkerRunnable(aPromiseWorkerProxy->GetWorkerPrivate(),
-                       "PromiseWorkerProxyRunnable", WorkerThread),
+      : WorkerThreadRunnable("PromiseWorkerProxyRunnable"),
         mPromiseWorkerProxy(aPromiseWorkerProxy),
         mFunc(aFunc) {
     MOZ_ASSERT(NS_IsMainThread());
@@ -735,7 +741,6 @@ class PromiseWorkerProxyRunnable final : public WorkerRunnable {
                          WorkerPrivate* aWorkerPrivate) override {
     MOZ_ASSERT(aWorkerPrivate);
     aWorkerPrivate->AssertIsOnWorkerThread();
-    MOZ_ASSERT(aWorkerPrivate == mWorkerPrivate);
 
     MOZ_ASSERT(mPromiseWorkerProxy);
     RefPtr<Promise> workerPromise = mPromiseWorkerProxy->GetWorkerPromise();
@@ -862,7 +867,7 @@ void PromiseWorkerProxy::RunCallback(JSContext* aCx,
   RefPtr<PromiseWorkerProxyRunnable> runnable =
       new PromiseWorkerProxyRunnable(this, aFunc);
 
-  runnable->Dispatch();
+  runnable->Dispatch(GetWorkerPrivate());
 }
 
 void PromiseWorkerProxy::ResolvedCallback(JSContext* aCx,

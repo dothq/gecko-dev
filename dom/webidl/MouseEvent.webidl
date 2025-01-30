@@ -19,23 +19,23 @@ interface MouseEvent : UIEvent {
               optional MouseEventInit mouseEventInitDict = {});
 
   [NeedsCallerType]
-  readonly attribute long           screenX;
+  readonly attribute double         screenX;
   [NeedsCallerType]
-  readonly attribute long           screenY;
+  readonly attribute double         screenY;
 
   [ChromeOnly]
   readonly attribute nsIScreen?     screen;
 
-  readonly attribute long           pageX;
-  readonly attribute long           pageY;
-  readonly attribute long           clientX;
-  readonly attribute long           clientY;
+  readonly attribute double         pageX;
+  readonly attribute double         pageY;
+  readonly attribute double         clientX;
+  readonly attribute double         clientY;
   [BinaryName="clientX"]
-  readonly attribute long           x;
+  readonly attribute double         x;
   [BinaryName="clientY"]
-  readonly attribute long           y;
-  readonly attribute long           offsetX;
-  readonly attribute long           offsetY;
+  readonly attribute double         y;
+  readonly attribute double         offsetX;
+  readonly attribute double         offsetY;
   readonly attribute boolean        ctrlKey;
   readonly attribute boolean        shiftKey;
   readonly attribute boolean        altKey;
@@ -72,10 +72,10 @@ interface MouseEvent : UIEvent {
 // Suggested initMouseEvent replacement initializer:
 dictionary MouseEventInit : EventModifierInit {
   // Attributes for MouseEvent:
-  long           screenX       = 0;
-  long           screenY       = 0;
-  long           clientX       = 0;
-  long           clientY       = 0;
+  double         screenX       = 0.0;
+  double         screenY       = 0.0;
+  double         clientX       = 0.0;
+  double         clientY       = 0.0;
   short          button        = 0;
   // Note: "buttons" was not previously initializable through initMouseEvent!
   unsigned short buttons       = 0;
@@ -92,7 +92,7 @@ partial interface MouseEvent
   // Finger or touch pressure event value
   // ranges between 0.0 and 1.0
   // TODO: Remove mozPressure. (bug 1534199)
-  [Deprecated="MouseEvent_MozPressure"]
+  [NeedsCallerType, Deprecated="MouseEvent_MozPressure"]
   readonly attribute float mozPressure;
 
   const unsigned short    MOZ_SOURCE_UNKNOWN    = 0;
@@ -103,10 +103,10 @@ partial interface MouseEvent
   const unsigned short    MOZ_SOURCE_TOUCH      = 5;
   const unsigned short    MOZ_SOURCE_KEYBOARD   = 6;
 
-  [ChromeOnly]
+  [NeedsCallerType, ChromeOnly]
   readonly attribute unsigned short inputSource;
 
-  [Deprecated="MozInputSource", BinaryName="inputSource"]
+  [NeedsCallerType, Deprecated="MozInputSource", BinaryName="inputSource"]
   readonly attribute unsigned short mozInputSource;
 
   // TODO: Remove initNSMouseEvent. (bug 1165213)

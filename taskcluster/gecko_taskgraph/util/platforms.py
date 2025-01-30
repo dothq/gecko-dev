@@ -14,7 +14,7 @@ _renames = {"win": "windows"}
 
 
 _archive_formats = {
-    "linux": ".tar.bz2",
+    "linux": ".tar.xz",
     "macosx": ".tar.gz",
     "windows": ".zip",
 }
@@ -27,7 +27,8 @@ _executable_extension = {
 
 _architectures = {
     r"linux\b.*": "x86",
-    r"linux64\b.*": "x86_64",
+    r"linux64\b(?!-aarch64).*": "x86_64",
+    r"linux64-aarch64\b.*": "aarch64",
     r"macosx64\b.*": "macos-x86_64-aarch64",
     r"win32\b.*": "x86",
     r"win64\b(?!-aarch64).*": "x86_64",

@@ -8,7 +8,7 @@ use api::{
 };
 use api::units::*;
 use crate::scene_building::{CreateShadow, IsVisible};
-use crate::frame_builder::{FrameBuildingState};
+use crate::frame_builder::FrameBuildingState;
 use crate::gpu_cache::GpuDataRequest;
 use crate::intern;
 use crate::internal_types::LayoutPrimitiveInfo;
@@ -144,7 +144,6 @@ impl InternablePrimitive for LineDecoration {
         _key: LineDecorationKey,
         data_handle: LineDecorationDataHandle,
         _: &mut PrimitiveStore,
-        _reference_frame_relative_offset: LayoutVector2D,
     ) -> PrimitiveInstanceKind {
         PrimitiveInstanceKind::LineDecoration {
             data_handle,

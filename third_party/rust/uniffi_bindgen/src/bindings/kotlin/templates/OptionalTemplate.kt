@@ -1,5 +1,8 @@
 {%- let inner_type_name = inner_type|type_name(ci) %}
 
+/**
+ * @suppress
+ */
 public object {{ ffi_converter_name }}: FfiConverterRustBuffer<{{ inner_type_name }}?> {
     override fun read(buf: ByteBuffer): {{ inner_type_name }}? {
         if (buf.get().toInt() == 0) {
@@ -8,11 +11,11 @@ public object {{ ffi_converter_name }}: FfiConverterRustBuffer<{{ inner_type_nam
         return {{ inner_type|read_fn }}(buf)
     }
 
-    override fun allocationSize(value: {{ inner_type_name }}?): Int {
+    override fun allocationSize(value: {{ inner_type_name }}?): ULong {
         if (value == null) {
-            return 1
+            return 1UL
         } else {
-            return 1 + {{ inner_type|allocation_size_fn }}(value)
+            return 1UL + {{ inner_type|allocation_size_fn }}(value)
         }
     }
 

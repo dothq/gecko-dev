@@ -18,6 +18,13 @@ XPCOMUtils.defineLazyServiceGetter(
   Ci.nsIContentAnalysis
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "_contentAnalysisClipboardEnabled",
+  "browser.contentanalysis.interception_point.clipboard.enabled",
+  true
+);
+
 // imported by adjustableTitle.js loaded in the same context:
 /* globals PromptUtils */
 
@@ -38,46 +45,46 @@ function commonDialogOnLoad() {
   let needIconifiedHeader =
     args.modalType == Ci.nsIPrompt.MODAL_TYPE_CONTENT ||
     ["promptUserAndPass", "promptPassword"].includes(args.promptType) ||
-    args.headerIconURL;
+    args.headerIconCSSValue;
   let root = document.documentElement;
   if (needIconifiedHeader) {
     root.setAttribute("neediconheader", "true");
   }
   let title = { raw: args.title };
-  let { promptPrincipal } = args;
-  if (promptPrincipal) {
-    if (promptPrincipal.isNullPrincipal) {
-      title = { l10nId: "common-dialog-title-null" };
-    } else if (promptPrincipal.isSystemPrincipal) {
-      title = { l10nId: "common-dialog-title-system" };
-      root.style.setProperty(
-        "--icon-url",
-        "url('chrome://branding/content/icon32.png')"
-      );
-    } else if (promptPrincipal.addonPolicy) {
-      title.raw = promptPrincipal.addonPolicy.name;
-    } else if (promptPrincipal.isContentPrincipal) {
-      try {
-        title.raw = promptPrincipal.URI.displayHostPort;
-      } catch (ex) {
-        // hostPort getter can throw, e.g. for about URIs.
-        title.raw = promptPrincipal.originNoSuffix;
+  let { useTitle, promptPrincipal } = args;
+  if (!useTitle) {
+    if (promptPrincipal) {
+      if (promptPrincipal.isNullPrincipal) {
+        title = { l10nId: "common-dialog-title-null" };
+      } else if (promptPrincipal.isSystemPrincipal) {
+        title = { l10nId: "common-dialog-title-system" };
+        root.style.setProperty("--icon-url", CommonDialog.DEFAULT_APP_ICON_CSS);
+      } else if (promptPrincipal.addonPolicy) {
+        title.raw = promptPrincipal.addonPolicy.name;
+      } else if (promptPrincipal.isContentPrincipal) {
+        try {
+          title.raw = promptPrincipal.URI.displayHostPort;
+        } catch (ex) {
+          // hostPort getter can throw, e.g. for about URIs.
+          title.raw = promptPrincipal.originNoSuffix;
+        }
+        // hostPort can be empty for file URIs.
+        if (!title.raw) {
+          title.raw = promptPrincipal.prePath;
+        }
+      } else {
+        title = { l10nId: "common-dialog-title-unknown" };
       }
-      // hostPort can be empty for file URIs.
-      if (!title.raw) {
-        title.raw = promptPrincipal.prePath;
-      }
-    } else {
-      title = { l10nId: "common-dialog-title-unknown" };
+    } else if (args.authOrigin) {
+      title = { raw: args.authOrigin };
     }
-  } else if (args.authOrigin) {
-    title = { raw: args.authOrigin };
   }
-  if (args.headerIconURL) {
-    root.style.setProperty("--icon-url", `url('${args.headerIconURL}')`);
+  if (args.headerIconCSSValue) {
+    root.style.setProperty("--icon-url", args.headerIconCSSValue);
   }
   // Fade and crop potentially long raw titles, e.g., origins and hostnames.
-  title.shouldUseMaskFade = title.raw && (args.authOrigin || promptPrincipal);
+  title.shouldUseMaskFade =
+    !useTitle && title.raw && (args.authOrigin || promptPrincipal);
   root.setAttribute("headertitle", JSON.stringify(title));
   if (args.isInsecureAuth) {
     dialog.setAttribute("insecureauth", "true");
@@ -103,6 +110,10 @@ function commonDialogOnLoad() {
     button0: dialog.getButton("accept"),
     focusTarget: window,
   };
+
+  if (args.isExtra1Secondary) {
+    dialog.setAttribute("extra1-is-secondary", true);
+  }
 
   Dialog = new CommonDialog(args, ui);
   window.addEventListener("dialogclosing", function (aEvent) {
@@ -137,7 +148,7 @@ function commonDialogOnLoad() {
   if (lazy.gContentAnalysis.isActive && args.owningBrowsingContext?.isContent) {
     ui.loginTextbox?.addEventListener("paste", async event => {
       let data = event.clipboardData.getData("text/plain");
-      if (data?.length > 0) {
+      if (data?.length > 0 && lazy._contentAnalysisClipboardEnabled) {
         // Prevent the paste from happening until content analysis returns a response
         event.preventDefault();
         // Selections can be forward or backward, so use min/max
@@ -157,8 +168,11 @@ function commonDialogOnLoad() {
               requestToken: Services.uuid.generateUUID().toString(),
               resources: [],
               analysisType: Ci.nsIContentAnalysisRequest.eBulkDataEntry,
+              reason: Ci.nsIContentAnalysisRequest.eClipboardPaste,
               operationTypeForDisplay: Ci.nsIContentAnalysisRequest.eClipboard,
-              url: args.owningBrowsingContext.currentURI,
+              url: lazy.gContentAnalysis.getURIForBrowsingContext(
+                args.owningBrowsingContext
+              ),
               textContent: data,
               windowGlobalParent:
                 args.owningBrowsingContext.currentWindowContext,

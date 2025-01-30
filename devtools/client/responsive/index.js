@@ -6,8 +6,8 @@
 
 "use strict";
 
-const { BrowserLoader } = ChromeUtils.import(
-  "resource://devtools/shared/loader/browser-loader.js"
+const { BrowserLoader } = ChromeUtils.importESModule(
+  "resource://devtools/shared/loader/browser-loader.sys.mjs"
 );
 const { require } = BrowserLoader({
   baseURI: "resource://devtools/client/responsive/",
@@ -35,15 +35,12 @@ const {
 } = require("resource://devtools/client/responsive/actions/devices.js");
 const {
   addViewport,
-  changePixelRatio,
   removeDeviceAssociation,
   resizeViewport,
   zoomViewport,
 } = require("resource://devtools/client/responsive/actions/viewports.js");
 const {
   changeDisplayPixelRatio,
-  changeUserAgent,
-  toggleTouchSimulation,
 } = require("resource://devtools/client/responsive/actions/ui.js");
 
 // Exposed for use by tests
@@ -187,9 +184,6 @@ window.setViewportSize = ({ width, height }) => {
 window.clearDeviceAssociation = () => {
   try {
     bootstrap.dispatch(removeDeviceAssociation(0));
-    bootstrap.dispatch(toggleTouchSimulation(false));
-    bootstrap.dispatch(changePixelRatio(0, 0));
-    bootstrap.dispatch(changeUserAgent(""));
   } catch (e) {
     console.error(e);
   }

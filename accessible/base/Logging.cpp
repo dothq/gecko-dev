@@ -21,6 +21,7 @@
 #include "nsIDocShellTreeItem.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/StackWalk.h"
 #include "mozilla/ToString.h"
 #include "mozilla/dom/BorrowedAttrInfo.h"
@@ -73,7 +74,7 @@ static void EnableLogging(const char* aModulesStr) {
   const char* token = aModulesStr;
   while (*token != '\0') {
     size_t tokenLen = strcspn(token, ",");
-    for (unsigned int idx = 0; idx < ArrayLength(sModuleMap); idx++) {
+    for (unsigned int idx = 0; idx < std::size(sModuleMap); idx++) {
       if (strncmp(token, sModuleMap[idx].mStr, tokenLen) == 0) {
 #if !defined(MOZ_PROFILING) && (!defined(DEBUG) || defined(MOZ_OPTIMIZE))
         // Stack tracing on profiling enabled or debug not optimized builds.
@@ -194,12 +195,12 @@ static void LogPresShell(dom::Document* aDocumentNode) {
   PresShell* presShell = aDocumentNode->GetPresShell();
   printf("presshell: %p", static_cast<void*>(presShell));
 
-  nsIScrollableFrame* sf = nullptr;
+  ScrollContainerFrame* sf = nullptr;
   if (presShell) {
     printf(", is %s destroying", (presShell->IsDestroying() ? "" : "not"));
-    sf = presShell->GetRootScrollFrameAsScrollable();
+    sf = presShell->GetRootScrollContainerFrame();
   }
-  printf(", root scroll frame: %p", static_cast<void*>(sf));
+  printf(", root scroll container frame: %p", static_cast<void*>(sf));
 }
 
 static void LogDocLoadGroup(dom::Document* aDocumentNode) {
@@ -976,7 +977,7 @@ bool logging::IsEnabledAll(uint32_t aModules) {
 }
 
 bool logging::IsEnabled(const nsAString& aModuleStr) {
-  for (unsigned int idx = 0; idx < ArrayLength(sModuleMap); idx++) {
+  for (unsigned int idx = 0; idx < std::size(sModuleMap); idx++) {
     if (aModuleStr.EqualsASCII(sModuleMap[idx].mStr)) {
       return sModules & sModuleMap[idx].mModule;
     }

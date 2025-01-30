@@ -3,6 +3,11 @@
 # Any copyright is dedicated to the Public Domain.
 # http://creativecommons.org/publicdomain/zero/1.0/
 #
+# These tests are run before any xpcshell test is ran when the --self-test flag
+# is passed. To run these tests, run:
+# ./mach xpcshell-test --self-test
+# or use "mach test" with any xpcshell test file or directory:
+# ./mach test testing/modules/tests/xpcshell/test_assert.js --self-test
 
 import os
 import pprint
@@ -1139,7 +1144,6 @@ add_test({
         self.assertInLog("this_test_will_fail")
         self.assertInLog("run_next_test")
         self.assertInLog("run_test")
-        self.assertNotInLog("Task.jsm")
 
     def testAddTaskSkip(self):
         self.writeFile("test_tasks_skip.js", ADD_TASK_SKIP)

@@ -6,6 +6,7 @@
 #define __FFmpegLibWrapper_h__
 
 #include "mozilla/Attributes.h"
+#include "mozilla/DefineEnum.h"
 #include "mozilla/Types.h"
 #include "ffvpx/tx.h"
 
@@ -18,8 +19,8 @@ struct AVDictionary;
 struct AVCodecParserContext;
 struct PRLibrary;
 struct AVChannelLayout;
-#ifdef MOZ_WIDGET_GTK
 struct AVCodecHWConfig;
+#ifdef MOZ_WIDGET_GTK
 struct AVVAAPIHWConfig;
 struct AVHWFramesConstraints;
 #endif
@@ -36,46 +37,11 @@ struct MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FFmpegLibWrapper {
   // anyway.
   ~FFmpegLibWrapper() = default;
 
-  enum class LinkResult {
-    Success,
-    NoProvidedLib,
-    NoAVCodecVersion,
-    CannotUseLibAV57,
-    BlockedOldLibAVVersion,
-    UnknownFutureLibAVVersion,
-    UnknownFutureFFMpegVersion,
-    UnknownOlderFFMpegVersion,
-    MissingFFMpegFunction,
-    MissingLibAVFunction,
-  };
-
-  static const char* LinkResultToString(LinkResult aResult) {
-    switch (aResult) {
-      case LinkResult::Success:
-        return "Success";
-      case LinkResult::NoProvidedLib:
-        return "NoProvidedLib";
-      case LinkResult::NoAVCodecVersion:
-        return "NoAVCodecVersion";
-      case LinkResult::CannotUseLibAV57:
-        return "CannotUseLibAV57";
-      case LinkResult::BlockedOldLibAVVersion:
-        return "BlockedOldLibAVVersion";
-      case LinkResult::UnknownFutureLibAVVersion:
-        return "UnknownFutureLibAVVersion";
-      case LinkResult::UnknownFutureFFMpegVersion:
-        return "UnknownFutureFFMpegVersion";
-      case LinkResult::UnknownOlderFFMpegVersion:
-        return "UnknownOlderFFMpegVersion";
-      case LinkResult::MissingFFMpegFunction:
-        return "MissingFFMpegFunction";
-      case LinkResult::MissingLibAVFunction:
-        return "MissingLibAVFunction";
-      default:
-        break;
-    }
-    return "Unknown";
-  }
+  MOZ_DEFINE_ENUM_CLASS_WITH_TOSTRING_AT_CLASS_SCOPE(
+      LinkResult, (Success, NoProvidedLib, NoAVCodecVersion, CannotUseLibAV57,
+                   BlockedOldLibAVVersion, UnknownFutureLibAVVersion,
+                   UnknownFutureFFMpegVersion, UnknownOlderFFMpegVersion,
+                   MissingFFMpegFunction, MissingLibAVFunction));
 
   // Examine mAVCodecLib, mAVUtilLib and mVALib, and attempt to resolve
   // all symbols.
@@ -138,9 +104,11 @@ struct MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FFmpegLibWrapper {
                                      int flags);
 
   // libavcodec >= v57
-  AVPacket* (*av_packet_alloc)(void);
   void (*av_packet_unref)(AVPacket* pkt);
   void (*av_packet_free)(AVPacket** pkt);
+
+  // libavcodec >= 61
+  AVPacket* (*av_packet_alloc)();
 
   // libavcodec v58 and later only
   int (*avcodec_send_packet)(AVCodecContext* avctx, const AVPacket* avpkt);
@@ -161,11 +129,16 @@ struct MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FFmpegLibWrapper {
                                     int nb_channels);
   void (*av_channel_layout_from_mask)(AVChannelLayout* ch_layout,
                                       uint64_t mask);
+  int (*av_channel_layout_copy)(AVChannelLayout* dst, AVChannelLayout* src);
   int (*av_dict_set)(AVDictionary** pm, const char* key, const char* value,
                      int flags);
   void (*av_dict_free)(AVDictionary** m);
   int (*av_opt_set)(void* obj, const char* name, const char* val,
                     int search_flags);
+  int (*av_opt_set_double)(void* obj, const char* name, double val,
+                           int search_flags);
+  int (*av_opt_set_int)(void* obj, const char* name, int64_t val,
+                        int search_flags);
 
   // libavutil v55 and later only
   AVFrame* (*av_frame_alloc)();
@@ -184,23 +157,26 @@ struct MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FFmpegLibWrapper {
   int (*av_frame_get_colorspace)(const AVFrame* frame);
   int (*av_frame_get_color_range)(const AVFrame* frame);
 
-#ifdef MOZ_WIDGET_GTK
+  // libavcodec > 58
   const AVCodecHWConfig* (*avcodec_get_hw_config)(const AVCodec* codec,
                                                   int index);
+  // libavutil >= 58
   AVBufferRef* (*av_hwdevice_ctx_alloc)(int);
   int (*av_hwdevice_ctx_init)(AVBufferRef* ref);
+  AVBufferRef* (*av_hwframe_ctx_alloc)(AVBufferRef* device_ctx);
+  int (*av_hwframe_ctx_init)(AVBufferRef* ref);
+  AVBufferRef* (*av_buffer_ref)(AVBufferRef* buf);
+  void (*av_buffer_unref)(AVBufferRef** buf);
+
+#ifdef MOZ_WIDGET_GTK
   AVVAAPIHWConfig* (*av_hwdevice_hwconfig_alloc)(AVBufferRef* device_ctx);
   AVHWFramesConstraints* (*av_hwdevice_get_hwframe_constraints)(
       AVBufferRef* ref, const void* hwconfig);
   void (*av_hwframe_constraints_free)(AVHWFramesConstraints** constraints);
-
-  AVBufferRef* (*av_buffer_ref)(AVBufferRef* buf);
-  void (*av_buffer_unref)(AVBufferRef** buf);
   int (*av_hwframe_transfer_get_formats)(AVBufferRef* hwframe_ctx, int dir,
                                          int** formats, int flags);
   int (*av_hwdevice_ctx_create_derived)(AVBufferRef** dst_ctx, int type,
                                         AVBufferRef* src_ctx, int flags);
-  AVBufferRef* (*av_hwframe_ctx_alloc)(AVBufferRef* device_ctx);
   const char* (*avcodec_get_name)(int id);
   char* (*av_get_pix_fmt_string)(char* buf, int buf_size, int pix_fmt);
 

@@ -59,7 +59,7 @@ struct BGRAColor {
   }
 
   BGRAColor DeviceColor() const {
-    MOZ_ASSERT(!mPremultiplied);
+    MOZ_RELEASE_ASSERT(!mPremultiplied);
     if (msRGB) {
       gfx::DeviceColor color = gfx::ToDeviceColor(
           gfx::sRGBColor(float(mRed) / 255.0f, float(mGreen) / 255.0f,
@@ -72,8 +72,8 @@ struct BGRAColor {
   }
 
   BGRAColor sRGBColor() const {
-    MOZ_ASSERT(msRGB);
-    MOZ_ASSERT(!mPremultiplied);
+    MOZ_RELEASE_ASSERT(msRGB);
+    MOZ_RELEASE_ASSERT(!mPremultiplied);
     return *this;
   }
 
@@ -113,11 +113,13 @@ enum TestCaseFlags {
 
 struct ImageTestCase {
   ImageTestCase(const char* aPath, const char* aMimeType, gfx::IntSize aSize,
-                uint32_t aFlags = TEST_CASE_DEFAULT_FLAGS)
+                uint32_t aFlags = TEST_CASE_DEFAULT_FLAGS,
+                uint32_t aFrameCount = 1)
       : mPath(aPath),
         mMimeType(aMimeType),
         mSize(aSize),
         mOutputSize(aSize),
+        mFrameCount(aFrameCount),
         mFlags(aFlags),
         mSurfaceFlags(DefaultSurfaceFlags()),
         mColor(BGRAColor::Green()) {}
@@ -173,6 +175,7 @@ struct ImageTestCase {
   const char* mMimeType;
   gfx::IntSize mSize;
   gfx::IntSize mOutputSize;
+  uint32_t mFrameCount = 0;
   uint32_t mFlags;
   SurfaceFlags mSurfaceFlags;
   BGRAColor mColor;

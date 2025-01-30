@@ -141,14 +141,17 @@ void nsTableColGroupFrame::DidSetComputedStyle(
     ComputedStyle* aOldComputedStyle) {
   nsContainerFrame::DidSetComputedStyle(aOldComputedStyle);
 
-  if (!aOldComputedStyle)  // avoid this on init
+  if (!aOldComputedStyle) {  // avoid this on init
     return;
+  }
 
   nsTableFrame* tableFrame = GetTableFrame();
   if (tableFrame->IsBorderCollapse() &&
       tableFrame->BCRecalcNeeded(aOldComputedStyle, Style())) {
     int32_t colCount = GetColCount();
-    if (!colCount) return;  // this is a degenerated colgroup
+    if (!colCount) {
+      return;  // this is a degenerated colgroup
+    }
     TableArea damageArea(GetFirstColumn()->GetColIndex(), 0, colCount,
                          tableFrame->GetRowCount());
     tableFrame->AddBCDamageArea(damageArea);
@@ -259,8 +262,9 @@ void nsTableColGroupFrame::RemoveChild(DestroyContext& aContext,
       ResetColIndices(this, colIndex, nextChild);
     } else {
       nsIFrame* nextGroup = GetNextSibling();
-      if (nextGroup)  // reset next and all following colgroups
+      if (nextGroup) {  // reset next and all following colgroups
         ResetColIndices(nextGroup, colIndex);
+      }
     }
   }
 
@@ -315,10 +319,10 @@ nsIFrame::LogicalSides nsTableColGroupFrame::GetLogicalSkipSides() const {
   }
 
   if (GetPrevInFlow()) {
-    skip |= eLogicalSideBitsBStart;
+    skip += LogicalSide::BStart;
   }
   if (GetNextInFlow()) {
-    skip |= eLogicalSideBitsBEnd;
+    skip += LogicalSide::BEnd;
   }
   return skip;
 }
@@ -329,7 +333,6 @@ void nsTableColGroupFrame::Reflow(nsPresContext* aPresContext,
                                   nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableColGroupFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_ASSERTION(nullptr != mContent, "bad state -- null content for frame");
 
@@ -432,7 +435,9 @@ nsresult nsTableColGroupFrame::GetFrameName(nsAString& aResult) const {
 
 void nsTableColGroupFrame::Dump(int32_t aIndent) {
   char* indent = new char[aIndent + 1];
-  if (!indent) return;
+  if (!indent) {
+    return;
+  }
   for (int32_t i = 0; i < aIndent + 1; i++) {
     indent[i] = ' ';
   }

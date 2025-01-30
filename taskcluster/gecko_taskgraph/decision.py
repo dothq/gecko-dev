@@ -32,9 +32,10 @@ from taskgraph.util.yaml import load_yaml
 
 from . import GECKO
 from .actions import render_actions_json
+from .files_changed import get_changed_files
 from .parameters import get_app_version, get_version
 from .try_option_syntax import parse_message
-from .util.backstop import BACKSTOP_INDEX, is_backstop
+from .util.backstop import ANDROID_PERFTEST_BACKSTOP_INDEX, BACKSTOP_INDEX, is_backstop
 from .util.bugbug import push_schedules
 from .util.chunking import resolver
 from .util.hg import get_hg_commit_message, get_hg_revision_branch
@@ -91,13 +92,16 @@ PER_PROJECT_PARAMETERS = {
         "target_tasks_method": "mozilla_release_tasks",
         "release_type": "release",
     },
-    "mozilla-esr115": {
-        "target_tasks_method": "mozilla_esr115_tasks",
-        "release_type": "esr115",
+    "mozilla-esr128": {
+        "target_tasks_method": "mozilla_esr128_tasks",
+        "release_type": "esr128",
     },
     "pine": {
         "target_tasks_method": "pine_tasks",
         "release_type": "nightly-pine",
+    },
+    "cypress": {
+        "target_tasks_method": "cypress_tasks",
     },
     "larch": {
         "target_tasks_method": "larch_tasks",
@@ -227,12 +231,25 @@ def taskgraph_decision(options, parameters=None):
     if len(push_schedules) > 0:
         write_artifact("bugbug-push-schedules.json", push_schedules.popitem()[1])
 
-    # cache run-task & misc/fetch-content
+    # cache run-task, misc/fetch-content & robustcheckout.py
     scripts_root_dir = os.path.join(GECKO, "taskcluster/scripts")
     run_task_file_path = os.path.join(scripts_root_dir, "run-task")
-    fetch_content_file_path = os.path.join(scripts_root_dir, "misc/fetch-content")
+    fetch_content_file_path = os.path.join(
+        GECKO,
+        "third_party",
+        "python",
+        "taskcluster_taskgraph",
+        "taskgraph",
+        "run-task",
+        "fetch-content",
+    )
+    robustcheckout_path = os.path.join(
+        GECKO,
+        "testing/mozharness/external_tools/robustcheckout.py",
+    )
     shutil.copy2(run_task_file_path, ARTIFACTS_DIR)
     shutil.copy2(fetch_content_file_path, ARTIFACTS_DIR)
+    shutil.copy2(robustcheckout_path, ARTIFACTS_DIR)
 
     # actually create the graph
     create_tasks(
@@ -307,6 +324,9 @@ def get_decision_parameters(graph_config, options):
     parameters["message"] = try_syntax_from_message(commit_message)
     parameters["hg_branch"] = get_hg_revision_branch(
         GECKO, revision=parameters["head_rev"]
+    )
+    parameters["files_changed"] = sorted(
+        get_changed_files(parameters["head_repository"], parameters["head_rev"])
     )
     parameters["next_version"] = None
     parameters["optimize_strategies"] = None
@@ -387,6 +407,14 @@ def get_decision_parameters(graph_config, options):
     # Determine if this should be a backstop push.
     parameters["backstop"] = is_backstop(parameters)
 
+    # For the android perf tasks, run them 50% less often
+    parameters["android_perftest_backstop"] = is_backstop(
+        parameters,
+        push_interval=30,
+        time_interval=60 * 6,
+        backstop_strategy="android_perftest_backstop",
+    )
+
     if "decision-parameters" in graph_config["taskgraph"]:
         find_object(graph_config["taskgraph"]["decision-parameters"])(
             graph_config, parameters
@@ -447,15 +475,20 @@ def set_try_config(parameters, task_config_file):
 
 def set_decision_indexes(decision_task_id, params, graph_config):
     index_paths = []
+    if params["android_perftest_backstop"]:
+        index_paths.insert(0, ANDROID_PERFTEST_BACKSTOP_INDEX)
     if params["backstop"]:
-        index_paths.append(BACKSTOP_INDEX)
+        # When two Decision tasks run at nearly the same time, it's possible
+        # they both end up being backstops if the second checks the backstop
+        # index before the first inserts it. Insert this index first to reduce
+        # the chances of that happening.
+        index_paths.insert(0, BACKSTOP_INDEX)
 
     subs = params.copy()
     subs["trust-domain"] = graph_config["trust-domain"]
 
-    index_paths = [i.format(**subs) for i in index_paths]
     for index_path in index_paths:
-        insert_index(index_path, decision_task_id, use_proxy=True)
+        insert_index(index_path.format(**subs), decision_task_id, use_proxy=True)
 
 
 def write_artifact(filename, data):

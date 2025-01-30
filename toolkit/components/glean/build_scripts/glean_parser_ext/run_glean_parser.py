@@ -5,6 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import os
+import pickle
 import sys
 from pathlib import Path
 
@@ -12,7 +13,8 @@ import cpp
 import jinja2
 import jog
 import rust
-from glean_parser import lint, parser, translate, util
+from buildconfig import topsrcdir
+from glean_parser import lint, metrics, parser, translate, util
 from mozbuild.util import FileAvoidWrite, memoize
 from util import generate_metric_ids
 
@@ -36,7 +38,16 @@ class ParserError(Exception):
 
 GIFFT_TYPES = {
     "Event": ["event"],
-    "Histogram": ["timing_distribution", "memory_distribution", "custom_distribution"],
+    "Histogram": [
+        "custom_distribution",
+        "labeled_custom_distribution",
+        "memory_distribution",
+        "labeled_memory_distribution",
+        "timing_distribution",
+        "labeled_timing_distribution",
+        "counter",
+        "labeled_counter",
+    ],
     "Scalar": [
         "boolean",
         "labeled_boolean",
@@ -48,6 +59,7 @@ GIFFT_TYPES = {
         "uuid",
         "datetime",
         "quantity",
+        "labeled_quantity",
         "rate",
         "url",
     ],
@@ -62,20 +74,41 @@ def get_parser_options(moz_app_version):
     }
 
 
-def parse(args):
+def parse(args, interesting_yamls=None):
     """
     Parse and lint the input files,
     then return the parsed objects for further processing.
+
+    :param interesting_yamls: If set, the "opt-in" list of metrics to actually
+      collect. Other metrics not listed in files in this list will be marked
+      disabled and thus not collected (only built).
     """
+
+    if all(arg.endswith(".cached") for arg in args[:-1]):
+        objects = dict()
+        options = None
+        for cache_file in args[:-1]:
+            with open(cache_file, "rb") as cache:
+                cached_objects, cached_options = pickle.load(cache)
+                objects.update(cached_objects)
+                assert (
+                    options is None or cached_options == options
+                ), "consistent options"
+                options = options or cached_options
+        return objects, options
 
     # Unfortunately, GeneratedFile appends `flags` directly after `inputs`
     # instead of listifying either, so we need to pull stuff from a *args.
     yaml_array = args[:-1]
     moz_app_version = args[-1]
-
     input_files = [Path(x) for x in yaml_array]
 
     options = get_parser_options(moz_app_version)
+    if interesting_yamls:
+        # We need to make these paths absolute here. They are used from at least
+        # two different contexts.
+        interesting = [Path(os.path.join(topsrcdir, x)) for x in interesting_yamls]
+        options.update({"interesting": interesting})
 
     return parse_with_options(input_files, options)
 
@@ -118,10 +151,7 @@ def main(cpp_fd, *args):
     # We only need this info if we're dealing with pings.
     ping_names_by_app_id = {}
     if "pings" in all_objs:
-        import sys
         from os import path
-
-        from buildconfig import topsrcdir
 
         sys.path.append(path.join(path.dirname(__file__), path.pardir, path.pardir))
         from metrics_index import pings_by_app_id
@@ -164,7 +194,20 @@ def output_gifft_map(output_fd, probe_type, all_objs, cpp_fd):
                 hasattr(metric, "telemetry_mirror")
                 and metric.telemetry_mirror is not None
             ):
-                info = (metric.telemetry_mirror, f"{category_name}.{metric.name}")
+                if metric.type in ["counter", "labeled_counter"]:
+                    # These types map to Scalars... unless prefixed with `h#`,
+                    # then they map to Histograms.
+                    if (
+                        probe_type == "Histogram"
+                        and not metric.telemetry_mirror.startswith("h#")
+                        or probe_type != "Histogram"
+                        and metric.telemetry_mirror.startswith("h#")
+                    ):
+                        continue
+                info = (
+                    metric.telemetry_mirror.split("#")[-1],
+                    f"{category_name}.{metric.name}",
+                )
                 if metric.type in GIFFT_TYPES[probe_type]:
                     if any(
                         metric.telemetry_mirror == value[0]
@@ -189,6 +232,19 @@ def output_gifft_map(output_fd, probe_type, all_objs, cpp_fd):
                         file=sys.stderr,
                     )
                     sys.exit(1)
+                # We only support mirrors for lifetime: ping
+                # If you understand and are okay with how Legacy Telemetry has no
+                # mechanism to which to mirror non-ping lifetimes,
+                # you may use `no_lint: [GIFFT_NON_PING_LIFETIME]`
+                elif (
+                    metric.lifetime != metrics.Lifetime.ping
+                    and "GIFFT_NON_PING_LIFETIME" not in metric.no_lint
+                ):
+                    print(
+                        f"Glean lifetime semantics are not mirrored. {category_name}.{metric.name}'s lifetime of {metric.lifetime} is not supported.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
 
     env = jinja2.Environment(
         loader=jinja2.PackageLoader("run_glean_parser", "templates"),
@@ -208,14 +264,6 @@ def output_gifft_map(output_fd, probe_type, all_objs, cpp_fd):
         )
     )
     output_fd.write("\n")
-
-    # Events also need to output maps from event extra enum to strings.
-    # Sadly we need to generate code for all possible events, not just mirrored.
-    # Otherwise we won't compile.
-    if probe_type == "Event":
-        template = env.get_template("gifft_events.jinja2")
-        cpp_fd.write(template.render(all_objs=all_objs))
-        cpp_fd.write("\n")
 
 
 def jog_factory(output_fd, *args):

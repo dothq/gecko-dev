@@ -222,7 +222,6 @@ public:
     MFBT_API double toDouble() const;
     // Note: toString method supports infinity and nan but fromString not.
     MFBT_API std::string toString() const;
-    MFBT_API bool toString(char* strBuf, size_t bufLength) const;
 
     static MFBT_API Decimal fromDouble(double);
     // fromString supports following syntax EBNF:
@@ -234,11 +233,13 @@ public:
     // Note: fromString doesn't support "infinity" and "nan".
     static MFBT_API Decimal fromString(const std::string& aValue);
     static MFBT_API Decimal infinity(Sign);
-    static MFBT_API Decimal nan();
+    static constexpr Decimal nan() {
+        return Decimal(EncodedData(Positive, EncodedData::ClassNaN));
+    }
     static MFBT_API Decimal zero(Sign);
 
     // You should not use below methods. We expose them for unit testing.
-    MFBT_API explicit Decimal(const EncodedData&);
+    constexpr explicit Decimal(const EncodedData& data) : m_data(data) {}
     const EncodedData& value() const { return m_data; }
 
 private:

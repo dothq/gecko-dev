@@ -1,12 +1,3 @@
-/* import-globals-from ../../../common/tests/unit/head_helpers.js */
-
-const { TestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/TestUtils.sys.mjs"
-);
-const { Utils } = ChromeUtils.importESModule(
-  "resource://services-settings/Utils.sys.mjs"
-);
-
 const BinaryOutputStream = Components.Constructor(
   "@mozilla.org/binaryoutputstream;1",
   "nsIBinaryOutputStream",
@@ -163,4 +154,34 @@ add_task(async function test_utils_fetch_with_bad_proxy() {
   Services.prefs.clearUserPref("network.proxy.allow_hijacking_localhost");
   Services.prefs.clearUserPref("network.proxy.failover_direct");
   Services.prefs.clearUserPref("network.proxy.allow_bypass");
+});
+
+add_task(async function test_base_attachment_url_depends_on_server() {
+  Services.prefs.setStringPref(
+    "services.settings.server",
+    `http://localhost:${server.identity.primaryPort}/v2`
+  );
+
+  Assert.equal(
+    Services.prefs.getStringPref("services.settings.server"),
+    Utils.SERVER_URL
+  );
+
+  server.registerPathHandler("/v2/", (request, response) => {
+    response.write(
+      JSON.stringify({
+        capabilities: {
+          attachments: {
+            base_url: "http://some-cdn-url.org",
+          },
+        },
+      })
+    );
+    response.setHeader("Content-Type", "application/json; charset=UTF-8");
+    response.setStatusLine(null, 200, "OK");
+  });
+
+  const after = await Utils.baseAttachmentsURL();
+
+  Assert.equal(after, "http://some-cdn-url.org/", "A trailing slash is added");
 });

@@ -13,9 +13,6 @@ with Files("code-coverage/**"):
 with Files("compare-locales/mach_commands.py"):
     BUG_COMPONENT = ("Localization Infrastructure and Tools", "compare-locales")
 
-with Files("github-sync/**"):
-    BUG_COMPONENT = ("Core", "Graphics")
-
 with Files("lint/**"):
     BUG_COMPONENT = ("Developer Infrastructure", "Lint and Formatting")
 
@@ -44,11 +41,14 @@ with Files("tryselect/**"):
 with Files("tryselect/selectors/release.py"):
     BUG_COMPONENT = ("Release Engineering", "General")
 
+with Files("ts/**"):
+    BUG_COMPONENT = ("Developer Infrastructure", "Lint and Formatting")
+
 with Files("update-packaging/**"):
     BUG_COMPONENT = ("Release Engineering", "General")
 
 with Files("update-verify/**"):
-    BUG_COMPONENT = ("Release Engineering", "Release Automation: Updates")
+    BUG_COMPONENT = ("Release Engineering", "Release Automation")
 
 with Files("vcs/**"):
     BUG_COMPONENT = ("Firefox Build System", "General")
@@ -67,10 +67,6 @@ SPHINX_TREES["profiler"] = "profiler/docs"
 
 with Files("tryselect/docs/**"):
     SCHEDULES.exclusive = ["docs"]
-
-CRAMTEST_MANIFESTS += [
-    "tryselect/test/cram.toml",
-]
 
 PYTHON_UNITTEST_MANIFESTS += [
     "fuzzing/smoke/python.toml",

@@ -8,8 +8,12 @@ import { connect } from "devtools/client/shared/vendor/react-redux";
 
 import Popup from "./Popup";
 
-import { getIsCurrentThreadPaused } from "../../../selectors/index";
+import {
+  getIsCurrentThreadPaused,
+  getSelectedTraceIndex,
+} from "../../../selectors/index";
 import actions from "../../../actions/index";
+import { features } from "../../../utils/prefs";
 
 const EXCEPTION_MARKER = "mark-text-exception";
 
@@ -25,32 +29,47 @@ class Preview extends PureComponent {
       editor: PropTypes.object.isRequired,
       editorRef: PropTypes.object.isRequired,
       isPaused: PropTypes.bool.isRequired,
+      hasSelectedTrace: PropTypes.bool.isRequired,
       getExceptionPreview: PropTypes.func.isRequired,
       getPreview: PropTypes.func,
     };
   }
 
   componentDidMount() {
-    this.updateListeners();
+    if (features.codemirrorNext) {
+      this.props.editor.on("tokenenter", this.onTokenEnter);
+      this.props.editor.addEditorDOMEventListeners({
+        mouseup: this.onMouseUp,
+        mousedown: this.onMouseDown,
+        scroll: this.onScroll,
+      });
+    } else {
+      const { codeMirror } = this.props.editor;
+      const codeMirrorWrapper = codeMirror.getWrapperElement();
+      codeMirror.on("tokenenter", this.onTokenEnter);
+      codeMirror.on("scroll", this.onScroll);
+      codeMirrorWrapper.addEventListener("mouseup", this.onMouseUp);
+      codeMirrorWrapper.addEventListener("mousedown", this.onMouseDown);
+    }
   }
 
   componentWillUnmount() {
-    const { codeMirror } = this.props.editor;
-    const codeMirrorWrapper = codeMirror.getWrapperElement();
+    if (features.codemirrorNext) {
+      this.props.editor.off("tokenenter", this.onTokenEnter);
+      this.props.editor.removeEditorDOMEventListeners({
+        mouseup: this.onMouseUp,
+        mousedown: this.onMouseDown,
+        scroll: this.onScroll,
+      });
+    } else {
+      const { codeMirror } = this.props.editor;
+      const codeMirrorWrapper = codeMirror.getWrapperElement();
 
-    codeMirror.off("tokenenter", this.onTokenEnter);
-    codeMirror.off("scroll", this.onScroll);
-    codeMirrorWrapper.removeEventListener("mouseup", this.onMouseUp);
-    codeMirrorWrapper.removeEventListener("mousedown", this.onMouseDown);
-  }
-
-  updateListeners() {
-    const { codeMirror } = this.props.editor;
-    const codeMirrorWrapper = codeMirror.getWrapperElement();
-    codeMirror.on("tokenenter", this.onTokenEnter);
-    codeMirror.on("scroll", this.onScroll);
-    codeMirrorWrapper.addEventListener("mouseup", this.onMouseUp);
-    codeMirrorWrapper.addEventListener("mousedown", this.onMouseDown);
+      codeMirror.off("tokenenter", this.onTokenEnter);
+      codeMirror.off("scroll", this.onScroll);
+      codeMirrorWrapper.removeEventListener("mouseup", this.onMouseUp);
+      codeMirrorWrapper.removeEventListener("mousedown", this.onMouseDown);
+    }
   }
 
   // Note that these events are emitted by utils/editor/tokens.js
@@ -60,16 +79,28 @@ class Preview extends PureComponent {
     const tokenId = {};
     this.currentTokenId = tokenId;
 
-    const { editor, getPreview, getExceptionPreview } = this.props;
-    const isTargetException = target.classList.contains(EXCEPTION_MARKER);
+    const {
+      editor,
+      getPausedPreview,
+      getTracerPreview,
+      getExceptionPreview,
+      isPaused,
+      hasSelectedTrace,
+    } = this.props;
+    const isTargetException = target.closest(`.${EXCEPTION_MARKER}`);
 
     let preview;
     if (isTargetException) {
-      preview = await getExceptionPreview(target, tokenPos, editor.codeMirror);
+      preview = await getExceptionPreview(target, tokenPos, editor);
     }
 
-    if (!preview && this.props.isPaused && !this.state.selecting) {
-      preview = await getPreview(target, tokenPos, editor.codeMirror);
+    if (!preview && (hasSelectedTrace || isPaused) && !this.state.selecting) {
+      if (hasSelectedTrace) {
+        preview = await getTracerPreview(target, tokenPos, editor);
+      }
+      if (!preview && isPaused) {
+        preview = await getPausedPreview(target, tokenPos, editor);
+      }
     }
 
     // Prevent modifying state and showing this preview if we started hovering another token
@@ -80,19 +111,19 @@ class Preview extends PureComponent {
   };
 
   onMouseUp = () => {
-    if (this.props.isPaused) {
+    if (this.props.isPaused || this.props.hasSelectedTrace) {
       this.setState({ selecting: false });
     }
   };
 
   onMouseDown = () => {
-    if (this.props.isPaused) {
+    if (this.props.isPaused || this.props.hasSelectedTrace) {
       this.setState({ selecting: true });
     }
   };
 
   onScroll = () => {
-    if (this.props.isPaused) {
+    if (this.props.isPaused || this.props.hasSelectedTrace) {
       this.clearPreview();
     }
   };
@@ -118,11 +149,13 @@ class Preview extends PureComponent {
 const mapStateToProps = state => {
   return {
     isPaused: getIsCurrentThreadPaused(state),
+    hasSelectedTrace: getSelectedTraceIndex(state) != null,
   };
 };
 
 export default connect(mapStateToProps, {
   addExpression: actions.addExpression,
-  getPreview: actions.getPreview,
+  getPausedPreview: actions.getPausedPreview,
+  getTracerPreview: actions.getTracerPreview,
   getExceptionPreview: actions.getExceptionPreview,
 })(Preview);

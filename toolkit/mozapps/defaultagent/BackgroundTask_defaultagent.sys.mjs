@@ -100,7 +100,8 @@ const kNotificationAction = Object.freeze({
 export async function runBackgroundTask(commandLine) {
   Services.fog.initializeFOG(
     undefined,
-    "firefox.desktop.background.defaultagent"
+    "firefox.desktop.background.defaultagent",
+    /* disableInternalPings */ true
   );
 
   let defaultAgent = Cc["@mozilla.org/default-agent;1"].getService(
@@ -202,10 +203,31 @@ async function runWithRegistryLocked(aMutexGuardedFunction) {
   }
 }
 
-async function doTask(defaultAgent, force) {
-  if (!defaultAgent.appRanRecently() && !force) {
-    lazy.log.warn("Main app has not ran recently, exiting without running.");
-    throw new Error("App hasn't ran recently");
+const kSecondsPerDay = 24 /*hours*/ * 60 /*minutes*/ * 60; /*seconds*/
+
+const kTaskExpirationSeconds = 90 /*days*/ * kSecondsPerDay;
+
+export async function doTask(defaultAgent, force) {
+  let secondsSinceAppRan;
+  try {
+    secondsSinceAppRan = defaultAgent.SecondsSinceLastAppRun();
+  } catch (err) {
+    if (err.result == Cr.NS_ERROR_NOT_AVAILABLE) {
+      // There was no registry value to read to determine when the last app run occurred
+      secondsSinceAppRan = 0;
+    } else {
+      // Something else happened. Let's log the error result for now.
+      lazy.log.warn(
+        "Unexpected error code in determining when the app last ran: " +
+          err.result
+      );
+      secondsSinceAppRan = 0;
+    }
+  }
+  const daysSinceLastAppLaunch = secondsSinceAppRan / kSecondsPerDay;
+  if (secondsSinceAppRan > kTaskExpirationSeconds && !force) {
+    lazy.log.warn("Main app has not run recently, exiting without running.");
+    throw new Error("App hasn't run recently");
   }
 
   let browser = defaultAgent.getDefaultBrowser();
@@ -245,7 +267,8 @@ async function doTask(defaultAgent, force) {
     previousBrowser,
     defaultPdfHandler,
     notificationTelemetry.shown,
-    notificationTelemetry.action
+    notificationTelemetry.action,
+    daysSinceLastAppLaunch
   );
 }
 
@@ -330,7 +353,7 @@ function makeAlert(options) {
   let systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
   alert.init(
     options.name,
-    "chrome://branding/content/about-logo@2x.png",
+    "chrome://global/content/defaultagent/fox-doodle-peek.png",
     options.title,
     options.body,
     true /* aTextClickable */,

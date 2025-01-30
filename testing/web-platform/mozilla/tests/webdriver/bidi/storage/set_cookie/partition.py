@@ -10,6 +10,10 @@ from webdriver.bidi.modules.storage import (
 pytestmark = pytest.mark.asyncio
 
 
+# This is a gecko-specific test because Firefox and Chrome define partitioning
+# on a browsing context differently. Firefox as a combination of an origin loaded
+# in this browsing context and a related user context, where Chrome defines it
+# as only a user context, which leads to different returned partition keys.
 async def test_partition_context(
     bidi_session,
     set_cookie,

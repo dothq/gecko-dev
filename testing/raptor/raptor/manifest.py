@@ -11,9 +11,9 @@ from logger.logger import RaptorLogger
 from manifestparser import TestManifest
 from perftest import GECKO_PROFILER_APPS, TRACE_APPS
 from six.moves.urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
+from support_class_utils import import_support_class
 from utils import (
     bool_from_str,
-    import_support_class,
     transform_platform,
     transform_subtest,
 )
@@ -42,7 +42,7 @@ playback_settings = [
 ]
 
 
-def filter_app(tests, values):
+def filter_app(tests, values, strict=False):
     for test in tests:
         if values["app"] in [app.strip() for app in test["apps"].split(",")]:
             yield test
@@ -147,7 +147,9 @@ def validate_test_toml(test_details):
                 "`repository_revision` is required when a `repository` is defined."
             )
             valid_settings = False
-        elif test_details.get("type") not in ("benchmark"):
+        elif test_details.get("type") not in ("benchmark") and not test_details.get(
+            "benchmark_webserver", False
+        ):
             LOG.error("`repository` is only available for benchmark test types.")
             valid_settings = False
 
@@ -275,7 +277,7 @@ def write_test_settings_json(args, test_details, oskey):
                 "gecko_profile_entries": int(
                     test_details.get("gecko_profile_entries", 1000000)
                 ),
-                "gecko_profile_interval": int(
+                "gecko_profile_interval": float(
                     test_details.get("gecko_profile_interval", 1)
                 ),
                 "gecko_profile_threads": ",".join(set(threads)),
@@ -374,7 +376,6 @@ def get_raptor_test_list(args, oskey):
 
     if args.collect_perfstats and args.app.lower() not in (
         "chrome",
-        "chromium",
         "custom-car",
     ):
         for next_test in tests_to_run:
@@ -603,7 +604,7 @@ def get_raptor_test_list(args, oskey):
             and next_test.get("type") == "pageload"
         ):
             next_test["measure"] = (
-                "fnbpaint, fcp, dcf, loadtime, "
+                "fnbpaint, fcp, loadtime, "
                 "ContentfulSpeedIndex, PerceptualSpeedIndex, "
                 "SpeedIndex, FirstVisualChange, LastVisualChange, "
                 "largestContentfulPaint"

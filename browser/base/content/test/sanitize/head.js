@@ -49,10 +49,10 @@ function checkIndexedDB(host, originAttributes) {
       originAttributes
     );
     let request = indexedDB.openForPrincipal(principal, "TestDatabase", 1);
-    request.onupgradeneeded = function (e) {
+    request.onupgradeneeded = function () {
       data = false;
     };
-    request.onsuccess = function (e) {
+    request.onsuccess = function () {
       resolve(data);
     };
   });
@@ -391,7 +391,7 @@ async function createDummyDataForHost(host) {
     "dummy.js";
 
   await SiteDataTestUtils.addToIndexedDB(origin);
-  await SiteDataTestUtils.addServiceWorker(dummySWURL);
+  await SiteDataTestUtils.addServiceWorker({ win: window, path: dummySWURL });
 }
 
 /**

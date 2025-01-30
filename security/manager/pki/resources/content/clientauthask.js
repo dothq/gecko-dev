@@ -46,7 +46,7 @@ var certArray;
  *
  * @type {HTMLInputElement} Element checkbox, has to have |checked| property.
  */
-var rememberBox;
+var rememberBox, args;
 
 async function onLoad() {
   let rememberSetting = Services.prefs.getBoolPref(
@@ -55,12 +55,20 @@ async function onLoad() {
   rememberBox = document.getElementById("rememberBox");
   rememberBox.checked = rememberSetting;
 
-  certArray = window.arguments[0].certArray;
+  let propBag = window.arguments[0]
+    .QueryInterface(Ci.nsIWritablePropertyBag2)
+    .QueryInterface(Ci.nsIWritablePropertyBag);
+  args = {};
+  for (let prop of propBag.enumerator) {
+    args[prop.name] = prop.value;
+  }
+
+  certArray = args.certArray;
 
   document.l10n.setAttributes(
     document.getElementById("clientAuthSiteIdentification"),
     "client-auth-site-identification",
-    { hostname: window.arguments[0].hostname }
+    { hostname: args.hostname }
   );
 
   let selectElement = document.getElementById("nicknames");
@@ -116,21 +124,22 @@ async function setDetails() {
   );
   let parsedCert = await parse(pemToDER(cert.getBase64DERString()));
   let keyUsages = parsedCert.ext.keyUsages;
-  if (keyUsages && keyUsages.purposes.length) {
-    document.l10n.setAttributes(
-      document.getElementById("clientAuthCertDetailsKeyUsages"),
-      "client-auth-cert-details-key-usages",
-      { keyUsages: keyUsages.purposes.join(", ") }
-    );
-  }
+  let keyUsagesJoined =
+    keyUsages && keyUsages.purposes.length ? keyUsages.purposes.join(", ") : "";
+  document.l10n.setAttributes(
+    document.getElementById("clientAuthCertDetailsKeyUsages"),
+    "client-auth-cert-details-key-usages",
+    { keyUsages: keyUsagesJoined }
+  );
   let emailAddresses = cert.getEmailAddresses();
-  if (emailAddresses.length) {
-    document.l10n.setAttributes(
-      document.getElementById("clientAuthCertDetailsEmailAddresses"),
-      "client-auth-cert-details-email-addresses",
-      { emailAddresses: emailAddresses.join(", ") }
-    );
-  }
+  let emailAddressesJoined = emailAddresses.length
+    ? emailAddresses.join(", ")
+    : "";
+  document.l10n.setAttributes(
+    document.getElementById("clientAuthCertDetailsEmailAddresses"),
+    "client-auth-cert-details-email-addresses",
+    { emailAddresses: emailAddressesJoined }
+  );
   document.l10n.setAttributes(
     document.getElementById("clientAuthCertDetailsIssuedBy"),
     "client-auth-cert-details-issued-by",
@@ -148,7 +157,7 @@ async function onCertSelected() {
 }
 
 function doOK() {
-  let { retVals } = window.arguments[0];
+  let { retVals } = args;
   let index = parseInt(document.getElementById("nicknames").value);
   let cert = certArray[index];
   retVals.cert = cert;
@@ -156,7 +165,7 @@ function doOK() {
 }
 
 function doCancel() {
-  let { retVals } = window.arguments[0];
+  let { retVals } = args;
   retVals.cert = null;
   retVals.rememberDecision = rememberBox.checked;
 }

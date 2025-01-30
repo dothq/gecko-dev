@@ -1,4 +1,5 @@
 // META: script=/resources/testdriver.js
+// META: script=/resources/testdriver-vendor.js
 // META: script=/common/utils.js
 // META: script=resources/fledge-util.sub.js
 // META: script=/common/subset-tests.js
@@ -32,6 +33,7 @@ subsetTest(promise_test, async test => {
     "adComponentsLimit": 40,
     "joinCount": 1,
     "bidCount": 0,
+    "multiBidLimit": 1,
     "prevWinsMs": []
   }
   let biddingLogicURL = createBiddingScriptURL(
@@ -939,7 +941,7 @@ subsetTest(promise_test, async test => {
                  if (!deepEquals(Object.keys(instance.exports), ["increment"]))
                    throw "Unexpected exports: " + JSON.stringify(instance.exports);
 
-                 if (instance.exports.increment(1) != 2)
+                 if (instance.exports.increment(1) !== 2)
                    throw "Unexpected increment result: " + instance.exports.increment(1);` })
       }
     });

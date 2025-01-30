@@ -158,17 +158,95 @@ module.exports = function (config) {
               functions: 0,
               branches: 0,
             },
+            /**
+             * WallpaperFeed.sys.mjs is tested via an xpcshell test
+             */
+            "lib/WallpaperFeed.sys.mjs": {
+              statements: 0,
+              lines: 0,
+              functions: 0,
+              branches: 0,
+            },
+            "content-src/components/Base/Base.jsx": {
+              statements: 0,
+              lines: 0,
+              functions: 0,
+              branches: 0,
+            },
+            "content-src/components/DiscoveryStreamComponents/FeatureHighlight/WallpaperFeatureHighlight.jsx":
+              {
+                statements: 0,
+                lines: 0,
+                functions: 0,
+                branches: 0,
+              },
+            /**
+             * TopicSelection.jsx is tested via an xpcshell test
+             */
+            "content-src/components/DiscoveryStreamComponents/TopicSelection/*.jsx":
+              {
+                statements: 0,
+                lines: 0,
+                functions: 0,
+                branches: 0,
+              },
+            "content-src/components/DiscoveryStreamComponents/DSCard/DSCard.jsx":
+              {
+                statements: 98.25,
+                lines: 98.2,
+                functions: 100,
+                branches: 72.95,
+              },
+            "content-src/components/DiscoveryStreamComponents/CardSections/CardSections.jsx":
+              {
+                statements: 93.62,
+                lines: 93.48,
+                functions: 92.31,
+                branches: 60,
+              },
+            "content-src/components/DiscoveryStreamComponents/SectionContextMenu/SectionContextMenu.jsx":
+              {
+                statements: 0,
+                lines: 0,
+                functions: 0,
+                branches: 0,
+              },
+            "content-src/components/DiscoveryStreamComponents/AdBanner/AdBanner.jsx":
+              {
+                branches: 66.67,
+              },
             "content-src/components/DiscoveryStreamComponents/**/*.jsx": {
               statements: 90.48,
               lines: 90.48,
               functions: 85.71,
               branches: 68.75,
             },
-            "content-src/asrouter/**/*.jsx": {
-              statements: 57,
-              lines: 58,
-              functions: 60,
-              branches: 50,
+            /**
+             * WallpaperSection.jsx is tested via an xpcshell test
+             */
+            "content-src/components/WallpapersSection/*.jsx": {
+              statements: 0,
+              lines: 0,
+              functions: 0,
+              branches: 0,
+            },
+            /**
+             * Notifications.jsx is tested via an xpcshell test
+             */
+            "content-src/components/Notifications/**/*.jsx": {
+              statements: 0,
+              lines: 0,
+              functions: 0,
+              branches: 0,
+            },
+            /**
+             * Weather.jsx is tested via an xpcshell test
+             */
+            "content-src/components/Weather/*.jsx": {
+              statements: 0,
+              lines: 0,
+              functions: 0,
+              branches: 0,
             },
             "content-src/components/DiscoveryStreamAdmin/*.jsx": {
               statements: 0,
@@ -194,6 +272,9 @@ module.exports = function (config) {
               functions: 96,
               branches: 70,
             },
+            "content-src/lib/hooks.jsx": {
+              branches: 60,
+            },
             "content-src/components/**/*.jsx": {
               statements: 51.1,
               lines: 52.38,
@@ -211,11 +292,8 @@ module.exports = function (config) {
       devtool: "inline-source-map",
       // This resolve config allows us to import with paths relative to the root directory, e.g. "lib/ActivityStream.sys.mjs"
       resolve: {
-        extensions: [".js", ".jsx"],
+        extensions: [".js", ".jsx", ".mjs"],
         modules: [PATHS.moduleResolveDirectory, "node_modules"],
-        alias: {
-          asrouter: path.join(__dirname, "../asrouter"),
-        },
       },
       plugins: [
         // The ResourceUriPlugin handles translating resource URIs in import
@@ -260,7 +338,7 @@ module.exports = function (config) {
           },
           {
             enforce: "post",
-            test: /\.js[mx]?$/,
+            test: /\.js[x]?$/,
             loader: "@jsdevtools/coverage-istanbul-loader",
             options: { esModules: true },
             include: [

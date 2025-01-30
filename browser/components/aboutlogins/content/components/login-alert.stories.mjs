@@ -4,7 +4,6 @@
 
 // eslint-disable-next-line import/no-unresolved
 import { html } from "lit.all.mjs";
-// eslint-disable-next-line import/no-unassigned-import
 import "./login-alert.mjs";
 
 export default {
@@ -48,24 +47,19 @@ BasicLoginAlert.argTypes = {
   },
 };
 
-export const VulnerablePasswordAlert = ({ hostname }) =>
-  html`
-    <login-vulnerable-password-alert
-      .hostname=${hostname}
-    ></login-vulnerable-password-alert>
-  `;
+export const VulnerablePasswordAlert = ({ hostname }) => html`
+  <login-vulnerable-password-alert
+    .hostname=${hostname}
+  ></login-vulnerable-password-alert>
+`;
 
 VulnerablePasswordAlert.args = {
   hostname: "https://www.example.com",
 };
 
-export const LoginBreachAlert = ({ date, hostname }) =>
-  html`
-    <login-breach-alert
-      .date=${date}
-      .hostname=${hostname}
-    ></login-breach-alert>
-  `;
+export const LoginBreachAlert = ({ date, hostname }) => html`
+  <login-breach-alert .date=${date} .hostname=${hostname}></login-breach-alert>
+`;
 
 LoginBreachAlert.argTypes = {
   date: {

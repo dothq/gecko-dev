@@ -11,7 +11,6 @@
 #endif
 #include "MediaInfo.h"
 #include "RemoteDataDecoder.h"
-#include "TheoraDecoder.h"
 #include "VPXDecoder.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Components.h"
@@ -64,21 +63,28 @@ AndroidDecoderModule::AndroidDecoderModule(CDMProxy* aProxy) {
   mProxy = static_cast<MediaDrmCDMProxy*>(aProxy);
 }
 
-StaticAutoPtr<nsTArray<nsCString>> AndroidDecoderModule::sSupportedSwMimeTypes;
-StaticAutoPtr<nsTArray<nsCString>> AndroidDecoderModule::sSupportedHwMimeTypes;
-StaticAutoPtr<MediaCodecsSupported> AndroidDecoderModule::sSupportedCodecs;
+/* static */ bool AndroidDecoderModule::AreSupportedMimeTypesReady() {
+  StaticMutexAutoLock lock(sMutex);
+  return sSupportedSwMimeTypes && sSupportedHwMimeTypes;
+}
+
+/* static */ bool AndroidDecoderModule::IsSupportedCodecsReady() {
+  StaticMutexAutoLock lock(sMutex);
+  return sSupportedCodecs;
+}
 
 /* static */
 media::MediaCodecsSupported AndroidDecoderModule::GetSupportedCodecs() {
-  if (!sSupportedSwMimeTypes || !sSupportedHwMimeTypes || !sSupportedCodecs) {
+  if (!AreSupportedMimeTypesReady() || !IsSupportedCodecsReady()) {
     SetSupportedMimeTypes();
   }
+  StaticMutexAutoLock lock(sMutex);
   return *sSupportedCodecs;
 }
 
 DecodeSupportSet AndroidDecoderModule::SupportsMimeType(
     const nsACString& aMimeType) {
-  if (!sSupportedSwMimeTypes) {
+  if (!AreSupportedMimeTypesReady()) {
     SetSupportedMimeTypes();
   }
 
@@ -99,12 +105,9 @@ DecodeSupportSet AndroidDecoderModule::SupportsMimeType(
       }
       break;
 
-    // Prefer the gecko decoder for theora/opus/vorbis; stagefright crashes
+    // Prefer the gecko decoder for opus/vorbis; stagefright crashes
     // on content demuxed from mp4.
-    // Not all android devices support FLAC/theora even when they say they do.
-    case MediaCodec::Theora:
-      SLOG("Rejecting video of type %s", aMimeType.Data());
-      return media::DecodeSupportSet{};
+    // Not all android devices support FLAC even when they say they do.
     // Always use our own software decoder (in ffvpx) for audio except for AAC
     case MediaCodec::MP3:
       [[fallthrough]];
@@ -135,13 +138,16 @@ DecodeSupportSet AndroidDecoderModule::SupportsMimeType(
 
   // If a codec has no special handling or can't be determined from the
   // MIME type string, check if the MIME type string itself is supported.
-  if (sSupportedHwMimeTypes &&
-      sSupportedHwMimeTypes->Contains(TranslateMimeType(aMimeType))) {
-    return DecodeSupport::HardwareDecode;
-  }
-  if (sSupportedSwMimeTypes &&
-      sSupportedSwMimeTypes->Contains(TranslateMimeType(aMimeType))) {
-    return DecodeSupport::SoftwareDecode;
+  {
+    StaticMutexAutoLock lock(sMutex);
+    if (sSupportedHwMimeTypes &&
+        sSupportedHwMimeTypes->Contains(TranslateMimeType(aMimeType))) {
+      return DecodeSupport::HardwareDecode;
+    }
+    if (sSupportedSwMimeTypes &&
+        sSupportedSwMimeTypes->Contains(TranslateMimeType(aMimeType))) {
+      return DecodeSupport::SoftwareDecode;
+    }
   }
   return media::DecodeSupportSet{};
 }
@@ -179,24 +185,45 @@ void AndroidDecoderModule::SetSupportedMimeTypes() {
 // Inbound MIME types prefixed with SW/HW need to be processed
 void AndroidDecoderModule::SetSupportedMimeTypes(
     nsTArray<nsCString>&& aSupportedTypes) {
+  StaticMutexAutoLock lock(sMutex);
   // Return if support is already cached
   if (sSupportedSwMimeTypes && sSupportedHwMimeTypes && sSupportedCodecs) {
     return;
   }
   if (!sSupportedSwMimeTypes) {
     sSupportedSwMimeTypes = new nsTArray<nsCString>;
-    ClearOnShutdown(&sSupportedSwMimeTypes);
+    if (NS_IsMainThread()) {
+      ClearOnShutdown(&sSupportedSwMimeTypes);
+    } else {
+      Unused << NS_DispatchToMainThread(NS_NewRunnableFunction(__func__, []() {
+        StaticMutexAutoLock lock(sMutex);
+        ClearOnShutdown(&sSupportedSwMimeTypes);
+      }));
+    }
   }
   if (!sSupportedHwMimeTypes) {
     sSupportedHwMimeTypes = new nsTArray<nsCString>;
-    ClearOnShutdown(&sSupportedHwMimeTypes);
+    if (NS_IsMainThread()) {
+      ClearOnShutdown(&sSupportedHwMimeTypes);
+    } else {
+      Unused << NS_DispatchToMainThread(NS_NewRunnableFunction(__func__, []() {
+        StaticMutexAutoLock lock(sMutex);
+        ClearOnShutdown(&sSupportedHwMimeTypes);
+      }));
+    }
   }
   if (!sSupportedCodecs) {
     sSupportedCodecs = new MediaCodecsSupported();
-    ClearOnShutdown(&sSupportedCodecs);
+    if (NS_IsMainThread()) {
+      ClearOnShutdown(&sSupportedCodecs);
+    } else {
+      Unused << NS_DispatchToMainThread(NS_NewRunnableFunction(__func__, []() {
+        StaticMutexAutoLock lock(sMutex);
+        ClearOnShutdown(&sSupportedCodecs);
+      }));
+    }
   }
 
-  DecodeSupportSet support;
   // Process each MIME type string
   for (const auto& s : aSupportedTypes) {
     // Verify MIME type string present
@@ -212,12 +239,13 @@ void AndroidDecoderModule::SetSupportedMimeTypes(
 
     // Extract SW/HW support prefix
     const auto caps = Substring(s, 0, 2);
+    DecodeSupport support{};
     if (caps == "SW"_ns) {
       sSupportedSwMimeTypes->AppendElement(mimeType);
-      support += DecodeSupport::SoftwareDecode;
+      support = DecodeSupport::SoftwareDecode;
     } else if (caps == "HW"_ns) {
       sSupportedHwMimeTypes->AppendElement(mimeType);
-      support += DecodeSupport::HardwareDecode;
+      support = DecodeSupport::HardwareDecode;
     } else {
       SLOG("Error parsing acceleration info from JNI codec string %s",
            s.Data());

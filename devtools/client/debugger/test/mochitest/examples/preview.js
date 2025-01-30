@@ -84,3 +84,35 @@ function multipleTokens() {
   foo || blip.boom;
   debugger;
 }
+
+function thisProperties() {
+  new(class {
+    constructor() {
+      this.myProperty = {
+        x: "this-myProperty-x",
+        y: "this-myProperty-y",
+        z: "this-myProperty-z",
+      };
+      this.myProperty.x;
+      const propertyName = "myProperty";
+      this[propertyName].y;
+      this?.[propertyName].z;
+      debugger;
+    }
+  });
+}
+
+function valueOfExpression() {
+  function a(value) {
+    b(value).catch(console.error);
+    debugger;
+  };
+
+  function b() {
+    return new Promise(() => {});
+  }
+
+  a("foo")
+}
+
+

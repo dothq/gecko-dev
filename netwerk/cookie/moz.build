@@ -22,9 +22,11 @@ XPIDL_MODULE = "necko_cookie"
 
 EXPORTS.mozilla.net = [
     "Cookie.h",
+    "CookieCommons.h",
     "CookieJarSettings.h",
     "CookieKey.h",
     "CookieNotification.h",
+    "CookieParser.h",
     "CookiePersistentStorage.h",
     "CookiePrivateStorage.h",
     "CookieService.h",
@@ -38,6 +40,7 @@ UNIFIED_SOURCES += [
     "CookieJarSettings.cpp",
     "CookieLogging.cpp",
     "CookieNotification.cpp",
+    "CookieParser.cpp",
     "CookiePersistentStorage.cpp",
     "CookiePrivateStorage.cpp",
     "CookieService.cpp",

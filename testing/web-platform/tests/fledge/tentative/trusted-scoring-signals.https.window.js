@@ -1,4 +1,5 @@
 // META: script=/resources/testdriver.js
+// META: script=/resources/testdriver-vendor.js
 // META: script=/common/utils.js
 // META: script=resources/fledge-util.sub.js
 // META: script=/common/subset-tests.js
@@ -11,7 +12,9 @@
 // META: variant=?26-30
 // META: variant=?31-35
 // META: variant=?36-40
-// META: variant=?41-last
+// META: variant=?41-45
+// META: variant=?46-50
+// META: variant=?51-last
 
 "use strict";
 
@@ -20,25 +23,25 @@
 // to worklet scripts, and handling the Data-Version header.
 
 // Helper for trusted scoring signals tests. Runs an auction with
-// TRUSTED_SCORING_SIGNALS_URL and a single interest group, failing the test
-// if there's no winner. "scoreAdCheck" is an expression that should be true
+// trustedSignalsURL and a single interest group, failing the test if there's no
+// winner. "scoreAdCheck" is an expression that should be true
 // when evaluated in scoreAd(). "renderURL" can be used to control the response
-// given for TRUSTED_SCORING_SIGNALS_URL.
+// given for trustedSignalsURL.
 async function runTrustedScoringSignalsTest(test, uuid, renderURL, scoreAdCheck,
-                                            additionalInterestGroupOverrides) {
+                                            additionalInterestGroupOverrides,
+                                            trustedSignalsURL = TRUSTED_SCORING_SIGNALS_URL,
+                                            decisionScriptParamOverrides = {}) {
   const auctionConfigOverrides = {
-      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      trustedScoringSignalsURL: trustedSignalsURL,
       decisionLogicURL:
           createDecisionScriptURL(uuid, {
-                  scoreAd: `if (!(${scoreAdCheck})) throw "error";` })};
-  await joinGroupAndRunBasicFledgeTestExpectingWinner(
-      test,
-      {
-        uuid: uuid,
-        interestGroupOverrides: {ads: [{ renderURL: renderURL }],
-                                 ...additionalInterestGroupOverrides},
-        auctionConfigOverrides: auctionConfigOverrides
-      });
+                  scoreAd: `if (!(${scoreAdCheck})) throw "error";`,
+                  ...decisionScriptParamOverrides})};
+  await joinInterestGroup(test, uuid,
+                          {ads: [{ renderURL: renderURL }],
+                           ...additionalInterestGroupOverrides});
+  return await runBasicFledgeTestExpectingWinner(
+      test, uuid, auctionConfigOverrides);
 }
 
 // Much like runTrustedScoringSignalsTest, but runs auctions through reporting
@@ -305,6 +308,124 @@ subsetTest(promise_test, async test => {
 }, 'Trusted scoring signals multiple renderURLs.');
 
 /////////////////////////////////////////////////////////////////////////////
+// Cross-origin trusted scoring signals tests
+/////////////////////////////////////////////////////////////////////////////
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/'string-value,data-version:3,cors');
+  await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals['${OTHER_ORIGIN1}'].renderURL[
+           "${renderURL}"] === "1" &&
+       browserSignals.crossOriginDataVersion === 3`,
+       /*additionalInterestGroupOverrides=*/ {},
+      CROSS_ORIGIN_TRUSTED_SCORING_SIGNALS_URL,
+      {permitCrossOriginTrustedSignals: `"${OTHER_ORIGIN1}"`});
+}, 'Basic cross-origin trusted scoring signals.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/'string-value,data-version:3');
+  await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals === null &&
+       !('crossOriginDataVersion' in browserSignals)`,
+       /*additionalInterestGroupOverrides=*/ {},
+      CROSS_ORIGIN_TRUSTED_SCORING_SIGNALS_URL,
+      {permitCrossOriginTrustedSignals: `"${OTHER_ORIGIN1}"`});
+}, 'Cross-origin trusted scoring signals w/o CORS authorization.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const sellerReportURL = createSellerReportURL(uuid);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/`string-value,data-version:3,uuid:${uuid},dispatch:track_get`);
+  // Use the request tracker for trusted scoring signals, to have it
+  // record whether they got fetched or not.
+  const crossOriginRequestTrackerURL = OTHER_ORIGIN1 + BASE_PATH +
+    'resources/request-tracker.py';
+
+  let combinedTrustedSignalsURL = new URL(crossOriginRequestTrackerURL);
+  combinedTrustedSignalsURL.search =
+      `hostname=${window.location.hostname}&renderUrls=${encodeURIComponent(renderURL)}`
+
+  let result = await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals === null &&
+       !('crossOriginDataVersion' in browserSignals)`,
+       /*additionalInterestGroupOverrides=*/ {},
+      crossOriginRequestTrackerURL,
+      {permitCrossOriginTrustedSignals: `"${OTHER_ORIGIN1}"`,
+       reportResult: `sendReportTo("${sellerReportURL}")`});
+  createAndNavigateFencedFrame(test, result);
+  await waitForObservedRequests(
+      uuid, [combinedTrustedSignalsURL.href, createBidderReportURL(uuid), sellerReportURL]);
+}, 'Cross-origin trusted scoring signals w/o CORS authorization sends request.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/'string-value,data-version:3, cors');
+  await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals === null &&
+       !('crossOriginDataVersion' in browserSignals)`,
+       /*additionalInterestGroupOverrides=*/ {},
+      CROSS_ORIGIN_TRUSTED_SCORING_SIGNALS_URL);
+}, 'Cross-origin trusted scoring signals w/o script allow header.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/'string-value,data-version:3');
+  await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals === null &&
+       !('crossOriginDataVersion' in browserSignals)`,
+       /*additionalInterestGroupOverrides=*/ {},
+      CROSS_ORIGIN_TRUSTED_SCORING_SIGNALS_URL,
+      {permitCrossOriginTrustedSignals:
+          `"${OTHER_ORIGIN2}", "${window.location.origin}"`});
+}, 'Cross-origin trusted scoring signals with wrong script allow header.');
+
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const sellerReportURL = createSellerReportURL(uuid);
+  const renderURL = createRenderURL(uuid, /*script=*/null,
+      /*signalsParam=*/`string-value,data-version:3,uuid:${uuid},dispatch:track_get`);
+  // Use the request tracker for trusted scoring signals, to have it
+  // record whether they got fetched or not.
+  const crossOriginRequestTrackerURL = OTHER_ORIGIN1 + BASE_PATH +
+    'resources/request-tracker.py';
+  let result = await runTrustedScoringSignalsTest(
+      test, uuid, renderURL,
+      `trustedScoringSignals === null &&
+       !('dataVersion' in browserSignals) &&
+       crossOriginTrustedScoringSignals === null &&
+       !('crossOriginDataVersion' in browserSignals)`,
+       /*additionalInterestGroupOverrides=*/ {},
+      crossOriginRequestTrackerURL,
+      {permitCrossOriginTrustedSignals:
+          `"${OTHER_ORIGIN2}", "${window.location.origin}"`,
+       reportResult: `sendReportTo("${sellerReportURL}")`});
+  createAndNavigateFencedFrame(test, result);
+  await waitForObservedRequests(uuid,
+                                [createBidderReportURL(uuid), sellerReportURL]);
+}, 'Cross-origin trusted scoring signals with wrong script allow header not fetched.');
+
+/////////////////////////////////////////////////////////////////////////////
 // Data-Version tests
 /////////////////////////////////////////////////////////////////////////////
 
@@ -510,3 +631,158 @@ subsetTest(promise_test, async test => {
       })
     });
 }, 'Component ads trusted scoring signals.');
+
+/////////////////////////////////////////////////////////////////////////////
+// maxTrustedBiddingSignalsURLLength tests
+/////////////////////////////////////////////////////////////////////////////
+// To detect whether two signals are fetched together or separately, the trusted scoring signals
+// Python server will return the request URL as the signal value if the request URL contains the
+// string `url` in its query parameters.
+
+// Trusted scoring signals can be retrieved when `maxTrustedScoringSignalsURLLength` is set to 0.
+// Check if the returned signal contains value of `renderURL` to make sure the signal is fetched
+// with the full URL.
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url');
+  const interestGroupOverrides = { ads: [{ renderURL: renderURL }] };
+  const auctionConfigOverrides = {
+      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      maxTrustedScoringSignalsURLLength: 0,
+      decisionLogicURL:
+        createDecisionScriptURL(uuid, {
+            scoreAd:
+              `if (!trustedScoringSignals.renderURL["${renderURL}"].includes(encodeURIComponent("${renderURL}")))
+                throw "error";`
+        })
+  };
+
+  await joinGroupAndRunBasicFledgeTestExpectingWinner(
+    test,
+    {
+      uuid: uuid,
+      interestGroupOverrides: interestGroupOverrides,
+      auctionConfigOverrides: auctionConfigOverrides
+    });
+}, 'Trusted scoring signals request works with a URL length limit set to 0.');
+
+// Trusted scoring signals can be retrieved when `maxTrustedScoringSignalsURLLength` is set to
+// a non-zero value smaller than the length of the request URL. Check if the returned signal
+// contains value of `renderURL` to make sure the signal was fetched with the full URL.
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url');
+  const interestGroupOverrides = { ads: [{ renderURL: renderURL }] };
+  const auctionConfigOverrides = {
+      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      maxTrustedScoringSignalsURLLength: 1,
+      decisionLogicURL:
+        createDecisionScriptURL(uuid, {
+            scoreAd:
+              `if (!trustedScoringSignals.renderURL["${renderURL}"].includes(encodeURIComponent("${renderURL}")))
+                throw "error";`
+        })
+  };
+
+  await joinGroupAndRunBasicFledgeTestExpectingWinner(
+      test,
+      {
+        uuid: uuid,
+        interestGroupOverrides: interestGroupOverrides,
+        auctionConfigOverrides: auctionConfigOverrides
+      });
+}, 'Trusted scoring signals request works with a URL length limit smaller than the URL length.');
+
+// Trusted scoring signals can be retrieved when `maxTrustedScoringSignalsURLLength` is set to
+// a value larger than the length of the request URL. Check if the returned signal contains
+// value of `renderURL` to make sure the signal was fetched with the full URL.
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url');
+  const interestGroupOverrides = { ads: [{ renderURL: renderURL }] };
+  const auctionConfigOverrides = {
+      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      maxTrustedScoringSignalsURLLength: 1000,
+      decisionLogicURL:
+        createDecisionScriptURL(uuid, {
+            scoreAd:
+              `if (!trustedScoringSignals.renderURL["${renderURL}"].includes(encodeURIComponent("${renderURL}")))
+                throw "error";`
+        })
+  };
+
+  await joinGroupAndRunBasicFledgeTestExpectingWinner(
+      test,
+      {
+        uuid: uuid,
+        interestGroupOverrides: interestGroupOverrides,
+        auctionConfigOverrides: auctionConfigOverrides
+      });
+}, 'Trusted scoring signals request works with a URL length limit larger than the URL length.');
+
+// Test whether an oversized trusted scoring signals request URL, generated from two interest
+// groups, will be split into two parts when `maxTrustedScoringSignalsURLLength` is set to a
+// value larger than a single URL length and smaller than the combined URL length. Check the returned
+// signal for interest group `group 1` only contains string `group1` but not `group2` to ensure the
+// fetch requests are not combined together.
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL1 = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url,group1');
+  const renderURL2 = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url,group2');
+  const auctionConfigOverrides = {
+      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      maxTrustedScoringSignalsURLLength: 300,
+      decisionLogicURL:
+        createDecisionScriptURL(uuid, {
+            // This will make the auction reject `renderURL2`, and if `renderURL1` passes check,
+            // we consider `renderURL2` is fetched by itself in the trusted scoring signals request.
+            scoreAd:
+              `if (!trustedScoringSignals.renderURL.hasOwnProperty("${renderURL1}") ||
+                  trustedScoringSignals.renderURL.hasOwnProperty("${renderURL2}") ||
+                  trustedScoringSignals.renderURL["${renderURL1}"].includes('group2') ||
+                  !trustedScoringSignals.renderURL["${renderURL1}"].includes('group1')) {
+                throw "error";
+              }`
+        })
+  };
+
+  await Promise.all(
+      [ joinInterestGroup(test, uuid, { name: 'group 1', ads: [{ renderURL: renderURL1 }] }),
+        joinInterestGroup(test, uuid, { name: 'group 2', ads: [{ renderURL: renderURL2 }] }) ]
+  );
+
+  await runBasicFledgeTestExpectingWinner(test, uuid, auctionConfigOverrides);
+}, 'Trusted scoring signals splits the request if the combined URL length exceeds the limit of regular value.');
+
+// Test whether an oversized trusted scoring signals request URL, generated from two interest
+// groups, will be split into two parts when `maxTrustedScoringSignalsURLLength` is set to a
+// value smaller than a single URL length. Check the returned signal for interest group `group 1`
+// only contains `group1` but not `group2` to ensure the fetch requests are not combined together.
+subsetTest(promise_test, async test => {
+  const uuid = generateUuid(test);
+  const renderURL1 = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url,group1');
+  const renderURL2 = createRenderURL(uuid, /*script=*/null, /*signalsParam=*/'url,group2');
+  const auctionConfigOverrides = {
+      trustedScoringSignalsURL: TRUSTED_SCORING_SIGNALS_URL,
+      maxTrustedScoringSignalsURLLength: 1,
+      decisionLogicURL:
+        createDecisionScriptURL(uuid, {
+            // This will make the auction reject `renderURL2`, and if `renderURL1` passes check,
+            // we consider `renderURL2` is fetched by itself in the trusted scoring signals request.
+            scoreAd:
+              `if (!trustedScoringSignals.renderURL.hasOwnProperty("${renderURL1}") ||
+                  trustedScoringSignals.renderURL.hasOwnProperty("${renderURL2}") ||
+                  trustedScoringSignals.renderURL["${renderURL1}"].includes('group2') ||
+                  !trustedScoringSignals.renderURL["${renderURL1}"].includes('group1')) {
+                throw "error";
+              }`
+        })
+  };
+
+  await Promise.all(
+      [ joinInterestGroup(test, uuid, { name: 'group 1', ads: [{ renderURL: renderURL1 }] }),
+        joinInterestGroup(test, uuid, { name: 'group 2', ads: [{ renderURL: renderURL2 }] }) ]
+  );
+
+  await runBasicFledgeTestExpectingWinner(test, uuid, auctionConfigOverrides);
+}, 'Trusted scoring signals splits the request if the combined URL length exceeds the limit of small value.');

@@ -35,8 +35,8 @@ AudioDriftCorrection::AudioDriftCorrection(
     : mTargetRate(aTargetRate),
       mDriftController(MakeUnique<DriftController>(aSourceRate, aTargetRate,
                                                    mDesiredBuffering)),
-      mResampler(MakeUnique<AudioResampler>(
-          aSourceRate, aTargetRate, mDesiredBuffering, aPrincipalHandle)) {}
+      mResampler(MakeUnique<AudioResampler>(aSourceRate, aTargetRate, 0,
+                                            aPrincipalHandle)) {}
 
 AudioDriftCorrection::~AudioDriftCorrection() = default;
 
@@ -94,7 +94,7 @@ AudioSegment AudioDriftCorrection::RequestFrames(const AudioSegment& aInput,
   mDriftController->UpdateClock(inputDuration, outputDuration,
                                 CurrentBuffering(), BufferSize());
   // Update resampler's rate if there is a new correction.
-  mResampler->UpdateOutRate(mDriftController->GetCorrectedTargetRate());
+  mResampler->UpdateInRate(mDriftController->GetCorrectedSourceRate());
   if (hasUnderrun) {
     if (!mIsHandlingUnderrun) {
       NS_WARNING("Drift-correction: Underrun");
@@ -109,12 +109,11 @@ AudioSegment AudioDriftCorrection::RequestFrames(const AudioSegment& aInput,
     }
   }
 
-  if (mDriftController->DurationWithinHysteresis() >
-          mLatencyReductionTimeLimit &&
+  if (mDriftController->DurationNearDesired() > mLatencyReductionTimeLimit &&
       mDriftController->DurationSinceDesiredBufferingChange() >
           mLatencyReductionTimeLimit) {
-    // We have been stable within hysteresis for a while. Let's reduce the
-    // desired buffering if we can.
+    // We have been stable for a while.
+    // Let's reduce the desired buffering if we can.
     const media::TimeUnit sourceLatency =
         mDriftController->MeasuredSourceLatency();
     // We target 30% over the measured source latency, a bit higher than how we
@@ -171,7 +170,8 @@ void AudioDriftCorrection::SetDesiredBuffering(
     media::TimeUnit aDesiredBuffering) {
   mDesiredBuffering = aDesiredBuffering;
   mDriftController->SetDesiredBuffering(mDesiredBuffering);
-  mResampler->SetPreBufferDuration(mDesiredBuffering);
+  mResampler->SetInputPreBufferFrameCount(
+      mDesiredBuffering.ToTicksAtRate(mDriftController->mSourceRate));
 }
 }  // namespace mozilla
 

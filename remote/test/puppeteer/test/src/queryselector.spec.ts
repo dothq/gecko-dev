@@ -43,7 +43,7 @@ describe('querySelector', function () {
       const text = await page.$eval(
         'section',
         (e, div) => {
-          return e.textContent! + (div as HTMLElement).textContent!;
+          return e.textContent! + div.textContent!;
         },
         divHandle
       );
@@ -108,7 +108,7 @@ describe('querySelector', function () {
           return (
             sections.reduce((acc, section) => {
               return acc + Number(section.textContent);
-            }, 0) + Number((div as HTMLElement).textContent)
+            }, 0) + Number(div.textContent)
           );
         },
         divHandle
@@ -161,12 +161,29 @@ describe('querySelector', function () {
       const elements = await page.$$('div');
       expect(elements).toHaveLength(2);
       const promises = elements.map(element => {
-        return page.evaluate((e: HTMLElement) => {
+        return page.evaluate(e => {
           return e.textContent;
         }, element);
       });
       expect(await Promise.all(promises)).toEqual(['A', 'B']);
     });
+
+    it('should query existing elements without isolation', async () => {
+      const {page} = await getTestState();
+
+      await page.setContent('<div>A</div><br/><div>B</div>');
+      const elements = await page.$$('div', {
+        isolate: false,
+      });
+      expect(elements).toHaveLength(2);
+      const promises = elements.map(element => {
+        return page.evaluate(e => {
+          return e.textContent;
+        }, element);
+      });
+      expect(await Promise.all(promises)).toEqual(['A', 'B']);
+    });
+
     it('should return empty array if nothing is found', async () => {
       const {page, server} = await getTestState();
 
@@ -330,7 +347,7 @@ describe('querySelector', function () {
       const elements = await html.$$('div');
       expect(elements).toHaveLength(2);
       const promises = elements.map(element => {
-        return page.evaluate((e: HTMLElement) => {
+        return page.evaluate(e => {
           return e.textContent;
         }, element);
       });
@@ -463,7 +480,7 @@ describe('querySelector', function () {
           return (
             sections.reduce((acc, section) => {
               return acc + Number(section.textContent);
-            }, 0) + Number((div as HTMLElement).textContent)
+            }, 0) + Number(div.textContent)
           );
         },
         divHandle

@@ -166,11 +166,14 @@ struct opCreateMathMLElement {
 struct opSetFormElement {
   nsIContent** mContent;
   nsIContent** mFormElement;
+  nsIContent** mIntendedParent;
 
   explicit opSetFormElement(nsIContentHandle* aContent,
-                            nsIContentHandle* aFormElement) {
+                            nsIContentHandle* aFormElement,
+                            nsIContentHandle* aIntendedParent) {
     mContent = static_cast<nsIContent**>(aContent);
     mFormElement = static_cast<nsIContent**>(aFormElement);
+    mIntendedParent = static_cast<nsIContent**>(aIntendedParent);
   };
 };
 
@@ -217,7 +220,7 @@ struct opAppendCommentToDocument {
   int32_t mLength;
 
   explicit opAppendCommentToDocument(char16_t* aBuffer, int32_t aLength)
-      : mBuffer(aBuffer), mLength(aLength){};
+      : mBuffer(aBuffer), mLength(aLength) {};
 };
 
 class nsHtml5TreeOperationStringPair {
@@ -282,6 +285,7 @@ struct opGetShadowRootFromHost {
   nsIContent** mTemplateNode;
   mozilla::dom::ShadowRootMode mShadowRootMode;
   bool mShadowRootIsClonable;
+  bool mShadowRootIsSerializable;
   bool mShadowRootDelegatesFocus;
 
   explicit opGetShadowRootFromHost(nsIContentHandle* aHost,
@@ -289,12 +293,14 @@ struct opGetShadowRootFromHost {
                                    nsIContentHandle* aTemplateNode,
                                    mozilla::dom::ShadowRootMode aShadowRootMode,
                                    bool aShadowRootIsClonable,
+                                   bool aShadowRootIsSerializable,
                                    bool aShadowRootDelegatesFocus) {
     mHost = static_cast<nsIContent**>(aHost);
     mFragHandle = static_cast<nsIContent**>(aFragHandle);
     mTemplateNode = static_cast<nsIContent**>(aTemplateNode);
     mShadowRootMode = aShadowRootMode;
     mShadowRootIsClonable = aShadowRootIsClonable;
+    mShadowRootIsSerializable = aShadowRootIsSerializable;
     mShadowRootDelegatesFocus = aShadowRootDelegatesFocus;
   }
 };
@@ -317,7 +323,7 @@ struct opGetFosterParent {
 struct opMarkAsBroken {
   nsresult mResult;
 
-  explicit opMarkAsBroken(nsresult aResult) : mResult(aResult){};
+  explicit opMarkAsBroken(nsresult aResult) : mResult(aResult) {};
 };
 
 struct opRunScriptThatMayDocumentWriteOrBlock {
@@ -369,7 +375,7 @@ struct opUpdateCharsetSource {
   nsCharsetSource mCharsetSource;
 
   explicit opUpdateCharsetSource(nsCharsetSource aCharsetSource)
-      : mCharsetSource(aCharsetSource){};
+      : mCharsetSource(aCharsetSource) {};
 };
 
 struct opCharsetSwitchTo {
@@ -381,7 +387,7 @@ struct opCharsetSwitchTo {
                              int32_t aCharsetSource, int32_t aLineNumber)
       : mEncoding(aEncoding),
         mCharsetSource(aCharsetSource),
-        mLineNumber(aLineNumber){};
+        mLineNumber(aLineNumber) {};
 };
 
 struct opUpdateStyleSheet {
@@ -395,7 +401,7 @@ struct opUpdateStyleSheet {
 struct opProcessOfflineManifest {
   char16_t* mUrl;
 
-  explicit opProcessOfflineManifest(char16_t* aUrl) : mUrl(aUrl){};
+  explicit opProcessOfflineManifest(char16_t* aUrl) : mUrl(aUrl) {};
 };
 
 struct opMarkMalformedIfScript {
@@ -446,14 +452,14 @@ struct opMaybeComplainAboutCharset {
 
   explicit opMaybeComplainAboutCharset(char* aMsgId, bool aError,
                                        int32_t aLineNumber)
-      : mMsgId(aMsgId), mError(aError), mLineNumber(aLineNumber){};
+      : mMsgId(aMsgId), mError(aError), mLineNumber(aLineNumber) {};
 };
 
 struct opMaybeComplainAboutDeepTree {
   int32_t mLineNumber;
 
   explicit opMaybeComplainAboutDeepTree(int32_t aLineNumber)
-      : mLineNumber(aLineNumber){};
+      : mLineNumber(aLineNumber) {};
 };
 
 struct opAddClass {
@@ -483,7 +489,7 @@ struct opAddViewSourceBase {
   int32_t mLength;
 
   explicit opAddViewSourceBase(char16_t* aBuffer, int32_t aLength)
-      : mBuffer(aBuffer), mLength(aLength){};
+      : mBuffer(aBuffer), mLength(aLength) {};
 };
 
 struct opAddErrorType {
@@ -502,6 +508,22 @@ struct opAddErrorType {
     if (aOther) {
       aOther->AddRef();
     }
+  };
+};
+
+struct opShallowCloneInto {
+  nsIContent** mSrc;
+  nsIContent** mDst;
+  nsIContent** mIntendedParent;
+  mozilla::dom::FromParser mFromParser;
+
+  opShallowCloneInto(nsIContentHandle* aSrc, nsIContentHandle* aDst,
+                     nsIContentHandle* aIntendedParent,
+                     mozilla::dom::FromParser aFromParser)
+      : mFromParser(aFromParser) {
+    mSrc = static_cast<nsIContent**>(aSrc);
+    mDst = static_cast<nsIContent**>(aDst);
+    mIntendedParent = static_cast<nsIContent**>(aIntendedParent);
   };
 };
 
@@ -538,7 +560,7 @@ typedef mozilla::Variant<
     opSetScriptLineAndColumnNumberAndFreeze, opSvgLoad,
     opMaybeComplainAboutCharset, opMaybeComplainAboutDeepTree, opAddClass,
     opAddViewSourceHref, opAddViewSourceBase, opAddErrorType, opAddLineNumberId,
-    opStartLayout, opEnableEncodingMenu>
+    opStartLayout, opEnableEncodingMenu, opShallowCloneInto>
     treeOperation;
 
 class nsHtml5TreeOperation final {
@@ -601,7 +623,8 @@ class nsHtml5TreeOperation final {
                                          nsNodeInfoManager* aNodeInfoManager,
                                          nsHtml5DocumentBuilder* aBuilder);
 
-  static void SetFormElement(nsIContent* aNode, nsIContent* aParent);
+  static void SetFormElement(nsIContent* aNode, nsIContent* aForm,
+                             nsIContent* aParent);
 
   static nsresult AppendIsindexPrompt(nsIContent* parent,
                                       nsHtml5DocumentBuilder* aBuilder);

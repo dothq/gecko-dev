@@ -153,6 +153,20 @@ class ArrayBufferDataStream {
       this.pos += size;
       return value;
     }
+
+    readBytes() {
+      const size = this.readInt32();
+      const bytes = new Uint8Array(this.dataView.buffer, this.pos, size);
+      this.pos += size;
+      return bytes
+    }
+
+    writeBytes(uint8Array) {
+      this.writeUint32(uint8Array.length);
+      value.forEach((elt) => {
+        dataStream.writeUint8(elt);
+      })
+    }
 }
 
 function handleRustResult(result, liftCallback, liftErrCallback) {
@@ -164,9 +178,8 @@ function handleRustResult(result, liftCallback, liftErrCallback) {
             throw liftErrCallback(result.data);
 
         case "internal-error":
-            let message = result.internalErrorMessage;
-            if (message) {
-                throw new UniFFIInternalError(message);
+            if (result.data) {
+                throw new UniFFIInternalError(FfiConverterString.lift(result.data));
             } else {
                 throw new UniFFIInternalError("Unknown error");
             }
@@ -279,6 +292,9 @@ export class FfiConverterString extends FfiConverter {
     }
 }
 
+/**
+ * CustomTypesDemo
+ */
 export class CustomTypesDemo {
     constructor({ url, handle } = {}) {
         try {
@@ -297,9 +313,16 @@ export class CustomTypesDemo {
             }
             throw e;
         }
+        /**
+         * @type {Url}
+         */
         this.url = url;
+        /**
+         * @type {Handle}
+         */
         this.handle = handle;
     }
+
     equals(other) {
         return (
             this.url == other.url &&
@@ -331,7 +354,7 @@ export class FfiConverterTypeCustomTypesDemo extends FfiConverterArrayBuffer {
     static checkType(value) {
         super.checkType(value);
         if (!(value instanceof CustomTypesDemo)) {
-            throw new TypeError(`Expected 'CustomTypesDemo', found '${typeof value}'`);
+            throw new UniFFITypeError(`Expected 'CustomTypesDemo', found '${typeof value}'`);
         }
         try {
             FfiConverterTypeUrl.checkType(value.url);
@@ -441,6 +464,10 @@ export class FfiConverterTypeUrl extends FfiConverter {
 
 
 
+/**
+ * getCustomTypesDemo
+ * @returns {CustomTypesDemo}
+ */
 export function getCustomTypesDemo(demo) {
 
         const liftResult = (result) => FfiConverterTypeCustomTypesDemo.lift(result);
@@ -454,8 +481,8 @@ export function getCustomTypesDemo(demo) {
                 }
                 throw e;
             }
-            return UniFFIScaffolding.callAsync(
-                39, // custom_types:uniffi_uniffi_custom_types_fn_func_get_custom_types_demo
+            return UniFFIScaffolding.callAsyncWrapper(
+                95, // custom_types:uniffi_uniffi_custom_types_fn_func_get_custom_types_demo
                 FfiConverterOptionalTypeCustomTypesDemo.lower(demo),
             )
         }

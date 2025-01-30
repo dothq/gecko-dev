@@ -3,6 +3,10 @@
 
 "use strict";
 
+let bounceTrackingProtection = Cc[
+  "@mozilla.org/bounce-tracking-protection;1"
+].getService(Ci.nsIBounceTrackingProtection);
+
 add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
     set: [
@@ -73,12 +77,18 @@ add_task(async function test_bounce_chain() {
       await promiseRecordBounces;
 
       Assert.deepEqual(
-        bounceTrackingProtection.testGetBounceTrackerCandidateHosts({}).sort(),
+        bounceTrackingProtection
+          .testGetBounceTrackerCandidateHosts({})
+          .map(entry => entry.siteHost)
+          .sort(),
         [SITE_TRACKER_B, SITE_TRACKER].sort(),
         `Identified all bounce trackers in the redirect chain.`
       );
       Assert.deepEqual(
-        bounceTrackingProtection.testGetUserActivationHosts({}).sort(),
+        bounceTrackingProtection
+          .testGetUserActivationHosts({})
+          .map(entry => entry.siteHost)
+          .sort(),
         [SITE_A, SITE_B].sort(),
         "Should only have user activation for sites where we clicked links."
       );

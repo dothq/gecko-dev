@@ -191,6 +191,7 @@ class DebuggerFrame : public NativeObject {
   [[nodiscard]] static DebuggerFrame* check(JSContext* cx, HandleValue thisv);
 
   bool isOnStack() const;
+  bool isOnStackOrSuspendedWasmStack() const;
 
   bool isSuspended() const;
 
@@ -252,6 +253,11 @@ class DebuggerFrame : public NativeObject {
    */
   bool resume(const FrameIter& iter);
 
+  /*
+   * Called when JS PI sets aside the suspendable stack frames.
+   */
+  void suspendWasmFrame(JS::GCContext* gcx);
+
   bool hasAnyHooks() const;
 
   Debugger* owner() const;
@@ -287,6 +293,7 @@ class DebuggerFrame : public NativeObject {
   FrameIter getFrameIter(JSContext* cx);
 
   void terminate(JS::GCContext* gcx, AbstractFramePtr frame);
+  void onGeneratorClosed(JS::GCContext* gcx);
   void suspend(JS::GCContext* gcx);
 
   [[nodiscard]] bool replaceFrameIterData(JSContext* cx, const FrameIter&);

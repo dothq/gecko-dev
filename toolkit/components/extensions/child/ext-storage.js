@@ -28,28 +28,16 @@ this.storage = class extends ExtensionAPI {
   getLocalFileBackend(context, { deserialize, serialize }) {
     return {
       get(keys) {
-        return measureOp(
-          ExtensionTelemetry.storageLocalGetJson,
-          context.extension,
-          () => {
-            return context.childManager
-              .callParentAsyncFunction("storage.local.JSONFileBackend.get", [
-                serialize(keys),
-              ])
-              .then(deserialize);
-          }
-        );
+        return context.childManager
+          .callParentAsyncFunction("storage.local.JSONFileBackend.get", [
+            serialize(keys),
+          ])
+          .then(deserialize);
       },
       set(items) {
-        return measureOp(
-          ExtensionTelemetry.storageLocalSetJson,
-          context.extension,
-          () => {
-            return context.childManager.callParentAsyncFunction(
-              "storage.local.JSONFileBackend.set",
-              [serialize(items)]
-            );
-          }
+        return context.childManager.callParentAsyncFunction(
+          "storage.local.JSONFileBackend.set",
+          [serialize(items)]
         );
       },
       remove(keys) {
@@ -154,6 +142,8 @@ this.storage = class extends ExtensionAPI {
       return new EventManager({
         context,
         name: onChangedName,
+        // Parent event already resets idle if needed, no need to do it here.
+        resetIdleOnEvent: false,
         register: fire => {
           let onChanged = (data, area) => {
             let changes = new context.cloneScope.Object();
@@ -318,7 +308,7 @@ this.storage = class extends ExtensionAPI {
           set(items) {
             return context.childManager.callParentAsyncFunction(
               "storage.session.set",
-              [serialize(items)]
+              [serialize(items), { callerLocation: context.getCaller() }]
             );
           },
           onChanged: makeOnChangedEventTarget("storage.session.onChanged"),

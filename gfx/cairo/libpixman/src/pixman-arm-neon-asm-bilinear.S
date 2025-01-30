@@ -55,9 +55,9 @@
 #endif
 
 .text
-.fpu neon
 .arch armv7a
 .object_arch armv4
+.fpu neon
 .eabi_attribute 10, 0
 .eabi_attribute 12, 0
 .arm
@@ -67,6 +67,8 @@
 #include "pixman-private.h"
 #include "pixman-arm-asm.h"
 #include "pixman-arm-neon-asm.h"
+
+pixman_syntax_unified
 
 /*
  * Bilinear macros from pixman-arm-neon-asm.S

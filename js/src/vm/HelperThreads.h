@@ -14,6 +14,7 @@
 #include "mozilla/Variant.h"
 
 #include "js/AllocPolicy.h"
+#include "js/HelperThreadAPI.h"
 #include "js/shadow/Zone.h"
 #include "js/UniquePtr.h"
 #include "js/Vector.h"
@@ -41,7 +42,7 @@ struct PromiseHelperTask;
 class SourceCompressionTask;
 
 namespace frontend {
-struct CompilationStencil;
+struct InitialStencilAndDelazifications;
 }
 
 namespace gc {
@@ -58,8 +59,10 @@ using IonFreeCompileTasks = Vector<IonCompileTask*, 8, SystemAllocPolicy>;
 namespace wasm {
 struct CompileTask;
 struct CompileTaskState;
-struct Tier2GeneratorTask;
-using UniqueTier2GeneratorTask = UniquePtr<Tier2GeneratorTask>;
+struct CompleteTier2GeneratorTask;
+using UniqueCompleteTier2GeneratorTask = UniquePtr<CompleteTier2GeneratorTask>;
+struct PartialTier2CompileTask;
+using UniquePartialTier2CompileTask = UniquePtr<PartialTier2CompileTask>;
 }  // namespace wasm
 
 /*
@@ -68,20 +71,41 @@ using UniqueTier2GeneratorTask = UniquePtr<Tier2GeneratorTask>;
  */
 extern Mutex gHelperThreadLock MOZ_UNANNOTATED;
 
-class MOZ_RAII AutoLockHelperThreadState : public LockGuard<Mutex> {
-  using Base = LockGuard<Mutex>;
-
+// Set of tasks to dispatch when the helper thread state lock is released.
+class AutoHelperTaskQueue {
  public:
-  explicit AutoLockHelperThreadState() : Base(gHelperThreadLock) {}
+  ~AutoHelperTaskQueue() { dispatchQueuedTasks(); }
+  bool hasQueuedTasks() const { return !tasksToDispatch.empty(); }
+  void queueTaskToDispatch(JS::HelperThreadTask* task) const;
+  void dispatchQueuedTasks();
+
+ private:
+  // TODO: Convert this to use a linked list.
+  mutable Vector<JS::HelperThreadTask*, 1, SystemAllocPolicy> tasksToDispatch;
 };
 
-class MOZ_RAII AutoUnlockHelperThreadState : public UnlockGuard<Mutex> {
-  using Base = UnlockGuard<Mutex>;
-
+// A lock guard for data protected by the helper thread lock.
+//
+// This can also queue helper thread tasks to be triggered when the lock is
+// released.
+class MOZ_RAII AutoLockHelperThreadState
+    : public AutoHelperTaskQueue,  // Must come before LockGuard.
+      public LockGuard<Mutex> {
  public:
-  explicit AutoUnlockHelperThreadState(AutoLockHelperThreadState& locked)
-      : Base(locked) {}
+  AutoLockHelperThreadState() : LockGuard<Mutex>(gHelperThreadLock) {}
+  AutoLockHelperThreadState(const AutoLockHelperThreadState&) = delete;
+
+ private:
+  friend class UnlockGuard<AutoLockHelperThreadState>;
+  void unlock() {
+    LockGuard<Mutex>::unlock();
+    dispatchQueuedTasks();
+  }
+
+  friend class GlobalHelperThreadState;
 };
+
+using AutoUnlockHelperThreadState = UnlockGuard<AutoLockHelperThreadState>;
 
 // Create data structures used by helper threads.
 bool CreateHelperThreadsState();
@@ -101,20 +125,33 @@ size_t GetMaxWasmCompilationThreads();
 bool SetFakeCPUCount(size_t count);
 
 // Enqueues a wasm compilation task.
-bool StartOffThreadWasmCompile(wasm::CompileTask* task, wasm::CompileMode mode);
+bool StartOffThreadWasmCompile(wasm::CompileTask* task,
+                               wasm::CompileState state);
 
 // Remove any pending wasm compilation tasks queued with
 // StartOffThreadWasmCompile that match the arguments. Return the number
 // removed.
 size_t RemovePendingWasmCompileTasks(const wasm::CompileTaskState& taskState,
-                                     wasm::CompileMode mode,
+                                     wasm::CompileState state,
                                      const AutoLockHelperThreadState& lock);
 
-// Enqueues a wasm compilation task.
-void StartOffThreadWasmTier2Generator(wasm::UniqueTier2GeneratorTask task);
+// Enqueues a wasm Complete Tier-2 compilation task.  This (logically, at
+// least) manages a set of sub-tasks that perform compilation of groups of
+// functions.
+void StartOffThreadWasmCompleteTier2Generator(
+    wasm::UniqueCompleteTier2GeneratorTask task);
 
-// Cancel all background Wasm Tier-2 compilations.
-void CancelOffThreadWasmTier2Generator();
+// Enqueues a wasm Partial Tier-2 compilation task.  This compiles one
+// function, doing so itself, without any sub-tasks.
+void StartOffThreadWasmPartialTier2Compile(
+    wasm::UniquePartialTier2CompileTask task);
+
+// Cancel all background Wasm Complete Tier-2 compilations, both the generator
+// task and the individual compilation tasks.
+void CancelOffThreadWasmCompleteTier2Generator();
+
+// Cancel a single background Wasm Partial Tier-2 compilation.
+void CancelOffThreadWasmPartialTier2Compile();
 
 /*
  * If helper threads are available, call execute() then dispatchResolve() on the
@@ -209,9 +246,9 @@ void WaitForAllDelazifyTasks(JSRuntime* rt);
 
 // Start off-thread delazification task, to race the delazification of inner
 // functions.
-void StartOffThreadDelazification(JSContext* maybeCx,
-                                  const JS::ReadOnlyCompileOptions& options,
-                                  const frontend::CompilationStencil& stencil);
+void StartOffThreadDelazification(
+    JSContext* maybeCx, const JS::ReadOnlyCompileOptions& options,
+    frontend::InitialStencilAndDelazifications* stencils);
 
 // Drain the task queues and wait for all helper threads to finish running.
 //

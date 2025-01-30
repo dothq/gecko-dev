@@ -5,17 +5,14 @@
   <title>FxviewTabList Tests</title>
   <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
   <script src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"></script>
+  <link rel="localization" href="browser/firefoxView.ftl">
+  <link rel="localization" href="browser/fxviewTabList.ftl">
   <link rel="localization" href="browser/places.ftl">
   <link rel="stylesheet" href="chrome://mochikit/content/tests/SimpleTest/test.css"/>
   <link rel="stylesheet" href="chrome://global/skin/in-content/common.css">
   <script type="module" src="chrome://browser/content/firefoxview/fxview-tab-list.mjs"></script>
 </head>
 <body>
-  <style>
-    fxview-tab-list.history::part(secondary-button) {
-      background-image: url("chrome://global/skin/icons/more.svg");
-    }
-  </style>
 <p id="display"></p>
 <div id="content" style="max-width: 750px">
   <fxview-tab-list class="history" .dateTimeFormat="relative" .hasPopup="menu">
@@ -42,8 +39,8 @@
   const { BrowserTestUtils } = ChromeUtils.importESModule(
     "resource://testing-common/BrowserTestUtils.sys.mjs"
   );
-  const { FirefoxViewPlacesQuery } = ChromeUtils.importESModule(
-    "resource:///modules/firefox-view-places-query.sys.mjs"
+  const { PlacesQuery } = ChromeUtils.importESModule(
+    "resource://gre/modules/PlacesQuery.sys.mjs"
   );
   const { PlacesUtils } = ChromeUtils.importESModule(
     "resource://gre/modules/PlacesUtils.sys.mjs"
@@ -57,7 +54,7 @@
 
   const fxviewTabList = document.querySelector("fxview-tab-list");
   let tabItems = [];
-  const placesQuery = new FirefoxViewPlacesQuery();
+  const placesQuery = new PlacesQuery();
 
   const URLs = [
     "http://mochi.test:8888/browser/",
@@ -111,7 +108,20 @@
     });
     await historyUpdated.promise;
 
-    fxviewTabList.tabItems = [...history.values()].flat();
+    fxviewTabList.tabItems = Array.from(history.values()).flat().map(visit => ({
+      ...visit,
+      time: visit.date.getTime(),
+      title: visit.title || visit.url,
+      icon: `page-icon:${visit.url}`,
+      primaryL10nId: "fxviewtabrow-tabs-list-tab",
+      primaryL10nArgs: JSON.stringify({
+        targetURI: visit.url,
+      }),
+      secondaryL10nId: "fxviewtabrow-options-menu-button",
+      secondaryL10nArgs: JSON.stringify({
+        tabTitle: visit.title || visit.url,
+      }),
+    }));
 
     await fxviewTabList.getUpdateComplete();
     tabItems = Array.from(fxviewTabList.rowEls);

@@ -152,7 +152,9 @@ RemoteVideoDecoderParent::RemoteVideoDecoderParent(
 
 IPCResult RemoteVideoDecoderParent::RecvConstruct(
     ConstructResolver&& aResolver) {
-  auto imageContainer = MakeRefPtr<layers::ImageContainer>();
+  auto imageContainer = MakeRefPtr<layers::ImageContainer>(
+      layers::ImageUsageType::RemoteVideoDecoder,
+      layers::ImageContainer::SYNCHRONOUS);
   if (mKnowsCompositor && XRE_IsRDDProcess()) {
     // Ensure to allocate recycle allocator
     imageContainer->EnsureRecycleAllocatorForRDD(mKnowsCompositor);
@@ -160,7 +162,7 @@ IPCResult RemoteVideoDecoderParent::RecvConstruct(
   auto params = CreateDecoderParams{
       mVideoInfo,     mKnowsCompositor,
       imageContainer, CreateDecoderParams::VideoFrameRate(mFramerate),
-      mOptions,       CreateDecoderParams::NoWrapper(true),
+      mOptions,       CreateDecoderParams::WrapperSet({/* No wrapper */}),
       mMediaEngineId, mTrackingId,
   };
 

@@ -104,9 +104,8 @@ class MessagePayload extends Component {
 
     getMessagePayload(selectedMessage.payload, connector.getLongString).then(
       async payload => {
-        const { formattedData, formattedDataTitle } = await this.parsePayload(
-          payload
-        );
+        const { formattedData, formattedDataTitle } =
+          await this.parsePayload(payload);
         this.setState({
           payload,
           isFormattedData: !!formattedData,
@@ -138,6 +137,15 @@ class MessagePayload extends Component {
       request.id,
       "responseHeaders"
     );
+
+    if (!responseHeaders.headers) {
+      // If the network event actor was destroyed while retrieving the request
+      // data, no headers will be available.
+      return {
+        formattedData: null,
+        formattedDataTitle: "",
+      };
+    }
 
     const wsProtocol = getResponseHeader(
       { responseHeaders },

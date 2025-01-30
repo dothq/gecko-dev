@@ -16,6 +16,26 @@ add_task(async function setup_storage() {
   );
 });
 
+async function disableOSAuthForThisTest() {
+  // Revert head.js change that mocks os auth
+  sinon.restore();
+
+  let oldValue = FormAutofillUtils.getOSAuthEnabled(
+    FormAutofillUtils.AUTOFILL_CREDITCARDS_REAUTH_PREF
+  );
+  FormAutofillUtils.setOSAuthEnabled(
+    FormAutofillUtils.AUTOFILL_CREDITCARDS_REAUTH_PREF,
+    false
+  );
+
+  registerCleanupFunction(() => {
+    FormAutofillUtils.setOSAuthEnabled(
+      FormAutofillUtils.AUTOFILL_CREDITCARDS_REAUTH_PREF,
+      oldValue
+    );
+  });
+}
+
 add_task(async function test_active_delay() {
   // This is a workaround for the fact that we don't have a way
   // to know when the popup was opened exactly and this makes our test
@@ -26,11 +46,11 @@ add_task(async function test_active_delay() {
   // gets opened and listen for it in this test before we check if the item
   // is disabled.
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["security.notification_enable_delay", 1000],
-      ["extensions.formautofill.reauth.enabled", false],
-    ],
+    set: [["security.notification_enable_delay", 2000]],
   });
+
+  await disableOSAuthForThisTest();
+
   await BrowserTestUtils.withNewTab(
     { gBrowser, url: CC_URL },
     async function (browser) {
@@ -66,17 +86,19 @@ add_task(async function test_active_delay() {
       info(`Popup was disabled for ${delta} ms`);
       Assert.greaterOrEqual(
         delta,
-        1000,
-        "Popup was disabled for at least 1000 ms"
+        2000,
+        "Popup was disabled for at least 2000 ms"
       );
 
       // Check the clicking on the menu works now
+      const promise = TestUtils.topicObserved("formautofill-autofill-complete");
       firstItem.click();
       is(
         browser.autoCompletePopup.selectedIndex,
         0,
         "First item selected after clicking on enabled item"
       );
+      await promise;
 
       // Clean up
       await closePopup(browser);
@@ -86,10 +108,7 @@ add_task(async function test_active_delay() {
 
 add_task(async function test_no_delay() {
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["security.notification_enable_delay", 1000],
-      ["extensions.formautofill.reauth.enabled", false],
-    ],
+    set: [["security.notification_enable_delay", 2000]],
   });
   await BrowserTestUtils.withNewTab(
     { gBrowser, url: ADDRESS_URL },

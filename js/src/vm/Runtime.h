@@ -52,6 +52,7 @@
 #include "vm/GeckoProfiler.h"
 #include "vm/InvalidatingFuse.h"
 #include "vm/JSScript.h"
+#include "vm/Logging.h"
 #include "vm/OffThreadPromiseRuntimeState.h"  // js::OffThreadPromiseRuntimeState
 #include "vm/SharedScriptDataTableHolder.h"   // js::SharedScriptDataTableHolder
 #include "vm/Stack.h"
@@ -102,7 +103,7 @@ struct PcScriptCache;
 class CompileRuntime;
 
 #ifdef JS_SIMULATOR_ARM64
-typedef vixl::Simulator Simulator;
+using vixl::Simulator;
 #elif defined(JS_SIMULATOR)
 class Simulator;
 #endif
@@ -305,6 +306,9 @@ class HasSeenObjectEmulateUndefinedFuse : public js::InvalidatingRuntimeFuse {
     // this invariant directly.
     return true;
   }
+
+ public:
+  virtual void popFuse(JSContext* cx) override;
 };
 
 }  // namespace js
@@ -437,10 +441,12 @@ struct JSRuntime {
   js::UnprotectedData<JS::ConsumeStreamCallback> consumeStreamCallback;
   js::UnprotectedData<JS::ReportStreamErrorCallback> reportStreamErrorCallback;
 
-  js::GlobalObject* getIncumbentGlobal(JSContext* cx);
+  bool getHostDefinedData(JSContext* cx,
+                          JS::MutableHandle<JSObject*> data) const;
+
   bool enqueuePromiseJob(JSContext* cx, js::HandleFunction job,
                          js::HandleObject promise,
-                         js::Handle<js::GlobalObject*> incumbentGlobal);
+                         js::HandleObject hostDefinedData);
   void addUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
   void removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
 
@@ -561,13 +567,14 @@ struct JSRuntime {
  private:
   // List of non-ephemeron weak containers to sweep during
   // beginSweepingSweepGroup.
-  js::MainThreadData<mozilla::LinkedList<js::gc::WeakCacheBase>> weakCaches_;
+  js::MainThreadData<mozilla::LinkedList<JS::detail::WeakCacheBase>>
+      weakCaches_;
 
  public:
-  mozilla::LinkedList<js::gc::WeakCacheBase>& weakCaches() {
+  mozilla::LinkedList<JS::detail::WeakCacheBase>& weakCaches() {
     return weakCaches_.ref();
   }
-  void registerWeakCache(js::gc::WeakCacheBase* cachep) {
+  void registerWeakCache(JS::detail::WeakCacheBase* cachep) {
     weakCaches().insertBack(cachep);
   }
 

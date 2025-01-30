@@ -137,7 +137,7 @@ ToolbarKeyboardNavigator = {
   },
 
   // CustomizableUI event handler
-  onWidgetAdded(aWidgetId, aArea, aPosition) {
+  onWidgetAdded(aWidgetId, aArea) {
     if (!this.kToolbars.includes(aArea)) {
       return;
     }
@@ -406,7 +406,7 @@ ToolbarKeyboardNavigator = {
       return;
     }
     focus.dispatchEvent(
-      new MouseEvent("click", {
+      new PointerEvent("click", {
         bubbles: true,
         ctrlKey: aEvent.ctrlKey,
         altKey: aEvent.altKey,

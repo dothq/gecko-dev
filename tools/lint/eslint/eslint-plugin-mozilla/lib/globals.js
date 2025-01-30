@@ -146,16 +146,16 @@ function convertCallExpressionToGlobals(node, isGlobal) {
     });
   }
 
+  // The definition matches below must be in the global scope for us to define
+  // a global, so bail out early if we're not a global.
+  if (!isGlobal) {
+    return [];
+  }
+
   let source;
   try {
     source = helpers.getASTSource(node);
   } catch (e) {
-    return [];
-  }
-
-  // The definition matches below must be in the global scope for us to define
-  // a global, so bail out early if we're not a global.
-  if (!isGlobal) {
     return [];
   }
 
@@ -634,8 +634,8 @@ module.exports = {
     let globalScope;
 
     let parser = {
-      Program() {
-        globalScope = context.getScope();
+      Program(node) {
+        globalScope = helpers.getScope(context, node);
       },
     };
     let filename = context.getFilename();
@@ -651,10 +651,14 @@ module.exports = {
     for (let type of Object.keys(GlobalsForNode.prototype)) {
       parser[type] = function (node) {
         if (type === "Program") {
-          globalScope = context.getScope();
+          globalScope = helpers.getScope(context, node);
           helpers.addGlobals(extraHTMLGlobals, globalScope);
         }
-        let globals = handler[type](node, context.getAncestors(), globalScope);
+        let globals = handler[type](
+          node,
+          helpers.getAncestors(context, node),
+          globalScope
+        );
         helpers.addGlobals(
           globals,
           globalScope,

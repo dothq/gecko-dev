@@ -24,7 +24,6 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/HTMLSelectElement.h"
 #include "mozilla/dom/Document.h"
-#include "nsIScrollableFrame.h"
 #include "mozilla/ServoStyleSet.h"
 #include "nsNodeInfoManager.h"
 #include "nsContentCreatorFunctions.h"
@@ -48,7 +47,9 @@ using namespace mozilla::gfx;
 
 NS_IMETHODIMP
 nsComboboxControlFrame::RedisplayTextEvent::Run() {
-  if (mControlFrame) mControlFrame->HandleRedisplayTextEvent();
+  if (mControlFrame) {
+    mControlFrame->HandleRedisplayTextEvent();
+  }
   return NS_OK;
 }
 
@@ -171,8 +172,8 @@ nscoord nsComboboxControlFrame::GetLongestOptionISize(
   return maxOptionSize;
 }
 
-nscoord nsComboboxControlFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
-                                                  IntrinsicISizeType aType) {
+nscoord nsComboboxControlFrame::IntrinsicISize(const IntrinsicSizeInput& aInput,
+                                               IntrinsicISizeType aType) {
   Maybe<nscoord> containISize = ContainIntrinsicISize(NS_UNCONSTRAINEDSIZE);
   if (containISize && *containISize != NS_UNCONSTRAINEDSIZE) {
     return *containISize;
@@ -180,27 +181,12 @@ nscoord nsComboboxControlFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
 
   nscoord displayISize = 0;
   if (!containISize && !StyleContent()->mContent.IsNone()) {
-    displayISize += GetLongestOptionISize(aRenderingContext);
+    displayISize += GetLongestOptionISize(aInput.mContext);
   }
 
   // Add room for the dropmarker button (if there is one).
   displayISize += DropDownButtonISize();
   return displayISize;
-}
-
-nscoord nsComboboxControlFrame::GetMinISize(gfxContext* aRenderingContext) {
-  nscoord minISize;
-  DISPLAY_MIN_INLINE_SIZE(this, minISize);
-  minISize = GetIntrinsicISize(aRenderingContext, IntrinsicISizeType::MinISize);
-  return minISize;
-}
-
-nscoord nsComboboxControlFrame::GetPrefISize(gfxContext* aRenderingContext) {
-  nscoord prefISize;
-  DISPLAY_PREF_INLINE_SIZE(this, prefISize);
-  prefISize =
-      GetIntrinsicISize(aRenderingContext, IntrinsicISizeType::PrefISize);
-  return prefISize;
 }
 
 dom::HTMLSelectElement& nsComboboxControlFrame::Select() const {

@@ -40,7 +40,7 @@ beetmover_description_schema = Schema(
         ),
         Optional("shipping-product"): task_description_schema["shipping-product"],
         Optional("attributes"): task_description_schema["attributes"],
-        Optional("job-from"): task_description_schema["job-from"],
+        Optional("task-from"): task_description_schema["task-from"],
     }
 )
 
@@ -111,11 +111,16 @@ def make_task_description(config, jobs):
             .get("machine", {})
             .get("platform", "")
         )
+        dep_symbol = dep_job.task.get("extra", {}).get("treeherder", {}).get("symbol")
+        assert not dep_symbol or (
+            dep_symbol.startswith("B") and dep_symbol.endswith("s")
+        )
+        symbol_suffix = f"-{dep_symbol[1:-1]}" if dep_symbol[1:-1] else ""
         treeherder.setdefault("platform", f"{dep_th_platform}/opt")
         treeherder.setdefault("tier", 2)
         treeherder.setdefault("kind", "build")
         package = job["maven-package"]
-        treeherder.setdefault("symbol", f"BM-{package}")
+        treeherder.setdefault("symbol", f"BM-{package}{symbol_suffix}")
         label = job["label"]
         description = (
             "Beetmover submission for geckoview"

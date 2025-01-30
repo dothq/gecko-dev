@@ -640,6 +640,81 @@ void RunTestsSocket(SandboxTestingChild* child) {
   int c;
   child->ErrnoTest("getcpu"_ns, true,
                    [&] { return syscall(SYS_getcpu, &c, NULL, NULL); });
+
+  child->ErrnoTest("sendmsg"_ns, true, [&] {
+    int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) {
+      return fd;
+    }
+
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    // Address within 100::/64, i.e. IPv6 discard prefix.
+    inet_pton(AF_INET6, "100::1", &addr.sin6_addr);
+    addr.sin6_port = htons(12345);
+
+    struct msghdr msg = {0};
+    struct iovec iov[1];
+    char buf[] = "test";
+    iov[0].iov_base = buf;
+    iov[0].iov_len = sizeof(buf);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+    msg.msg_name = &addr;
+    msg.msg_namelen = sizeof(addr);
+
+    int rv = sendmsg(fd, &msg, 0);
+    close(fd);
+    MOZ_ASSERT(rv == sizeof(buf),
+               "Expected sendmsg to return the number of bytes sent");
+    return rv;
+  });
+
+  child->ErrnoTest("recvmmsg"_ns, true, [&] {
+    int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) {
+      return fd;
+    }
+
+    // Set the socket to non-blocking mode
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+      close(fd);
+      return -1;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      close(fd);
+      return -1;
+    }
+
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    addr.sin6_port = htons(0);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      return -1;
+    }
+
+    struct mmsghdr msgs[1];
+    memset(msgs, 0, sizeof(msgs));
+    struct iovec iov[1];
+    char buf[64];
+    iov[0].iov_base = buf;
+    iov[0].iov_len = sizeof(buf);
+    msgs[0].msg_hdr.msg_iov = iov;
+    msgs[0].msg_hdr.msg_iovlen = 1;
+
+    int rv = recvmmsg(fd, msgs, 1, 0, nullptr);
+    close(fd);
+    MOZ_ASSERT(rv == -1 && errno == EAGAIN,
+               "recvmmsg should return -1 with EAGAIN given that no datagrams "
+               "are available");
+    return 0;
+  });
 #  endif  // XP_LINUX
 #elif XP_MACOSX
   RunMacTestLaunchProcess(child);
@@ -680,11 +755,11 @@ void RunTestsRDD(SandboxTestingChild* child) {
 
   RunTestsSched(child);
 
-  child->ErrnoTest("socket_inet"_ns, false,
-                   [] { return socket(AF_INET, SOCK_STREAM, 0); });
+  child->ErrnoValueTest("socket_inet"_ns, EACCES,
+                        [] { return socket(AF_INET, SOCK_STREAM, 0); });
 
-  child->ErrnoTest("socket_unix"_ns, false,
-                   [] { return socket(AF_UNIX, SOCK_STREAM, 0); });
+  child->ErrnoValueTest("socket_unix"_ns, EACCES,
+                        [] { return socket(AF_UNIX, SOCK_STREAM, 0); });
 
   child->ErrnoTest("uname"_ns, true, [] {
     struct utsname uts;
@@ -711,6 +786,13 @@ void RunTestsRDD(SandboxTestingChild* child) {
     return mknod("/dev/null", S_IFCHR | 0666, makedev(1, 3));
   });
 
+  // Rust panics call getcwd to try to print relative paths in
+  // backtraces.
+  child->ErrnoValueTest("getcwd"_ns, ENOENT, [] {
+    char buf[4096];
+    return (getcwd(buf, sizeof(buf)) == nullptr) ? -1 : 0;
+  });
+
   // nvidia defines some ioctls with the type 0x46 ('F', otherwise
   // used by fbdev) and numbers starting from 200 (0xc8).
   child->ErrnoValueTest("ioctl_nvidia"_ns, ENOTTY,
@@ -719,6 +801,16 @@ void RunTestsRDD(SandboxTestingChild* child) {
   child->ErrnoTest("statfs"_ns, true, [] {
     struct statfs sf;
     return statfs("/usr/share", &sf);
+  });
+
+  child->ErrnoValueTest("fork"_ns, EPERM, [] {
+    pid_t pid = fork();
+    if (pid == 0) {
+      // Success: shouldn't happen, and parent will report a test
+      // failure.
+      _exit(0);
+    }
+    return pid;
   });
 
 #  elif XP_MACOSX
@@ -909,6 +1001,12 @@ void RunTestsUtilityAudioDecoder(SandboxTestingChild* child,
     long rv = syscall(SYS_set_mempolicy, 0, NULL, 0);
     return rv;
   });
+
+  child->ErrnoValueTest("prctl_capbtest_read_blocked"_ns, EINVAL, [] {
+    int rv = prctl(PR_CAPBSET_READ, 0, 0, 0, 0);
+    return rv;
+  });
+
 #  elif XP_MACOSX  // XP_LINUX
   RunMacTestLaunchProcess(child);
   RunMacTestWindowServer(child);

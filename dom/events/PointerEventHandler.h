@@ -50,13 +50,16 @@ class PointerInfo final {
   uint16_t mPointerType;
   bool mActiveState;
   bool mPrimaryState;
+  bool mFromTouchEvent;
   bool mPreventMouseEventByContent;
   WeakPtr<dom::Document> mActiveDocument;
   explicit PointerInfo(bool aActiveState, uint16_t aPointerType,
-                       bool aPrimaryState, dom::Document* aActiveDocument)
+                       bool aPrimaryState, bool aFromTouchEvent,
+                       dom::Document* aActiveDocument)
       : mPointerType(aPointerType),
         mActiveState(aActiveState),
         mPrimaryState(aPrimaryState),
+        mFromTouchEvent(aFromTouchEvent),
         mPreventMouseEventByContent(false),
         mActiveDocument(aActiveDocument) {}
 };
@@ -202,14 +205,27 @@ class PointerEventHandler final {
       bool aDontRetargetEvents, nsEventStatus* aStatus,
       nsIContent** aMouseOrTouchEventTarget = nullptr);
 
+  /**
+   * Synthesize eMouseMove or ePointerMove to dispatch mouse/pointer boundary
+   * events if they are required.  This dispatches the event on the widget.
+   * Therefore, this dispatches the event on correct document in the same
+   * process.  However, if there is a popup under the pointer or a document in a
+   * different process, this does not work as you expected.
+   */
+  MOZ_CAN_RUN_SCRIPT static void SynthesizeMoveToDispatchBoundaryEvents(
+      const WidgetMouseEvent* aEvent);
+
   static void InitPointerEventFromMouse(WidgetPointerEvent* aPointerEvent,
                                         WidgetMouseEvent* aMouseEvent,
                                         EventMessage aMessage);
 
   static void InitPointerEventFromTouch(WidgetPointerEvent& aPointerEvent,
                                         const WidgetTouchEvent& aTouchEvent,
-                                        const mozilla::dom::Touch& aTouch,
-                                        bool aIsPrimary);
+                                        const mozilla::dom::Touch& aTouch);
+
+  static void InitCoalescedEventFromPointerEvent(
+      WidgetPointerEvent& aCoalescedEvent,
+      const WidgetPointerEvent& aSourceEvent);
 
   static bool ShouldGeneratePointerEventFromMouse(WidgetGUIEvent* aEvent) {
     return aEvent->mMessage == eMouseDown || aEvent->mMessage == eMouseUp ||
@@ -249,6 +265,10 @@ class PointerEventHandler final {
   // GetPointerPrimaryState returns state of attribute isPrimary for pointer
   // event with pointerId
   static bool GetPointerPrimaryState(uint32_t aPointerId);
+
+  // HasActiveTouchPointer returns true if there is active pointer event that is
+  // generated from touch event.
+  static bool HasActiveTouchPointer();
 
   MOZ_CAN_RUN_SCRIPT
   static void DispatchGotOrLostPointerCaptureEvent(

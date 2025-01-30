@@ -32,19 +32,17 @@ namespace JS::loader {
 // ScriptFetchOptions
 //////////////////////////////////////////////////////////////
 
-NS_IMPL_CYCLE_COLLECTION(ScriptFetchOptions, mTriggeringPrincipal, mElement)
+NS_IMPL_CYCLE_COLLECTION(ScriptFetchOptions, mTriggeringPrincipal)
 
 ScriptFetchOptions::ScriptFetchOptions(
     mozilla::CORSMode aCORSMode, const nsAString& aNonce,
     mozilla::dom::RequestPriority aFetchPriority,
-    const ParserMetadata aParserMetadata, nsIPrincipal* aTriggeringPrincipal,
-    mozilla::dom::Element* aElement)
+    const ParserMetadata aParserMetadata, nsIPrincipal* aTriggeringPrincipal)
     : mCORSMode(aCORSMode),
       mNonce(aNonce),
       mFetchPriority(aFetchPriority),
       mParserMetadata(aParserMetadata),
-      mTriggeringPrincipal(aTriggeringPrincipal),
-      mElement(aElement) {}
+      mTriggeringPrincipal(aTriggeringPrincipal) {}
 
 ScriptFetchOptions::~ScriptFetchOptions() = default;
 
@@ -130,6 +128,12 @@ mozilla::dom::ScriptLoadContext* ScriptLoadRequest::GetScriptLoadContext() {
   return mLoadContext->AsWindowContext();
 }
 
+const mozilla::dom::ScriptLoadContext* ScriptLoadRequest::GetScriptLoadContext()
+    const {
+  MOZ_ASSERT(mLoadContext);
+  return mLoadContext->AsWindowContext();
+}
+
 mozilla::loader::SyncLoadContext* ScriptLoadRequest::GetSyncLoadContext() {
   MOZ_ASSERT(mLoadContext);
   return mLoadContext->AsSyncContext();
@@ -153,6 +157,37 @@ ModuleLoadRequest* ScriptLoadRequest::AsModuleRequest() {
 const ModuleLoadRequest* ScriptLoadRequest::AsModuleRequest() const {
   MOZ_ASSERT(IsModuleRequest());
   return static_cast<const ModuleLoadRequest*>(this);
+}
+
+bool ScriptLoadRequest::IsCacheable() const {
+  if (HasScriptLoadContext() && GetScriptLoadContext()->mIsInline) {
+    return false;
+  }
+
+  return !mExpirationTime.IsExpired();
+}
+
+void ScriptLoadRequest::CacheEntryFound(LoadedScript* aLoadedScript) {
+  MOZ_ASSERT(IsCheckingCache());
+  MOZ_ASSERT(mURI);
+
+  mLoadedScript = aLoadedScript;
+
+  MOZ_ASSERT(mFetchOptions->IsCompatible(mLoadedScript->GetFetchOptions()));
+
+  switch (mKind) {
+    case ScriptKind::eClassic:
+    case ScriptKind::eImportMap:
+      MOZ_ASSERT(mLoadedScript->IsClassicScript());
+      break;
+    case ScriptKind::eModule:
+      MOZ_ASSERT(mLoadedScript->IsModuleScript());
+      break;
+    case ScriptKind::eEvent:
+      MOZ_ASSERT_UNREACHABLE("EventScripts are not using ScriptLoadRequest");
+      break;
+  }
+  mState = State::Ready;
 }
 
 void ScriptLoadRequest::NoCacheEntryFound() {
@@ -181,19 +216,12 @@ void ScriptLoadRequest::SetPendingFetchingError() {
   mState = State::PendingFetchingError;
 }
 
-void ScriptLoadRequest::MarkForBytecodeEncoding(JSScript* aScript) {
+void ScriptLoadRequest::MarkScriptForBytecodeEncoding(JSScript* aScript) {
   MOZ_ASSERT(!IsModuleRequest());
-  MOZ_ASSERT(!IsMarkedForBytecodeEncoding());
+  MOZ_ASSERT(!mScriptForBytecodeEncoding);
+  MarkForBytecodeEncoding();
   mScriptForBytecodeEncoding = aScript;
   HoldJSObjects(this);
-}
-
-bool ScriptLoadRequest::IsMarkedForBytecodeEncoding() const {
-  if (IsModuleRequest()) {
-    return AsModuleRequest()->IsModuleMarkedForBytecodeEncoding();
-  }
-
-  return !!mScriptForBytecodeEncoding;
 }
 
 static bool IsInternalURIScheme(nsIURI* uri) {

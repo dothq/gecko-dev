@@ -14,6 +14,7 @@
 #include "jit/FixedList.h"
 #include "jit/InlineScriptTree.h"
 #include "jit/JitAllocPolicy.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 
 namespace js {
@@ -30,7 +31,7 @@ using MInstructionReverseIterator = InlineListReverseIterator<MInstruction>;
 using MPhiIterator = InlineListIterator<MPhi>;
 
 #ifdef DEBUG
-typedef InlineForwardListIterator<MResumePoint> MResumePointIterator;
+using MResumePointIterator = InlineForwardListIterator<MResumePoint>;
 #endif
 
 class LBlock;
@@ -60,6 +61,9 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
 
   // This block will unconditionally bail out.
   bool alwaysBails_ = false;
+
+  // Will be used for branch hinting in wasm.
+  wasm::BranchHint branchHint_ = wasm::BranchHint::Invalid;
 
   // Pushes a copy of a local variable or argument.
   void pushVariable(uint32_t slot) { push(slots_[slot]); }
@@ -375,6 +379,15 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   uint32_t id() const { return id_; }
   uint32_t numPredecessors() const { return predecessors_.length(); }
 
+  bool branchHintingUnlikely() const {
+    return branchHint_ == wasm::BranchHint::Unlikely;
+  }
+  bool branchHintingLikely() const {
+    return branchHint_ == wasm::BranchHint::Likely;
+  }
+
+  void setBranchHinting(wasm::BranchHint value) { branchHint_ = value; }
+
   uint32_t domIndex() const {
     MOZ_ASSERT(!isDead());
     return domIndex_;
@@ -649,7 +662,7 @@ using MBasicBlockIterator = InlineListIterator<MBasicBlock>;
 using ReversePostorderIterator = InlineListIterator<MBasicBlock>;
 using PostorderIterator = InlineListReverseIterator<MBasicBlock>;
 
-typedef Vector<MBasicBlock*, 1, JitAllocPolicy> MIRGraphReturns;
+using MIRGraphReturns = Vector<MBasicBlock*, 1, JitAllocPolicy>;
 
 class MIRGraph {
   InlineList<MBasicBlock> blocks_;
@@ -699,13 +712,15 @@ class MIRGraph {
 
   MBasicBlock* entryBlock() { return *blocks_.begin(); }
   MBasicBlockIterator begin() { return blocks_.begin(); }
-  MBasicBlockIterator begin(MBasicBlock* at) { return blocks_.begin(at); }
+  MBasicBlockIterator begin(const MBasicBlock* at) { return blocks_.begin(at); }
   MBasicBlockIterator end() { return blocks_.end(); }
   PostorderIterator poBegin() { return blocks_.rbegin(); }
-  PostorderIterator poBegin(MBasicBlock* at) { return blocks_.rbegin(at); }
+  PostorderIterator poBegin(const MBasicBlock* at) {
+    return blocks_.rbegin(at);
+  }
   PostorderIterator poEnd() { return blocks_.rend(); }
   ReversePostorderIterator rpoBegin() { return blocks_.begin(); }
-  ReversePostorderIterator rpoBegin(MBasicBlock* at) {
+  ReversePostorderIterator rpoBegin(const MBasicBlock* at) {
     return blocks_.begin(at);
   }
   ReversePostorderIterator rpoEnd() { return blocks_.end(); }

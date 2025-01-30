@@ -113,9 +113,6 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
     return TimeStampToDOM(mLargestContentfulRender);
   }
   DOMTimeMilliSec GetTimeToTTFI() const { return TimeStampToDOM(mTTFI); }
-  DOMTimeMilliSec GetTimeToDOMContentFlushed() const {
-    return TimeStampToDOM(mDOMContentFlushed);
-  }
 
   DOMHighResTimeStamp GetUnloadEventStartHighRes() {
     mozilla::TimeStamp stamp = GetUnloadEventStartTimeStamp();
@@ -182,7 +179,6 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
       const mozilla::TimeStamp& aCompositeEndTime);
   void NotifyLargestContentfulRenderForRootContentDocument(
       const DOMHighResTimeStamp& aRenderTime);
-  void NotifyDOMContentFlushedForRootContentDocument();
   void NotifyDocShellStateChanged(DocShellState aDocShellState);
 
   void MaybeAddLCPProfilerMarker(mozilla::MarkerInnerWindowId aInnerWindowID);
@@ -210,7 +206,7 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
     return timing.forget();
   }
 
-  bool DocShellHasBeenActiveSinceNavigationStart() {
+  bool DocShellHasBeenActiveSinceNavigationStart() const {
     return mDocShellHasBeenActiveSinceNavigationStart;
   }
 
@@ -243,7 +239,6 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
   mozilla::TimeStamp mNonBlankPaint;
   mozilla::TimeStamp mContentfulComposite;
   mozilla::TimeStamp mLargestContentfulRender;
-  mozilla::TimeStamp mDOMContentFlushed;
 
   mozilla::TimeStamp mBeforeUnloadStart;
   mozilla::TimeStamp mUnloadStart;

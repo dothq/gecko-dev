@@ -26,8 +26,10 @@ default_optimizations = (
     # skip the task except for every Nth push
     {"skip-unless-expanded": None},
     {"skip-unless-backstop": None},
+    {"skip-unless-android-perftest-backstop": None},
     # skip this task if none of the given file patterns match
     {"skip-unless-changed": [str]},
+    {"skip-unless-missing-or-changed": [voluptuous.Any(str, [str])]},
     # skip this task if unless the change files' SCHEDULES contains any of these components
     {"skip-unless-schedules": list(schedules.ALL_COMPONENTS)},
     # optimize strategy aliases for the test kind
@@ -39,6 +41,8 @@ default_optimizations = (
     {"upload-symbols": None},
     # optimize strategy alias for reprocess-symbols tasks
     {"reprocess-symbols": None},
+    # optimization strategy for mozlint tests
+    {"skip-unless-mozlint": voluptuous.Any(str, [str])},
 )
 
 OptimizationSchema = voluptuous.Any(*default_optimizations)

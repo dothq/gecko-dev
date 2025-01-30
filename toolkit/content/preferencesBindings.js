@@ -381,6 +381,11 @@ const Preferences = (window.Preferences = (function () {
       if (this.locked) {
         aElement.disabled = true;
       }
+      if (aElement.labels?.length) {
+        for (let label of aElement.labels) {
+          label.toggleAttribute("disabled", this.locked);
+        }
+      }
 
       if (!this.isElementEditable(aElement)) {
         return;
@@ -427,6 +432,7 @@ const Preferences = (window.Preferences = (function () {
       }
       if (
         aElement.localName == "checkbox" ||
+        aElement.localName == "moz-checkbox" ||
         (aElement.localName == "input" && aElement.type == "checkbox")
       ) {
         setValue(aElement, "checked", val);
@@ -464,6 +470,7 @@ const Preferences = (window.Preferences = (function () {
       let value;
       if (
         aElement.localName == "checkbox" ||
+        aElement.localName == "moz-checkbox" ||
         (aElement.localName == "input" && aElement.type == "checkbox")
       ) {
         value = getValue(aElement, "checked");
@@ -490,6 +497,7 @@ const Preferences = (window.Preferences = (function () {
         case "textarea":
         case "menulist":
         case "moz-toggle":
+        case "moz-checkbox":
           return true;
       }
       return false;

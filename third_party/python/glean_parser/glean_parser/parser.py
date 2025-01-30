@@ -11,7 +11,7 @@ Code for parsing metrics.yaml files.
 import functools
 from pathlib import Path
 import textwrap
-from typing import Any, Dict, Generator, Iterable, Optional, Tuple, Union
+from typing import Any, cast, Dict, Generator, Iterable, Optional, Set, Tuple, Union
 
 import jsonschema  # type: ignore
 from jsonschema.exceptions import ValidationError  # type: ignore
@@ -267,6 +267,7 @@ def _instantiate_pings(
     """
     global_no_lint = content.get("no_lint", [])
     assert isinstance(global_no_lint, list)
+    ping_schedule_reverse_map: Dict[str, Set[str]] = dict()
 
     for ping_key, ping_val in sorted(content.items()):
         if ping_key.startswith("$"):
@@ -284,6 +285,20 @@ def _instantiate_pings(
         if not isinstance(ping_val, dict):
             raise TypeError(f"Invalid content for ping {ping_key}")
         ping_val["name"] = ping_key
+
+        if "metadata" in ping_val and "ping_schedule" in ping_val["metadata"]:
+            if ping_key in ping_val["metadata"]["ping_schedule"]:
+                yield util.format_error(
+                    filepath,
+                    f"For ping '{ping_key}'",
+                    "ping_schedule contains its own ping name",
+                )
+                continue
+            for ping_schedule in ping_val["metadata"]["ping_schedule"]:
+                if ping_schedule not in ping_schedule_reverse_map:
+                    ping_schedule_reverse_map[ping_schedule] = set()
+                ping_schedule_reverse_map[ping_schedule].add(ping_key)
+
         try:
             ping_obj = Ping(
                 defined_in=getattr(ping_val, "defined_in", None),
@@ -312,6 +327,13 @@ def _instantiate_pings(
         else:
             all_objects.setdefault("pings", {})[ping_key] = ping_obj
             sources[ping_key] = filepath
+
+    for scheduler, scheduled in ping_schedule_reverse_map.items():
+        if scheduler in all_objects["pings"] and isinstance(
+            all_objects["pings"][scheduler], Ping
+        ):
+            scheduler_obj: Ping = cast(Ping, all_objects["pings"][scheduler])
+            scheduler_obj.schedules_pings = sorted(list(scheduled))
 
 
 def _instantiate_tags(
@@ -422,6 +444,8 @@ def parse_objects(
           the metric expires.
         - `allow_missing_files`: Do not raise a `FileNotFoundError` if any of
           the input `filepaths` do not exist.
+        - `interesting`: Contains an array of interesting metrics/ping files.
+          Probes not included in these files will be marked as disabled.
     """
     if config is None:
         config = {}
@@ -443,4 +467,40 @@ def parse_objects(
             yield from _instantiate_tags(
                 all_objects, sources, content, filepath, config
             )
+
+    if config.get("interesting"):
+        # We're configured to disable probes not included in the interesting list.
+        filepaths = util.ensure_list(config.get("interesting"))
+        interesting_metrics_dict: Dict[str, Dict[str, Any]] = dict()
+        interesting_metrics_dict.setdefault("metrics", DictWrapper())
+        interesting_metrics_dict.setdefault("pings", DictWrapper())
+        for filepath in filepaths:
+            content, filetype = yield from _load_file(filepath, config)
+
+            if not isinstance(content, dict):
+                raise TypeError(f"Invalid content for {filepath}")
+
+            for category_key, category_val in sorted(content.items()):
+              if category_key.startswith("$"):
+                  continue
+
+              interesting_metrics_dict.setdefault(category_key, DictWrapper())
+
+              if not isinstance(category_val, dict):
+                  raise TypeError(f"Invalid category_val for {category_key}")
+
+              for metric_key, metric_val in sorted(category_val.items()):
+                  interesting_metrics_dict[category_key][metric_key] = metric_val
+
+        for category_key, category_val in all_objects.items():
+            if category_key == "tags":
+                continue
+
+            for metric_key, metric_val in sorted(category_val.items()):
+                category_dict = interesting_metrics_dict.get(category_key, {})
+                if metric_key not in category_dict:
+                    obj = all_objects[category_key][metric_key]
+                    if hasattr(obj, "disabled"):
+                        obj.disabled = True
+
     return _preprocess_objects(all_objects, config)

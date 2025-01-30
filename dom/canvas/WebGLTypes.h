@@ -20,12 +20,14 @@
 #include "mozilla/Casting.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/EnumTypeTraits.h"
+#include "mozilla/IsEnumCase.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Range.h"
 #include "mozilla/RefCounted.h"
 #include "mozilla/Result.h"
 #include "mozilla/ResultVariant.h"
 #include "mozilla/Span.h"
+#include "mozilla/TiedFields.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/BuildConstants.h"
@@ -39,8 +41,7 @@
 #include "nsTArray.h"
 #include "nsString.h"
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
-#include "mozilla/ipc/SharedMemoryBasic.h"
-#include "TiedFields.h"
+#include "mozilla/ipc/SharedMemory.h"
 
 // Manual reflection of WebIDL typedefs that are different from their
 // OpenGL counterparts.
@@ -215,6 +216,7 @@ enum class WebGLExtensionID : uint8_t {
   EXT_blend_minmax,
   EXT_color_buffer_float,
   EXT_color_buffer_half_float,
+  EXT_depth_clamp,
   EXT_disjoint_timer_query,
   EXT_float_blend,
   EXT_frag_depth,
@@ -311,6 +313,20 @@ enum class AttribBaseType : uint8_t {
   Int,
   Uint,
 };
+}  // namespace webgl
+template <>
+inline constexpr bool IsEnumCase<webgl::AttribBaseType>(
+    const webgl::AttribBaseType v) {
+  switch (v) {
+    case webgl::AttribBaseType::Boolean:
+    case webgl::AttribBaseType::Float:
+    case webgl::AttribBaseType::Int:
+    case webgl::AttribBaseType::Uint:
+      return true;
+  }
+  return false;
+}
+namespace webgl {
 webgl::AttribBaseType ToAttribBaseType(GLenum);
 const char* ToString(AttribBaseType);
 
@@ -362,11 +378,10 @@ struct WebGLContextOptions final {
 
   dom::WebGLPowerPreference powerPreference =
       dom::WebGLPowerPreference::Default;
-  bool ignoreColorSpace = true;
-  dom::PredefinedColorSpace colorSpace = dom::PredefinedColorSpace::Srgb;
+  bool forceSoftwareRendering = false;
   bool shouldResistFingerprinting = true;
-
   bool enableDebugRendererInfo = false;
+  PaddingField<bool, 7> _padding;
 
   auto MutTiedFields() {
     // clang-format off
@@ -382,11 +397,10 @@ struct WebGLContextOptions final {
       xrCompatible,
 
       powerPreference,
-      colorSpace,
-      ignoreColorSpace,
+      forceSoftwareRendering,
       shouldResistFingerprinting,
-
-      enableDebugRendererInfo);
+      enableDebugRendererInfo,
+      _padding);
     // clang-format on
   }
 
@@ -464,16 +478,7 @@ struct avec2 {
 #undef _
 
   avec2 Clamp(const avec2& min, const avec2& max) const {
-    return {mozilla::Clamp(x, min.x, max.x), mozilla::Clamp(y, min.y, max.y)};
-  }
-
-  // mozilla::Clamp doesn't work on floats, so be clear that this is a min+max
-  // helper.
-  avec2 ClampMinMax(const avec2& min, const avec2& max) const {
-    const auto ClampScalar = [](const T v, const T min, const T max) {
-      return std::max(min, std::min(v, max));
-    };
-    return {ClampScalar(x, min.x, max.x), ClampScalar(y, min.y, max.y)};
+    return {std::clamp(x, min.x, max.x), std::clamp(y, min.y, max.y)};
   }
 
   template <typename U>
@@ -633,7 +638,7 @@ struct InitContextDesc final {
   uint32_t principalKey = 0;
   uvec2 size = {};
   WebGLContextOptions options;
-  std::array<uint8_t, 3> _padding2;
+  std::array<uint8_t, 5> _padding2;
 
   auto MutTiedFields() {
     return std::tie(isWebgl2, resistFingerprinting, _padding, principalKey,
@@ -684,24 +689,35 @@ struct Limits final {
 };
 
 // -
+namespace details {
+template <class T, size_t Padding>
+struct PaddedBase {
+ protected:
+  T val = {};
+
+ private:
+  uint8_t padding[Padding] = {};
+};
+
+template <class T>
+struct PaddedBase<T, 0> {
+ protected:
+  T val = {};
+};
+}  // namespace details
 
 template <class T, size_t PaddedSize>
-struct Padded {
- private:
-  T val = {};
-  uint8_t padding[PaddedSize - sizeof(T)] = {};
+struct Padded : details::PaddedBase<T, PaddedSize - sizeof(T)> {
+  operator T&() { return this->val; }
+  operator const T&() const { return this->val; }
 
- public:
-  operator T&() { return val; }
-  operator const T&() const { return val; }
+  auto& operator=(const T& rhs) { return this->val = rhs; }
+  auto& operator=(T&& rhs) { return this->val = std::move(rhs); }
 
-  auto& operator=(const T& rhs) { return val = rhs; }
-  auto& operator=(T&& rhs) { return val = std::move(rhs); }
-
-  auto& operator*() { return val; }
-  auto& operator*() const { return val; }
-  auto operator->() { return &val; }
-  auto operator->() const { return &val; }
+  auto& operator*() { return this->val; }
+  auto& operator*() const { return this->val; }
+  auto operator->() { return &this->val; }
+  auto operator->() const { return &this->val; }
 };
 
 // -
@@ -711,14 +727,18 @@ enum class OptionalRenderableFormatBits : uint8_t {
   SRGB8 = (1 << 1),
 };
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(OptionalRenderableFormatBits)
-inline constexpr bool IsEnumCase(const OptionalRenderableFormatBits raw) {
+
+}  // namespace webgl
+template <>
+inline constexpr bool IsEnumCase<webgl::OptionalRenderableFormatBits>(
+    const webgl::OptionalRenderableFormatBits raw) {
   auto rawWithoutValidBits = UnderlyingValue(raw);
   auto bit = decltype(rawWithoutValidBits){1};
   while (bit) {
-    switch (OptionalRenderableFormatBits{bit}) {
+    switch (webgl::OptionalRenderableFormatBits{bit}) {
       // -Werror=switch ensures exhaustive.
-      case OptionalRenderableFormatBits::RGB8:
-      case OptionalRenderableFormatBits::SRGB8:
+      case webgl::OptionalRenderableFormatBits::RGB8:
+      case webgl::OptionalRenderableFormatBits::SRGB8:
         rawWithoutValidBits &= ~bit;
         break;
     }
@@ -726,6 +746,7 @@ inline constexpr bool IsEnumCase(const OptionalRenderableFormatBits raw) {
   }
   return rawWithoutValidBits == 0;
 }
+namespace webgl {
 
 // -
 
@@ -734,7 +755,7 @@ struct InitContextResult final {
   WebGLContextOptions options;
   gl::GLVendor vendor;
   OptionalRenderableFormatBits optionalRenderableFormatBits;
-  uint8_t _padding = {};
+  std::array<uint8_t, 3> _padding = {};
   Limits limits;
   EnumMask<layers::SurfaceDescriptor::Type> uploadableSdTypes;
 
@@ -1242,22 +1263,21 @@ enum class ProvokingVertex : GLenum {
   FirstVertex = LOCAL_GL_FIRST_VERTEX_CONVENTION,
   LastVertex = LOCAL_GL_LAST_VERTEX_CONVENTION,
 };
-inline constexpr bool IsEnumCase(const ProvokingVertex raw) {
+
+}  // namespace webgl
+
+template <>
+inline constexpr bool IsEnumCase<webgl::ProvokingVertex>(
+    const webgl::ProvokingVertex raw) {
   switch (raw) {
-    case ProvokingVertex::FirstVertex:
-    case ProvokingVertex::LastVertex:
+    case webgl::ProvokingVertex::FirstVertex:
+    case webgl::ProvokingVertex::LastVertex:
       return true;
   }
   return false;
 }
 
-template <class E>
-inline constexpr std::optional<E> AsEnumCase(
-    const std::underlying_type_t<E> raw) {
-  const auto ret = static_cast<E>(raw);
-  if (!IsEnumCase(ret)) return {};
-  return ret;
-}
+namespace webgl {
 
 // -
 
@@ -1302,6 +1322,50 @@ struct ReinterpretToSpan {
   }
 };
 
+// -
+
+inline std::string Join(Span<const std::string> ss,
+                        const std::string_view& delim) {
+  if (!ss.size()) return "";
+  auto ret = std::string();
+  {
+    auto chars = delim.size() * (ss.size() - 1);
+    for (const auto& s : ss) {
+      chars += s.size();
+    }
+    ret.reserve(chars);
+  }
+
+  ret = ss[0];
+  ss = ss.subspan(1);
+  for (const auto& s : ss) {
+    ret += delim;
+    ret += s;
+  }
+  return ret;
+}
+
+inline std::string ToStringWithCommas(uint64_t v) {
+  if (!v) return "0";
+  std::vector<std::string> chunks;
+  while (v) {
+    const auto chunk = v % 1000;
+    v /= 1000;
+    chunks.insert(chunks.begin(), std::to_string(chunk));
+  }
+  return Join(chunks, ",");
+}
+
+// -
+
+namespace webgl {
+
+std::unordered_map<GLenum, bool> MakeIsEnabledMap(bool webgl2);
+
+static constexpr uint32_t kMaxClientWaitSyncTimeoutNS =
+    1000 * 1000 * 1000;  // 1000ms in ns.
+
+}  // namespace webgl
 }  // namespace mozilla
 
 #endif

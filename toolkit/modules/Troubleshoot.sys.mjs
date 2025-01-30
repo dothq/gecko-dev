@@ -5,8 +5,6 @@
 import { AddonManager } from "resource://gre/modules/AddonManager.sys.mjs";
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
-import { FeatureGate } from "resource://featuregates/FeatureGate.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -22,6 +20,7 @@ const PREFS_FOR_DISPLAY = [
   "apz.",
   "browser.cache.",
   "browser.contentblocking.category",
+  "browser.contentanalysis.",
   "browser.display.",
   "browser.download.always_ask_before_handling_new_types",
   "browser.download.enable_spam_prevention",
@@ -41,6 +40,7 @@ const PREFS_FOR_DISPLAY = [
   "browser.places.",
   "browser.privatebrowsing.",
   "browser.search.context.loadInBackground",
+  "browser.search.lastSettingsCorruptTime",
   "browser.search.log",
   "browser.search.openintab",
   "browser.search.param",
@@ -258,15 +258,29 @@ var dataProviders = {
 
     try {
       // Windows - Get info about attached pointing devices
-      data.pointingDevices = Services.sysinfo
-        .getProperty("pointingDevices")
-        .split(",");
+      data.pointingDevices = [];
+      if (Services.sysinfo.getProperty("hasMouse")) {
+        data.pointingDevices.push("pointing-device-mouse");
+      }
+      if (Services.sysinfo.getProperty("hasTouch")) {
+        data.pointingDevices.push("pointing-device-touchscreen");
+      }
+      if (Services.sysinfo.getProperty("hasPen")) {
+        data.pointingDevices.push("pointing-device-pen-digitizer");
+      }
+      if (!data.pointingDevices.length) {
+        data.pointingDevices.push("pointing-device-none");
+      }
     } catch (e) {}
 
     data.numTotalWindows = 0;
     data.numFissionWindows = 0;
     data.numRemoteWindows = 0;
-    for (let { docShell } of Services.wm.getEnumerator("navigator:browser")) {
+    for (let { docShell } of Services.wm.getEnumerator(
+      AppConstants.platform == "android"
+        ? "navigator:geckoview"
+        : "navigator:browser"
+    )) {
       docShell.QueryInterface(Ci.nsILoadContext);
       data.numTotalWindows++;
       if (docShell.useRemoteSubframes) {
@@ -465,10 +479,14 @@ var dataProviders = {
   },
 
   async experimentalFeatures(done) {
-    if (AppConstants.platform == "android") {
+    if (AppConstants.MOZ_BUILD_APP != "browser") {
       done();
       return;
     }
+    let { FeatureGate } = ChromeUtils.importESModule(
+      "resource://featuregates/FeatureGate.sys.mjs"
+    );
+
     let gates = await FeatureGate.all();
     done(
       gates.map(gate => {
@@ -568,26 +586,26 @@ var dataProviders = {
       // a string in some cases and an object in others, return an object always.
       let msg = { key: "" };
       try {
-        var status = gfxInfo.getFeatureStatus(feature);
+        var status = gfxInfo.getFeatureStatusStr(feature);
       } catch (e) {}
       switch (status) {
-        case Ci.nsIGfxInfo.FEATURE_BLOCKED_DEVICE:
-        case Ci.nsIGfxInfo.FEATURE_DISCOURAGED:
+        case "BLOCKED_DEVICE":
+        case "DISCOURAGED":
           msg = { key: "blocked-gfx-card" };
           break;
-        case Ci.nsIGfxInfo.FEATURE_BLOCKED_OS_VERSION:
+        case "BLOCKED_OS_VERSION":
           msg = { key: "blocked-os-version" };
           break;
-        case Ci.nsIGfxInfo.FEATURE_BLOCKED_DRIVER_VERSION:
+        case "BLOCKED_DRIVER_VERSION":
           try {
             var driverVersion =
-              gfxInfo.getFeatureSuggestedDriverVersion(feature);
+              gfxInfo.getFeatureSuggestedDriverVersionStr(feature);
           } catch (e) {}
           msg = driverVersion
             ? { key: "try-newer-driver", args: { driverVersion } }
             : { key: "blocked-driver" };
           break;
-        case Ci.nsIGfxInfo.FEATURE_BLOCKED_MISMATCHED_VERSION:
+        case "BLOCKED_MISMATCHED_VERSION":
           msg = { key: "blocked-mismatched-version" };
           break;
       }
@@ -639,9 +657,7 @@ var dataProviders = {
 
     if (!data.numAcceleratedWindows && gfxInfo) {
       let win = AppConstants.platform == "win";
-      let feature = win
-        ? gfxInfo.FEATURE_DIRECT3D_9_LAYERS
-        : gfxInfo.FEATURE_OPENGL_LAYERS;
+      let feature = win ? "DIRECT3D_9_LAYERS" : "OPENGL_LAYERS";
       data.numAcceleratedWindowsMessage = statusMsgForFeature(feature);
     }
 
@@ -688,9 +704,7 @@ var dataProviders = {
       }
 
       if ("direct2DEnabled" in data && !data.direct2DEnabled) {
-        data.direct2DEnabledMessage = statusMsgForFeature(
-          Ci.nsIGfxInfo.FEATURE_DIRECT2D
-        );
+        data.direct2DEnabledMessage = statusMsgForFeature("DIRECT2D");
       }
     }
 
@@ -839,13 +853,13 @@ var dataProviders = {
 
       desc.isFallbackAdapter = adapter.isFallbackAdapter;
 
-      const adapterInfo = await adapter.requestAdapterInfo();
+      const adapterInfo = adapter.info;
       // We can't directly enumerate properties of instances of `GPUAdapterInfo`s, so use the prototype instead.
       const adapterInfoObj = {};
       for (const k of Object.keys(Object.getPrototypeOf(adapterInfo)).sort()) {
         adapterInfoObj[k] = adapterInfo[k];
       }
-      desc[`requestAdapterInfo()`] = adapterInfoObj;
+      desc.info = adapterInfoObj;
 
       desc.features = Array.from(adapter.features).sort();
 
@@ -999,6 +1013,24 @@ var dataProviders = {
     });
   },
 
+  contentAnalysis: async function contentAnalysis(done) {
+    const contentAnalysis = Cc["@mozilla.org/contentanalysis;1"].getService(
+      Ci.nsIContentAnalysis
+    );
+    if (!contentAnalysis.isActive) {
+      done({ active: false });
+      return;
+    }
+    let info = await contentAnalysis.getDiagnosticInfo();
+    done({
+      active: true,
+      connected: info.connectedToAgent,
+      agentPath: info.agentPath,
+      failedSignatureVerification: info.failedSignatureVerification,
+      requestCount: info.requestCount,
+    });
+  },
+
   async normandy(done) {
     if (!AppConstants.MOZ_NORMANDY) {
       done();
@@ -1055,6 +1087,32 @@ var dataProviders = {
       nimbusExperiments,
       nimbusRollouts,
     });
+  },
+
+  async remoteSettings(done) {
+    const { RemoteSettings } = ChromeUtils.importESModule(
+      "resource://services-settings/remote-settings.sys.mjs"
+    );
+
+    let inspected;
+    try {
+      inspected = await RemoteSettings.inspect({ localOnly: true });
+    } catch (error) {
+      console.error(error);
+      done({ isSynchronizationBroken: true, history: { "settings-sync": [] } });
+      return;
+    }
+
+    // Show last check in standard format.
+    inspected.lastCheck = inspected.lastCheck
+      ? new Date(inspected.lastCheck * 1000).toISOString()
+      : "";
+    // Trim history entries.
+    for (let h of Object.values(inspected.history)) {
+      h.splice(10, Infinity);
+    }
+
+    done(inspected);
   },
 };
 

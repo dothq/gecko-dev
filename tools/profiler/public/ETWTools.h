@@ -8,6 +8,7 @@
 #define ETWTools_h
 
 #include "mozilla/BaseProfilerMarkers.h"
+#include "mozilla/Flow.h"
 #include "mozilla/TimeStamp.h"
 #include "nsString.h"
 
@@ -207,6 +208,13 @@ static inline void CreateDataDescForPayloadNonPOD(
 
 static inline void CreateDataDescForPayloadNonPOD(
     PayloadBuffer& aBuffer, EVENT_DATA_DESCRIPTOR& aDescriptor,
+    const Flow& aFlow) {
+  // TODO: we could use a custom schema à la TraceLoggingCustom
+  CreateDataDescForPayloadPOD(aBuffer, aDescriptor, aFlow.Id());
+}
+
+static inline void CreateDataDescForPayloadNonPOD(
+    PayloadBuffer& aBuffer, EVENT_DATA_DESCRIPTOR& aDescriptor,
     const mozilla::TimeStamp& aPayload) {
   if (aPayload.RawQueryPerformanceCounterValue().isNothing()) {
     // This should never happen?
@@ -329,8 +337,8 @@ static inline void EmitETWMarker(const mozilla::ProfilerString8View& aName,
       return;
     }
 
-    static const __declspec(allocate(_tlgSegMetadataEvents)) __declspec(
-        align(1)) constexpr StaticMetaData<MarkerType>
+    static const __declspec(allocate(_tlgSegMetadataEvents))
+    __declspec(align(1)) constexpr StaticMetaData<MarkerType>
         staticData;
 
     // Allocate the exact amount of descriptors required by this event.

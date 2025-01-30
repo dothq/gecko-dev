@@ -1,9 +1,7 @@
 #!/usr/bin/env python
-# ***** BEGIN LICENSE BLOCK *****
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-# ***** END LICENSE BLOCK *****
 """Generic error lists.
 
 Error lists are used to parse output in mozharness.base.log.OutputParser.
@@ -69,7 +67,7 @@ GitErrorList = BaseErrorList + [
 
 PythonErrorList = BaseErrorList + [
     {"regex": re.compile(r"""Warning:.*Error: """), "level": WARNING},
-    {"regex": re.compile(r"""package.*> Error:"""), "level": ERROR},
+    {"regex": re.compile(r"""package.*> (?:Error|ERROR):"""), "level": ERROR},
     {"substr": r"""Traceback (most recent call last)""", "level": ERROR},
     {"substr": r"""SyntaxError: """, "level": ERROR},
     {"substr": r"""TypeError: """, "level": ERROR},

@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include <limits.h>
 #include "prprf.h"
 #include "cert.h"
 #include "certi.h"
@@ -402,7 +403,7 @@ ParseRFC1485AVA(PLArenaPool* arena, const char** pbp, const char* endptr)
     }
 
     /* is this a dotted decimal OID attribute type ? */
-    if (!PL_strncasecmp("oid.", tagBuf, 4) || isdigit(tagBuf[0])) {
+    if (!PL_strncasecmp("oid.", tagBuf, 4) || isdigit((unsigned char)tagBuf[0])) {
         rv = SEC_StringToOID(arena, &derOid, tagBuf, strlen(tagBuf));
         isDottedOid = (PRBool)(rv == SECSuccess);
     } else {
@@ -599,6 +600,8 @@ typedef enum {
  * Some callers will do quoting when needed, others will not.
  * If a caller selects minimalEscapeAndQuote, and the string does not
  * need quoting, then this function changes it to minimalEscape.
+ * Limit source to 16K, which avoids any possibility of overflow.
+ * Maximum output size would be 3*srclen+2.
  */
 static int
 cert_RFC1485_GetRequiredLen(const char* src, int srclen, EQMode* pEQMode)
@@ -608,6 +611,10 @@ cert_RFC1485_GetRequiredLen(const char* src, int srclen, EQMode* pEQMode)
     PRBool needsQuoting = PR_FALSE;
     char lastC = 0;
 
+    /* avoids needing to check for overflow */
+    if (srclen > 16384) {
+        return -1;
+    }
     /* need to make an initial pass to determine if quoting is needed */
     for (i = 0; i < srclen; i++) {
         char c = src[i];
@@ -637,6 +644,7 @@ cert_RFC1485_GetRequiredLen(const char* src, int srclen, EQMode* pEQMode)
         reqLen += 2;
     if (pEQMode && mode == minimalEscapeAndQuote && !needsQuoting)
         *pEQMode = minimalEscape;
+    /* Maximum output size would be 3*srclen+2 */
     return reqLen;
 }
 
@@ -648,9 +656,10 @@ escapeAndQuote(char* dst, int dstlen, char* src, int srclen, EQMode* pEQMode)
     int i, reqLen = 0;
     EQMode mode = pEQMode ? *pEQMode : minimalEscape;
 
+    reqLen = cert_RFC1485_GetRequiredLen(src, srclen, &mode);
+    /* reqLen is max 16384*3 + 2 */
     /* space for terminal null */
-    reqLen = cert_RFC1485_GetRequiredLen(src, srclen, &mode) + 1;
-    if (reqLen > dstlen) {
+    if (reqLen < 0 || reqLen + 1 > dstlen) {
         PORT_SetError(SEC_ERROR_OUTPUT_LEN);
         return SECFailure;
     }
@@ -933,9 +942,9 @@ AppendAVA(stringBuf* bufp, CERTAVA* ava, CertStrictnessLevel strict)
 #define vt n2k.valueType
 
     /* READABLE mode recognizes more names from the name2kinds table
-   * than do STRICT or INVERTIBLE modes.  This assignment chooses the
-   * point in the table where the attribute type name scanning stops.
-   */
+     * than do STRICT or INVERTIBLE modes.  This assignment chooses the
+     * point in the table where the attribute type name scanning stops.
+     */
     endKind = (strict == CERT_N2A_READABLE) ? SEC_OID_UNKNOWN
                                             : SEC_OID_AVA_POSTAL_ADDRESS;
     tag = CERT_GetAVATag(ava);
@@ -981,8 +990,22 @@ AppendAVA(stringBuf* bufp, CERTAVA* ava, CertStrictnessLevel strict)
     }
 
     nameLen = strlen(tagName);
-    valueLen =
-        (useHex ? avaValue->len : cert_RFC1485_GetRequiredLen((char*)avaValue->data, avaValue->len, &mode));
+
+    if (useHex) {
+        valueLen = avaValue->len;
+    } else {
+        int reqLen = cert_RFC1485_GetRequiredLen((char*)avaValue->data, avaValue->len, &mode);
+        if (reqLen < 0) {
+            SECITEM_FreeItem(avaValue, PR_TRUE);
+            return SECFailure;
+        }
+        valueLen = reqLen;
+    }
+    if (UINT_MAX - nameLen < 2 ||
+        valueLen > UINT_MAX - nameLen - 2) {
+        SECITEM_FreeItem(avaValue, PR_TRUE);
+        return SECFailure;
+    }
     len = nameLen + valueLen + 2; /* Add 2 for '=' and trailing NUL */
 
     maxName = nameLen;
@@ -1023,8 +1046,8 @@ AppendAVA(stringBuf* bufp, CERTAVA* ava, CertStrictnessLevel strict)
     memcpy(encodedAVA, tagName, nameLen);
     if (truncateName) {
         /* If tag name is too long, we know it is an OID form that was
-     * allocated from the heap, so we can modify it in place
-     */
+         * allocated from the heap, so we can modify it in place
+         */
         encodedAVA[nameLen - 1] = '.';
         encodedAVA[nameLen - 2] = '.';
         encodedAVA[nameLen - 3] = '.';
@@ -1110,16 +1133,16 @@ CERT_NameToAsciiInvertible(CERTName* name, CertStrictnessLevel strict)
     lastRdn--;
 
     /*
-   * Loop over name contents in _reverse_ RDN order appending to string
-   */
+     * Loop over name contents in _reverse_ RDN order appending to string
+     */
     for (rdn = lastRdn; rdn >= rdns; rdn--) {
         CERTAVA** avas = (*rdn)->avas;
         CERTAVA* ava;
         PRBool newRDN = PR_TRUE;
 
         /*
-     * XXX Do we need to traverse the AVAs in reverse order, too?
-     */
+         * XXX Do we need to traverse the AVAs in reverse order, too?
+         */
         while (avas && (ava = *avas++) != NULL) {
             SECStatus rv;
             /* Put in comma or plus separator */
@@ -1198,20 +1221,23 @@ avaToString(PLArenaPool* arena, CERTAVA* ava)
     if (!avaValue) {
         return buf;
     }
-    valueLen =
-        cert_RFC1485_GetRequiredLen((char*)avaValue->data, avaValue->len, NULL) + 1;
-    if (arena) {
-        buf = (char*)PORT_ArenaZAlloc(arena, valueLen);
-    } else {
-        buf = (char*)PORT_ZAlloc(valueLen);
-    }
-    if (buf) {
-        SECStatus rv =
-            escapeAndQuote(buf, valueLen, (char*)avaValue->data, avaValue->len, NULL);
-        if (rv != SECSuccess) {
-            if (!arena)
-                PORT_Free(buf);
-            buf = NULL;
+    int reqLen = cert_RFC1485_GetRequiredLen((char*)avaValue->data, avaValue->len, NULL);
+    /* reqLen is max 16384*3 + 2 */
+    if (reqLen >= 0) {
+        valueLen = reqLen + 1;
+        if (arena) {
+            buf = (char*)PORT_ArenaZAlloc(arena, valueLen);
+        } else {
+            buf = (char*)PORT_ZAlloc(valueLen);
+        }
+        if (buf) {
+            SECStatus rv =
+                escapeAndQuote(buf, valueLen, (char*)avaValue->data, avaValue->len, NULL);
+            if (rv != SECSuccess) {
+                if (!arena)
+                    PORT_Free(buf);
+                buf = NULL;
+            }
         }
     }
     SECITEM_FreeItem(avaValue, PR_TRUE);
@@ -1331,7 +1357,7 @@ CERT_GetCertificateEmailAddress(CERTCertificate* cert)
     }
     if (rawEmailAddr) {
         for (i = 0; i <= (int)PORT_Strlen(rawEmailAddr); i++) {
-            rawEmailAddr[i] = tolower(rawEmailAddr[i]);
+            rawEmailAddr[i] = tolower((unsigned char)rawEmailAddr[i]);
         }
     }
 
@@ -1357,7 +1383,7 @@ appendStringToBuf(char* dest, char* src, PRUint32* pRemaining)
     if (dest && src && src[0] && *pRemaining > (len = PL_strlen(src))) {
         PRUint32 i;
         for (i = 0; i < len; ++i)
-            dest[i] = tolower(src[i]);
+            dest[i] = tolower((unsigned char)src[i]);
         dest[len] = 0;
         dest += len + 1;
         *pRemaining -= len + 1;

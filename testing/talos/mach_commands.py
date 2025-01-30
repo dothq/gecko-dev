@@ -12,6 +12,7 @@ import sys
 
 import six
 from mach.decorators import Command
+from mach.util import get_state_dir
 from mozbuild.base import BinaryNotFoundException, MozbuildObject
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -25,7 +26,20 @@ class TalosRunner(MozbuildObject):
         2. Make config for Talos Mozharness
         3. Run mozharness
         """
-
+        # Validate that the user is using a supported python version before doing anything else
+        max_py_major, max_py_minor = 3, 11
+        sys_maj, sys_min = sys.version_info.major, sys.version_info.minor
+        if sys_min > max_py_minor:
+            raise PythonVersionException(
+                print(
+                    f"\tPlease downgrade your Python version as talos does not yet support Python "
+                    f"versions greater than {max_py_major}.{max_py_minor}."
+                    f"\n\tYou seem to currently be using Python {sys_maj}.{sys_min}."
+                    f"\n\tSee here for a possible solution in debugging your python environment: "
+                    f"https://firefox-source-docs.mozilla.org/testing/perfdocs/"
+                    f"debugging.html#debugging-local-python-environment"
+                )
+            )
         try:
             self.init_variables(talos_args)
         except BinaryNotFoundException as e:
@@ -82,6 +96,7 @@ class TalosRunner(MozbuildObject):
                 "win32": "python3.manifest",
                 "win64": "python3_x64.manifest",
             },
+            "mozbuild_path": get_state_dir(),
         }
 
     def make_args(self):
@@ -117,6 +132,16 @@ def create_parser():
     return create_parser(mach_interface=True)
 
 
+def setup_toolchain_artifacts(args, command_context):
+    if not any(arg.lower() == "pdfpaint" for arg in args):
+        return
+
+    from mozbuild.bootstrap import bootstrap_toolchain
+
+    print("Setting up pdfpaint PDFs...")
+    bootstrap_toolchain("talos-pdfs")
+
+
 @Command(
     "talos-test",
     category="testing",
@@ -127,7 +152,13 @@ def run_talos_test(command_context, **kwargs):
     talos = command_context._spawn(TalosRunner)
 
     try:
-        return talos.run_test(sys.argv[2:])
+        args = sys.argv[2:]
+        setup_toolchain_artifacts(args, command_context)
+        return talos.run_test(args)
     except Exception as e:
         print(str(e))
         return 1
+
+
+class PythonVersionException(Exception):
+    pass

@@ -4,11 +4,11 @@
 "use strict";
 
 const { actionCreators: ac, actionTypes: at } = ChromeUtils.importESModule(
-  "resource://activity-stream/common/Actions.sys.mjs"
+  "resource://activity-stream/common/Actions.mjs"
 );
 
 const { MESSAGE_TYPE_HASH: msg } = ChromeUtils.importESModule(
-  "resource:///modules/asrouter/ActorConstants.sys.mjs"
+  "resource:///modules/asrouter/ActorConstants.mjs"
 );
 
 const { updateAppInfo } = ChromeUtils.importESModule(
@@ -947,18 +947,18 @@ add_task(
   }
 );
 
-add_task(async function test_applyWhatsNewPolicy() {
+add_task(async function test_applyToolbarBadgePolicy() {
   info(
-    "TelemetryFeed.applyWhatsNewPolicy should set client_id and set pingType"
+    "TelemetryFeed.applyToolbarBadgePolicy should set client_id and set pingType"
   );
   let instance = new TelemetryFeed();
-  let { ping, pingType } = await instance.applyWhatsNewPolicy({});
+  let { ping, pingType } = await instance.applyToolbarBadgePolicy({});
 
   Assert.equal(
     ping.client_id,
     Services.prefs.getCharPref("toolkit.telemetry.cachedClientID")
   );
-  Assert.equal(pingType, "whats-new-panel");
+  Assert.equal(pingType, "toolbar-badge");
 });
 
 add_task(async function test_applyInfoBarPolicy() {
@@ -1214,6 +1214,20 @@ add_task(
   }
 );
 
+add_task(async function test_applyMenuMessagePolicy() {
+  info(
+    "TelemetryFeed.applyMenuMessagePolicy should set client_id and set pingType"
+  );
+  let instance = new TelemetryFeed();
+  let { ping, pingType } = await instance.applyMenuMessagePolicy({});
+
+  Assert.equal(
+    ping.client_id,
+    Services.prefs.getCharPref("toolkit.telemetry.cachedClientID")
+  );
+  Assert.equal(pingType, "menu");
+});
+
 add_task(async function test_applyUndesiredEventPolicy() {
   info(
     "TelemetryFeed.applyUndesiredEventPolicy should exclude client_id " +
@@ -1244,12 +1258,14 @@ add_task(async function test_createASRouterEvent_valid_ping() {
       "ASRouterEventPing ping"
   );
   let instance = new TelemetryFeed();
-  let data = {
-    action: "cfr_user_event",
-    event: "CLICK",
-    message_id: "cfr_message_01",
+  let action = {
+    type: msg.AS_ROUTER_TELEMETRY_USER_EVENT,
+    data: {
+      action: "cfr_user_event",
+      event: "CLICK",
+      message_id: "cfr_message_01",
+    },
   };
-  let action = ac.ASRouterUserEvent(data);
   let { ping } = await instance.createASRouterEvent(action);
 
   await assertASRouterEventPingValid(ping);
@@ -1266,7 +1282,7 @@ add_task(async function test_createASRouterEvent_call_correctPolicy() {
     let instance = new TelemetryFeed();
     sandbox.stub(instance, expectedPolicyFnName);
 
-    let action = ac.ASRouterUserEvent(data);
+    let action = { type: msg.AS_ROUTER_TELEMETRY_USER_EVENT, data };
     await instance.createASRouterEvent(action);
     Assert.ok(
       instance[expectedPolicyFnName].calledOnce,
@@ -1288,10 +1304,10 @@ add_task(async function test_createASRouterEvent_call_correctPolicy() {
     message_id: "onboarding_message_01",
   });
 
-  testCallCorrectPolicy("applyWhatsNewPolicy", {
-    action: "whats-new-panel_user_event",
-    event: "CLICK_BUTTON",
-    message_id: "whats-new-panel_message_01",
+  testCallCorrectPolicy("applyToolbarBadgePolicy", {
+    action: "badge_user_event",
+    event: "IMPRESSION",
+    message_id: "badge_message_01",
   });
 
   testCallCorrectPolicy("applyMomentsPolicy", {
@@ -1324,12 +1340,14 @@ add_task(async function test_createASRouterEvent_stringify_event_context() {
       "it is an Object"
   );
   let instance = new TelemetryFeed();
-  let data = {
-    action: "asrouter_undesired_event",
-    event: "UNDESIRED_EVENT",
-    event_context: { foo: "bar" },
+  let action = {
+    type: msg.AS_ROUTER_TELEMETRY_USER_EVENT,
+    data: {
+      action: "asrouter_undesired_event",
+      event: "UNDESIRED_EVENT",
+      event_context: { foo: "bar" },
+    },
   };
-  let action = ac.ASRouterUserEvent(data);
   let { ping } = await instance.createASRouterEvent(action);
 
   Assert.equal(ping.event_context, JSON.stringify({ foo: "bar" }));
@@ -1341,12 +1359,14 @@ add_task(async function test_createASRouterEvent_not_stringify_event_context() {
       "if it is a String"
   );
   let instance = new TelemetryFeed();
-  let data = {
-    action: "asrouter_undesired_event",
-    event: "UNDESIRED_EVENT",
-    event_context: "foo",
+  let action = {
+    type: msg.AS_ROUTER_TELEMETRY_USER_EVENT,
+    data: {
+      action: "asrouter_undesired_event",
+      event: "UNDESIRED_EVENT",
+      event_context: "foo",
+    },
   };
-  let action = ac.ASRouterUserEvent(data);
   let { ping } = await instance.createASRouterEvent(action);
 
   Assert.equal(ping.event_context, "foo");
@@ -1568,20 +1588,6 @@ add_task(
     sandbox.restore();
   }
 );
-
-add_task(async function test_uninit_calls_utEvents_uninit() {
-  info("TelemetryFeed.uninit should call .utEvents.uninit");
-  let sandbox = sinon.createSandbox();
-  let instance = new TelemetryFeed();
-  sandbox.stub(instance.utEvents, "uninit");
-
-  instance.uninit();
-  Assert.ok(
-    instance.utEvents.uninit.calledOnce,
-    "TelemetryFeed.utEvents.uninit should be called"
-  );
-  sandbox.restore();
-});
 
 add_task(async function test_uninit_deregisters_observer() {
   info(
@@ -1811,7 +1817,7 @@ add_task(async function test_onAction_basic_actions() {
 
 add_task(async function test_onAction_calls_handleASRouterUserEvent() {
   let actions = [
-    at.AS_ROUTER_TELEMETRY_USER_EVENT,
+    msg.AS_ROUTER_TELEMETRY_USER_EVENT,
     msg.TOOLBAR_BADGE_TELEMETRY,
     msg.TOOLBAR_PANEL_TELEMETRY,
     msg.MOMENTS_PAGE_TELEMETRY,
@@ -2230,6 +2236,8 @@ add_task(
     const POS_1 = 1;
     const POS_2 = 4;
     const SHIM = "Y29uc2lkZXIgeW91ciBjdXJpb3NpdHkgcmV3YXJkZWQ=";
+    const FETCH_TIMESTAMP = new Date("March 22, 2024 10:15:20");
+    const NEWTAB_CREATION_TIMESTAMP = new Date("March 23, 2024 11:10:30");
     sandbox.stub(instance.sessions, "get").returns({ session_id: SESSION_ID });
 
     let pingSubmitted = new Promise(resolve => {
@@ -2252,6 +2260,14 @@ add_task(
           tile_id: String(2),
         });
         Assert.equal(Glean.pocket.shim.testGetValue(), SHIM);
+        Assert.deepEqual(
+          Glean.pocket.fetchTimestamp.testGetValue(),
+          FETCH_TIMESTAMP
+        );
+        Assert.deepEqual(
+          Glean.pocket.newtabCreationTimestamp.testGetValue(),
+          NEWTAB_CREATION_TIMESTAMP
+        );
 
         resolve();
       });
@@ -2272,10 +2288,12 @@ add_task(
           type: "spoc",
           recommendation_id: undefined,
           shim: SHIM,
+          fetchTimestamp: FETCH_TIMESTAMP.valueOf(),
         },
       ],
       window_inner_width: 1000,
       window_inner_height: 900,
+      firstVisibleTimestamp: NEWTAB_CREATION_TIMESTAMP.valueOf(),
     });
 
     await pingSubmitted;
@@ -2949,6 +2967,8 @@ add_task(
     Services.fog.testResetFOG();
     const ACTION_POSITION = 42;
     const SHIM = "Y29uc2lkZXIgeW91ciBjdXJpb3NpdHkgcmV3YXJkZWQ=";
+    const FETCH_TIMESTAMP = new Date("March 22, 2024 10:15:20");
+    const NEWTAB_CREATION_TIMESTAMP = new Date("March 23, 2024 11:10:30");
     let action = ac.DiscoveryStreamUserEvent({
       event: "CLICK",
       action_position: ACTION_POSITION,
@@ -2957,6 +2977,8 @@ add_task(
         recommendation_id: undefined,
         tile_id: 448685088,
         shim: SHIM,
+        fetchTimestamp: FETCH_TIMESTAMP.valueOf(),
+        firstVisibleTimestamp: NEWTAB_CREATION_TIMESTAMP.valueOf(),
       },
     });
 
@@ -2966,6 +2988,14 @@ add_task(
     let pingSubmitted = new Promise(resolve => {
       GleanPings.spoc.testBeforeNextSubmit(reason => {
         Assert.equal(reason, "click");
+        Assert.deepEqual(
+          Glean.pocket.fetchTimestamp.testGetValue(),
+          FETCH_TIMESTAMP
+        );
+        Assert.deepEqual(
+          Glean.pocket.newtabCreationTimestamp.testGetValue(),
+          NEWTAB_CREATION_TIMESTAMP
+        );
         resolve();
       });
     });
@@ -3043,6 +3073,8 @@ add_task(
     Services.fog.testResetFOG();
     const ACTION_POSITION = 42;
     const SHIM = "Y29uc2lkZXIgeW91ciBjdXJpb3NpdHkgcmV3YXJkZWQ=";
+    const FETCH_TIMESTAMP = new Date("March 22, 2024 10:15:20");
+    const NEWTAB_CREATION_TIMESTAMP = new Date("March 23, 2024 11:10:30");
     let action = ac.DiscoveryStreamUserEvent({
       event: "SAVE_TO_POCKET",
       action_position: ACTION_POSITION,
@@ -3051,6 +3083,8 @@ add_task(
         recommendation_id: undefined,
         tile_id: 448685088,
         shim: SHIM,
+        fetchTimestamp: FETCH_TIMESTAMP.valueOf(),
+        newtabCreationTimestamp: NEWTAB_CREATION_TIMESTAMP.valueOf(),
       },
     });
 
@@ -3063,6 +3097,14 @@ add_task(
           Glean.pocket.shim.testGetValue(),
           SHIM,
           "Pocket shim was recorded"
+        );
+        Assert.deepEqual(
+          Glean.pocket.fetchTimestamp.testGetValue(),
+          FETCH_TIMESTAMP
+        );
+        Assert.deepEqual(
+          Glean.pocket.newtabCreationTimestamp.testGetValue(),
+          NEWTAB_CREATION_TIMESTAMP
         );
 
         resolve();
@@ -3122,6 +3164,88 @@ add_task(
     sandbox.restore();
   }
 );
+
+add_task(
+  async function test_handleDiscoveryStreamUserEvent_thumbs_down_event() {
+    info(
+      "TelemetryFeed.handleDiscoveryStreamUserEvent instruments a thumbs down" +
+        " event of an organic story"
+    );
+
+    let sandbox = sinon.createSandbox();
+    let instance = new TelemetryFeed();
+    Services.fog.testResetFOG();
+    const ACTION_POSITION = 42;
+    let action = ac.DiscoveryStreamUserEvent({
+      event: "POCKET_THUMBS_DOWN",
+      action_position: ACTION_POSITION,
+      value: {
+        card_type: "organic",
+        recommendation_id: "decaf-c0ff33",
+        tile_id: 314623757745896,
+        thumbs_down: true,
+        thumbs_up: false,
+      },
+    });
+
+    const SESSION_ID = "decafc0ffee";
+    sandbox.stub(instance.sessions, "get").returns({ session_id: SESSION_ID });
+
+    instance.handleDiscoveryStreamUserEvent(action);
+
+    let thumbVotes = Glean.pocket.thumbVotingInteraction.testGetValue();
+    Assert.equal(thumbVotes.length, 1, "Recorded 1 thumbs down");
+    Assert.deepEqual(thumbVotes[0].extra, {
+      newtab_visit_id: SESSION_ID,
+      recommendation_id: "decaf-c0ff33",
+      tile_id: String(314623757745896),
+      thumbs_down: String(true),
+      thumbs_up: String(false),
+    });
+
+    sandbox.restore();
+  }
+);
+
+add_task(async function test_handleDiscoveryStreamUserEvent_thumbs_up_event() {
+  info(
+    "TelemetryFeed.handleDiscoveryStreamUserEvent instruments a thumbs up" +
+      " event of an organic story"
+  );
+
+  let sandbox = sinon.createSandbox();
+  let instance = new TelemetryFeed();
+  Services.fog.testResetFOG();
+  const ACTION_POSITION = 42;
+  let action = ac.DiscoveryStreamUserEvent({
+    event: "POCKET_THUMBS_DOWN",
+    action_position: ACTION_POSITION,
+    value: {
+      card_type: "organic",
+      recommendation_id: "decaf-c0ff33",
+      tile_id: 314623757745896,
+      thumbs_down: false,
+      thumbs_up: true,
+    },
+  });
+
+  const SESSION_ID = "decafc0ffee";
+  sandbox.stub(instance.sessions, "get").returns({ session_id: SESSION_ID });
+
+  instance.handleDiscoveryStreamUserEvent(action);
+
+  let thumbVotes = Glean.pocket.thumbVotingInteraction.testGetValue();
+  Assert.equal(thumbVotes.length, 1, "Recorded 1 thumbs down");
+  Assert.deepEqual(thumbVotes[0].extra, {
+    newtab_visit_id: SESSION_ID,
+    recommendation_id: "decaf-c0ff33",
+    tile_id: String(314623757745896),
+    thumbs_down: String(false),
+    thumbs_up: String(true),
+  });
+
+  sandbox.restore();
+});
 
 add_task(
   async function test_handleAboutSponsoredTopSites_record_showPrivacyClick() {

@@ -111,10 +111,9 @@ otherwise install OpenSSL and ensure that it's on your $PATH.""")
 
 
 def check_environ(product):
-    if product not in ("android_weblayer", "android_webview", "chrome",
-                       "chrome_android", "chrome_ios", "content_shell",
-                       "edgechromium", "firefox", "firefox_android", "ladybird", "servo",
-                       "wktr"):
+    if product not in ("android_webview", "chrome", "chrome_android", "chrome_ios",
+                       "edge", "firefox", "firefox_android", "headless_shell",
+                       "ladybird", "servo", "wktr"):
         config_builder = serve.build_config(os.path.join(wpt_root, "config.json"))
         # Override the ports to avoid looking for free ports
         config_builder.ssl = {"type": "none"}
@@ -524,9 +523,9 @@ class Chrome(BrowserSetup):
             kwargs["binary_args"].append("--no-sandbox")
 
 
-class ContentShell(BrowserSetup):
-    name = "content_shell"
-    browser_cls = browser.ContentShell
+class HeadlessShell(BrowserSetup):
+    name = "headless_shell"
+    browser_cls = browser.HeadlessShell
     experimental_channels = ("dev", "canary", "nightly")
 
     def setup_kwargs(self, kwargs):
@@ -536,7 +535,7 @@ class ContentShell(BrowserSetup):
             if binary:
                 kwargs["binary"] = binary
             else:
-                raise WptrunError(f"Unable to locate {self.name.capitalize()} binary")
+                raise WptrunError(f"Unable to locate {self.name!r} binary")
 
         if kwargs["mojojs_path"]:
             kwargs["enable_mojojs"] = True
@@ -547,7 +546,13 @@ class ContentShell(BrowserSetup):
                            "Provide '--mojojs-path' explicitly instead.")
             logger.warning("MojoJS is disabled for this run.")
 
-        kwargs["enable_webtransport_h3"] = True
+        # Never pause after test, since headless shell is not interactive.
+        kwargs["pause_after_test"] = False
+        # Don't add a `--headless` switch.
+        kwargs["headless"] = False
+
+        if kwargs["enable_webtransport_h3"] is None:
+            kwargs["enable_webtransport_h3"] = True
 
 
 class Chromium(Chrome):
@@ -568,6 +573,8 @@ class ChromeAndroidBase(BrowserSetup):
         if kwargs["package_name"] is None:
             kwargs["package_name"] = self.browser.find_binary(
                 channel=browser_channel)
+        if not kwargs["device_serial"]:
+            kwargs["device_serial"] = ["emulator-5554"]
         if kwargs["webdriver_binary"] is None:
             webdriver_binary = None
             if not kwargs["install_webdriver"]:
@@ -615,17 +622,6 @@ class ChromeiOS(BrowserSetup):
             raise WptrunError("Unable to locate or install chromedriver binary")
 
 
-class AndroidWeblayer(ChromeAndroidBase):
-    name = "android_weblayer"
-    browser_cls = browser.AndroidWeblayer
-
-    def setup_kwargs(self, kwargs):
-        super().setup_kwargs(kwargs)
-        if kwargs["browser_channel"] in self.experimental_channels and kwargs["enable_experimental"] is None:
-            logger.info("Automatically turning on experimental features for WebLayer Dev/Canary")
-            kwargs["enable_experimental"] = True
-
-
 class AndroidWebview(ChromeAndroidBase):
     name = "android_webview"
     browser_cls = browser.AndroidWebview
@@ -663,9 +659,9 @@ class Opera(BrowserSetup):
                 raise WptrunError("Unable to locate or install operadriver binary")
 
 
-class EdgeChromium(BrowserSetup):
+class Edge(BrowserSetup):
     name = "MicrosoftEdge"
-    browser_cls = browser.EdgeChromium
+    browser_cls = browser.Edge
     experimental_channels: ClassVar[Tuple[str, ...]] = ("dev", "canary")
 
     def setup_kwargs(self, kwargs):
@@ -822,9 +818,8 @@ class WebKitTestRunner(BrowserSetup):
             kwargs["binary"] = binary
 
 
-class WebKitGTKMiniBrowser(BrowserSetup):
-    name = "webkitgtk_minibrowser"
-    browser_cls = browser.WebKitGTKMiniBrowser
+class WebKitGlibBaseMiniBrowser(BrowserSetup):
+    """ Base class for WebKitGTKMiniBrowser and WPEWebKitMiniBrowser """
 
     def install(self, channel=None):
         if self.prompt_install(self.name):
@@ -844,8 +839,23 @@ class WebKitGTKMiniBrowser(BrowserSetup):
                 venv_path=self.venv.path, channel=kwargs["browser_channel"])
 
             if webdriver_binary is None:
-                raise WptrunError("Unable to find WebKitWebDriver in PATH")
+                raise WptrunError('Unable to find "%s" binary in PATH' % self.browser_cls.WEBDRIVER_BINARY_NAME)
             kwargs["webdriver_binary"] = webdriver_binary
+
+
+class WebKitGTKMiniBrowser(WebKitGlibBaseMiniBrowser):
+    name = "webkitgtk_minibrowser"
+    browser_cls = browser.WebKitGTKMiniBrowser
+
+
+class WPEWebKitMiniBrowser(WebKitGlibBaseMiniBrowser):
+    name = "wpewebkit_minibrowser"
+    browser_cls = browser.WPEWebKitMiniBrowser
+
+    def setup_kwargs(self, kwargs):
+        if kwargs["headless"]:
+            kwargs["binary_args"].append("--headless")
+        super().setup_kwargs(kwargs)
 
 
 class Epiphany(BrowserSetup):
@@ -872,7 +882,6 @@ class Epiphany(BrowserSetup):
 
 
 product_setup = {
-    "android_weblayer": AndroidWeblayer,
     "android_webview": AndroidWebview,
     "firefox": Firefox,
     "firefox_android": FirefoxAndroid,
@@ -880,8 +889,8 @@ product_setup = {
     "chrome_android": ChromeAndroid,
     "chrome_ios": ChromeiOS,
     "chromium": Chromium,
-    "content_shell": ContentShell,
-    "edgechromium": EdgeChromium,
+    "edge": Edge,
+    "headless_shell": HeadlessShell,
     "safari": Safari,
     "servo": Servo,
     "servodriver": ServoWebDriver,
@@ -890,6 +899,7 @@ product_setup = {
     "webkit": WebKit,
     "wktr": WebKitTestRunner,
     "webkitgtk_minibrowser": WebKitGTKMiniBrowser,
+    "wpewebkit_minibrowser": WPEWebKitMiniBrowser,
     "epiphany": Epiphany,
     "ladybird": Ladybird,
 }
@@ -924,6 +934,9 @@ def setup_wptrunner(venv, **kwargs):
     args_general(kwargs)
 
     if kwargs["product"] not in product_setup:
+        if kwargs["product"] == "edgechromium":
+            raise WptrunError("edgechromium has been renamed to edge.")
+
         raise WptrunError("Unsupported product %s" % kwargs["product"])
 
     setup_cls = product_setup[kwargs["product"]](venv, kwargs["prompt"])
@@ -965,7 +978,7 @@ def setup_wptrunner(venv, **kwargs):
 
     if kwargs["install_browser"]:
         logger.info("Installing browser")
-        kwargs["binary"] = setup_cls.install(channel=channel)
+        kwargs["binary"] = setup_cls.install(channel=kwargs["browser_channel"])
 
     setup_cls.setup(kwargs)
 

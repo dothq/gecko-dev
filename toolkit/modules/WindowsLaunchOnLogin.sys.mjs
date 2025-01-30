@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+const LAUNCH_ON_LOGIN_TASKID = "LaunchOnLogin";
+
 /**
  * "Launch on Login" is a Firefox feature automatically launches Firefox when the
  * user logs in to Windows. The technical mechanism is simply writing a registry
@@ -12,6 +14,11 @@
  * When such keys are present, the launch on login feature should be considered
  * disabled and not available from within Firefox. This module provides the
  * functionality to access and modify these registry keys.
+ *
+ * MSIX installs cannot write to the registry so we instead use the MSIX-exclusive
+ * Windows StartupTask APIs. The difference here is that the startup task is always
+ * "registered", we control whether it's enabled or disabled. As such some
+ * functions such as getLaunchOnLoginApproved() have different behavior on MSIX installs.
  */
 export var WindowsLaunchOnLogin = {
   /**
@@ -64,9 +71,41 @@ export var WindowsLaunchOnLogin = {
   },
 
   /**
+   * Either creates a Windows launch on login registry key on regular installs
+   * or enables the startup task within the app manifest due to
+   * restrictions on writing to the registry in MSIX.
+   */
+  async createLaunchOnLogin() {
+    if (Services.sysinfo.getProperty("hasWinPackageId")) {
+      await this.enableLaunchOnLoginMSIX();
+    } else {
+      await this.createLaunchOnLoginRegistryKey();
+    }
+  },
+
+  /**
+   * Stop launching on login by removing our registry key (on non-MSIX builds) or disabling
+   * our startup task (on MSIX builds).
+   * If the user has disabled launch on login via the Windows settings, this method will
+   * no-op as we do not want to change the (separate) keys Windows uses to manage user
+   * settings, and removing our own launch on login registry key but leaving the Windows
+   * keys alone would leave the registry in a dubious state.
+   */
+  async removeLaunchOnLogin() {
+    if (await this.getLaunchOnLoginApproved()) {
+      if (Services.sysinfo.getProperty("hasWinPackageId")) {
+        await this._disableLaunchOnLoginMSIX();
+      } else {
+        await this._removeLaunchOnLoginRegistryKey();
+        await this._removeLaunchOnLoginShortcuts();
+      }
+    }
+  },
+
+  /**
    * Safely removes a Windows launch on login registry key
    */
-  async removeLaunchOnLoginRegistryKey() {
+  async _removeLaunchOnLoginRegistryKey() {
     try {
       await this.withLaunchOnLoginRegistryKey(async wrk => {
         let registryName = this.getLaunchOnLoginRegistryName();
@@ -82,6 +121,75 @@ export var WindowsLaunchOnLogin = {
       // We should only end up here if we fail to open the registry
       console.error("Failed to open Windows registry", e);
     }
+  },
+
+  /**
+   * Enables launch on login on MSIX installs by using the
+   * StartupTask APIs. A task called "LaunchOnLogin" exists
+   * in the packaged application manifest.
+   *
+   * @returns {Promise<bool>}
+   *          Whether the enable operation was successful.
+   */
+  async enableLaunchOnLoginMSIX() {
+    if (!Services.sysinfo.getProperty("hasWinPackageId")) {
+      throw Components.Exception(
+        "Called on non-MSIX build",
+        Cr.NS_ERROR_NOT_IMPLEMENTED
+      );
+    }
+    let shellService = Cc["@mozilla.org/browser/shell-service;1"].getService(
+      Ci.nsIWindowsShellService
+    );
+    return shellService.enableLaunchOnLoginMSIXAsync(LAUNCH_ON_LOGIN_TASKID);
+  },
+
+  /**
+   * Disables launch on login on MSIX installs by using the
+   * StartupTask APIs. A task called "LaunchOnLogin" exists
+   * in the packaged application manifest.
+   *
+   * @returns {Promise<bool>}
+   *          Whether the disable operation was successful.
+   */
+  async _disableLaunchOnLoginMSIX() {
+    if (!Services.sysinfo.getProperty("hasWinPackageId")) {
+      throw Components.Exception(
+        "Called on non-MSIX build",
+        Cr.NS_ERROR_NOT_IMPLEMENTED
+      );
+    }
+    let shellService = Cc["@mozilla.org/browser/shell-service;1"].getService(
+      Ci.nsIWindowsShellService
+    );
+    return shellService.disableLaunchOnLoginMSIXAsync(LAUNCH_ON_LOGIN_TASKID);
+  },
+
+  /**
+   * Determines whether launch on login on MSIX is enabled by using the
+   * StartupTask APIs. A task called "LaunchOnLogin" exists
+   * in the packaged application manifest.
+   *
+   * @returns {Promise<bool>}
+   *          Whether the startup task is enabled.
+   */
+  async getLaunchOnLoginEnabledMSIX() {
+    if (!Services.sysinfo.getProperty("hasWinPackageId")) {
+      throw Components.Exception(
+        "Called on non-MSIX build",
+        Cr.NS_ERROR_NOT_IMPLEMENTED
+      );
+    }
+    let shellService = Cc["@mozilla.org/browser/shell-service;1"].getService(
+      Ci.nsIWindowsShellService
+    );
+    let state = await shellService.getLaunchOnLoginEnabledMSIXAsync(
+      LAUNCH_ON_LOGIN_TASKID
+    );
+    return (
+      state == shellService.LAUNCH_ON_LOGIN_ENABLED ||
+      state == shellService.LAUNCH_ON_LOGIN_ENABLED_BY_POLICY
+    );
   },
 
   /**
@@ -101,7 +209,7 @@ export var WindowsLaunchOnLogin = {
    * %USERNAME%\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup folder
    * that point to the current Firefox executable.
    */
-  async removeLaunchOnLoginShortcuts() {
+  async _removeLaunchOnLoginShortcuts() {
     let shortcuts = this.getLaunchOnLoginShortcutList();
     for (let i = 0; i < shortcuts.length; i++) {
       await IOUtils.remove(shortcuts[i]);
@@ -109,11 +217,51 @@ export var WindowsLaunchOnLogin = {
   },
 
   /**
+   * If the state is set to disabled from the Windows UI our API calls to
+   * re-enable it will fail so we should say that it's not approved and
+   * provide users the link to the App Startup settings so they can
+   * re-enable it.
+   *
+   * @returns {Promise<bool>}
+   *          If launch on login has not been disabled by Windows settings
+   *          or enabled by policy.
+   */
+  async getLaunchOnLoginApprovedMSIX() {
+    if (!Services.sysinfo.getProperty("hasWinPackageId")) {
+      throw Components.Exception(
+        "Called on non-MSIX build",
+        Cr.NS_ERROR_NOT_IMPLEMENTED
+      );
+    }
+    let shellService = Cc["@mozilla.org/browser/shell-service;1"].getService(
+      Ci.nsIWindowsShellService
+    );
+    let state = await shellService.getLaunchOnLoginEnabledMSIXAsync(
+      LAUNCH_ON_LOGIN_TASKID
+    );
+    return !(
+      state == shellService.LAUNCH_ON_LOGIN_DISABLED_BY_SETTINGS ||
+      state == shellService.LAUNCH_ON_LOGIN_ENABLED_BY_POLICY
+    );
+  },
+
+  /**
    * Checks if Windows launch on login was independently enabled or disabled
    * by the user in the Windows Startup Apps menu. The registry key that
    * stores this information should not be modified.
+   *
+   * If the state is set to disabled from the Windows UI on MSIX our API calls to
+   * re-enable it will fail so report false.
+   *
+   * @returns {Promise<bool>}
+   *          Report whether launch on login is allowed on Windows. On MSIX
+   *          it's possible to set a startup app through policy making us
+   *          unable to modify it so we should account for that here.
    */
-  getLaunchOnLoginApproved() {
+  async getLaunchOnLoginApproved() {
+    if (Services.sysinfo.getProperty("hasWinPackageId")) {
+      return this.getLaunchOnLoginApprovedMSIX();
+    }
     try {
       let wrkApproved = Cc[
         "@mozilla.org/windows-registry-key;1"
@@ -131,9 +279,7 @@ export var WindowsLaunchOnLogin = {
       // There's very little consistency with these binary values aside from if the first byte
       // is even it's enabled and odd is disabled. There's also no published specification.
       let approvedByWindows =
-        wrkApproved.readBinaryValue(registryName).charCodeAt(0).toString(16) %
-          2 ==
-        0;
+        wrkApproved.readBinaryValue(registryName).charCodeAt(0) % 2 == 0;
       wrkApproved.close();
       return approvedByWindows;
     } catch (e) {
@@ -147,8 +293,17 @@ export var WindowsLaunchOnLogin = {
    * Checks if Windows launch on login has an existing registry key or user-created shortcut in
    * %USERNAME%\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup. The registry key that
    * stores this information should not be modified.
+   *
+   * On MSIX installs we instead query whether the StartupTask is enabled or disabled
+   *
+   * @returns {Promise<bool>}
+   *          Whether launch on login is enabled.
    */
-  getLaunchOnLoginEnabled() {
+  async getLaunchOnLoginEnabled() {
+    if (Services.sysinfo.getProperty("hasWinPackageId")) {
+      return this.getLaunchOnLoginEnabledMSIX();
+    }
+
     let registryName = this.getLaunchOnLoginRegistryName();
     let regExists = false;
     let shortcutExists = false;

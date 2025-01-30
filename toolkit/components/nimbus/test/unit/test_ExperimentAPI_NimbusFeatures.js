@@ -17,6 +17,7 @@ const NON_MATCHING_ROLLOUT = Object.freeze(
   ExperimentFakes.rollout("non-matching-rollout", {
     branch: {
       slug: "slug",
+      ratio: 1,
       features: [
         {
           featureId: "aboutwelcome",
@@ -30,6 +31,7 @@ const MATCHING_ROLLOUT = Object.freeze(
   ExperimentFakes.rollout("matching-rollout", {
     branch: {
       slug: "slug",
+      ratio: 1,
       features: [
         {
           featureId: "aboutwelcome",
@@ -92,8 +94,11 @@ add_task(async function readyCallAfterStore_with_remote_value() {
   await manager.store.addEnrollment(MATCHING_ROLLOUT);
 
   Assert.ok(!feature.getVariable("enabled"), "Loads value from store");
-  manager.store._deleteForTests("aboutwelcome");
+
+  manager.unenroll(MATCHING_ROLLOUT.slug, "test-cleanup");
+
   sandbox.restore();
+  await assertEmptyStore(manager.store);
 });
 
 add_task(async function has_sync_value_before_ready() {
@@ -121,7 +126,11 @@ add_task(async function has_sync_value_before_ready() {
 
   Assert.equal(feature.getVariable("remoteValue"), true, "Sync load from pref");
 
-  manager.store._deleteForTests("aboutwelcome");
+  Services.prefs.clearUserPref("nimbus.syncdefaultsstore.aboutwelcome");
+  Services.prefs.clearUserPref(
+    "nimbus.syncdefaultsstore.aboutwelcome.remoteValue"
+  );
+  await assertEmptyStore(manager.store);
 });
 
 add_task(async function update_remote_defaults_onUpdate() {
@@ -137,8 +146,10 @@ add_task(async function update_remote_defaults_onUpdate() {
   Assert.equal(stub.callCount, 1, "Called once for remote configs");
   Assert.equal(stub.firstCall.args[1], "rollout-updated", "Correct reason");
 
-  manager.store._deleteForTests("aboutwelcome");
+  manager.unenroll(MATCHING_ROLLOUT.slug, "test-cleanup");
+
   sandbox.restore();
+  await assertEmptyStore(manager.store);
 });
 
 add_task(async function test_features_over_feature() {
@@ -148,6 +159,7 @@ add_task(async function test_features_over_feature() {
     ExperimentFakes.rollout("matching-rollout", {
       branch: {
         slug: "slug",
+        ratio: 1,
         feature: {
           featureId: "aboutwelcome",
           value: { enabled: false },
@@ -165,6 +177,7 @@ add_task(async function test_features_over_feature() {
     ExperimentFakes.rollout("matching-rollout", {
       branch: {
         slug: "slug",
+        ratio: 1,
         feature: {
           featureId: "aboutwelcome",
           value: { enabled: false },
@@ -190,6 +203,9 @@ add_task(async function test_features_over_feature() {
 
   manager.store._deleteForTests("aboutwelcome");
   manager.store._deleteForTests("matching-rollout");
+
+  await assertEmptyStore(manager.store);
+
   sandbox.restore();
 });
 
@@ -208,7 +224,8 @@ add_task(async function update_remote_defaults_readyPromise() {
     "Update called after enrollment processed."
   );
 
-  manager.store._deleteForTests("aboutwelcome");
+  manager.unenroll(MATCHING_ROLLOUT.slug, "test-cleanup");
+  await assertEmptyStore(manager.store);
   sandbox.restore();
 });
 
@@ -229,7 +246,8 @@ add_task(async function update_remote_defaults_enabled() {
     "Feature is disabled by remote configuration"
   );
 
-  manager.store._deleteForTests("aboutwelcome");
+  manager.unenroll(NON_MATCHING_ROLLOUT.slug, "test-cleanup");
+  await assertEmptyStore(manager.store);
   sandbox.restore();
 });
 
@@ -252,6 +270,7 @@ add_task(async function test_getVariable_no_mutation() {
 
   Assert.ok(feature.getVariable("mochitest"), "Got back the expected feature");
 
+  await assertEmptyStore(manager.store);
   sandbox.restore();
 });
 
@@ -260,6 +279,7 @@ add_task(async function remote_isEarlyStartup_config() {
   let rollout = ExperimentFakes.rollout("password-autocomplete", {
     branch: {
       slug: "remote-config-isEarlyStartup",
+      ratio: 1,
       features: [
         {
           featureId: "password-autocomplete",
@@ -284,4 +304,7 @@ add_task(async function remote_isEarlyStartup_config() {
   Services.prefs.clearUserPref(
     "nimbus.syncdefaultsstore.password-autocomplete"
   );
+
+  manager.unenroll(rollout.slug, "test-cleanup");
+  await assertEmptyStore(manager.store);
 });

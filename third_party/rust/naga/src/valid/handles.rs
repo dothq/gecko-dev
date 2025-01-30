@@ -2,23 +2,25 @@
 
 use crate::{
     arena::{BadHandle, BadRangeError},
+    diagnostic_filter::DiagnosticFilterNode,
     Handle,
 };
 
+use crate::non_max_u32::NonMaxU32;
 use crate::{Arena, UniqueArena};
 
 use super::ValidationError;
 
-use std::{convert::TryInto, hash::Hash, num::NonZeroU32};
+use std::{convert::TryInto, hash::Hash};
 
 impl super::Validator {
     /// Validates that all handles within `module` are:
     ///
     /// * Valid, in the sense that they contain indices within each arena structure inside the
-    /// [`crate::Module`] type.
+    ///   [`crate::Module`] type.
     /// * No arena contents contain any items that have forward dependencies; that is, the value
-    ///     associated with a handle only may contain references to handles in the same arena that
-    ///     were constructed before it.
+    ///   associated with a handle only may contain references to handles in the same arena that
+    ///   were constructed before it.
     ///
     /// By validating the above conditions, we free up subsequent logic to assume that handle
     /// accesses are infallible.
@@ -31,12 +33,15 @@ impl super::Validator {
     pub(super) fn validate_module_handles(module: &crate::Module) -> Result<(), ValidationError> {
         let &crate::Module {
             ref constants,
+            ref overrides,
             ref entry_points,
             ref functions,
             ref global_variables,
             ref types,
             ref special_types,
-            ref const_expressions,
+            ref global_expressions,
+            ref diagnostic_filters,
+            ref diagnostic_filter_leaf,
         } = module;
 
         // NOTE: Types being first is important. All other forms of validation depend on this.
@@ -67,23 +72,31 @@ impl super::Validator {
             }
         }
 
-        for handle_and_expr in const_expressions.iter() {
-            Self::validate_const_expression_handles(handle_and_expr, constants, types)?;
+        for handle_and_expr in global_expressions.iter() {
+            Self::validate_const_expression_handles(handle_and_expr, constants, overrides, types)?;
         }
 
         let validate_type = |handle| Self::validate_type_handle(handle, types);
         let validate_const_expr =
-            |handle| Self::validate_expression_handle(handle, const_expressions);
+            |handle| Self::validate_expression_handle(handle, global_expressions);
 
         for (_handle, constant) in constants.iter() {
-            let &crate::Constant {
-                name: _,
-                r#override: _,
-                ty,
-                init,
-            } = constant;
+            let &crate::Constant { name: _, ty, init } = constant;
             validate_type(ty)?;
             validate_const_expr(init)?;
+        }
+
+        for (_handle, override_) in overrides.iter() {
+            let &crate::Override {
+                name: _,
+                id: _,
+                ty,
+                init,
+            } = override_;
+            validate_type(ty)?;
+            if let Some(init_expr) = init {
+                validate_const_expr(init_expr)?;
+            }
         }
 
         for (_handle, global_variable) in global_variables.iter() {
@@ -109,6 +122,7 @@ impl super::Validator {
                 ref expressions,
                 ref named_expressions,
                 ref body,
+                ref diagnostic_filter_leaf,
             } = function;
 
             for arg in arguments.iter() {
@@ -140,7 +154,8 @@ impl super::Validator {
                 Self::validate_expression_handles(
                     handle_and_expr,
                     constants,
-                    const_expressions,
+                    overrides,
+                    global_expressions,
                     types,
                     local_variables,
                     global_variables,
@@ -151,11 +166,20 @@ impl super::Validator {
 
             Self::validate_block_handles(body, expressions, functions)?;
 
+            if let Some(handle) = *diagnostic_filter_leaf {
+                handle.check_valid_for(diagnostic_filters)?;
+            }
+
             Ok(())
         };
 
         for entry_point in entry_points.iter() {
             validate_function(None, &entry_point.function)?;
+            if let Some(sizes) = entry_point.workgroup_size_overrides {
+                for size in sizes.iter().filter_map(|x| *x) {
+                    validate_const_expr(size)?;
+                }
+            }
         }
 
         for (function_handle, function) in functions.iter() {
@@ -167,6 +191,14 @@ impl super::Validator {
         }
         if let Some(ty) = special_types.ray_intersection {
             validate_type(ty)?;
+        }
+
+        for (handle, _node) in diagnostic_filters.iter() {
+            let DiagnosticFilterNode { inner: _, parent } = diagnostic_filters[handle];
+            handle.check_dep_opt(parent)?;
+        }
+        if let Some(handle) = *diagnostic_filter_leaf {
+            handle.check_valid_for(diagnostic_filters)?;
         }
 
         Ok(())
@@ -186,6 +218,13 @@ impl super::Validator {
         handle.check_valid_for(constants).map(|_| ())
     }
 
+    fn validate_override_handle(
+        handle: Handle<crate::Override>,
+        overrides: &Arena<crate::Override>,
+    ) -> Result<(), InvalidHandleError> {
+        handle.check_valid_for(overrides).map(|_| ())
+    }
+
     fn validate_expression_handle(
         handle: Handle<crate::Expression>,
         expressions: &Arena<crate::Expression>,
@@ -203,9 +242,11 @@ impl super::Validator {
     fn validate_const_expression_handles(
         (handle, expression): (Handle<crate::Expression>, &crate::Expression),
         constants: &Arena<crate::Constant>,
+        overrides: &Arena<crate::Override>,
         types: &UniqueArena<crate::Type>,
     ) -> Result<(), InvalidHandleError> {
         let validate_constant = |handle| Self::validate_constant_handle(handle, constants);
+        let validate_override = |handle| Self::validate_override_handle(handle, overrides);
         let validate_type = |handle| Self::validate_type_handle(handle, types);
 
         match *expression {
@@ -213,6 +254,12 @@ impl super::Validator {
             crate::Expression::Constant(constant) => {
                 validate_constant(constant)?;
                 handle.check_dep(constants[constant].init)?;
+            }
+            crate::Expression::Override(override_) => {
+                validate_override(override_)?;
+                if let Some(init) = overrides[override_].init {
+                    handle.check_dep(init)?;
+                }
             }
             crate::Expression::ZeroValue(ty) => {
                 validate_type(ty)?;
@@ -230,7 +277,8 @@ impl super::Validator {
     fn validate_expression_handles(
         (handle, expression): (Handle<crate::Expression>, &crate::Expression),
         constants: &Arena<crate::Constant>,
-        const_expressions: &Arena<crate::Expression>,
+        overrides: &Arena<crate::Override>,
+        global_expressions: &Arena<crate::Expression>,
         types: &UniqueArena<crate::Type>,
         local_variables: &Arena<crate::LocalVariable>,
         global_variables: &Arena<crate::GlobalVariable>,
@@ -239,8 +287,9 @@ impl super::Validator {
         current_function: Option<Handle<crate::Function>>,
     ) -> Result<(), InvalidHandleError> {
         let validate_constant = |handle| Self::validate_constant_handle(handle, constants);
+        let validate_override = |handle| Self::validate_override_handle(handle, overrides);
         let validate_const_expr =
-            |handle| Self::validate_expression_handle(handle, const_expressions);
+            |handle| Self::validate_expression_handle(handle, global_expressions);
         let validate_type = |handle| Self::validate_type_handle(handle, types);
 
         match *expression {
@@ -259,6 +308,9 @@ impl super::Validator {
             crate::Expression::Literal(_) => {}
             crate::Expression::Constant(constant) => {
                 validate_constant(constant)?;
+            }
+            crate::Expression::Override(override_) => {
+                validate_override(override_)?;
             }
             crate::Expression::ZeroValue(ty) => {
                 validate_type(ty)?;
@@ -390,6 +442,8 @@ impl super::Validator {
             }
             crate::Expression::AtomicResult { .. }
             | crate::Expression::RayQueryProceedResult
+            | crate::Expression::SubgroupBallotResult
+            | crate::Expression::SubgroupOperationResult { .. }
             | crate::Expression::WorkGroupUniformLoadResult { .. } => (),
             crate::Expression::ArrayLength(array) => {
                 handle.check_dep(array)?;
@@ -498,7 +552,9 @@ impl super::Validator {
                     crate::AtomicFunction::Exchange { compare } => validate_expr_opt(compare)?,
                 };
                 validate_expr(value)?;
-                validate_expr(result)?;
+                if let Some(result) = result {
+                    validate_expr(result)?;
+                }
                 Ok(())
             }
             crate::Statement::WorkGroupUniformLoad { pointer, result } => {
@@ -535,6 +591,38 @@ impl super::Validator {
                 }
                 Ok(())
             }
+            crate::Statement::SubgroupBallot { result, predicate } => {
+                validate_expr_opt(predicate)?;
+                validate_expr(result)?;
+                Ok(())
+            }
+            crate::Statement::SubgroupCollectiveOperation {
+                op: _,
+                collective_op: _,
+                argument,
+                result,
+            } => {
+                validate_expr(argument)?;
+                validate_expr(result)?;
+                Ok(())
+            }
+            crate::Statement::SubgroupGather {
+                mode,
+                argument,
+                result,
+            } => {
+                validate_expr(argument)?;
+                match mode {
+                    crate::GatherMode::BroadcastFirst => {}
+                    crate::GatherMode::Broadcast(index)
+                    | crate::GatherMode::Shuffle(index)
+                    | crate::GatherMode::ShuffleDown(index)
+                    | crate::GatherMode::ShuffleUp(index)
+                    | crate::GatherMode::ShuffleXor(index) => validate_expr(index)?,
+                }
+                validate_expr(result)?;
+                Ok(())
+            }
             crate::Statement::Break
             | crate::Statement::Continue
             | crate::Statement::Kill
@@ -562,6 +650,7 @@ impl From<BadRangeError> for ValidationError {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
+#[cfg_attr(test, derive(PartialEq))]
 pub enum InvalidHandleError {
     #[error(transparent)]
     BadHandle(#[from] BadHandle),
@@ -572,6 +661,7 @@ pub enum InvalidHandleError {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
+#[cfg_attr(test, derive(PartialEq))]
 #[error(
     "{subject:?} of kind {subject_kind:?} depends on {depends_on:?} of kind {depends_on_kind}, \
     which has not been processed yet"
@@ -620,7 +710,7 @@ impl<T> Handle<T> {
             Ok(self)
         } else {
             let erase_handle_type = |handle: Handle<_>| {
-                Handle::new(NonZeroU32::new((handle.index() + 1).try_into().unwrap()).unwrap())
+                Handle::new(NonMaxU32::new((handle.index()).try_into().unwrap()).unwrap())
             };
             Err(FwdDepError {
                 subject: erase_handle_type(self),
@@ -664,6 +754,7 @@ fn constant_deps() {
     let mut const_exprs = Arena::new();
     let mut fun_exprs = Arena::new();
     let mut constants = Arena::new();
+    let overrides = Arena::new();
 
     let i32_handle = types.insert(
         Type {
@@ -679,7 +770,6 @@ fn constant_deps() {
     let self_referential_const = constants.append(
         Constant {
             name: None,
-            r#override: crate::Override::None,
             ty: i32_handle,
             init: fun_expr,
         },
@@ -692,6 +782,7 @@ fn constant_deps() {
         assert!(super::Validator::validate_const_expression_handles(
             handle_and_expr,
             &constants,
+            &overrides,
             &types,
         )
         .is_err());

@@ -48,9 +48,8 @@ using mozilla::gfx::Matrix4x4 from "mozilla/gfx/Matrix.h";
 using mozilla::gfx::SurfaceFormat from "mozilla/gfx/Types.h";
 using mozilla::LayoutDeviceIntPoint from "Units.h";
 using mozilla::LayoutDevicePoint from "Units.h";
+using mozilla::LayoutDeviceIntMargin from "Units.h";
 using mozilla::ScreenIntCoord from "Units.h";
-using mozilla::ScreenIntMargin from "Units.h";
-using mozilla::ScreenIntPoint from "Units.h";
 using mozilla::ScreenRect from "Units.h";
 using struct mozilla::layers::ScrollableLayerGuid from "mozilla/layers/ScrollableLayerGuid.h";
 using struct mozilla::layers::ZoomConstraints from "mozilla/layers/ZoomConstraints.h";
@@ -73,6 +72,7 @@ using class mozilla::WidgetKeyboardEvent from "ipc/nsGUIEventIPC.h";
 using class mozilla::WidgetMouseEvent from "ipc/nsGUIEventIPC.h";
 using class mozilla::WidgetWheelEvent from "ipc/nsGUIEventIPC.h";
 using class mozilla::WidgetDragEvent from "ipc/nsGUIEventIPC.h";
+using class mozilla::WidgetPointerEvent from "ipc/nsGUIEventIPC.h";
 using struct nsRect from "nsRect.h";
 using class mozilla::WidgetSelectionEvent from "ipc/nsGUIEventIPC.h";
 using class mozilla::WidgetTouchEvent from "ipc/nsGUIEventIPC.h";
@@ -87,7 +87,7 @@ using nsCursor from "nsIWidget.h";
 using struct LookAndFeelInt from "mozilla/widget/WidgetMessageUtils.h";
 using struct mozilla::DimensionRequest from "mozilla/widget/WidgetMessageUtils.h";
 using class mozilla::dom::MessagePort from "mozilla/dom/MessagePort.h";
-using class mozilla::dom::ipc::StructuredCloneData from "mozilla/dom/ipc/StructuredCloneData.h";
+[MoveOnly=data] using class mozilla::dom::ipc::StructuredCloneData from "mozilla/dom/ipc/StructuredCloneData.h";
 using mozilla::dom::MaybeDiscardedWindowContext from "mozilla/dom/WindowContext.h";
 using mozilla::EventMessage from "mozilla/EventForwards.h";
 using nsEventStatus from "mozilla/EventForwards.h";
@@ -126,6 +126,7 @@ struct RequestData
   nullable nsIURI requestURI;
   nullable nsIURI originalRequestURI;
   nsCString matchedList;
+  nsCString canceledReason;
 };
 
 struct WebProgressStateChangeData
@@ -376,23 +377,12 @@ parent:
      * Set the native cursor.
      * @param value
      *   The widget cursor to set.
-     * @param hasCustomCursor
-     *   Whether there's any custom cursor represented by cursorData and
-     *   company.
-     * @param customCursorData
-     *   Serialized image data.
-     * @param width
-     *   Width of the image.
-     * @param height
-     *   Height of the image.
+     * @param customCursor
+     *   Serialized image data for custom cursor.
      * @param resolutionX
      *   Resolution of the image X axis in dppx units.
      * @param resolutionY
      *   Resolution of the image Y axis in dppx units.
-     * @param stride
-     *   Stride used in the image data.
-     * @param format
-     *   Image format, see gfx::SurfaceFormat for possible values.
      * @param hotspotX
      *   Horizontal hotspot of the image, as specified by the css cursor property.
      * @param hotspotY
@@ -402,11 +392,8 @@ parent:
      *   update.
      */
     async SetCursor(nsCursor value,
-                    bool hasCustomCursor,
-                    BigBuffer? customCursorData,
-                    uint32_t width, uint32_t height,
+                    IPCImage? customCursor,
                     float resolutionX, float resolutionY,
-                    uint32_t stride, SurfaceFormat format,
                     uint32_t hotspotX, uint32_t hotspotY, bool force);
 
     /**
@@ -426,7 +413,9 @@ parent:
      * Create an asynchronous color picker on the parent side,
      * but don't open it yet.
      */
-    async PColorPicker(nsString title, nsString initialColor, nsString[] defaultColors);
+    async PColorPicker(MaybeDiscardedBrowsingContext aBrowsingContext,
+                       nsString title, nsString initialColor,
+                       nsString[] defaultColors);
 
     async PFilePicker(nsString aTitle, Mode aMode, MaybeDiscardedBrowsingContext aBrowsingContext);
 
@@ -540,6 +529,7 @@ parent:
     async OnLocationChange(WebProgressData aWebProgressData,
                            RequestData aRequestData, nullable nsIURI aLocation,
                            uint32_t aFlags, bool aCanGoBack,
+                           bool aCanGoBackIgnoringUserInteraction,
                            bool aCanGoForward,
                            WebProgressLocationChangeData? aLocationChangeData);
 
@@ -568,16 +558,21 @@ parent:
     async ImageLoadComplete(nsresult aResult);
 
     /**
-     * Child informs the parent that a pointer lock has requested/released.
-     */
-    async RequestPointerLock() returns (nsCString error);
-    async ReleasePointerLock();
-
-    /**
      * Child informs the parent that a pointer capture has requested/released.
      */
     async RequestPointerCapture(uint32_t aPointerId) returns (bool aSuccess);
     async ReleasePointerCapture(uint32_t aPointerId);
+
+    /**
+     * Child informs the parent that a pointer lock has requested.
+     */
+    async RequestPointerLock() returns (nsCString error);
+
+both:
+    /**
+     * informs that a pointer lock has released.
+     */
+    async ReleasePointerLock();
 
 child:
     async NativeSynthesisResponse(uint64_t aObserverId, nsCString aResponse);
@@ -705,7 +700,9 @@ child:
 
     async DynamicToolbarMaxHeightChanged(ScreenIntCoord height);
 
-    async DynamicToolbarOffsetChanged(ScreenIntCoord height);
+    async DynamicToolbarOffsetChanged(ScreenIntCoord offset);
+
+    async KeyboardHeightChanged(ScreenIntCoord height);
 
     /**
      * StopIMEStateManagement() is called when the process loses focus and
@@ -763,6 +760,14 @@ child:
     async NormalPriorityRealMouseButtonEvent(WidgetMouseEvent event,
                                              ScrollableLayerGuid aGuid,
                                              uint64_t aInputBlockId);
+
+    [Priority=input]
+    async RealPointerButtonEvent(WidgetPointerEvent event,
+                                 ScrollableLayerGuid aGuid,
+                                 uint64_t aInputBlockId);
+    async NormalPriorityRealPointerButtonEvent(WidgetPointerEvent event,
+                                               ScrollableLayerGuid aGuid,
+                                               uint64_t aInputBlockId);
 
     [Priority=input]
     async RealMouseEnterExitWidgetEvent(WidgetMouseEvent event,
@@ -847,11 +852,27 @@ child:
     [Priority=input] async SelectionEvent(WidgetSelectionEvent event);
     async NormalPrioritySelectionEvent(WidgetSelectionEvent event);
 
+
+    [Priority=input] async SimpleContentCommandEvent(EventMessage message);
+    async NormalPrioritySimpleContentCommandEvent(EventMessage message);
+
     /**
      * Dispatch eContentCommandInsertText event in the remote process.
      */
     [Priority=input] async InsertText(nsString aStringToInsert);
     async NormalPriorityInsertText(nsString aStringToInsert);
+
+    /**
+     * Dispatch eContentCommandReplaceText event in the remote process.
+     */
+    [Priority=input] async ReplaceText(nsString aReplacementString,
+                                       nsString aStringToInsert,
+                                       uint32_t aOffset,
+				       bool aPreventSetSelection);
+    async NormalPriorityReplaceText(nsString aReplacementString,
+                                    nsString aStringToInsert,
+                                    uint32_t aOffset,
+				    bool aPreventSetSelection);
 
     /**
      * Call PasteTransferable via a controller on the content process
@@ -917,7 +938,7 @@ child:
      * Tell the child that the safe area of widget has changed.
      *
      */
-    async SafeAreaInsetsChanged(ScreenIntMargin aSafeAreaInsets);
+    async SafeAreaInsetsChanged(LayoutDeviceIntMargin aSafeAreaInsets);
 
     /**
      * Tell the browser that its frame loader has been swapped
@@ -960,8 +981,33 @@ child:
      *
      * @param aBrowsingContext the browsing context to print.
      * @param aPrintData the serialized settings to print with
+     * @param aReturnStaticClone If the document in aBrowsingContext is not a static clone, whether
+     *   to return the static document clone created.
+     *   Note that if you call this with true but do not later call PrintClonedPage(),
+     *   you must call DestroyPrintCache() to avoid leaks.
      */
-    async Print(MaybeDiscardedBrowsingContext aBC, PrintData aPrintData);
+    async Print(MaybeDiscardedBrowsingContext aBC, PrintData aPrintData, bool aReturnStaticClone) returns(MaybeDiscardedBrowsingContext staticCloneBrowsingContext);
+
+    /**
+     * Tell the child to print the passed in static clone browsing context with the given settings.
+     *
+     * @param aBrowsingContext the browsing context to print.
+     * @param aPrintData the serialized settings to print with
+     * @param aStaticCloneBrowsingContext The static clone of aBrowsingContext that
+     *   was created by an earlier call to Print(). This is the page that will actually be
+     *   printed.
+     */
+    async PrintClonedPage(MaybeDiscardedBrowsingContext aBC, PrintData aPrintData, MaybeDiscardedBrowsingContext aStaticCloneBrowsingContext);
+
+    /**
+     * Destroy the static document clone for printing, if present. See Print() for details.
+     * For callers' simplicity, it is safe to call this method even if aStaticCloneBrowsingContext
+     * is null or has already been discarded.
+     *
+     * @param aStaticCloneBrowsingContext The static clone that was created by
+     *   an earlier call to Print().
+     */
+    async DestroyPrintClone(MaybeDiscardedBrowsingContext aStaticCloneBrowsingContext);
 
     /**
      * Update the child with the tab's current top-level native window handle.
@@ -977,6 +1023,40 @@ child:
     async AllowScriptsToClose();
 
     async WillChangeProcess();
+
+    async InvokeChildDragSession(
+        MaybeDiscardedWindowContext aSourceWindowContext,
+        MaybeDiscardedWindowContext aSourceTopWindowContext,
+        nullable nsIPrincipal aPrincipal,
+        IPCTransferableData[] transfers, uint32_t action);
+
+    async UpdateDragSession(
+        nullable nsIPrincipal aPrincipal,
+        IPCTransferableData[] transfers,
+                            EventMessage message);
+
+    async EndDragSession(bool aDoneDrag, bool aUserCancelled,
+                         LayoutDeviceIntPoint aDragEndPoint,
+                         uint32_t aKeyModifiers,
+                         uint32_t aDropEffect);
+
+    /**
+     * Use a eQueryDropTargetHittest event to obtain the element under aPt.
+     * Store that in the current drag session for later event targetting.
+     * Also tell the drag session to hold off on running EndDragSession
+     * until it is told to resume.
+     */
+    async StoreDropTargetAndDelayEndDragSession(
+        LayoutDeviceIntPoint aPt, uint32_t aDropEffect, uint32_t aDragAction,
+        nullable nsIPrincipal aPrincipal,
+        nullable nsIContentSecurityPolicy aCsp);
+
+    /**
+     * Send a drop (if aShouldDrop) or dragexit (otherwise) event to the
+     * recorded drop target and issue any EndDragSession call that was stopped
+     * by StoreDropTargetAndDelayEndDragSession (if any).
+     */
+    async DispatchToDropTargetAndResumeEndDragSession(bool aShouldDrop);
 
 parent:
     /**
@@ -1003,6 +1083,8 @@ parent:
      */
     async NewWindowGlobal(ManagedEndpoint<PWindowGlobalParent> aEndpoint,
                           WindowGlobalInit aInit);
+
+    async UpdateDropEffect(uint32_t aDragAction, uint32_t aDropEffect);
 
 /*
  * FIXME: write protocol!

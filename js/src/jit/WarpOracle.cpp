@@ -169,8 +169,8 @@ AbortReasonOr<WarpSnapshot*> WarpOracle::createSnapshot() {
 #endif
 
   auto* snapshot = new (alloc_.fallible())
-      WarpSnapshot(cx_, alloc_, std::move(scriptSnapshots_), bailoutInfo_,
-                   recordFinalWarmUpCount);
+      WarpSnapshot(cx_, alloc_, std::move(scriptSnapshots_), zoneStubs_,
+                   bailoutInfo_, recordFinalWarmUpCount);
   if (!snapshot) {
     return abort(outerScript_, AbortReason::Alloc);
   }
@@ -283,20 +283,8 @@ WarpEnvironment WarpScriptOracle::createEnvironment() {
     return WarpEnvironment(ConstantObjectEnvironment(obj));
   }
 
-  JSObject* templateEnv = script_->jitScript()->templateEnvironment();
-
-  CallObject* callObjectTemplate = nullptr;
-  if (fun->needsCallObject()) {
-    callObjectTemplate = &templateEnv->as<CallObject>();
-  }
-
-  NamedLambdaObject* namedLambdaTemplate = nullptr;
-  if (fun->needsNamedLambdaEnvironment()) {
-    if (callObjectTemplate) {
-      templateEnv = templateEnv->enclosingEnvironment();
-    }
-    namedLambdaTemplate = &templateEnv->as<NamedLambdaObject>();
-  }
+  auto [callObjectTemplate, namedLambdaTemplate] =
+      script_->jitScript()->functionEnvironmentTemplates(fun);
 
   return WarpEnvironment(
       FunctionEnvironment(callObjectTemplate, namedLambdaTemplate));
@@ -441,12 +429,14 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
         break;
       }
 
-      case JSOp::BindGName: {
-        Rooted<GlobalObject*> global(cx_, &script_->global());
-        Rooted<PropertyName*> name(cx_, loc.getPropertyName(script_));
-        if (JSObject* env = MaybeOptimizeBindGlobalName(cx_, global, name)) {
+      case JSOp::BindUnqualifiedGName: {
+        GlobalObject* global = &script_->global();
+        PropertyName* name = loc.getPropertyName(script_);
+        if (JSObject* env =
+                MaybeOptimizeBindUnqualifiedGlobalName(global, name)) {
           MOZ_ASSERT(env->isTenured());
-          if (!AddOpSnapshot<WarpBindGName>(alloc_, opSnapshots, offset, env)) {
+          if (!AddOpSnapshot<WarpBindUnqualifiedGName>(alloc_, opSnapshots,
+                                                       offset, env)) {
             return abort(AbortReason::Alloc);
           }
         } else {
@@ -510,6 +500,11 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
         break;
       }
 
+      case JSOp::String:
+        if (!loc.atomizeString(cx_, script_)) {
+          return abort(AbortReason::Alloc);
+        }
+        break;
       case JSOp::GetName:
       case JSOp::GetGName:
       case JSOp::GetProp:
@@ -543,6 +538,8 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::StrictEq:
       case JSOp::StrictNe:
       case JSOp::BindName:
+      case JSOp::BindUnqualifiedName:
+      case JSOp::GetBoundName:
       case JSOp::Add:
       case JSOp::Sub:
       case JSOp::Mul:
@@ -578,6 +575,7 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::OptimizeSpreadCall:
       case JSOp::Typeof:
       case JSOp::TypeofExpr:
+      case JSOp::TypeofEq:
       case JSOp::NewObject:
       case JSOp::NewInit:
       case JSOp::NewArray:
@@ -613,7 +611,6 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::Int32:
       case JSOp::Double:
       case JSOp::BigInt:
-      case JSOp::String:
       case JSOp::Symbol:
       case JSOp::Pop:
       case JSOp::PopN:
@@ -713,6 +710,11 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::Try:
       case JSOp::Finally:
       case JSOp::NewPrivateName:
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+      case JSOp::AddDisposable:
+      case JSOp::TakeDisposeCapability:
+      case JSOp::CreateSuppressedError:
+#endif
         // Supported by WarpBuilder. Nothing to do.
         break;
 
@@ -923,22 +925,27 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
     // them.
     switch (op) {
       case CacheOp::CallRegExpMatcherResult:
-        if (!cx_->zone()->jitZone()->ensureRegExpMatcherStubExists(cx_)) {
+        if (!oracle_->snapshotJitZoneStub(JitZone::StubKind::RegExpMatcher)) {
           return abort(AbortReason::Error);
         }
         break;
       case CacheOp::CallRegExpSearcherResult:
-        if (!cx_->zone()->jitZone()->ensureRegExpSearcherStubExists(cx_)) {
+        if (!oracle_->snapshotJitZoneStub(JitZone::StubKind::RegExpSearcher)) {
           return abort(AbortReason::Error);
         }
         break;
       case CacheOp::RegExpBuiltinExecMatchResult:
-        if (!cx_->zone()->jitZone()->ensureRegExpExecMatchStubExists(cx_)) {
+        if (!oracle_->snapshotJitZoneStub(JitZone::StubKind::RegExpExecMatch)) {
           return abort(AbortReason::Error);
         }
         break;
       case CacheOp::RegExpBuiltinExecTestResult:
-        if (!cx_->zone()->jitZone()->ensureRegExpExecTestStubExists(cx_)) {
+        if (!oracle_->snapshotJitZoneStub(JitZone::StubKind::RegExpExecTest)) {
+          return abort(AbortReason::Error);
+        }
+        break;
+      case CacheOp::ConcatStringsResult:
+        if (!oracle_->snapshotJitZoneStub(JitZone::StubKind::StringConcat)) {
           return abort(AbortReason::Error);
         }
         break;
@@ -1090,7 +1097,13 @@ AbortReasonOr<bool> WarpScriptOracle::maybeInlineCall(
       case AbortReason::Disable: {
         // If the target script can't be warp-compiled, mark it as
         // uninlineable, clean up, and fall through to the non-inlined path.
+
+        // If we monomorphically inline mutually recursive functions,
+        // we can reach this point more than once for the same stub.
+        // We should only unlink the stub once.
         ICEntry* entry = icScript_->icEntryForStub(fallbackStub);
+        MOZ_ASSERT_IF(entry->firstStub() != stub,
+                      entry->firstStub() == stub->next());
         if (entry->firstStub() == stub) {
           fallbackStub->unlinkStub(cx_->zone(), entry, /*prev=*/nullptr, stub);
         }
@@ -1133,6 +1146,18 @@ AbortReasonOr<bool> WarpScriptOracle::maybeInlineCall(
     }
   }
 
+  return true;
+}
+
+bool WarpOracle::snapshotJitZoneStub(JitZone::StubKind kind) {
+  if (zoneStubs_[kind]) {
+    return true;
+  }
+  JitCode* stub = cx_->zone()->jitZone()->ensureStubExists(cx_, kind);
+  if (!stub) {
+    return false;
+  }
+  zoneStubs_[kind] = stub;
   return true;
 }
 
@@ -1209,6 +1234,10 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
   // If the stub data contains weak pointers then trigger a read barrier. This
   // is necessary as these will now be strong references in the snapshot.
   //
+  // If the stub data contains strings then atomize them. This ensures we don't
+  // try to access potentially unstable characters from a background thread and
+  // also facilitates certain optimizations.
+  //
   // Also asserts non-object fields don't contain nursery pointers.
 
   uint32_t field = 0;
@@ -1270,11 +1299,17 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
         break;
       }
       case StubField::Type::String: {
-#ifdef DEBUG
-        JSString* str =
-            stubInfo->getStubField<StubField::Type::String>(stub, offset);
+        uintptr_t oldWord = stubInfo->getStubRawWord(stub, offset);
+        JSString* str = reinterpret_cast<JSString*>(oldWord);
         MOZ_ASSERT(!IsInsideNursery(str));
-#endif
+        JSAtom* atom = AtomizeString(cx_, str);
+        if (!atom) {
+          return false;
+        }
+        if (atom != str) {
+          uintptr_t newWord = reinterpret_cast<uintptr_t>(atom);
+          stubInfo->replaceStubRawWord(stubDataCopy, offset, oldWord, newWord);
+        }
         break;
       }
       case StubField::Type::Id: {
@@ -1287,10 +1322,19 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
         break;
       }
       case StubField::Type::Value: {
-#ifdef DEBUG
-        Value v = stubInfo->getStubField<StubField::Type::Value>(stub, offset);
+        Value v =
+            stubInfo->getStubField<StubField::Type::Value>(stub, offset).get();
         MOZ_ASSERT_IF(v.isGCThing(), !IsInsideNursery(v.toGCThing()));
-#endif
+        if (v.isString()) {
+          Value newVal;
+          JSAtom* atom = AtomizeString(cx_, v.toString());
+          if (!atom) {
+            return false;
+          }
+          newVal.setString(atom);
+          stubInfo->replaceStubRawValueBits(stubDataCopy, offset, v.asRawBits(),
+                                            newVal.asRawBits());
+        }
         break;
       }
       case StubField::Type::AllocSite: {

@@ -6,6 +6,10 @@
 
 #include "vm/SelfHosting.h"
 
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+#  include "builtin/AsyncDisposableStackObject.h"
+#  include "builtin/DisposableStackObject.h"
+#endif
 #include "mozilla/BinarySearch.h"
 #include "mozilla/Casting.h"
 #include "mozilla/Maybe.h"
@@ -15,7 +19,6 @@
 #include <algorithm>
 #include <iterator>
 
-#include "jsdate.h"
 #include "jsfriendapi.h"
 #include "jsmath.h"
 #include "jsnum.h"
@@ -27,6 +30,7 @@
 #  include "builtin/intl/Collator.h"
 #  include "builtin/intl/DateTimeFormat.h"
 #  include "builtin/intl/DisplayNames.h"
+#  include "builtin/intl/DurationFormat.h"
 #  include "builtin/intl/IntlObject.h"
 #  include "builtin/intl/ListFormat.h"
 #  include "builtin/intl/Locale.h"
@@ -48,8 +52,10 @@
 #include "frontend/BytecodeCompiler.h"    // CompileGlobalScriptToStencil
 #include "frontend/CompilationStencil.h"  // js::frontend::CompilationStencil
 #include "frontend/FrontendContext.h"     // AutoReportFrontendContext
+#include "frontend/StencilXdr.h"  // js::EncodeStencil, js::DecodeStencil
 #include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
+#include "jit/TrampolineNatives.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Conversions.h"
 #include "js/ErrorReport.h"  // JS::PrintError
@@ -72,7 +78,8 @@
 #include "vm/Compression.h"
 #include "vm/DateObject.h"
 #include "vm/ErrorReporting.h"  // js::MaybePrintAndClearPendingException
-#include "vm/FrameIter.h"       // js::ScriptFrameIter
+#include "vm/Float16.h"
+#include "vm/FrameIter.h"  // js::ScriptFrameIter
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Iteration.h"
@@ -101,7 +108,6 @@ using namespace js;
 using namespace js::selfhosted;
 
 using JS::CompileOptions;
-using mozilla::Maybe;
 
 static bool intrinsic_ToObject(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -411,6 +417,24 @@ static bool intrinsic_ThrowInternalError(JSContext* cx, unsigned argc,
   ThrowErrorWithType(cx, JSEXN_INTERNALERR, args);
   return false;
 }
+
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+static bool intrinsic_CreateSuppressedError(JSContext* cx, unsigned argc,
+                                            Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+
+  JS::Rooted<JS::Value> error(cx, args[0]);
+  JS::Rooted<JS::Value> suppressed(cx, args[1]);
+
+  ErrorObject* suppressedError = CreateSuppressedError(cx, error, suppressed);
+  if (!suppressedError) {
+    return false;
+  }
+  args.rval().setObject(*suppressedError);
+  return true;
+}
+#endif
 
 /**
  * Handles an assertion failure in self-hosted code just like an assertion
@@ -900,7 +924,7 @@ static bool intrinsic_GeneratorSetClosed(JSContext* cx, unsigned argc,
   MOZ_ASSERT(args[0].isObject());
 
   GeneratorObject* genObj = &args[0].toObject().as<GeneratorObject>();
-  genObj->setClosed();
+  genObj->setClosed(cx);
   return true;
 }
 
@@ -1024,6 +1048,8 @@ static bool intrinsic_GetTypedArrayKind(JSContext* cx, unsigned argc,
                 "TYPEDARRAY_KIND_BIGINT64 doesn't match the scalar type");
   static_assert(TYPEDARRAY_KIND_BIGUINT64 == Scalar::Type::BigUint64,
                 "TYPEDARRAY_KIND_BIGUINT64 doesn't match the scalar type");
+  static_assert(TYPEDARRAY_KIND_FLOAT16 == Scalar::Type::Float16,
+                "TYPEDARRAY_KIND_FLOAT16 doesn't match the scalar type");
 
   JSObject* obj = &args[0].toObject();
   Scalar::Type type = JS_GetArrayBufferViewType(obj);
@@ -1211,44 +1237,6 @@ static TypedArrayObject* DangerouslyUnwrapTypedArray(JSContext* cx,
   return unwrapped;
 }
 
-// The specification requires us to perform bitwise copying when |sourceType|
-// and |targetType| are the same (ES2017, §22.2.3.24, step 15). Additionally,
-// as an optimization, we can also perform bitwise copying when |sourceType|
-// and |targetType| have compatible bit-level representations.
-static bool IsTypedArrayBitwiseSlice(Scalar::Type sourceType,
-                                     Scalar::Type targetType) {
-  switch (sourceType) {
-    case Scalar::Int8:
-      return targetType == Scalar::Int8 || targetType == Scalar::Uint8;
-
-    case Scalar::Uint8:
-    case Scalar::Uint8Clamped:
-      return targetType == Scalar::Int8 || targetType == Scalar::Uint8 ||
-             targetType == Scalar::Uint8Clamped;
-
-    case Scalar::Int16:
-    case Scalar::Uint16:
-      return targetType == Scalar::Int16 || targetType == Scalar::Uint16;
-
-    case Scalar::Int32:
-    case Scalar::Uint32:
-      return targetType == Scalar::Int32 || targetType == Scalar::Uint32;
-
-    case Scalar::Float32:
-      return targetType == Scalar::Float32;
-
-    case Scalar::Float64:
-      return targetType == Scalar::Float64;
-
-    case Scalar::BigInt64:
-    case Scalar::BigUint64:
-      return targetType == Scalar::BigInt64 || targetType == Scalar::BigUint64;
-
-    default:
-      MOZ_CRASH("IsTypedArrayBitwiseSlice with a bogus typed array type");
-  }
-}
-
 static bool intrinsic_TypedArrayBitwiseSlice(JSContext* cx, unsigned argc,
                                              Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -1284,9 +1272,13 @@ static bool intrinsic_TypedArrayBitwiseSlice(JSContext* cx, unsigned argc,
   }
   MOZ_ASSERT(!unsafeTypedArrayCrossCompartment->hasDetachedBuffer());
 
+  // The specification requires us to perform bitwise copying when |sourceType|
+  // and |targetType| are the same (ES2017, §22.2.3.24, step 15). Additionally,
+  // as an optimization, we can also perform bitwise copying when |sourceType|
+  // and |targetType| have compatible bit-level representations.
   Scalar::Type sourceType = source->type();
-  if (!IsTypedArrayBitwiseSlice(sourceType,
-                                unsafeTypedArrayCrossCompartment->type())) {
+  if (!CanUseBitwiseCopy(unsafeTypedArrayCrossCompartment->type(),
+                         sourceType)) {
     args.rval().setBoolean(false);
     return true;
   }
@@ -1828,6 +1820,26 @@ static bool intrinsic_ToBigInt(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
+static bool intrinsic_NumberToBigInt(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+  MOZ_ASSERT(args[0].isNumber());
+  BigInt* res = NumberToBigInt(cx, args[0].toNumber());
+  if (!res) {
+    return false;
+  }
+  args.rval().setBigInt(res);
+  return true;
+}
+
+static bool intrinsic_BigIntToNumber(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+  MOZ_ASSERT(args[0].isBigInt());
+  args.rval().setNumber(BigInt::numberValue(args[0].toBigInt()));
+  return true;
+}
+
 static bool intrinsic_NewWrapForValidIterator(JSContext* cx, unsigned argc,
                                               Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -1962,14 +1974,22 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("ArrayIteratorPrototypeOptimizable",
                     intrinsic_ArrayIteratorPrototypeOptimizable, 0, 0,
                     IntrinsicArrayIteratorPrototypeOptimizable),
-    JS_FN("ArrayNativeSort", intrinsic_ArrayNativeSort, 1, 0),
     JS_FN("AssertionFailed", intrinsic_AssertionFailed, 1, 0),
+    JS_FN("BigIntToNumber", intrinsic_BigIntToNumber, 1, 0),
     JS_FN("CallArrayBufferMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<ArrayBufferObject>>, 2, 0),
     JS_FN("CallArrayIteratorMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<ArrayIteratorObject>>, 2, 0),
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    JS_FN("CallAsyncDisposableStackMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<AsyncDisposableStackObject>>, 2, 0),
+#endif
     JS_FN("CallAsyncIteratorHelperMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<AsyncIteratorHelperObject>>, 2, 0),
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    JS_FN("CallDisposableStackMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<DisposableStackObject>>, 2, 0),
+#endif
     JS_FN("CallGeneratorMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<GeneratorObject>>, 2, 0),
     JS_FN("CallIteratorHelperMethodIfWrapped",
@@ -2003,6 +2023,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("CreateMapIterationResultPair",
           intrinsic_CreateMapIterationResultPair, 0, 0),
     JS_FN("CreateSetIterationResult", intrinsic_CreateSetIterationResult, 0, 0),
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    JS_FN("CreateSuppressedError", intrinsic_CreateSuppressedError, 2, 0),
+#endif
     JS_FN("DecompileArg", intrinsic_DecompileArg, 2, 0),
     JS_FN("DefineDataProperty", intrinsic_DefineDataProperty, 4, 0),
     JS_FN("DefineProperty", intrinsic_DefineProperty, 6, 0),
@@ -2031,9 +2054,19 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("GuardToArrayIterator",
                     intrinsic_GuardToBuiltin<ArrayIteratorObject>, 1, 0,
                     IntrinsicGuardToArrayIterator),
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    JS_INLINABLE_FN("GuardToAsyncDisposableStackHelper",
+                    intrinsic_GuardToBuiltin<AsyncDisposableStackObject>, 1, 0,
+                    IntrinsicGuardToAsyncDisposableStack),
+#endif
     JS_INLINABLE_FN("GuardToAsyncIteratorHelper",
                     intrinsic_GuardToBuiltin<AsyncIteratorHelperObject>, 1, 0,
                     IntrinsicGuardToAsyncIteratorHelper),
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    JS_INLINABLE_FN("GuardToDisposableStackHelper",
+                    intrinsic_GuardToBuiltin<DisposableStackObject>, 1, 0,
+                    IntrinsicGuardToDisposableStack),
+#endif
     JS_INLINABLE_FN("GuardToIteratorHelper",
                     intrinsic_GuardToBuiltin<IteratorHelperObject>, 1, 0,
                     IntrinsicGuardToIteratorHelper),
@@ -2117,6 +2150,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
                     IntrinsicNewStringIterator),
     JS_FN("NewWrapForValidIterator", intrinsic_NewWrapForValidIterator, 0, 0),
     JS_FN("NoPrivateGetter", intrinsic_NoPrivateGetter, 1, 0),
+    JS_FN("NumberToBigInt", intrinsic_NumberToBigInt, 1, 0),
     JS_INLINABLE_FN("ObjectHasPrototype", intrinsic_ObjectHasPrototype, 2, 0,
                     IntrinsicObjectHasPrototype),
     JS_INLINABLE_FN(
@@ -2173,7 +2207,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
                     IntrinsicSubstringKernel),
     JS_FN("ThisNumberValueForToLocaleString", ThisNumberValueForToLocaleString,
           0, 0),
-    JS_FN("ThisTimeValue", intrinsic_ThisTimeValue, 1, 0),
+    JS_INLINABLE_FN("ThisTimeValue", intrinsic_ThisTimeValue, 1, 0,
+                    IntrinsicThisTimeValue),
 #ifdef ENABLE_RECORD_TUPLE
     JS_FN("ThisTupleValue", intrinsic_ThisTupleValue, 1, 0),
 #endif
@@ -2204,7 +2239,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("TypedArrayLengthZeroOnOutOfBounds",
                     intrinsic_TypedArrayLengthZeroOnOutOfBounds, 1, 0,
                     IntrinsicTypedArrayLengthZeroOnOutOfBounds),
-    JS_FN("TypedArrayNativeSort", intrinsic_TypedArrayNativeSort, 1, 0),
     JS_INLINABLE_FN("UnsafeGetInt32FromReservedSlot",
                     intrinsic_UnsafeGetInt32FromReservedSlot, 2, 0,
                     IntrinsicUnsafeGetInt32FromReservedSlot),
@@ -2228,6 +2262,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
           CallNonGenericSelfhostedMethod<Is<DateTimeFormatObject>>, 2, 0),
     JS_FN("intl_CallDisplayNamesMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<DisplayNamesObject>>, 2, 0),
+    JS_FN("intl_CallDurationFormatMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<DurationFormatObject>>, 2, 0),
     JS_FN("intl_CallListFormatMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<ListFormatObject>>, 2, 0),
     JS_FN("intl_CallNumberFormatMethodIfWrapped",
@@ -2259,6 +2295,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("intl_FormatRelativeTime", intl_FormatRelativeTime, 4, 0),
     JS_FN("intl_GetCalendarInfo", intl_GetCalendarInfo, 1, 0),
     JS_FN("intl_GetPluralCategories", intl_GetPluralCategories, 1, 0),
+    JS_FN("intl_GetTimeSeparator", intl_GetTimeSeparator, 2, 0),
     JS_INLINABLE_FN("intl_GuardToCollator",
                     intrinsic_GuardToBuiltin<CollatorObject>, 1, 0,
                     IntlGuardToCollator),
@@ -2268,6 +2305,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("intl_GuardToDisplayNames",
                     intrinsic_GuardToBuiltin<DisplayNamesObject>, 1, 0,
                     IntlGuardToDisplayNames),
+    JS_INLINABLE_FN("intl_GuardToDurationFormat",
+                    intrinsic_GuardToBuiltin<DurationFormatObject>, 1, 0,
+                    IntlGuardToDurationFormat),
     JS_INLINABLE_FN("intl_GuardToListFormat",
                     intrinsic_GuardToBuiltin<ListFormatObject>, 1, 0,
                     IntlGuardToListFormat),
@@ -2336,8 +2376,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Array_indexOf", array_indexOf, 1, 0),
     JS_FN("std_Array_lastIndexOf", array_lastIndexOf, 1, 0),
     JS_INLINABLE_FN("std_Array_pop", array_pop, 0, 0, ArrayPop),
+    JS_TRAMPOLINE_FN("std_Array_sort", array_sort, 1, 0, ArraySort),
     JS_FN("std_BigInt_valueOf", BigIntObject::valueOf, 0, 0),
-    JS_FN("std_Date_now", date_now, 0, 0),
     JS_FN("std_Function_apply", fun_apply, 2, 0),
     JS_FN("std_Map_entries", MapObject::entries, 0, 0),
     JS_FN("std_Map_get", MapObject::get, 1, 0),
@@ -2346,6 +2386,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("std_Math_floor", math_floor, 1, 0, MathFloor),
     JS_INLINABLE_FN("std_Math_max", math_max, 2, 0, MathMax),
     JS_INLINABLE_FN("std_Math_min", math_min, 2, 0, MathMin),
+    JS_INLINABLE_FN("std_Math_sign", math_sign, 1, 0, MathSign),
     JS_INLINABLE_FN("std_Math_trunc", math_trunc, 1, 0, MathTrunc),
     JS_INLINABLE_FN("std_Object_create", obj_create, 2, 0, ObjectCreate),
     JS_INLINABLE_FN("std_Object_isPrototypeOf", obj_isPrototypeOf, 1, 0,
@@ -2378,8 +2419,11 @@ static const JSFunctionSpec intrinsic_functions[] = {
 #ifdef ENABLE_RECORD_TUPLE
     JS_FN("std_Tuple_unchecked", tuple_construct, 1, 0),
 #endif
+    JS_TRAMPOLINE_FN("std_TypedArray_sort", TypedArrayObject::sort, 1, 0,
+                     TypedArraySort),
 
-    JS_FS_END};
+    JS_FS_END,
+};
 
 #ifdef DEBUG
 
@@ -2610,7 +2654,6 @@ bool JSRuntime::initSelfHostingStencil(JSContext* cx,
   FillSelfHostingCompileOptions(options);
 
   // Try initializing from Stencil XDR.
-  bool decodeOk = false;
   AutoPrintSelfHostingFrontendContext fc(cx);
   if (xdrCache.Length() > 0) {
     // Allow the VM to directly use bytecode from the XDR buffer without
@@ -2630,16 +2673,11 @@ bool JSRuntime::initSelfHostingStencil(JSContext* cx,
       }
     }
 
-    RefPtr<frontend::CompilationStencil> stencil(
-        cx->new_<frontend::CompilationStencil>(input->source));
-    if (!stencil) {
-      return false;
-    }
-    if (!stencil->deserializeStencils(&fc, options, xdrCache, &decodeOk)) {
-      return false;
-    }
-
-    if (decodeOk) {
+    JS::DecodeOptions decodeOption(options);
+    RefPtr<frontend::CompilationStencil> stencil;
+    JS::TranscodeResult result =
+        js::DecodeStencil(&fc, decodeOption, xdrCache, getter_AddRefs(stencil));
+    if (result == JS::TranscodeResult::Ok) {
       MOZ_ASSERT(input->atomCache.empty());
 
       MOZ_ASSERT(!hasSelfHostStencil());
@@ -2677,9 +2715,9 @@ bool JSRuntime::initSelfHostingStencil(JSContext* cx,
   }
   frontend::NoScopeBindingCache scopeCache;
   RefPtr<frontend::CompilationStencil> stencil =
-      frontend::CompileGlobalScriptToStencil(cx, &fc, cx->tempLifoAlloc(),
-                                             *input, &scopeCache, srcBuf,
-                                             ScopeKind::Global);
+      frontend::CompileGlobalScriptToStencilWithInput(
+          cx, &fc, cx->tempLifoAlloc(), *input, &scopeCache, srcBuf,
+          ScopeKind::Global);
   if (!stencil) {
     return false;
   }
@@ -2687,11 +2725,8 @@ bool JSRuntime::initSelfHostingStencil(JSContext* cx,
   // Serialize the stencil to XDR.
   if (xdrWriter) {
     JS::TranscodeBuffer xdrBuffer;
-    bool succeeded = false;
-    if (!stencil->serializeStencils(cx, *input, xdrBuffer, &succeeded)) {
-      return false;
-    }
-    if (!succeeded) {
+    JS::TranscodeResult result = js::EncodeStencil(cx, stencil, xdrBuffer);
+    if (result != JS::TranscodeResult::Ok) {
       JS_ReportErrorASCII(cx, "Encoding failure");
       return false;
     }
@@ -2739,7 +2774,7 @@ void JSRuntime::finishSelfHosting() {
       // instance.
       RefPtr<frontend::CompilationStencil> stencil;
       *getter_AddRefs(stencil) = selfHostStencil_;
-      MOZ_ASSERT(stencil->refCount == 1);
+      MOZ_ASSERT(!stencil->hasMultipleReference());
     }
   }
 
@@ -2906,6 +2941,14 @@ static bool GetComputedIntrinsic(JSContext* cx, Handle<PropertyName*> name,
   // only have to look for it in one place when performing `GetIntrinsic`.
   mozilla::Maybe<PropertyInfo> prop =
       computedIntrinsicsHolder->lookup(cx, name);
+#ifdef DEBUG
+  if (!prop) {
+    Fprinter out(stderr);
+    out.printf("SelfHosted intrinsic not found: ");
+    name->dumpPropertyName(out);
+    out.printf("\n");
+  }
+#endif
   MOZ_RELEASE_ASSERT(prop, "SelfHosted intrinsic not found");
   RootedValue value(cx, computedIntrinsicsHolder->getSlot(prop->slot()));
   return GlobalObject::addIntrinsicValue(cx, cx->global(), name, value);

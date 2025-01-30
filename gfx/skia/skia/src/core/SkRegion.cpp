@@ -8,13 +8,18 @@
 #include "include/core/SkRegion.h"
 
 #include "include/private/base/SkMacros.h"
+#include "include/private/base/SkMalloc.h"
+#include "include/private/base/SkMath.h"
 #include "include/private/base/SkTemplates.h"
 #include "include/private/base/SkTo.h"
+#include "src/base/SkBuffer.h"
 #include "src/base/SkSafeMath.h"
 #include "src/core/SkRegionPriv.h"
 
 #include <algorithm>
-#include <utility>
+#include <atomic>
+#include <cstring>
+#include <functional>
 
 using namespace skia_private;
 
@@ -35,7 +40,7 @@ using namespace skia_private;
 
 constexpr int kRunArrayStackCount = 256;
 
-// This is a simple data structure which is like a SkSTArray<N,T,true>, except that:
+// This is a simple data structure which is like a STArray<N,T,true>, except that:
 //   - It does not initialize memory.
 //   - It does not distinguish between reserved space and initialized space.
 //   - resizeToAtLeast() instead of resize()
@@ -55,8 +60,10 @@ public:
     /** Resize the array to a size greater-than-or-equal-to count. */
     void resizeToAtLeast(int count) {
         if (count > fCount) {
-            // leave at least 50% extra space for future growth.
-            count += count >> 1;
+            // leave at least 50% extra space for future growth (unless adding would overflow)
+            SkSafeMath safe;
+            int newCount = safe.addInt(count, count >> 1);
+            count = safe ? newCount : SK_MaxS32;
             fMalloc.realloc(count);
             if (fPtr == fStack) {
                 memcpy(fMalloc.get(), fStack, fCount * sizeof(SkRegionPriv::RunType));
@@ -1140,8 +1147,6 @@ bool SkRegion::op(const SkRegion& rgna, const SkRegion& rgnb, Op op) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-#include "src/base/SkBuffer.h"
 
 size_t SkRegion::writeToMemory(void* storage) const {
     if (nullptr == storage) {

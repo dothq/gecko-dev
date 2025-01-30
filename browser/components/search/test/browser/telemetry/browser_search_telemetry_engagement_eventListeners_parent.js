@@ -29,6 +29,7 @@ const IMPRESSION = {
   is_shopping_page: "false",
   is_private: "false",
   shopping_tab_displayed: "false",
+  is_signed_in: "false",
 };
 
 const SELECTOR = ".arrow";
@@ -321,13 +322,13 @@ add_task(async function test_multiple_listeners() {
   await synthesizePageAction({
     selector: SELECTOR,
     tab,
+    event: {
+      type: "mousemove",
+    },
   });
   await synthesizePageAction({
     selector: SELECTOR,
     tab,
-    event: {
-      type: "mouseover",
-    },
   });
 
   assertSERPTelemetry([
@@ -335,11 +336,11 @@ add_task(async function test_multiple_listeners() {
       impression: IMPRESSION,
       engagements: [
         {
-          action: "clicked",
+          action: "mouseovered",
           target: SearchSERPTelemetryUtils.COMPONENTS.REFINED_SEARCH_BUTTONS,
         },
         {
-          action: "mouseovered",
+          action: "clicked",
           target: SearchSERPTelemetryUtils.COMPONENTS.REFINED_SEARCH_BUTTONS,
         },
       ],

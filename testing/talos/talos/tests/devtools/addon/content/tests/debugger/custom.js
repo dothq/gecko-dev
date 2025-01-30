@@ -16,7 +16,7 @@ const {
 const {
   createContext,
   findSource,
-  getCM,
+  getCMEditor,
   hoverOnToken,
   openDebuggerAndLog,
   pauseDebugger,
@@ -27,7 +27,6 @@ const {
   step,
   waitForSource,
   waitForText,
-  evalInFrame,
   waitUntil,
   addBreakpoint,
   waitForPaused,
@@ -50,6 +49,10 @@ const TEST_URL = PAGES_BASE_URL + "custom/debugger/app-build/index.html";
 const MINIFIED_URL = `${IFRAME_BASE_URL}custom/debugger/app-build/static/js/minified.js`;
 
 module.exports = async function () {
+  const isCm6Enabled = Services.prefs.getBoolPref(
+    "devtools.debugger.features.codemirror-next"
+  );
+
   const tab = await testSetup(TEST_URL, { disableCache: true });
 
   const toolbox = await openDebuggerAndLog("custom", EXPECTED);
@@ -59,10 +62,6 @@ module.exports = async function () {
 
   dump("Creating context\n");
   const dbg = await createContext(panel);
-
-  // Note that all sources added via eval, and all sources added by this function
-  // will be gone when reloading the page in the next step.
-  await testAddingSources(dbg, tab, toolbox);
 
   // Reselect App.js as that's the source expected to be selected after page reload
   await selectSource(dbg, EXPECTED.file);
@@ -74,9 +73,9 @@ module.exports = async function () {
   await stepDebuggerAndLog(dbg, tab, EXPECTED_FUNCTION);
 
   await testProjectSearch(dbg, tab);
-  await testPreview(dbg, tab, EXPECTED_FUNCTION);
-  await testOpeningLargeMinifiedFile(dbg, tab);
-  await testPrettyPrint(dbg, toolbox);
+  await testPreview(dbg, tab, EXPECTED_FUNCTION, isCm6Enabled);
+  await testOpeningLargeMinifiedFile(dbg, isCm6Enabled);
+  await testPrettyPrint(dbg, toolbox, isCm6Enabled);
 
   await closeToolboxAndLog("custom.jsdebugger", toolbox);
 
@@ -203,12 +202,13 @@ async function testProjectSearch(dbg) {
   await garbageCollect();
 }
 
-async function testPreview(dbg, tab, testFunction) {
+async function testPreview(dbg, tab, testFunction, isCm6Enabled) {
+  dump("Executing preview test ...\n");
   const pauseLocation = { line: 22, file: "App.js" };
 
   let test = runTest("custom.jsdebugger.preview.DAMP");
   await pauseDebugger(dbg, tab, testFunction, pauseLocation);
-  await hoverOnToken(dbg, "window.hitBreakpoint", "window");
+  await hoverOnToken(dbg, "window.hitBreakpoint", "window", isCm6Enabled);
   test.done();
 
   await removeBreakpoints(dbg);
@@ -217,6 +217,7 @@ async function testPreview(dbg, tab, testFunction) {
 }
 
 async function testOpeningLargeMinifiedFile(dbg) {
+  dump("Executing opening large minified test ...\n");
   const fileFirstMinifiedChars = `(()=>{var e,t,n,r,o={82603`;
 
   dump("Open minified.js (large minified file)\n");
@@ -238,7 +239,7 @@ async function testOpeningLargeMinifiedFile(dbg) {
   await garbageCollect();
 }
 
-async function testPrettyPrint(dbg, toolbox) {
+async function testPrettyPrint(dbg, toolbox, isCm6Enabled) {
   const formattedFileUrl = `${MINIFIED_URL}:formatted`;
   const filePrettyChars = "82603: (e, t, n) => {\n";
 
@@ -246,12 +247,17 @@ async function testPrettyPrint(dbg, toolbox) {
   await selectSource(dbg, MINIFIED_URL);
 
   dump("Wait until CodeMirror highlighting is done\n");
-  const cm = getCM(dbg);
-  // highlightFrontier is not documented but is an internal variable indicating the current
-  // line that was just highlighted. This document has only 2 lines, so wait until both
-  // are highlighted. Since there was an other document opened before, we need to do an
-  // exact check to properly wait.
-  await waitUntil(() => cm.doc.highlightFrontier === 2);
+  const cm = getCMEditor(dbg).codeMirror;
+  await waitUntil(() => {
+    if (isCm6Enabled) {
+      return true;
+    }
+    // For CM5 highlightFrontier is not documented but is an internal variable indicating the current
+    // line that was just highlighted. This document has only 2 lines, so wait until both
+    // are highlighted. Since there was an other document opened before, we need to do an
+    // exact check to properly wait.
+    return cm.doc.highlightFrontier === 2;
+  });
 
   const prettyPrintButton = await waitUntil(() => {
     return dbg.win.document.querySelector(".source-footer .prettyPrint.active");
@@ -318,45 +324,4 @@ async function testPrettyPrint(dbg, toolbox) {
   await dbg.actions.closeTabs(sources);
 
   await garbageCollect();
-}
-
-async function testAddingSources(dbg, tab, toolbox) {
-  // Before running the test, select an existing source in the two folders
-  // where we add sources so that the added sources are made visible in the SourceTree.
-  await selectSource(dbg, "js/testfile.js?id=0");
-  await selectSource(dbg, "js/subfolder/testsubfolder.js");
-
-  // Disabled ResourceCommand throttling so that the source notified by the server
-  // is immediately processed by the client and we process each new source quickly.
-  // Otherwise each source processing is faster than the throttling and we would mostly measure the throttling.
-  toolbox.commands.resourceCommand.throttlingDisabled = true;
-  const test = runTest("custom.jsdebugger.adding-sources.DAMP");
-
-  for (let i = 0; i < 15; i++) {
-    // Load source from two distinct folders to extend coverage around the source tree
-    const sourceFilename =
-      (i % 2 == 0 ? "testfile.js" : "testsubfolder.js") + "?dynamic-" + i;
-    const sourcePath =
-      i % 2 == 0 ? sourceFilename : "subfolder/" + sourceFilename;
-
-    await evalInFrame(
-      tab,
-      `
-      const script = document.createElement("script");
-      script.src = "./js/${sourcePath}";
-      document.body.appendChild(script);
-    `
-    );
-    dump(`Wait for new source '${sourceFilename}'\n`);
-    // Wait for the source to be in the redux store to avoid executing expensive DOM selectors.
-    await waitUntil(() => findSource(dbg, sourceFilename));
-    await waitUntil(() => {
-      return Array.from(
-        dbg.win.document.querySelectorAll(".sources-list .tree-node")
-      ).some(e => e.textContent.includes(sourceFilename));
-    });
-  }
-
-  test.done();
-  toolbox.commands.resourceCommand.throttlingDisabled = false;
 }

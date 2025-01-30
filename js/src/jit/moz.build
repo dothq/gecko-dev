@@ -26,14 +26,17 @@ UNIFIED_SOURCES += [
     "BaselineIC.cpp",
     "BaselineJIT.cpp",
     "BitSet.cpp",
+    "BranchHinting.cpp",
     "BytecodeAnalysis.cpp",
     "CacheIR.cpp",
+    "CacheIRAOT.cpp",
     "CacheIRCompiler.cpp",
     "CacheIRHealth.cpp",
     "CacheIRSpewer.cpp",
     "CodeGenerator.cpp",
     "CompileWrappers.cpp",
     "Disassemble.cpp",
+    "DominatorTree.cpp",
     "EdgeCaseAnalysis.cpp",
     "EffectiveAddressAnalysis.cpp",
     "ExecutableAllocator.cpp",
@@ -65,6 +68,7 @@ UNIFIED_SOURCES += [
     "LIR.cpp",
     "Lowering.cpp",
     "MacroAssembler.cpp",
+    "MIR-wasm.cpp",
     "MIR.cpp",
     "MIRGraph.cpp",
     "MoveResolver.cpp",
@@ -87,6 +91,7 @@ UNIFIED_SOURCES += [
     "Sink.cpp",
     "Snapshots.cpp",
     "Trampoline.cpp",
+    "TrampolineNatives.cpp",
     "TrialInlining.cpp",
     "TypePolicy.cpp",
     "ValueNumbering.cpp",
@@ -281,7 +286,7 @@ GeneratedFile(
     "LIROpsGenerated.h",
     script="GenerateLIRFiles.py",
     entry_point="generate_lir_header",
-    inputs=["LIROps.yaml"],
+    inputs=["LIROps.yaml", "MIROps.yaml"],
 )
 
 # Generate jit/CacheIROpsGenerated.h from jit/CacheIROps.yaml
@@ -298,6 +303,15 @@ GeneratedFile(
     entry_point="generate_atomics_header",
     inputs=[],
 )
+
+if CONFIG["ENABLE_JS_AOT_ICS"]:
+    GeneratedFile(
+        "CacheIRAOTGenerated.h",
+        script="GenerateCacheIRFiles.py",
+        entry_point="generate_aot_ics_header",
+        inputs=["../ics/"],
+        force=True,  # depends on list of files in js/src/ics/; always rebuild
+    )
 
 if CONFIG["FUZZING_INTERFACES"] or CONFIG["FUZZING_JS_FUZZILLI"]:
     include("/tools/fuzzing/libfuzzer-config.mozbuild")

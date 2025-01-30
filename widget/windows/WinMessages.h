@@ -10,11 +10,6 @@
  * MOZ_WM_* messages
  ****************************************************************************/
 
-// A magic APP message that can be sent to quit, sort of like a
-// QUERYENDSESSION/ENDSESSION, but without the query.
-#define MOZ_WM_APP_QUIT (WM_APP + 0x0300)
-// Used as a "tracer" event to probe event loop latency.
-#define MOZ_WM_TRACE (WM_APP + 0x0301)
 // accessibility priming
 #define MOZ_WM_STARTA11Y (WM_APP + 0x0302)
 // Our internal message for WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_VSCROLL and
@@ -25,9 +20,6 @@
 #define MOZ_WM_HSCROLL (WM_APP + 0x0313)
 #define MOZ_WM_MOUSEWHEEL_FIRST MOZ_WM_MOUSEVWHEEL
 #define MOZ_WM_MOUSEWHEEL_LAST MOZ_WM_HSCROLL
-// If a popup window is being activated, we try to reactivate the previous
-// window with this message.
-#define MOZ_WM_REACTIVATE (WM_APP + 0x0314)
 // If TSFTextStore needs to notify TSF/TIP of layout change later, this
 // message is posted.
 #define MOZ_WM_NOTIY_TSF_OF_LAYOUT_CHANGE (WM_APP + 0x0315)

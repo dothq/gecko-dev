@@ -21,8 +21,6 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/Telemetry.h"
-#include "mozilla/TelemetryScalarEnums.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/FileSystemManager.h"
@@ -119,13 +117,13 @@ class RequestResolver final : public nsIQuotaCallback {
 };
 
 // This class is used to return promise on worker thread.
-class RequestResolver::FinishWorkerRunnable final : public WorkerRunnable {
+class RequestResolver::FinishWorkerRunnable final
+    : public WorkerThreadRunnable {
   RefPtr<RequestResolver> mResolver;
 
  public:
   explicit FinishWorkerRunnable(RequestResolver* aResolver)
-      : WorkerRunnable(aResolver->mProxy->GetWorkerPrivate(),
-                       "RequestResolver::FinishWorkerRunnable"),
+      : WorkerThreadRunnable("RequestResolver::FinishWorkerRunnable"),
         mResolver(aResolver) {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aResolver);
@@ -326,7 +324,7 @@ already_AddRefed<Promise> ExecuteOpOnMainOrWorkerThread(
             new PersistentStoragePermissionRequest(principal, window, promise);
 
         // In private browsing mode, no permission prompt.
-        if (nsContentUtils::IsInPrivateBrowsing(doc)) {
+        if (doc->IsInPrivateBrowsing()) {
           aRv = request->Cancel();
         } else if (!request->CheckPermissionDelegate()) {
           aRv = request->Cancel();
@@ -373,7 +371,7 @@ already_AddRefed<Promise> ExecuteOpOnMainOrWorkerThread(
       RefPtr<EstimateWorkerMainThreadRunnable> runnnable =
           new EstimateWorkerMainThreadRunnable(promiseProxy->GetWorkerPrivate(),
                                                promiseProxy);
-      runnnable->Dispatch(Canceling, aRv);
+      runnnable->Dispatch(promiseProxy->GetWorkerPrivate(), Canceling, aRv);
 
       break;
     }
@@ -382,7 +380,7 @@ already_AddRefed<Promise> ExecuteOpOnMainOrWorkerThread(
       RefPtr<PersistedWorkerMainThreadRunnable> runnnable =
           new PersistedWorkerMainThreadRunnable(
               promiseProxy->GetWorkerPrivate(), promiseProxy);
-      runnnable->Dispatch(Canceling, aRv);
+      runnnable->Dispatch(promiseProxy->GetWorkerPrivate(), Canceling, aRv);
 
       break;
     }
@@ -565,7 +563,7 @@ nsresult RequestResolver::Finish() {
     }
 
     RefPtr<FinishWorkerRunnable> runnable = new FinishWorkerRunnable(this);
-    if (NS_WARN_IF(!runnable->Dispatch())) {
+    if (NS_WARN_IF(!runnable->Dispatch(mProxy->GetWorkerPrivate()))) {
       return NS_ERROR_FAILURE;
     }
   }
@@ -789,7 +787,6 @@ already_AddRefed<Promise> StorageManager::Persisted(ErrorResult& aRv) {
 already_AddRefed<Promise> StorageManager::Persist(ErrorResult& aRv) {
   MOZ_ASSERT(mOwner);
 
-  Telemetry::ScalarAdd(Telemetry::ScalarID::NAVIGATOR_STORAGE_PERSIST_COUNT, 1);
   return ExecuteOpOnMainOrWorkerThread(mOwner, RequestResolver::Type::Persist,
                                        aRv);
 }
@@ -797,8 +794,6 @@ already_AddRefed<Promise> StorageManager::Persist(ErrorResult& aRv) {
 already_AddRefed<Promise> StorageManager::Estimate(ErrorResult& aRv) {
   MOZ_ASSERT(mOwner);
 
-  Telemetry::ScalarAdd(Telemetry::ScalarID::NAVIGATOR_STORAGE_ESTIMATE_COUNT,
-                       1);
   return ExecuteOpOnMainOrWorkerThread(mOwner, RequestResolver::Type::Estimate,
                                        aRv);
 }

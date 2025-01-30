@@ -73,10 +73,6 @@ void nsXULTooltipListener::MouseOut(Event* aEvent) {
     return;
   }
 
-#ifdef DEBUG_crap
-  if (mNeedTitletip) return;
-#endif
-
   // check to see if the mouse left the targetNode, and if so,
   // hide the tooltip
   if (currentTooltip) {
@@ -252,8 +248,12 @@ nsXULTooltipListener::HandleEvent(Event* aEvent) {
   nsCOMPtr<nsIDragService> dragService =
       do_GetService("@mozilla.org/widget/dragservice;1");
   NS_ENSURE_TRUE(dragService, NS_OK);
-  nsCOMPtr<nsIDragSession> dragSession;
-  dragService->GetCurrentSession(getter_AddRefs(dragSession));
+  auto* widgetGuiEvent = aEvent->WidgetEventPtr()->AsGUIEvent();
+  if (!widgetGuiEvent) {
+    return NS_OK;
+  }
+  nsCOMPtr<nsIDragSession> dragSession =
+      dragService->GetCurrentSession(widgetGuiEvent->mWidget);
   if (dragSession) {
     return NS_OK;
   }
@@ -319,7 +319,9 @@ void nsXULTooltipListener::RemoveTooltipSupport(nsIContent* aNode) {
 
 void nsXULTooltipListener::CheckTreeBodyMove(MouseEvent* aMouseEvent) {
   nsCOMPtr<nsIContent> sourceNode = do_QueryReferent(mSourceNode);
-  if (!sourceNode) return;
+  if (!sourceNode) {
+    return;
+  }
 
   // get the documentElement of the document the tree is in
   Document* doc = sourceNode->GetComposedDoc();
@@ -327,7 +329,8 @@ void nsXULTooltipListener::CheckTreeBodyMove(MouseEvent* aMouseEvent) {
   RefPtr<XULTreeElement> tree = GetSourceTree();
   Element* root = doc ? doc->GetRootElement() : nullptr;
   if (root && root->GetPrimaryFrame() && tree) {
-    CSSIntPoint pos = aMouseEvent->ScreenPoint(CallerType::System);
+    CSSIntPoint pos =
+        RoundedToInt(aMouseEvent->ScreenPoint(CallerType::System));
 
     // subtract off the documentElement's position
     // XXX Isn't this just converting to client points?
@@ -653,7 +656,9 @@ void nsXULTooltipListener::KillTooltipTimer() {
 
 void nsXULTooltipListener::sTooltipCallback(nsITimer* aTimer, void* aListener) {
   RefPtr<nsXULTooltipListener> instance = sInstance;
-  if (instance) instance->ShowTooltip();
+  if (instance) {
+    instance->ShowTooltip();
+  }
 }
 
 XULTreeElement* nsXULTooltipListener::GetSourceTree() {

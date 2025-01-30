@@ -157,7 +157,7 @@ EXPORTS += [
     "FileBlockCache.h",
     "ForwardedInputTrack.h",
     "FrameStatistics.h",
-    "ImageToI420.h",
+    "ImageConversion.h",
     "Intervals.h",
     "MediaCache.h",
     "MediaContainerType.h",
@@ -190,7 +190,6 @@ EXPORTS += [
     "MediaTrackList.h",
     "MediaTrackListener.h",
     "MemoryBlockCache.h",
-    "MPSCQueue.h",
     "nsIDocumentActivity.h",
     "PrincipalChangeObserver.h",
     "PrincipalHandle.h",
@@ -200,6 +199,7 @@ EXPORTS += [
     "SeekTarget.h",
     "SelfRef.h",
     "SharedBuffer.h",
+    "TimedPacketizer.h",
     "TimeUnits.h",
     "Tracing.h",
     "VideoFrameContainer.h",
@@ -236,6 +236,7 @@ EXPORTS.mozilla.dom += [
     "MediaDevices.h",
     "MediaStreamError.h",
     "MediaStreamTrack.h",
+    "MPSCQueue.h",
     "VideoPlaybackQuality.h",
     "VideoStreamTrack.h",
     "VideoTrack.h",
@@ -281,7 +282,7 @@ UNIFIED_SOURCES += [
     "GetUserMediaRequest.cpp",
     "GraphDriver.cpp",
     "GraphRunner.cpp",
-    "ImageToI420.cpp",
+    "ImageConversion.cpp",
     "MediaCache.cpp",
     "MediaContainerType.cpp",
     "MediaDecoder.cpp",
@@ -296,6 +297,7 @@ UNIFIED_SOURCES += [
     "MediaPlaybackDelayPolicy.cpp",
     "MediaRecorder.cpp",
     "MediaResource.cpp",
+    "MediaResult.cpp",
     "MediaShutdownManager.cpp",
     "MediaStreamError.cpp",
     "MediaStreamTrack.cpp",
@@ -370,8 +372,8 @@ LOCAL_INCLUDES += [
 if CONFIG["MOZ_WEBRTC"]:
     LOCAL_INCLUDES += [
         "/dom/media/webrtc/common",
+        "/third_party/abseil-cpp",
         "/third_party/libwebrtc",
-        "/third_party/libwebrtc/third_party/abseil-cpp",
     ]
 
 DEFINES["MOZILLA_INTERNAL_API"] = True
@@ -401,6 +403,8 @@ if CONFIG["ENABLE_TESTS"]:
     ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
+
+LOCAL_INCLUDES += CONFIG["SKIA_INCLUDES"]
 
 # Suppress some GCC warnings being treated as errors:
 #  - about attributes on forward declarations for types that are already

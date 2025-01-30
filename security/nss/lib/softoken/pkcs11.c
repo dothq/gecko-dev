@@ -317,24 +317,24 @@ struct mechanismList {
 static const struct mechanismList mechanisms[] = {
 
     /*
-      * PKCS #11 Mechanism List.
-      *
-      * The first argument is the PKCS #11 Mechanism we support.
-      * The second argument is Mechanism info structure. It includes:
-      *    The minimum key size,
-      *       in bits for RSA, DSA, DH, EC*, KEA, RC2 and RC4 * algs.
-      *       in bytes for RC5, AES, Camellia, and CAST*
-      *       ignored for DES*, IDEA and FORTEZZA based
-      *    The maximum key size,
-      *       in bits for RSA, DSA, DH, EC*, KEA, RC2 and RC4 * algs.
-      *       in bytes for RC5, AES, Camellia, and CAST*
-      *       ignored for DES*, IDEA and FORTEZZA based
-      *     Flags
-      *       What operations are supported by this mechanism.
-      *  The third argument is a bool which tells if this mechanism is
-      *    supported in the database token.
-      *
-      */
+     * PKCS #11 Mechanism List.
+     *
+     * The first argument is the PKCS #11 Mechanism we support.
+     * The second argument is Mechanism info structure. It includes:
+     *    The minimum key size,
+     *       in bits for RSA, DSA, DH, EC*, KEA, RC2 and RC4 * algs.
+     *       in bytes for RC5, AES, Camellia, and CAST*
+     *       ignored for DES*, IDEA and FORTEZZA based
+     *    The maximum key size,
+     *       in bits for RSA, DSA, DH, EC*, KEA, RC2 and RC4 * algs.
+     *       in bytes for RC5, AES, Camellia, and CAST*
+     *       ignored for DES*, IDEA and FORTEZZA based
+     *     Flags
+     *       What operations are supported by this mechanism.
+     *  The third argument is a bool which tells if this mechanism is
+     *    supported in the database token.
+     *
+     */
 
     /* ------------------------- RSA Operations ---------------------------*/
     { CKM_RSA_PKCS_KEY_PAIR_GEN, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
@@ -373,6 +373,7 @@ static const struct mechanismList mechanisms[] = {
     { CKM_DH_PKCS_DERIVE, { DH_MIN_P_BITS, DH_MAX_P_BITS, CKF_DERIVE }, PR_TRUE },
     /* -------------------- Elliptic Curve Operations --------------------- */
     { CKM_EC_KEY_PAIR_GEN, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_GENERATE_KEY_PAIR | CKF_EC_BPNU }, PR_TRUE },
+    { CKM_NSS_ECDHE_NO_PAIRWISE_CHECK_KEY_PAIR_GEN, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_GENERATE_KEY_PAIR | CKF_EC_BPNU }, PR_TRUE },
     { CKM_ECDH1_DERIVE, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_DERIVE | CKF_EC_BPNU }, PR_TRUE },
     { CKM_ECDSA, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_SN_VR | CKF_EC_BPNU }, PR_TRUE },
     { CKM_ECDSA_SHA1, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_SN_VR | CKF_EC_BPNU }, PR_TRUE },
@@ -381,6 +382,7 @@ static const struct mechanismList mechanisms[] = {
     { CKM_ECDSA_SHA384, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_SN_VR | CKF_EC_BPNU }, PR_TRUE },
     { CKM_ECDSA_SHA512, { EC_MIN_KEY_BITS, EC_MAX_KEY_BITS, CKF_SN_VR | CKF_EC_BPNU }, PR_TRUE },
     { CKM_EC_EDWARDS_KEY_PAIR_GEN, { ECD_MIN_KEY_BITS, ECD_MAX_KEY_BITS, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
+    { CKM_EC_MONTGOMERY_KEY_PAIR_GEN, { ECD_MIN_KEY_BITS, ECD_MAX_KEY_BITS, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
     { CKM_EDDSA, { ECD_MIN_KEY_BITS, ECD_MAX_KEY_BITS, CKF_SN_VR | CKF_EC_POC }, PR_TRUE },
     /* ------------------------- RC2 Operations --------------------------- */
     { CKM_RC2_KEY_GEN, { 1, 128, CKF_GENERATE }, PR_TRUE },
@@ -649,6 +651,8 @@ static const struct mechanismList mechanisms[] = {
     /* -------------------- Kyber Operations ----------------------- */
     { CKM_NSS_KYBER_KEY_PAIR_GEN, { 0, 0, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
     { CKM_NSS_KYBER, { 0, 0, 0 }, PR_TRUE },
+    { CKM_NSS_ML_KEM_KEY_PAIR_GEN, { 0, 0, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
+    { CKM_NSS_ML_KEM, { 0, 0, 0 }, PR_TRUE },
 };
 static const CK_ULONG mechanismCount = sizeof(mechanisms) / sizeof(mechanisms[0]);
 
@@ -668,6 +672,16 @@ ForkedChild(void)
 }
 
 #endif
+
+#define SFTKFreeWrap(ctxtype, mmm) \
+    void SFTKFree_##mmm(void *vp)  \
+    {                              \
+        ctxtype *p = vp;           \
+        mmm(p);                    \
+    }
+
+SFTKFreeWrap(NSSLOWKEYPublicKey, nsslowkey_DestroyPublicKey);
+SFTKFreeWrap(NSSLOWKEYPrivateKey, nsslowkey_DestroyPrivateKey);
 
 static char *
 sftk_setStringName(const char *inString, char *buffer, int buffer_length, PRBool nullTerminate)
@@ -1087,13 +1101,14 @@ sftk_handlePublicKeyObject(SFTKSession *session, SFTKObject *object,
                 return CKR_TEMPLATE_INCOMPLETE;
             }
             /* for ECDSA and EDDSA. Change if the structure of any of them is modified. */
-            derive = (key_type == CKK_EC_EDWARDS) ? CK_FALSE : CK_TRUE; /* CK_TRUE for ECDH */
-            verify = CK_TRUE;                                           /* for ECDSA */
+            derive = (key_type == CKK_EC_EDWARDS) ? CK_FALSE : CK_TRUE;    /* CK_TRUE for ECDH */
+            verify = (key_type == CKK_EC_MONTGOMERY) ? CK_FALSE : CK_TRUE; /* for ECDSA and EDDSA */
             encrypt = CK_FALSE;
             recover = CK_FALSE;
             wrap = CK_FALSE;
             break;
         case CKK_NSS_KYBER:
+        case CKK_NSS_ML_KEM:
             if (!sftk_hasAttribute(object, CKA_NSS_PARAMETER_SET)) {
                 return CKR_TEMPLATE_INCOMPLETE;
             }
@@ -1132,7 +1147,7 @@ sftk_handlePublicKeyObject(SFTKSession *session, SFTKObject *object,
     if (object->objectInfo == NULL) {
         return crv;
     }
-    object->infoFree = (SFTKFree)nsslowkey_DestroyPublicKey;
+    object->infoFree = SFTKFree_nsslowkey_DestroyPublicKey;
 
     /* Check that an imported EC key is valid */
     if (key_type == CKK_EC || key_type == CKK_EC_EDWARDS || key_type == CKK_EC_MONTGOMERY) {
@@ -1285,8 +1300,10 @@ sftk_handlePrivateKeyObject(SFTKSession *session, SFTKObject *object, CK_KEY_TYP
             if (!sftk_hasAttribute(object, CKA_VALUE)) {
                 return CKR_TEMPLATE_INCOMPLETE;
             }
+            /* for ECDSA and EDDSA. Change if the structure of any of them is modified. */
+            derive = (key_type == CKK_EC_EDWARDS) ? CK_FALSE : CK_TRUE;  /* CK_TRUE for ECDH */
+            sign = (key_type == CKK_EC_MONTGOMERY) ? CK_FALSE : CK_TRUE; /* for ECDSA and EDDSA */
             encrypt = CK_FALSE;
-            sign = CK_TRUE;
             recover = CK_FALSE;
             wrap = CK_FALSE;
             break;
@@ -1305,6 +1322,7 @@ sftk_handlePrivateKeyObject(SFTKSession *session, SFTKObject *object, CK_KEY_TYP
             createObjectInfo = PR_FALSE;
             break;
         case CKK_NSS_KYBER:
+        case CKK_NSS_ML_KEM:
             if (!sftk_hasAttribute(object, CKA_KEY_TYPE)) {
                 return CKR_TEMPLATE_INCOMPLETE;
             }
@@ -1368,7 +1386,7 @@ sftk_handlePrivateKeyObject(SFTKSession *session, SFTKObject *object, CK_KEY_TYP
         object->objectInfo = sftk_mkPrivKey(object, key_type, &crv);
         if (object->objectInfo == NULL)
             return crv;
-        object->infoFree = (SFTKFree)nsslowkey_DestroyPrivateKey;
+        object->infoFree = SFTKFree_nsslowkey_DestroyPrivateKey;
     }
     return CKR_OK;
 }
@@ -1998,6 +2016,7 @@ sftk_GetPubKey(SFTKObject *object, CK_KEY_TYPE key_type,
             }
             break;
         case CKK_NSS_KYBER:
+        case CKK_NSS_ML_KEM:
             crv = CKR_OK;
             break;
         default:
@@ -2011,7 +2030,7 @@ sftk_GetPubKey(SFTKObject *object, CK_KEY_TYPE key_type,
     }
 
     object->objectInfo = pubKey;
-    object->infoFree = (SFTKFree)nsslowkey_DestroyPublicKey;
+    object->infoFree = SFTKFree_nsslowkey_DestroyPublicKey;
     return pubKey;
 }
 
@@ -2134,11 +2153,22 @@ sftk_mkPrivKey(SFTKObject *object, CK_KEY_TYPE key_type, CK_RV *crvp)
             if (sftk_hasAttribute(object, CKA_NSS_DB)) {
                 crv = sftk_Attribute2SSecItem(arena, &privKey->u.ec.publicValue,
                                               object, CKA_NSS_DB);
-                if (crv != CKR_OK)
+                if (crv != CKR_OK) {
                     break;
+                }
                 /* privKey was zero'd so public value is already set to NULL, 0
-             * if we don't set it explicitly */
+                 * if we don't set it explicitly */
+            } else if (key_type == CKK_EC) {
+                /* as no public key was provided during the import, we need to derive it here.
+                 See: PK11_ImportAndReturnPrivateKey*/
+                (void)SECITEM_AllocItem(arena, &privKey->u.ec.publicValue, EC_GetPointSize(&privKey->u.ec.ecParams));
+                rv = EC_DerivePublicKey(&privKey->u.ec.privateValue, &privKey->u.ec.ecParams, &privKey->u.ec.publicValue);
+                if (rv != SECSuccess) {
+                    break;
+                }
+                sftk_forceAttribute(object, CKA_NSS_DB, privKey->u.ec.publicValue.data, privKey->u.ec.publicValue.len);
             }
+
             rv = DER_SetUInteger(privKey->arena, &privKey->u.ec.version,
                                  NSSLOWKEY_EC_PRIVATE_KEY_VERSION);
             if (rv != SECSuccess) {
@@ -2156,6 +2186,7 @@ sftk_mkPrivKey(SFTKObject *object, CK_KEY_TYPE key_type, CK_RV *crvp)
             break;
 
         case CKK_NSS_KYBER:
+        case CKK_NSS_ML_KEM:
             break;
 
         default:
@@ -2357,7 +2388,7 @@ sftk_GetPrivKey(SFTKObject *object, CK_KEY_TYPE key_type, CK_RV *crvp)
 
     priv = sftk_mkPrivKey(object, key_type, crvp);
     object->objectInfo = priv;
-    object->infoFree = (SFTKFree)nsslowkey_DestroyPrivateKey;
+    object->infoFree = SFTKFree_nsslowkey_DestroyPrivateKey;
     return priv;
 }
 
@@ -3395,7 +3426,8 @@ sftk_getParameters(CK_C_INITIALIZE_ARGS *init_args, PRBool isFIPS,
                     if (libParams) {
                         /* memory allocated */
                         if (PR_Read(file_dc, libParams, len) == -1) {
-                            PR_Free(libParams);
+                            PORT_Free(libParams);
+                            libParams = NULL;
                         } else {
                             free_mem = PR_TRUE;
                             libParams[len] = '\0';
@@ -3407,7 +3439,7 @@ sftk_getParameters(CK_C_INITIALIZE_ARGS *init_args, PRBool isFIPS,
             }
         }
 
-        if (!libParams)
+        if (libParams == NULL)
             libParams = LIB_PARAM_DEFAULT;
 
     } else {
@@ -3424,7 +3456,7 @@ sftk_getParameters(CK_C_INITIALIZE_ARGS *init_args, PRBool isFIPS,
     crv = CKR_OK;
 loser:
     if (free_mem)
-        PR_Free(libParams);
+        PORT_Free(libParams);
 
     return crv;
 }
@@ -4803,8 +4835,14 @@ NSC_CreateObject(CK_SESSION_HANDLE hSession,
     if (object == NULL) {
         return CKR_HOST_MEMORY;
     }
-    object->isFIPS = PR_FALSE; /* if we created the object on the fly,
-                                * it's not a FIPS object */
+
+    /*
+     * sftk_NewObject will set object->isFIPS to PR_TRUE if the slot is FIPS.
+     * We don't need to worry about that here, as FC_CreateObject will always
+     * disallow the import of secret and private keys, regardless of isFIPS
+     * approval status. Therefore, at this point we know that the key is a
+     * public key, which is acceptable to be imported in plaintext.
+     */
 
     /*
      * load the template values into the object
@@ -5387,17 +5425,40 @@ NSC_FindObjectsInit(CK_SESSION_HANDLE hSession,
     isLoggedIn = (PRBool)((!slot->needLogin) || slot->isLoggedIn);
     PZ_Unlock(slot->slotLock);
 
-    crv = sftk_searchTokenList(slot, search, pTemplate, ulCount, isLoggedIn);
-    if (crv != CKR_OK) {
-        goto loser;
+    PRBool validTokenAttribute = PR_FALSE;
+    PRBool tokenAttributeValue = PR_FALSE;
+    for (CK_ULONG i = 0; i < ulCount; i++) {
+        CK_ATTRIBUTE_PTR attr = &pTemplate[i];
+        if (attr->type == CKA_TOKEN && attr->pValue && attr->ulValueLen == sizeof(CK_BBOOL)) {
+            if (*(CK_BBOOL *)attr->pValue == CK_TRUE) {
+                validTokenAttribute = PR_TRUE;
+                tokenAttributeValue = PR_TRUE;
+            } else if (*(CK_BBOOL *)attr->pValue == CK_FALSE) {
+                validTokenAttribute = PR_TRUE;
+                tokenAttributeValue = PR_FALSE;
+            }
+            break;
+        }
     }
 
-    /* build list of found objects in the session */
-    crv = sftk_searchObjectList(search, slot->sessObjHashTable,
-                                slot->sessObjHashSize, slot->objectLock,
-                                pTemplate, ulCount, isLoggedIn);
-    if (crv != CKR_OK) {
-        goto loser;
+    // Search over the token object list if the template's CKA_TOKEN attribute is set to
+    // CK_TRUE or if it is not set.
+    if (validTokenAttribute == PR_FALSE || tokenAttributeValue == PR_TRUE) {
+        crv = sftk_searchTokenList(slot, search, pTemplate, ulCount, isLoggedIn);
+        if (crv != CKR_OK) {
+            goto loser;
+        }
+    }
+
+    // Search over the session object list if the template's CKA_TOKEN attribute is set to
+    // CK_FALSE or if it is not set.
+    if (validTokenAttribute == PR_FALSE || tokenAttributeValue == PR_FALSE) {
+        crv = sftk_searchObjectList(search, slot->sessObjHashTable,
+                                    slot->sessObjHashSize, slot->objectLock,
+                                    pTemplate, ulCount, isLoggedIn);
+        if (crv != CKR_OK) {
+            goto loser;
+        }
     }
 
     if ((freeSearch = session->search) != NULL) {

@@ -38,9 +38,6 @@ add_setup(async function () {
   // Enable local telemetry recording for the duration of the tests.
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
-  await SpecialPowers.pushPrefEnv({
-    set: [["browser.search.serpEventTelemetry.enabled", true]],
-  });
 
   registerCleanupFunction(async () => {
     SearchSERPTelemetry.overrideSearchTelemetryForTests();
@@ -77,49 +74,7 @@ add_task(async function test_simple_search_page_visit() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
-      },
-      abandonment: {
-        reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
-      },
-    },
-  ]);
-});
-
-add_task(async function test_simple_search_page_visit_telemetry() {
-  resetTelemetry();
-
-  await BrowserTestUtils.withNewTab(
-    {
-      gBrowser,
-      /* URL must not be in the cache */
-      url: getSERPUrl("searchTelemetry.html") + `&random=${Math.random()}`,
-    },
-    async () => {
-      let scalars = {};
-      const key = "browser.search.data_transferred";
-
-      await TestUtils.waitForCondition(() => {
-        scalars =
-          Services.telemetry.getSnapshotForKeyedScalars("main", false).parent ||
-          {};
-        return key in scalars;
-      }, "should have the expected keyed scalars");
-
-      const scalar = scalars[key];
-      Assert.ok("example" in scalar, "correct telemetry category");
-      Assert.notEqual(scalars[key].example, 0, "bandwidth logged");
-    }
-  );
-  assertSERPTelemetry([
-    {
-      impression: {
-        provider: "example",
-        tagged: "true",
-        partner_code: "ff",
-        source: "unknown",
-        is_shopping_page: "false",
-        is_private: "false",
-        shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       abandonment: {
         reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
@@ -156,6 +111,7 @@ add_task(async function test_follow_on_visit() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       abandonment: {
         reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
@@ -170,6 +126,7 @@ add_task(async function test_follow_on_visit() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       abandonment: {
         reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
@@ -205,6 +162,7 @@ add_task(async function test_track_ad() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -247,6 +205,7 @@ add_task(async function test_track_ad_organic() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -294,6 +253,7 @@ add_task(async function test_track_ad_new_window() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {
@@ -349,6 +309,7 @@ add_task(async function test_track_ad_pages_without_ads() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
     },
     {
@@ -360,6 +321,7 @@ add_task(async function test_track_ad_pages_without_ads() {
         is_shopping_page: "false",
         is_private: "false",
         shopping_tab_displayed: "false",
+        is_signed_in: "false",
       },
       adImpressions: [
         {

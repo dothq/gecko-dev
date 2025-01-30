@@ -21,12 +21,12 @@ namespace mozilla {
 namespace layers {
 
 struct ShmemAndHandle {
-  RefPtr<ipc::SharedMemoryBasic> shmem;
+  RefPtr<ipc::SharedMemory> shmem;
   Handle handle;
 };
 
 static Maybe<ShmemAndHandle> CreateAndMapShmem(size_t aSize) {
-  auto shmem = MakeRefPtr<ipc::SharedMemoryBasic>();
+  auto shmem = MakeRefPtr<ipc::SharedMemory>();
   if (!shmem->Create(aSize) || !shmem->Map(aSize)) {
     return Nothing();
   }
@@ -66,7 +66,7 @@ bool CanvasDrawEventRecorder::Init(TextureType aTextureType,
     return false;
   }
 
-  mHeader = static_cast<Header*>(header->shmem->memory());
+  mHeader = static_cast<Header*>(header->shmem->Memory());
   mHeader->eventCount = 0;
   mHeader->writerWaitCount = 0;
   mHeader->writerState = State::Processing;
@@ -127,6 +127,7 @@ int64_t CanvasDrawEventRecorder::CreateCheckpoint() {
   int64_t checkpoint = mHeader->eventCount;
   RecordEvent(RecordedCheckpoint());
   ClearProcessedExternalSurfaces();
+  ClearProcessedExternalImages();
   return checkpoint;
 }
 
@@ -276,6 +277,7 @@ void CanvasDrawEventRecorder::DropFreeBuffers() {
   }
 
   ClearProcessedExternalSurfaces();
+  ClearProcessedExternalImages();
 }
 
 void CanvasDrawEventRecorder::IncrementEventCount() {
@@ -360,11 +362,10 @@ void CanvasDrawEventRecorder::QueueProcessPendingDeletionsLocked(
     return;
   }
 
-  class ProcessPendingRunnable final : public dom::WorkerRunnable {
+  class ProcessPendingRunnable final : public dom::MainThreadWorkerRunnable {
    public:
-    ProcessPendingRunnable(dom::WorkerPrivate* aWorkerPrivate,
-                           RefPtr<CanvasDrawEventRecorder>&& aRecorder)
-        : dom::WorkerRunnable(aWorkerPrivate),
+    explicit ProcessPendingRunnable(RefPtr<CanvasDrawEventRecorder>&& aRecorder)
+        : dom::MainThreadWorkerRunnable("ProcessPendingRunnable"),
           mRecorder(std::move(aRecorder)) {}
 
     bool WorkerRun(JSContext*, dom::WorkerPrivate*) override {
@@ -377,9 +378,8 @@ void CanvasDrawEventRecorder::QueueProcessPendingDeletionsLocked(
     RefPtr<CanvasDrawEventRecorder> mRecorder;
   };
 
-  auto task = MakeRefPtr<ProcessPendingRunnable>(mWorkerRef->Private(),
-                                                 std::move(aRecorder));
-  if (NS_WARN_IF(!task->Dispatch())) {
+  auto task = MakeRefPtr<ProcessPendingRunnable>(std::move(aRecorder));
+  if (NS_WARN_IF(!task->Dispatch(mWorkerRef->Private()))) {
     MOZ_CRASH("ProcessPendingRunnable leaked!");
   }
 }
@@ -444,12 +444,31 @@ void CanvasDrawEventRecorder::StoreSourceSurfaceRecording(
   DrawEventRecorderPrivate::StoreSourceSurfaceRecording(aSurface, aReason);
 }
 
+void CanvasDrawEventRecorder::StoreImageRecording(
+    const RefPtr<Image>& aImageOfSurfaceDescriptor, const char* aReasony) {
+  NS_ASSERT_OWNINGTHREAD(CanvasDrawEventRecorder);
+
+  StoreExternalImageRecording(aImageOfSurfaceDescriptor);
+  mExternalImages.back().mEventCount = mHeader->eventCount;
+
+  ClearProcessedExternalImages();
+}
+
 void CanvasDrawEventRecorder::ClearProcessedExternalSurfaces() {
   while (!mExternalSurfaces.empty()) {
     if (mExternalSurfaces.front().mEventCount > mHeader->processedCount) {
       break;
     }
     mExternalSurfaces.pop_front();
+  }
+}
+
+void CanvasDrawEventRecorder::ClearProcessedExternalImages() {
+  while (!mExternalImages.empty()) {
+    if (mExternalImages.front().mEventCount > mHeader->processedCount) {
+      break;
+    }
+    mExternalImages.pop_front();
   }
 }
 

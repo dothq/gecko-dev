@@ -234,11 +234,12 @@ add_task(async () => {
   await testDomainCookie("http://co.uk/", "co.uk");
 
   // Test that trailing dots are treated differently for purposes of the
-  // 'domain' attribute when using setCookieStringFromDocument.
+  // 'domain' attribute.
   await testTrailingDotCookie("http://localhost/", "localhost");
   await testTrailingDotCookie("http://foo.com/", "foo.com");
 
   cm.removeAll();
+  Services.prefs.clearUserPref("dom.security.https_first");
 });
 
 function getCookieCount() {
@@ -285,5 +286,4 @@ async function testTrailingDotCookie(uriString, domain) {
   Assert.equal(cm.countCookiesFromHost(domain), 0);
   Assert.equal(cm.countCookiesFromHost(domain + "."), 0);
   cm.removeAll();
-  Services.prefs.clearUserPref("dom.security.https_first");
 }

@@ -51,16 +51,20 @@ class CSSTransition final : public Animation {
   }
 
   void CancelFromStyle(PostRestyleMode aPostRestyle) {
+    Animation::Cancel(aPostRestyle);
+
     // The animation index to use for compositing will be established when
     // this transition next transitions out of the idle state but we still
     // update it now so that the sort order of this transition remains
     // defined until that moment.
     //
     // See longer explanation in CSSAnimation::CancelFromStyle.
+    //
+    // Note: We have to update |mAnimationIndex| after calling
+    // Animation::Cancel(), which enqueues transitioncancel event, to make sure
+    // we have the correct |mAnimationIndex| in AnimationEventInfo.
     mAnimationIndex = sNextAnimationIndex++;
     mNeedsNewAnimationIndexWhenRun = true;
-
-    Animation::Cancel(aPostRestyle);
 
     // It is important we do this *after* calling Cancel().
     // This is because Cancel() will end up posting a restyle and
@@ -77,7 +81,9 @@ class CSSTransition final : public Animation {
   const AnimatedPropertyID& TransitionProperty() const;
   AnimationValue ToValue() const;
 
-  bool HasLowerCompositeOrderThan(const CSSTransition& aOther) const;
+  bool HasLowerCompositeOrderThan(
+      const Maybe<EventContext>& aContext, const CSSTransition& aOther,
+      const Maybe<EventContext>& aOtherContext) const;
   EffectCompositor::CascadeLevel CascadeLevel() const override {
     return IsTiedToMarkup() ? EffectCompositor::CascadeLevel::Transitions
                             : EffectCompositor::CascadeLevel::Animations;
@@ -143,7 +149,14 @@ class CSSTransition final : public Animation {
   // For a new transition interrupting an existing transition on the
   // compositor, update the start value to match the value of the replaced
   // transitions at the current time.
-  void UpdateStartValueFromReplacedTransition();
+  bool UpdateStartValueFromReplacedTransition();
+
+  // Compute the output progress based on the ReplacedTransitionProperties
+  // object.
+  // https://drafts.csswg.org/web-animations-1/#calculating-the-transformed-progress
+  static Maybe<double> ComputeTransformedProgress(
+      const AnimationTimeline& aTimeline,
+      const CSSTransition::ReplacedTransitionProperties& aProperties);
 
  protected:
   virtual ~CSSTransition() {
@@ -222,6 +235,8 @@ class CSSTransition final : public Animation {
   // for the third transition (from 0px/2px to 10px) will be 0.8.
   double mReversePortion = 1.0;
 
+  // The information of the old transition we'd like to replace with "this"
+  // transition.
   Maybe<ReplacedTransitionProperties> mReplacedTransition;
 };
 

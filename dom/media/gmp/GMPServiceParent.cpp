@@ -312,13 +312,19 @@ GeckoMediaPluginServiceParent::Observe(nsISupports* aSubject,
   } else if (!strcmp(NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID, aTopic)) {
     mXPCOMWillShutdown = true;
   } else if (!strcmp("last-pb-context-exited", aTopic)) {
-    // When Private Browsing mode exits, all we need to do is clear
-    // mTempNodeIds. This drops all the node ids we've cached in memory
-    // for PB origin-pairs. If we try to open an origin-pair for non-PB
-    // mode, we'll get the NodeId salt stored on-disk, and if we try to
-    // open a PB mode origin-pair, we'll re-generate new salt.
+    GMP_LOG_DEBUG(
+        "Received 'last-pb-context-exited', clearing temporary node and "
+        "storage");
+    // When Private Browsing mode exits, we need to clear node Ids and storage.
+    // After dropping all the node ids we've cached in memory for PB
+    // origin-pairs, if we try to open an origin-pair for non-PB mode, we'll get
+    // the NodeId salt stored on-disk, and if we try to open a PB mode
+    // origin-pair, we'll re-generate new salt.
     mTempNodeIds.Clear();
+    mTempGMPStorage.Clear();
   } else if (!strcmp("browser:purge-session-history", aTopic)) {
+    GMP_LOG_DEBUG(
+        "Received 'browser:purge-session-history', clearing everything");
     // Clear everything!
     if (!aSomeData || nsDependentString(aSomeData).IsEmpty()) {
       return GMPDispatch(NewRunnableMethod(
@@ -612,20 +618,6 @@ void GeckoMediaPluginServiceParent::UpdateContentProcessGMPCapabilities(
   typedef mozilla::dom::GMPAPITags GMPAPITags;
   typedef mozilla::dom::ContentParent ContentParent;
 
-  const uint32_t NO_H264 = 0;
-  const uint32_t HAS_H264 = 1;
-  const uint32_t NO_H264_1_DIR = 2;
-  const uint32_t NO_H264_2_PLUS_DIRS = 3;
-  const uint32_t NO_H264_DIR_IN_PROGRESS = 4;
-  uint32_t hasH264 = NO_H264;
-  if (mDirectoriesAdded == 1) {
-    hasH264 = NO_H264_1_DIR;
-  } else if (mDirectoriesAdded > 1) {
-    hasH264 = NO_H264_2_PLUS_DIRS;
-  }
-  if (mDirectoriesInProgress) {
-    hasH264 = NO_H264_DIR_IN_PROGRESS;
-  }
   nsTArray<GMPCapabilityData> caps;
   {
     MutexAutoLock lock(mMutex);
@@ -649,10 +641,6 @@ void GeckoMediaPluginServiceParent::UpdateContentProcessGMPCapabilities(
       x.version() = gmp->GetVersion();
       for (const GMPCapability& tag : gmp->GetCapabilities()) {
         x.capabilities().AppendElement(GMPAPITags(tag.mAPIName, tag.mAPITags));
-        if (tag.mAPIName == nsLiteralCString(GMP_API_VIDEO_ENCODER) &&
-            tag.mAPITags.Contains("h264"_ns)) {
-          hasH264 = HAS_H264;
-        }
       }
 #ifdef MOZ_WMF_CDM
       if (name.Equals("gmp-widevinecdm-l1")) {
@@ -663,9 +651,6 @@ void GeckoMediaPluginServiceParent::UpdateContentProcessGMPCapabilities(
       caps.AppendElement(std::move(x));
     }
   }
-
-  Telemetry::Accumulate(Telemetry::MEDIA_GMP_UPDATE_CONTENT_PROCESS_HAS_H264,
-                        hasH264);
 
   if (aContentProcess) {
     Unused << aContentProcess->SendGMPsChanged(caps);
@@ -1083,7 +1068,7 @@ RefPtr<GenericPromise> GeckoMediaPluginServiceParent::AddOnGMPThread(
   GMP_LOG_DEBUG("%s::%s: %s", __CLASS__, __FUNCTION__, dir.get());
 
   nsCOMPtr<nsIFile> directory;
-  nsresult rv = NS_NewLocalFile(aDirectory, false, getter_AddRefs(directory));
+  nsresult rv = NS_NewLocalFile(aDirectory, getter_AddRefs(directory));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     GMP_LOG_DEBUG("%s::%s: failed to create nsIFile for dir=%s rv=%" PRIx32,
                   __CLASS__, __FUNCTION__, dir.get(),
@@ -1125,7 +1110,7 @@ void GeckoMediaPluginServiceParent::RemoveOnGMPThread(
                 NS_LossyConvertUTF16toASCII(aDirectory).get());
 
   nsCOMPtr<nsIFile> directory;
-  nsresult rv = NS_NewLocalFile(aDirectory, false, getter_AddRefs(directory));
+  nsresult rv = NS_NewLocalFile(aDirectory, getter_AddRefs(directory));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return;
   }
@@ -1311,9 +1296,9 @@ nsresult ReadSalt(nsIFile* aPath, nsACString& aOutData) {
 }
 
 already_AddRefed<GMPStorage> GeckoMediaPluginServiceParent::GetMemoryStorageFor(
-    const nsACString& aNodeId) {
+    const nsACString& aNodeId, const nsAString& aGMPName) {
   return do_AddRef(mTempGMPStorage.LookupOrInsertWith(
-      aNodeId, [] { return CreateGMPMemoryStorage(); }));
+      aNodeId, [&] { return CreateGMPMemoryStorage(aNodeId, aGMPName); }));
 }
 
 NS_IMETHODIMP
@@ -1375,7 +1360,6 @@ nsresult GeckoMediaPluginServiceParent::GetNodeId(
         auto salt = MakeUnique<nsCString>(newSalt);
 
         mPersistentStorageAllowed.InsertOrUpdate(*salt, false);
-
         entry.Insert(std::move(salt));
       }
 
@@ -1999,7 +1983,8 @@ mozilla::ipc::IPCResult GMPServiceParent::RecvLaunchGMP(
 
   Endpoint<PGMPContentParent> parent;
   Endpoint<PGMPContentChild> child;
-  rv = PGMPContent::CreateEndpoints(OtherPid(), result.pid(), &parent, &child);
+  rv = PGMPContent::CreateEndpoints(
+      OtherEndpointProcInfo(), gmp->OtherEndpointProcInfo(), &parent, &child);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     result.result() = rv;
     result.errorDescription() = "PGMPContent::CreateEndpoints failed."_ns;

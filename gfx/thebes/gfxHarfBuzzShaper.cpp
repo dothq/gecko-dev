@@ -288,7 +288,7 @@ hb_codepoint_t gfxHarfBuzzShaper::GetVerticalPresentationForm(
       {0xff5d, 0xfe38}   // FULLWIDTH RIGHT CURLY BRACKET
   };
   const uint16_t* charPair = static_cast<const uint16_t*>(
-      bsearch(&aUnicode, sVerticalForms, ArrayLength(sVerticalForms),
+      bsearch(&aUnicode, sVerticalForms, std::size(sVerticalForms),
               sizeof(sVerticalForms[0]), VertFormsGlyphCompare));
   return charPair ? charPair[1] : 0;
 }
@@ -1200,7 +1200,7 @@ static void AddOpenTypeFeature(uint32_t aTag, uint32_t aValue, void* aUserArg) {
 static hb_font_funcs_t* sHBFontFuncs = nullptr;
 static hb_font_funcs_t* sNominalGlyphFunc = nullptr;
 static hb_unicode_funcs_t* sHBUnicodeFuncs = nullptr;
-static const hb_script_t sMathScript =
+MOZ_RUNINIT static const hb_script_t sMathScript =
     hb_ot_tag_to_script(HB_TAG('m', 'a', 't', 'h'));
 
 bool gfxHarfBuzzShaper::Initialize() {
@@ -1538,8 +1538,8 @@ bool gfxHarfBuzzShaper::ShapeText(DrawTarget* aDrawTarget,
   hb_buffer_set_script(mBuffer, scriptTag);
 
   hb_language_t language;
-  if (style->languageOverride) {
-    language = hb_ot_tag_to_language(style->languageOverride);
+  if (style->languageOverride._0) {
+    language = hb_ot_tag_to_language(style->languageOverride._0);
   } else if (entry->mLanguageOverride) {
     language = hb_ot_tag_to_language(entry->mLanguageOverride);
   } else if (aLanguage) {

@@ -110,8 +110,7 @@ class Frame extends Component {
     this._locationChanged = this._locationChanged.bind(this);
   }
 
-  // FIXME: https://bugzilla.mozilla.org/show_bug.cgi?id=1774507
-  UNSAFE_componentWillMount() {
+  componentDidMount() {
     if (this.props.sourceMapURLService) {
       const location = savedFrameToLocation(this.props.frame);
       // Many things that make use of this component either:
@@ -259,10 +258,13 @@ class Frame extends Component {
       return {
         ...sourceElConfig,
         onClick: e => {
+          // We always need to prevent the default behavior of <a> link
           e.preventDefault();
-          e.stopPropagation();
+          if (onClick) {
+            e.stopPropagation();
 
-          onClick(generatedLocation);
+            onClick(generatedLocation);
+          }
         },
         href: source,
         draggable: false,

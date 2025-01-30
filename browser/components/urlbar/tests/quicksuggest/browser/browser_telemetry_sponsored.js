@@ -7,13 +7,6 @@
 
 "use strict";
 
-ChromeUtils.defineESModuleGetters(this, {
-  CONTEXTUAL_SERVICES_PING_TYPES:
-    "resource:///modules/PartnerLinkAttribution.sys.mjs",
-});
-
-const { TELEMETRY_SCALARS } = UrlbarProviderQuickSuggest;
-
 const REMOTE_SETTINGS_RESULT = {
   id: 1,
   url: "https://example.com/sponsored",
@@ -45,11 +38,9 @@ add_setup(async function () {
 });
 
 // sponsored
-add_tasks_with_rust(async function sponsored() {
+add_task(async function sponsored() {
   let match_type = "firefox-suggest";
-  let source = UrlbarPrefs.get("quicksuggest.rustEnabled")
-    ? "rust"
-    : "remote-settings";
+  let source = "rust";
 
   // Make sure `improve_suggest_experience_checked` is recorded correctly
   // depending on the value of the related pref.
@@ -67,19 +58,6 @@ add_tasks_with_rust(async function sponsored() {
       suggestion: REMOTE_SETTINGS_RESULT,
       // impression-only
       impressionOnly: {
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "impression_only",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
         ping: {
           type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
           payload: {
@@ -97,20 +75,6 @@ add_tasks_with_rust(async function sponsored() {
       },
       // click
       click: {
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-          [TELEMETRY_SCALARS.CLICK_SPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "click",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
         pings: [
           {
             type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -145,20 +109,6 @@ add_tasks_with_rust(async function sponsored() {
         // dismiss
         {
           command: "dismiss",
-          scalars: {
-            [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-            [TELEMETRY_SCALARS.BLOCK_SPONSORED]: position,
-          },
-          event: {
-            category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-            method: "engagement",
-            object: "block",
-            extra: {
-              suggestion_type,
-              match_type,
-              position: position.toString(),
-            },
-          },
           pings: [
             {
               type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -190,23 +140,9 @@ add_tasks_with_rust(async function sponsored() {
             },
           ],
         },
-        // help
+        // manage
         {
-          command: "help",
-          scalars: {
-            [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-            [TELEMETRY_SCALARS.HELP_SPONSORED]: position,
-          },
-          event: {
-            category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-            method: "engagement",
-            object: "help",
-            extra: {
-              suggestion_type,
-              match_type,
-              position: position.toString(),
-            },
-          },
+          command: "manage",
           pings: [
             {
               type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -231,11 +167,9 @@ add_tasks_with_rust(async function sponsored() {
 });
 
 // higher-placement sponsored, a.k.a sponsored priority, sponsored best match
-add_tasks_with_rust(async function sponsoredBestMatch() {
+add_task(async function sponsoredBestMatch() {
   let match_type = "best-match";
-  let source = UrlbarPrefs.get("quicksuggest.rustEnabled")
-    ? "rust"
-    : "remote-settings";
+  let source = "rust";
 
   await SpecialPowers.pushPrefEnv({
     set: [["browser.urlbar.quicksuggest.sponsoredPriority", true]],
@@ -245,19 +179,6 @@ add_tasks_with_rust(async function sponsoredBestMatch() {
     suggestion: REMOTE_SETTINGS_RESULT,
     // impression-only
     impressionOnly: {
-      scalars: {
-        [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-      },
-      event: {
-        category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-        method: "engagement",
-        object: "impression_only",
-        extra: {
-          suggestion_type,
-          match_type,
-          position: position.toString(),
-        },
-      },
       ping: {
         type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
         payload: {
@@ -275,20 +196,6 @@ add_tasks_with_rust(async function sponsoredBestMatch() {
     },
     // click
     click: {
-      scalars: {
-        [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-        [TELEMETRY_SCALARS.CLICK_SPONSORED]: position,
-      },
-      event: {
-        category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-        method: "engagement",
-        object: "click",
-        extra: {
-          suggestion_type,
-          match_type,
-          position: position.toString(),
-        },
-      },
       pings: [
         {
           type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -323,20 +230,6 @@ add_tasks_with_rust(async function sponsoredBestMatch() {
       // dismiss
       {
         command: "dismiss",
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-          [TELEMETRY_SCALARS.BLOCK_SPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "block",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
         pings: [
           {
             type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
@@ -368,23 +261,9 @@ add_tasks_with_rust(async function sponsoredBestMatch() {
           },
         ],
       },
-      // help
+      // manage
       {
-        command: "help",
-        scalars: {
-          [TELEMETRY_SCALARS.IMPRESSION_SPONSORED]: position,
-          [TELEMETRY_SCALARS.HELP_SPONSORED]: position,
-        },
-        event: {
-          category: QuickSuggest.TELEMETRY_EVENT_CATEGORY,
-          method: "engagement",
-          object: "help",
-          extra: {
-            suggestion_type,
-            match_type,
-            position: position.toString(),
-          },
-        },
+        command: "manage",
         pings: [
           {
             type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,

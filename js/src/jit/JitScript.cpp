@@ -597,6 +597,28 @@ bool JitScript::ensureHasCachedIonData(JSContext* cx, HandleScript script) {
   return true;
 }
 
+std::pair<CallObject*, NamedLambdaObject*>
+JitScript::functionEnvironmentTemplates(JSFunction* fun) const {
+  EnvironmentObject* templateEnv = templateEnvironment();
+
+  CallObject* callObjectTemplate = nullptr;
+  if (fun->needsCallObject()) {
+    callObjectTemplate = &templateEnv->as<CallObject>();
+  }
+
+  NamedLambdaObject* namedLambdaTemplate = nullptr;
+  if (fun->needsNamedLambdaEnvironment()) {
+    if (callObjectTemplate) {
+      namedLambdaTemplate =
+          &callObjectTemplate->enclosingEnvironment().as<NamedLambdaObject>();
+    } else {
+      namedLambdaTemplate = &templateEnv->as<NamedLambdaObject>();
+    }
+  }
+
+  return {callObjectTemplate, namedLambdaTemplate};
+}
+
 void JitScript::setBaselineScriptImpl(JSScript* script,
                                       BaselineScript* baselineScript) {
   JSRuntime* rt = script->runtimeFromMainThread();
@@ -703,9 +725,12 @@ void jit::JitSpewBaselineICStats(JSScript* script, const char* dumpReason) {
 }
 #endif
 
+using StubHashMap = HashMap<ICCacheIRStub*, ICCacheIRStub*,
+                            DefaultHasher<ICCacheIRStub*>, SystemAllocPolicy>;
+
 static void MarkActiveICScriptsAndCopyStubs(
     JSContext* cx, const JitActivationIterator& activation,
-    ICStubSpace& newStubSpace) {
+    ICStubSpace& newStubSpace, StubHashMap& alreadyClonedStubs) {
   for (OnlyJSJitFrameIter iter(activation); !iter.done(); ++iter) {
     const JSJitFrameIter& frame = iter.frame();
     switch (frame.type()) {
@@ -721,8 +746,15 @@ static void MarkActiveICScriptsAndCopyStubs(
         auto* layout = reinterpret_cast<BaselineStubFrameLayout*>(frame.fp());
         if (layout->maybeStubPtr() && !layout->maybeStubPtr()->isFallback()) {
           ICCacheIRStub* stub = layout->maybeStubPtr()->toCacheIRStub();
-          ICCacheIRStub* newStub = stub->clone(cx->runtime(), newStubSpace);
-          layout->setStubPtr(newStub);
+          auto lookup = alreadyClonedStubs.lookupForAdd(stub);
+          if (!lookup) {
+            ICCacheIRStub* newStub = stub->clone(cx->runtime(), newStubSpace);
+            AutoEnterOOMUnsafeRegion oomUnsafe;
+            if (!alreadyClonedStubs.add(lookup, stub, newStub)) {
+              oomUnsafe.crash("MarkActiveICScriptsAndCopyStubs");
+            }
+          }
+          layout->setStubPtr(lookup->value());
 
           // If this is a trial-inlining call site, also preserve the callee
           // ICScript. Inlined constructor calls invoke CreateThisFromIC (which
@@ -772,10 +804,12 @@ void jit::MarkActiveICScriptsAndCopyStubs(Zone* zone,
   if (zone->isAtomsZone()) {
     return;
   }
+  StubHashMap alreadyClonedStubs;
   JSContext* cx = TlsContext.get();
   for (JitActivationIterator iter(cx); !iter.done(); ++iter) {
     if (iter->compartment()->zone() == zone) {
-      MarkActiveICScriptsAndCopyStubs(cx, iter, newStubSpace);
+      MarkActiveICScriptsAndCopyStubs(cx, iter, newStubSpace,
+                                      alreadyClonedStubs);
     }
   }
 }
@@ -853,6 +887,21 @@ bool JitScript::resetAllocSites(bool resetNurserySites,
   });
 
   return anyReset;
+}
+
+bool JitScript::hasPretenuredAllocSites() {
+  bool found = false;
+  forEachICScript([&](ICScript* script) {
+    if (!found) {
+      for (gc::AllocSite* site : script->allocSites_) {
+        if (site->initialHeap() == gc::Heap::Tenured) {
+          found = true;
+        }
+      }
+    }
+  });
+
+  return found;
 }
 
 void JitScript::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,

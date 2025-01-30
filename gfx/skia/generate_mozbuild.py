@@ -28,6 +28,8 @@ if CONFIG['MOZ_OPTIMIZE']:
         skia_opt_flags += ['-O2']
     elif CONFIG['CC_TYPE'] in ('clang', 'gcc'):
         skia_opt_flags += ['-O3']
+if CONFIG['TARGET_CPU'] == 'loongarch64':
+    skia_opt_flags += ['-mlasx']
 
 """
 
@@ -36,7 +38,7 @@ footer = """
 # We allow warnings for third-party code that can be updated from upstream.
 AllowCompilerWarnings()
 
-FINAL_LIBRARY = 'gkmedias'
+FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     'skia',
 ]
@@ -44,22 +46,22 @@ LOCAL_INCLUDES += [
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     DEFINES['UNICODE'] = True
     DEFINES['_UNICODE'] = True
-    UNIFIED_SOURCES += [
-        'skia/src/fonts/SkFontMgr_indirect.cpp',
-        'skia/src/fonts/SkRemotableFontMgr.cpp',
-    ]
 
 # We should autogenerate these SSE related flags.
 
 if CONFIG['INTEL_ARCHITECTURE']:
-    SOURCES['skia/src/opts/SkOpts_ssse3.cpp'].flags += ['-Dskvx=skvx_ssse3', '-mssse3']
-    SOURCES['skia/src/opts/SkOpts_sse42.cpp'].flags += ['-Dskvx=skvx_sse42', '-msse4.2']
-    SOURCES['skia/src/opts/SkOpts_avx.cpp'].flags += ['-Dskvx=skvx_avx', '-mavx']
-    SOURCES['skia/src/opts/SkOpts_hsw.cpp'].flags += ['-Dskvx=skvx_hsw', '-mavx2', '-mf16c', '-mfma']
-    if not CONFIG["MOZ_CODE_COVERAGE"]:
-        SOURCES['skia/src/opts/SkOpts_skx.cpp'].flags += ['-Dskvx=skvx_skx', '-mavx512f', '-mavx512dq', '-mavx512cd', '-mavx512bw', '-mavx512vl']
-elif CONFIG['TARGET_CPU'] == 'aarch64' and CONFIG['CC_TYPE'] in ('clang', 'gcc'):
-    SOURCES['skia/src/opts/SkOpts_crc32.cpp'].flags += ['-Dskvx=skvx_crc32', '-march=armv8-a+crc']
+    SOURCES['skia/modules/skcms/skcms.cc'].flags += ['-DSKCMS_DISABLE_SKX']
+    skia_ssse3_flags = ['-Dskvx=skvx_ssse3', '-mssse3']
+    skia_avx_flags = ['-Dskvx=skvx_avx', '-mavx']
+    skia_hsw_flags = ['-Dskvx=skvx_hsw', '-mavx2', '-mf16c', '-mfma']
+    SOURCES['skia/src/core/SkBitmapProcState_opts_ssse3.cpp'].flags += skia_ssse3_flags
+    SOURCES['skia/src/core/SkBlitMask_opts_ssse3.cpp'].flags += skia_ssse3_flags
+    SOURCES['skia/src/core/SkSwizzler_opts_ssse3.cpp'].flags += ['-Dskvx=skvx_ssse3']
+    SOURCES['skia/src/core/SkMemset_opts_avx.cpp'].flags += skia_avx_flags
+    SOURCES['skia/src/core/SkBlitRow_opts_hsw.cpp'].flags += skia_hsw_flags
+    SOURCES['skia/src/core/SkSwizzler_opts_hsw.cpp'].flags += ['-Dskvx=skvx_hsw']
+    SOURCES['skia/src/opts/SkOpts_hsw.cpp'].flags += skia_hsw_flags
+    SOURCES['skia/modules/skcms/src/skcms_TransformHsw.cc'].flags += skia_hsw_flags
 
 DEFINES['MOZ_SKIA'] = True
 
@@ -104,6 +106,23 @@ if CONFIG['TARGET_CPU'] in ('mips32', 'mips64'):
     # The skia code uses `mips` as a variable, but it's a builtin preprocessor
     # macro on mips that expands to `1`.
     DEFINES['mips'] = False
+
+# Work around bug 1841199.
+if CONFIG['TARGET_CPU'] in ('mips32', 'mips64', 'ppc64'):
+    DEFINES['musttail'] = 'nomusttail'
+
+if CONFIG['TARGET_CPU'] == 'loongarch64':
+    # In ABI1.0, the compilers disable 128bit SIMD defautly; in ABI2.0, it
+    # enable defaultly. The below flags can maintain compatibility.
+    CXXFLAGS += ['-mlsx']
+    if (
+        CONFIG['CC_TYPE'] == 'clang'
+        and int(CONFIG["CC_VERSION"].split(".")[0]) >= 18
+    ):
+        CXXFLAGS += ['-flax-vector-conversions=all']
+    else:
+        # gcc, clang8 for loongarch64.
+        CXXFLAGS += ['-flax-vector-conversions']
 """
 
 import json
@@ -114,8 +133,7 @@ def parse_sources(output):
   return set(v.replace('//', 'skia/') for v in output.decode('utf-8').split() if v.endswith('.cpp') or v.endswith('.S'))
 
 def generate_opt_sources():
-  cpus = [('intel', 'x86', [':ssse3', ':sse42', ':avx', ':hsw', ':skx']),
-          ('arm64', 'arm64', [':crc32'])]
+  cpus = [('intel', 'x86', [':hsw'])]
 
   opt_sources = {}
   for key, cpu, deps in cpus:
@@ -166,7 +184,8 @@ def generate_platform_sources():
 def generate_separated_sources(platform_sources):
   ignorelist = [
     'skia/src/android/',
-    'skia/src/effects/',
+    'skia/src/effects/Sk',
+    'skia/src/effects/imagefilters/',
     'skia/src/fonts/',
     'skia/src/ports/SkImageEncoder',
     'skia/src/ports/SkImageGenerator',
@@ -179,7 +198,6 @@ def generate_separated_sources(platform_sources):
     'SkCamera',
     'SkCanvasStack',
     'SkCanvasStateUtils',
-    'JSON',
     'SkMultiPictureDocument',
     'SkNullCanvas',
     'SkNWayCanvas',
@@ -189,7 +207,7 @@ def generate_separated_sources(platform_sources):
     'SkXPS',
     'SkCreateCGImageRef',
     'skia/src/ports/SkGlobalInitialization',
-    'SkICC',
+    'skia/src/utils/SkJSON',
   ]
 
   def isignorelisted(value):
@@ -201,17 +219,22 @@ def generate_separated_sources(platform_sources):
 
   separated = defaultdict(set, {
     'common': {
-      'skia/src/codec/SkMasks.cpp',
+      'skia/src/effects/imagefilters/SkBlendImageFilter.cpp',
       'skia/src/effects/imagefilters/SkBlurImageFilter.cpp',
       'skia/src/effects/imagefilters/SkComposeImageFilter.cpp',
+      'skia/src/effects/imagefilters/SkCropImageFilter.cpp',
+      'skia/src/effects/SkBlenders.cpp',
       'skia/src/effects/SkDashPathEffect.cpp',
+      'skia/src/encode/SkJpegEncoder_none.cpp',
+      'skia/src/encode/SkPngEncoder_none.cpp',
+      'skia/src/encode/SkWebpEncoder_none.cpp',
       'skia/src/ports/SkDiscardableMemory_none.cpp',
       'skia/src/ports/SkGlobalInitialization_default.cpp',
       'skia/src/ports/SkMemory_mozalloc.cpp',
       'skia/src/ports/SkImageGenerator_none.cpp',
       'skia/modules/skcms/skcms.cc',
+      'skia/modules/skcms/src/skcms_TransformBaseline.cc',
       'skia/src/core/SkImageFilterTypes.cpp',
-      'skia/src/ports/SkFontMgr_empty_factory.cpp',
     },
     'android': {
       # 'skia/src/ports/SkDebug_android.cpp',
@@ -226,7 +249,9 @@ def generate_separated_sources(platform_sources):
       'skia/src/ports/SkFontHost_FreeType_common.cpp',
     },
     'win': set (),
-    'intel': set(),
+    'intel': {
+      'skia/modules/skcms/src/skcms_TransformHsw.cc',
+    },
     'arm': set(),
     'arm64': set(),
     'none': set(),
@@ -286,9 +311,12 @@ opt_allowlist = [
   'SkBitmapProcState',
   'SkBlitRow',
   'SkBlitter',
+  'SkMemset',
   'SkSpriteBlitter',
+  'SkSwizzler',
   'SkMatrix.cpp',
   'skcms',
+  '_opts',
 ]
 
 # Unfortunately for now the gpu and pathops directories are
@@ -312,10 +340,10 @@ unified_ignorelist = [
   'SkPathOpsDebug.cpp',
   'SkParsePath.cpp',
   'SkRecorder.cpp',
-  'SkXfermode',
   'SkRTree.cpp',
   'SkVertices.cpp',
   'SkSLLexer.cpp',
+  'SkTypeface_mac_ct.cpp',
 ] + opt_allowlist
 
 def write_sources(f, values, indent):

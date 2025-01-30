@@ -54,9 +54,11 @@ class js::jit::BailoutStack {
 #  pragma pack(pop)
 #endif
 
+#if !defined(JS_CODEGEN_NONE)
 // Make sure the compiler doesn't add extra padding on 32-bit platforms.
 static_assert((sizeof(BailoutStack) % 8) == 0,
               "BailoutStack should be 8-byte aligned.");
+#endif
 
 BailoutFrameInfo::BailoutFrameInfo(const JitActivationIterator& activations,
                                    BailoutStack* bailout)
@@ -311,10 +313,12 @@ bool jit::ExceptionHandlerBailout(JSContext* cx,
     rfe->bailoutInfo = bailoutInfo;
   } else {
     // Drop the exception that triggered the bailout and instead propagate the
-    // failure caused by processing the bailout (eg. OOM).
+    // failure caused by processing the bailout (eg. OOM). Note that recover
+    // instructions can do an interrupt check and throw an uncatchable
+    // exception.
     savedExc.drop();
     MOZ_ASSERT(!bailoutInfo);
-    MOZ_ASSERT(cx->isExceptionPending());
+    MOZ_ASSERT(cx->isExceptionPending() || cx->hadUncatchableException());
   }
 
   // Make the frame being bailed out the top profiled frame.

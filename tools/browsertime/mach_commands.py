@@ -44,7 +44,7 @@ import time
 import mozpack.path as mozpath
 from mach.decorators import Command, CommandArgument
 from mozbuild.base import BinaryNotFoundException, MachCommandBase
-from mozbuild.util import mkdir
+from mozbuild.dirutils import mkdir
 from six import StringIO
 
 AUTOMATION = "MOZ_AUTOMATION" in os.environ
@@ -152,7 +152,7 @@ def browsertime_path():
 
 def visualmetrics_path():
     """The path to the `visualmetrics.py` script."""
-    return mozpath.join(package_path(), "browsertime", "visualmetrics-portable.py")
+    return mozpath.join(package_path(), "visualmetrics", "visualmetrics-portable.py")
 
 
 def host_platform():
@@ -389,9 +389,11 @@ def append_env(command_context, append_path=True):
 
     path.insert(
         0,
-        path_to_ffmpeg
-        if host_platform().startswith("linux")
-        else mozpath.join(path_to_ffmpeg, "bin"),
+        (
+            path_to_ffmpeg
+            if host_platform().startswith("linux")
+            else mozpath.join(path_to_ffmpeg, "bin")
+        ),
     )  # noqa
 
     # Ensure that bare `node` and `npm` in scripts, including post-install

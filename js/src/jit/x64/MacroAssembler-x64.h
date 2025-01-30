@@ -77,6 +77,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
                            X86Encoding::XMMRegisterID srcId,
                            X86Encoding::XMMRegisterID destId));
 
+ protected:
+  void flexibleDivMod64(Register rhs, Register lhsOutput, bool isUnsigned,
+                        bool isDiv);
+
  public:
   using MacroAssemblerX86Shared::load32;
   using MacroAssemblerX86Shared::store16;
@@ -533,6 +537,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   void cmpPtr(Register lhs, Register rhs) { cmpq(rhs, lhs); }
   void testPtr(Register lhs, Register rhs) { testq(rhs, lhs); }
   void testPtr(Register lhs, Imm32 rhs) { testq(rhs, lhs); }
+  void testPtr(Register lhs, ImmWord rhs) { test64(lhs, Imm64(rhs.value)); }
   void testPtr(const Operand& lhs, Imm32 rhs) { testq(rhs, lhs); }
   void test64(Register lhs, Register rhs) { testq(rhs, lhs); }
   void test64(Register lhs, const Imm64 rhs) {
@@ -745,19 +750,22 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   }
 
   void testNullSet(Condition cond, const ValueOperand& value, Register dest) {
+    bool destIsZero = maybeEmitSetZeroByteRegister(value, dest);
     cond = testNull(cond, value);
-    emitSet(cond, dest);
+    emitSet(cond, dest, destIsZero);
   }
 
   void testObjectSet(Condition cond, const ValueOperand& value, Register dest) {
+    bool destIsZero = maybeEmitSetZeroByteRegister(value, dest);
     cond = testObject(cond, value);
-    emitSet(cond, dest);
+    emitSet(cond, dest, destIsZero);
   }
 
   void testUndefinedSet(Condition cond, const ValueOperand& value,
                         Register dest) {
+    bool destIsZero = maybeEmitSetZeroByteRegister(value, dest);
     cond = testUndefined(cond, value);
-    emitSet(cond, dest);
+    emitSet(cond, dest, destIsZero);
   }
 
   void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister) {
@@ -997,21 +1005,6 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   inline void unboxValue(const ValueOperand& src, AnyRegister dest,
                          JSValueType type);
 
-  // These two functions use the low 32-bits of the full value register.
-  void boolValueToDouble(const ValueOperand& operand, FloatRegister dest) {
-    convertInt32ToDouble(operand.valueReg(), dest);
-  }
-  void int32ValueToDouble(const ValueOperand& operand, FloatRegister dest) {
-    convertInt32ToDouble(operand.valueReg(), dest);
-  }
-
-  void boolValueToFloat32(const ValueOperand& operand, FloatRegister dest) {
-    convertInt32ToFloat32(operand.valueReg(), dest);
-  }
-  void int32ValueToFloat32(const ValueOperand& operand, FloatRegister dest) {
-    convertInt32ToFloat32(operand.valueReg(), dest);
-  }
-
   void loadConstantDouble(double d, FloatRegister dest);
   void loadConstantFloat32(float f, FloatRegister dest);
 
@@ -1225,12 +1218,9 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
 
   inline void incrementInt32Value(const Address& addr);
 
-  inline void ensureDouble(const ValueOperand& source, FloatRegister dest,
-                           Label* failure);
-
  public:
-  void handleFailureWithHandlerTail(Label* profilerExitTail,
-                                    Label* bailoutTail);
+  void handleFailureWithHandlerTail(Label* profilerExitTail, Label* bailoutTail,
+                                    uint32_t* returnValueCheckOffset);
 
   // Instrumentation for entering and leaving the profiler.
   void profilerEnterFrame(Register framePtr, Register scratch);

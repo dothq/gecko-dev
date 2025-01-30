@@ -11,7 +11,7 @@ const TEST_URL = testServer.urlFor("index.html");
 
 // getTokenFromPosition pauses 0.5s for each line,
 // so this test is quite slow to complete
-requestLongerTimeout(4);
+requestLongerTimeout(10);
 
 /**
  * Cover the breakpoints positions/columns:
@@ -30,7 +30,7 @@ add_task(async function testBreakableLinesOverReloads() {
   );
 
   info("Assert breakable lines of the first html page load");
-  await assertBreakablePositions(dbg, "index.html", 78, [
+  await assertBreakablePositions(dbg, "index.html", 85, [
     { line: 16, columns: [6, 14] },
     { line: 17, columns: [] },
     { line: 21, columns: [12, 20, 48] },
@@ -38,16 +38,23 @@ add_task(async function testBreakableLinesOverReloads() {
     { line: 25, columns: [] },
     { line: 30, columns: [] },
     { line: 36, columns: [] },
+    { line: 39, columns: [] },
+    { line: 41, columns: [8, 18] },
+    { line: 42, columns: [] },
+    { line: 43, columns: [] },
   ]);
 
   info("Pretty print first html page load and assert breakable lines");
   await prettyPrint(dbg);
-  await assertBreakablePositions(dbg, "index.html:formatted", 87, [
+  await assertBreakablePositions(dbg, "index.html:formatted", 96, [
     { line: 16, columns: [0, 8] },
     { line: 22, columns: [0, 8, 35] },
     { line: 27, columns: [0, 8] },
     { line: 28, columns: [] },
     { line: 36, columns: [] },
+    { line: 48, columns: [] },
+    { line: 50, columns: [2, 12] },
+    { line: 53, columns: [] },
   ]);
   await closeTab(dbg, "index.html:formatted");
 
@@ -148,7 +155,7 @@ add_task(async function testBreakableLinesOverReloads() {
     { line: 9, columns: [2, 8] },
     { line: 10, columns: [2, 10] },
     { line: 11, columns: [] },
-    { line: 13, columns: [] },
+    { line: 13, columns: [0, 8] },
   ]);
 });
 
@@ -160,7 +167,7 @@ async function assertBreakablePositions(
 ) {
   await selectSource(dbg, file);
   is(
-    getCM(dbg).lineCount(),
+    getLineCount(dbg),
     numberOfLines,
     `We show the expected number of lines in CodeMirror for ${file}`
   );
@@ -171,7 +178,7 @@ async function assertBreakablePositions(
     );
     // If we don't have any position, only assert that the line isn't breakable
     if (!positions) {
-      assertLineIsBreakable(dbg, file, line, false);
+      await assertLineIsBreakable(dbg, file, line, false);
       continue;
     }
     const { columns } = positions;
@@ -185,7 +192,7 @@ async function assertBreakablePositions(
     // Last lines of inline script are reported as breakable lines and selectors reports
     // one breakable column, but, we don't report any available column breakpoint for them.
     if (!columns.length) {
-      // So, only ensure that the really is no marker on this line
+      // So, only ensure that there really is no marker on this line
       const lineElement = await getTokenFromPosition(dbg, { line });
       const columnMarkers = lineElement.querySelectorAll(".column-breakpoint");
       is(
@@ -233,7 +240,9 @@ async function assertBreakablePositions(
     }
 
     const tokenElement = await getTokenFromPosition(dbg, { line });
-    const lineElement = tokenElement.closest(".CodeMirror-line");
+    const lineElement = tokenElement.closest(
+      isCm6Enabled ? ".cm-line" : ".CodeMirror-line"
+    );
     // Those are the breakpoint chevron we click on to set a breakpoint on a given column
     const columnMarkers = [
       ...lineElement.querySelectorAll(".column-breakpoint"),
@@ -245,20 +254,27 @@ async function assertBreakablePositions(
     );
 
     // The first breakable column received the line breakpoint when calling addBreakpoint()
-    const firstColumn = columns.shift();
+    const firstColumn = columns[0];
     ok(
       findColumnBreakpoint(dbg, file, line, firstColumn),
       `The first column ${firstColumn} has a breakpoint automatically`
     );
-    columnMarkers.shift();
 
-    for (const column of columns) {
+    for (const [index, column] of Object.entries(columns)) {
+      const columnMarkerIndex = Number(index);
+      // The first column breakpoint is shifted
+      if (columnMarkerIndex == 0) {
+        continue;
+      }
       ok(
         !findColumnBreakpoint(dbg, file, line, column),
         `Before clicking on the marker, the column ${column} was not having a breakpoint`
       );
-      const marker = columnMarkers.shift();
+
       const onSetBreakpoint = waitForDispatch(dbg.store, "SET_BREAKPOINT");
+      let marker = isCm6Enabled
+        ? getColumnMarker(lineElement, columnMarkerIndex)
+        : columnMarkers[columnMarkerIndex];
       marker.click();
       await onSetBreakpoint;
       ok(
@@ -270,6 +286,10 @@ async function assertBreakablePositions(
         dbg.store,
         "REMOVE_BREAKPOINT"
       );
+      if (isCm6Enabled) {
+        // Get the marker again as the column marker has re rendered
+        marker = getColumnMarker(lineElement, columnMarkerIndex);
+      }
       marker.click();
       await onRemoveBreakpoint;
 
@@ -281,4 +301,8 @@ async function assertBreakablePositions(
 
     await removeBreakpoint(dbg, source.id, line);
   }
+}
+
+function getColumnMarker(lineElement, index) {
+  return lineElement.querySelectorAll(".column-breakpoint")[index];
 }

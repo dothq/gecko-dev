@@ -16,6 +16,7 @@
 #include "WidgetUtilsGtk.h"
 #include "gfxConfig.h"
 #include "nsIGfxInfo.h"
+#include "GfxInfo.h"
 #include "mozilla/Components.h"
 #include "mozilla/ClearOnShutdown.h"
 
@@ -182,6 +183,20 @@ void DMABufDevice::Configure() {
     return;
   }
 
+  // See Bug 1865747 for details.
+  if (XRE_IsParentProcess()) {
+    if (auto* gbmBackend = getenv("GBM_BACKEND")) {
+      const nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+      nsAutoString vendorID;
+      gfxInfo->GetAdapterVendorID(vendorID);
+      if (vendorID != GfxDriverInfo::GetDeviceVendor(DeviceVendor::NVIDIA)) {
+        if (strstr(gbmBackend, "nvidia")) {
+          unsetenv("GBM_BACKEND");
+        }
+      }
+    }
+  }
+
   mDrmRenderNode = nsAutoCString(getenv("MOZ_DRM_DEVICE"));
   if (mDrmRenderNode.IsEmpty()) {
     mDrmRenderNode.Assign(gfx::gfxVars::DrmRenderDevice());
@@ -220,11 +235,11 @@ bool DMABufDevice::IsDMABufWebGLEnabled() {
   LOGDMABUF(
       ("DMABufDevice::IsDMABufWebGLEnabled: UseDMABuf %d "
        "sUseWebGLDmabufBackend %d "
-       "widget_dmabuf_webgl_enabled %d\n",
+       "UseDMABufWebGL %d\n",
        gfx::gfxVars::UseDMABuf(), sUseWebGLDmabufBackend,
-       StaticPrefs::widget_dmabuf_webgl_enabled()));
+       gfx::gfxVars::UseDMABufWebGL()));
   return gfx::gfxVars::UseDMABuf() && sUseWebGLDmabufBackend &&
-         StaticPrefs::widget_dmabuf_webgl_enabled();
+         gfx::gfxVars::UseDMABufWebGL();
 }
 
 #ifdef MOZ_WAYLAND

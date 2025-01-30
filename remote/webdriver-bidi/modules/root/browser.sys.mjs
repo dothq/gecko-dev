@@ -2,17 +2,52 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { Module } from "chrome://remote/content/shared/messagehandler/Module.sys.mjs";
+import { RootBiDiModule } from "chrome://remote/content/webdriver-bidi/modules/RootBiDiModule.sys.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   assert: "chrome://remote/content/shared/webdriver/Assert.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
-  Marionette: "chrome://remote/content/components/Marionette.sys.mjs",
+  getWebDriverSessionById:
+    "chrome://remote/content/shared/webdriver/Session.sys.mjs",
+  pprint: "chrome://remote/content/shared/Format.sys.mjs",
+  TabManager: "chrome://remote/content/shared/TabManager.sys.mjs",
   UserContextManager:
     "chrome://remote/content/shared/UserContextManager.sys.mjs",
+  windowManager: "chrome://remote/content/shared/WindowManager.sys.mjs",
+  WindowState: "chrome://remote/content/shared/WindowManager.sys.mjs",
 });
+
+/**
+ * An object that holds information about the client window
+ *
+ * @typedef ClientWindowInfo
+ *
+ * @property {boolean} active
+ *    True if client window is keyboard-interactable. False, if
+ *    otherwise.
+ * @property {string} clientWindow
+ *    The id of the client window.
+ * @property {number} height
+ *    The height of the client window.
+ *  @property {WindowState} state
+ *    The client window state.
+ * @property {number} width
+ *    The width of the client window.
+ * @property {number} x
+ *    The x-coordinate of the client window.
+ * @property {number} y
+ *    The y-coordinate of the client window.
+ */
+
+/**
+ * Return value of the getClientWindows command.
+ *
+ * @typedef GetClientWindowsResult
+ *
+ * @property {Array<ClientWindowInfo>} clientWindows
+ */
 
 /**
  * An object that holds information about a user context.
@@ -32,7 +67,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
  *     Array of UserContextInfo for the current user contexts.
  */
 
-class BrowserModule extends Module {
+class BrowserModule extends RootBiDiModule {
   constructor(messageHandler) {
     super(messageHandler);
   }
@@ -44,19 +79,52 @@ class BrowserModule extends Module {
    */
 
   /**
-   * Terminate all WebDriver sessions and clean up automation state in the remote browser instance.
+   * Terminate all WebDriver sessions and clean up automation state in the
+   * remote browser instance.
    *
-   * Session clean up and actual broser closure will happen later in WebDriverBiDiConnection class.
+   * The actual session clean-up and closing the browser will happen later
+   * in WebDriverBiDiConnection class.
    */
   async close() {
+    const session = lazy.getWebDriverSessionById(this.messageHandler.sessionId);
+
     // TODO Bug 1838269. Enable browser.close command for the case of classic + bidi session, when
     // session ending for this type of session is supported.
-    if (lazy.Marionette.running) {
+    if (session.http) {
       throw new lazy.error.UnsupportedOperationError(
-        "Closing browser with the session which was started with Webdriver classic is not supported," +
-          "you can use Webdriver classic session delete command which will also close the browser."
+        "Closing the browser in a session started with WebDriver classic" +
+          ' is not supported. Use the WebDriver classic "Delete Session"' +
+          " command instead which will also close the browser."
       );
     }
+
+    // Close all open top-level browsing contexts by not prompting for beforeunload.
+    for (const tab of lazy.TabManager.tabs) {
+      lazy.TabManager.removeTab(tab, { skipPermitUnload: true });
+    }
+  }
+
+  /**
+   * Returns a list of client windows info
+   *
+   * @returns {GetClientWindowsResult}
+   *     The list of client windows info
+   */
+  async getClientWindows() {
+    const clientWindowsIds = new Set();
+    const clientWindows = [];
+
+    for (const win of lazy.windowManager.windows) {
+      let clientWindowId = lazy.windowManager.getIdForWindow(win);
+      if (clientWindowsIds.has(clientWindowId)) {
+        continue;
+      }
+      clientWindowsIds.add(clientWindowId);
+      let clientWindowInfo = this.#getClientWindowInfo(win);
+      clientWindows.push(clientWindowInfo);
+    }
+
+    return { clientWindows };
   }
 
   /**
@@ -104,7 +172,7 @@ class BrowserModule extends Module {
 
     lazy.assert.string(
       userContextId,
-      `Expected "userContext" to be a string, got ${userContextId}`
+      lazy.pprint`Expected "userContext" to be a string, got ${userContextId}`
     );
 
     if (userContextId === lazy.UserContextManager.defaultUserContextId) {
@@ -121,6 +189,18 @@ class BrowserModule extends Module {
     lazy.UserContextManager.removeUserContext(userContextId, {
       closeContextTabs: true,
     });
+  }
+
+  #getClientWindowInfo(window) {
+    return {
+      active: Services.focus.activeWindow === window,
+      clientWindow: lazy.windowManager.getIdForWindow(window),
+      height: window.outerHeight,
+      state: lazy.WindowState.from(window.windowState),
+      width: window.outerWidth,
+      x: window.screenX,
+      y: window.screenY,
+    };
   }
 }
 

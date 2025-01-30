@@ -1,3 +1,6 @@
+/**
+ * @suppress
+ */
 public object FfiConverterULong: FfiConverter<ULong, Long> {
     override fun lift(value: Long): ULong {
         return value.toULong()
@@ -11,7 +14,7 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
         return value.toLong()
     }
 
-    override fun allocationSize(value: ULong) = 8
+    override fun allocationSize(value: ULong) = 8UL
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())

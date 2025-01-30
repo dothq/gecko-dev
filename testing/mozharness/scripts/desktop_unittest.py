@@ -1,14 +1,8 @@
 #!/usr/bin/env python
-# ***** BEGIN LICENSE BLOCK *****
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-# ***** END LICENSE BLOCK *****
-"""desktop_unittest.py
-
-author: Jordan Lund
-"""
 
 import copy
 import glob
@@ -23,6 +17,8 @@ from datetime import datetime, timedelta
 # load modules from parent dir
 here = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(1, os.path.dirname(here))
+
+import threading
 
 from mozfile import load_source
 from mozharness.base.errors import BaseErrorList
@@ -216,6 +212,15 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 },
             ],
             [
+                ["--variant"],
+                {
+                    "action": "store",
+                    "dest": "variant",
+                    "default": "",
+                    "help": "specify a variant if mozharness needs to setup paths",
+                },
+            ],
+            [
                 ["--gpu-required"],
                 {
                     "action": "store_true",
@@ -340,6 +345,15 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     "help": "Whether to use the Http2 server",
                 },
             ],
+            [
+                ["--mochitest-flavor"],
+                {
+                    "action": "store",
+                    "dest": "mochitest_flavor",
+                    "help": "Specify which mochitest flavor to run."
+                    "Examples: 'plain', 'browser'",
+                },
+            ],
         ]
         + copy.deepcopy(testing_config_options)
         + copy.deepcopy(code_coverage_config_options)
@@ -376,6 +390,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
         self.binary_path = c.get("binary_path")
         self.abs_app_dir = None
         self.abs_res_dir = None
+        self.mochitest_flavor = c.get("mochitest_flavor", None)
 
         # Construct an identifier to be used to identify Perfherder data
         # for resource monitoring recording. This attempts to uniquely
@@ -567,7 +582,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
         symbols_url = None
         self.info("finding symbols_url based upon self.installer_url")
         if self.installer_url:
-            for ext in [".zip", ".dmg", ".tar.bz2"]:
+            for ext in [".zip", ".dmg", ".tar.bz2", ".tar.xz"]:
                 if ext in self.installer_url:
                     symbols_url = self.installer_url.replace(
                         ext, ".crashreporter-symbols.zip"
@@ -633,6 +648,9 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 "gtest_dir": os.path.join(dirs["abs_test_install_dir"], "gtest"),
             }
 
+            if self.mochitest_flavor:
+                str_format_values.update({"mochitest_flavor": self.mochitest_flavor})
+
             # TestingMixin._download_and_extract_symbols() will set
             # self.symbols_path when downloading/extracting.
             if self.symbols_path:
@@ -671,8 +689,11 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
             # Ignore chunking if we have user specified test paths
             if not (self.verify_enabled or self.per_test_coverage):
                 test_paths = self._get_mozharness_test_paths(suite_category, suite)
-                if test_paths:
-                    base_cmd.extend(test_paths)
+                if test_paths or c["test_tags"]:
+                    if test_paths:
+                        base_cmd.extend(test_paths)
+                    if c["test_tags"]:
+                        base_cmd.extend(["--tag={}".format(t) for t in c["test_tags"]])
                 elif c.get("total_chunks") and c.get("this_chunk"):
                     base_cmd.extend(
                         [
@@ -692,11 +713,17 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                         "mochitest."
                     )
 
+            if c.get("mochitest_flavor", None):
+                base_cmd.append("--flavor={}".format(c["mochitest_flavor"]))
+
             if c["headless"]:
                 base_cmd.append("--headless")
 
             if c.get("threads"):
                 base_cmd.extend(["--threads", c["threads"]])
+
+            if c["variant"]:
+                base_cmd.append("--variant={}".format(c["variant"]))
 
             if c["enable_xorigin_tests"]:
                 base_cmd.append("--enable-xorigin-tests")
@@ -723,10 +750,6 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
             if c["conditioned_profile"]:
                 base_cmd.append("--conditioned-profile")
-
-            # Ensure the --tag flag and its params get passed along
-            if c["test_tags"]:
-                base_cmd.extend(["--tag={}".format(t) for t in c["test_tags"]])
 
             if suite_category not in c["suite_definitions"]:
                 self.fatal("'%s' not defined in the config!")
@@ -813,6 +836,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 ("browser-chrome.*", "browser-chrome"),
                 ("mochitest-browser-a11y.*", "browser-a11y"),
                 ("mochitest-browser-media.*", "browser-media"),
+                ("mochitest-browser-translations.*", "browser-translations"),
                 ("mochitest-devtools-chrome.*", "devtools-chrome"),
                 ("chrome", "chrome"),
             ],
@@ -926,8 +950,17 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
             # All Linux systems need module-null-sink to be loaded, otherwise
             # media tests fail.
+
             self.run_command("pactl load-module module-null-sink")
-            self.run_command("pactl list modules short")
+            modules = self.get_output_from_command("pactl list modules short")
+            if not [l for l in modules.splitlines() if "module-x11" in l]:
+                # gnome-session isn't running, missing logind and other system services
+                # force the task to retry (return 4)
+                self.return_code = 4
+                self.fatal(
+                    "Unable to start PulseAudio and load x11 modules",
+                    exit_code=self.return_code,
+                )
 
     def stage_files(self):
         for category in SUITE_CATEGORIES:
@@ -1110,18 +1143,22 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 try:
                     for nc in psutil.net_connections():
                         f.write("  %s\n" % str(nc))
-                except Exception:
-                    f.write("Exception getting network info: %s\n" % sys.exc_info()[0])
+                except Exception as e:
+                    f.write("Exception getting network info: %s\n" % e)
                 f.write("\nProcesses:\n")
                 try:
                     for p in psutil.process_iter():
                         ctime = str(datetime.fromtimestamp(p.create_time()))
+                        try:
+                            cmdline = p.cmdline()
+                        except psutil.NoSuchProcess:
+                            cmdline = ""
                         f.write(
-                            "  PID %d %s %s created at %s\n"
-                            % (p.pid, p.name(), str(p.cmdline()), ctime)
+                            "  PID %d %s %s created at %s [%s]\n"
+                            % (p.pid, p.name(), cmdline, ctime, p.status())
                         )
-                except Exception:
-                    f.write("Exception getting process info: %s\n" % sys.exc_info()[0])
+                except Exception as e:
+                    f.write("Exception getting process info: %s\n" % e)
         except Exception:
             # psutil throws a variety of intermittent exceptions
             self.info("Unable to complete system-info.log: %s" % sys.exc_info()[0])
@@ -1157,6 +1194,50 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
         executed_too_many_tests = False
         xpcshell_selftests = 0
 
+        def do_gnome_video_recording(suite_name, upload_dir, ev):
+            import os
+
+            import dbus
+
+            target_file = os.path.join(
+                upload_dir,
+                "video_{}.webm".format(suite_name),
+            )
+            self.info("Recording suite {} to {}".format(suite_name, target_file))
+
+            session_bus = dbus.SessionBus()
+            session_bus.call_blocking(
+                "org.gnome.Shell.Screencast",
+                "/org/gnome/Shell/Screencast",
+                "org.gnome.Shell.Screencast",
+                "Screencast",
+                signature="sa{sv}",
+                args=[
+                    target_file,
+                    {"draw-cursor": True, "framerate": 35},
+                ],
+            )
+
+            ev.wait()
+
+        def do_macos_video_recording(suite_name, upload_dir, ev):
+            import os
+            import subprocess
+
+            target_file = os.path.join(
+                upload_dir,
+                "video_{}.mov".format(suite_name),
+            )
+            self.info("Recording suite {} to {}".format(suite_name, target_file))
+
+            process = subprocess.Popen(
+                ["/usr/sbin/screencapture", "-v", "-k", target_file],
+                stdin=subprocess.PIPE,
+            )
+            ev.wait()
+            process.stdin.write(b"p")
+            process.wait()
+
         if suites:
             self.info("#### Running %s suites" % suite_category)
             for suite in suites:
@@ -1189,7 +1270,14 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     options_list = suites[suite]
                     tests_list = []
 
-                flavor = self._query_try_flavor(suite_category, suite)
+                flavor = (
+                    self.mochitest_flavor
+                    if self.mochitest_flavor
+                    else self._query_try_flavor(suite_category, suite)
+                )
+                if self.mochitest_flavor:
+                    replace_dict.update({"mochitest_flavor": flavor})
+
                 try_options, try_tests = self.try_args(flavor)
 
                 suite_name = suite_category + "-" + suite
@@ -1298,6 +1386,28 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
                     final_env = copy.copy(env)
 
+                    finish_video = threading.Event()
+                    do_video_recording = os.getenv("MOZ_RECORD_TEST")
+                    if do_video_recording:
+                        if sys.platform == "linux":
+                            target = do_gnome_video_recording
+                        elif sys.platform == "darwin":
+                            target = do_macos_video_recording
+                        else:
+                            self.warning(
+                                "Screen recording not implemented for this platform"
+                            )
+                        thread = threading.Thread(
+                            target=target,
+                            args=(
+                                suite,
+                                env["MOZ_UPLOAD_DIR"],
+                                finish_video,
+                            ),
+                        )
+                        self.info("Starting recording thread {}".format(suite))
+                        thread.start()
+
                     if self.per_test_coverage:
                         self.set_coverage_env(final_env)
 
@@ -1323,6 +1433,12 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     # 2) if num_errors is 0 then we look in the subclassed 'parser'
                     #    findings for harness/suite errors <- DesktopUnittestOutputParser
                     # 3) checking to see if the return code is in success_codes
+
+                    if do_video_recording:
+                        self.info("Stopping recording thread {}".format(suite))
+                        finish_video.set()
+                        thread.join()
+                        self.info("Stopped recording thread {}".format(suite))
 
                     success_codes = None
                     tbpl_status, log_level, summary = parser.evaluate_parser(

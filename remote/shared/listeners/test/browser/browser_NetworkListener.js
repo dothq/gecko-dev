@@ -2,6 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+const { NetworkDecodedBodySizeMap } = ChromeUtils.importESModule(
+  "chrome://remote/content/shared/NetworkDecodedBodySizeMap.sys.mjs"
+);
+
+const { NavigationManager } = ChromeUtils.importESModule(
+  "chrome://remote/content/shared/NavigationManager.sys.mjs"
+);
 const { NetworkListener } = ChromeUtils.importESModule(
   "chrome://remote/content/shared/listeners/NetworkListener.sys.mjs"
 );
@@ -10,7 +17,11 @@ const { TabManager } = ChromeUtils.importESModule(
 );
 
 add_task(async function test_beforeRequestSent() {
-  const listener = new NetworkListener();
+  const decodedBodySizeMap = new NetworkDecodedBodySizeMap();
+  const navigationManager = new NavigationManager();
+  navigationManager.startMonitoring();
+
+  const listener = new NetworkListener(navigationManager, decodedBodySizeMap);
   const events = [];
   const onEvent = (name, data) => events.push(data);
   listener.on("before-request-sent", onEvent);
@@ -54,10 +65,15 @@ add_task(async function test_beforeRequestSent() {
   gBrowser.removeTab(tab2);
   listener.off("before-request-sent", onEvent);
   listener.destroy();
+  navigationManager.destroy();
 });
 
 add_task(async function test_beforeRequestSent_newTab() {
-  const listener = new NetworkListener();
+  const decodedBodySizeMap = new NetworkDecodedBodySizeMap();
+  const navigationManager = new NavigationManager();
+  navigationManager.startMonitoring();
+
+  const listener = new NetworkListener(navigationManager, decodedBodySizeMap);
   const onBeforeRequestSent = listener.once("before-request-sent");
   listener.startListening();
 
@@ -76,10 +92,16 @@ add_task(async function test_beforeRequestSent_newTab() {
     "https://example.com/document-builder.sjs?html=tab"
   );
   gBrowser.removeTab(tab);
+  listener.destroy();
+  navigationManager.destroy();
 });
 
 add_task(async function test_fetchError() {
-  const listener = new NetworkListener();
+  const decodedBodySizeMap = new NetworkDecodedBodySizeMap();
+  const navigationManager = new NavigationManager();
+  navigationManager.startMonitoring();
+
+  const listener = new NetworkListener(navigationManager, decodedBodySizeMap);
   const onFetchError = listener.once("fetch-error");
   listener.startListening();
 
@@ -90,11 +112,17 @@ add_task(async function test_fetchError() {
   const event = await onFetchError;
 
   assertNetworkEvent(event, contextId, "https://not_a_valid_url/");
-  is(event.errorText, "NS_ERROR_UNKNOWN_HOST");
+  is(event.request.errorText, "NS_ERROR_UNKNOWN_HOST");
   gBrowser.removeTab(tab);
+  listener.destroy();
+  navigationManager.destroy();
 });
 
 function assertNetworkEvent(event, expectedContextId, expectedUrl) {
-  is(event.contextId, expectedContextId, "Event has the expected context id");
-  is(event.requestData.url, expectedUrl, "Event has the expected url");
+  is(
+    event.request.contextId,
+    expectedContextId,
+    "Event has the expected context id"
+  );
+  is(event.request.serializedURL, expectedUrl, "Event has the expected url");
 }

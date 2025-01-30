@@ -3,13 +3,6 @@ from contextlib import contextmanager
 from marionette_harness import MarionetteTestCase
 
 
-class ExperimentStatus:
-    UNENROLLED = 0
-    ENROLLED_CONTROL = 1
-    ENROLLED_TREATMENT = 2
-    DISQUALIFIED = 3
-
-
 class Prefs:
     FISSION_AUTOSTART = "fission.autostart"
     FISSION_AUTOSTART_SESSION = "fission.autostart.session"
@@ -21,8 +14,6 @@ ENV_DISABLE_E10S = "MOZ_FORCE_DISABLE_E10S"
 
 
 DECISION_STATUS = {
-    "experimentControl": 1,
-    "experimentTreatment": 2,
     "disabledByE10sEnv": 3,
     "enabledByEnv": 4,
     "disabledByEnv": 5,
@@ -156,9 +147,9 @@ class TestFissionAutostart(MarionetteTestCase):
 
     def tearDown(self):
         if self.fissionRequired is not None:
-            self.marionette.instance.required_prefs[
-                Prefs.FISSION_AUTOSTART
-            ] = self.fissionRequired
+            self.marionette.instance.required_prefs[Prefs.FISSION_AUTOSTART] = (
+                self.fissionRequired
+            )
         self.marionette.restart(in_app=False, clean=True)
 
         super(TestFissionAutostart, self).tearDown()
@@ -238,8 +229,7 @@ class TestFissionAutostart(MarionetteTestCase):
             decision="enabledByDefault",
         )
 
-        app_version = self.execute_script("return Services.appinfo.version")
-        self.restart(env={ENV_DISABLE_E10S: app_version})
+        self.restart(env={ENV_DISABLE_E10S: "1"})
         self.check_fission_status(
             enabled=False,
             decision="disabledByE10sEnv",

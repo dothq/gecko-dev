@@ -47,20 +47,22 @@ MFMediaEngineChild::MFMediaEngineChild(MFMediaEngineWrapper* aOwner,
 }
 
 RefPtr<GenericNonExclusivePromise> MFMediaEngineChild::Init(
-    bool aShouldPreload) {
+    const MediaInfo& aInfo, const ExternalPlaybackEngine::InitFlagSet& aFlags) {
   if (!mManagerThread) {
     return GenericNonExclusivePromise::CreateAndReject(NS_ERROR_FAILURE,
                                                        __func__);
   }
 
-  CLOG("Init");
+  CLOG("Init, hasAudio=%d, hasVideo=%d, encrypted=%d", aInfo.HasAudio(),
+       aInfo.HasVideo(), aInfo.IsEncrypted());
+
   MOZ_ASSERT(mMediaEngineId == 0);
   RefPtr<MFMediaEngineChild> self = this;
   RemoteDecoderManagerChild::LaunchUtilityProcessIfNeeded(
       RemoteDecodeIn::UtilityProcess_MFMediaEngineCDM)
       ->Then(
           mManagerThread, __func__,
-          [self, this, aShouldPreload](bool) {
+          [self, this, flag = aFlags, info = aInfo](bool) {
             RefPtr<RemoteDecoderManagerChild> manager =
                 RemoteDecoderManagerChild::GetSingleton(
                     RemoteDecodeIn::UtilityProcess_MFMediaEngineCDM);
@@ -72,8 +74,17 @@ RefPtr<GenericNonExclusivePromise> MFMediaEngineChild::Init(
 
             mIPDLSelfRef = this;
             Unused << manager->SendPMFMediaEngineConstructor(this);
-            MediaEngineInfoIPDL info(aShouldPreload);
-            SendInitMediaEngine(info)
+
+            MediaInfoIPDL mediaInfo(
+                info.HasAudio() ? Some(info.mAudio) : Nothing(),
+                info.HasVideo() ? Some(info.mVideo) : Nothing());
+
+            MediaEngineInfoIPDL initInfo(
+                mediaInfo,
+                flag.contains(ExternalPlaybackEngine::InitFlag::ShouldPreload),
+                flag.contains(
+                    ExternalPlaybackEngine::InitFlag::EncryptedCustomIdent));
+            SendInitMediaEngine(initInfo)
                 ->Then(
                     mManagerThread, __func__,
                     [self, this](uint64_t aId) {
@@ -110,7 +121,7 @@ RefPtr<GenericNonExclusivePromise> MFMediaEngineChild::Init(
 mozilla::ipc::IPCResult MFMediaEngineChild::RecvRequestSample(TrackType aType,
                                                               bool aIsEnough) {
   AssertOnManagerThread();
-  if (!mOwner) {
+  if (!mOwner || mShutdown) {
     return IPC_OK();
   }
   if (aType == TrackType::kVideoTrack) {
@@ -126,6 +137,9 @@ mozilla::ipc::IPCResult MFMediaEngineChild::RecvRequestSample(TrackType aType,
 mozilla::ipc::IPCResult MFMediaEngineChild::RecvUpdateCurrentTime(
     double aCurrentTimeInSecond) {
   AssertOnManagerThread();
+  if (mShutdown) {
+    return IPC_OK();
+  }
   if (mOwner) {
     mOwner->UpdateCurrentTime(aCurrentTimeInSecond);
   }
@@ -135,6 +149,9 @@ mozilla::ipc::IPCResult MFMediaEngineChild::RecvUpdateCurrentTime(
 mozilla::ipc::IPCResult MFMediaEngineChild::RecvNotifyEvent(
     MFMediaEngineEvent aEvent) {
   AssertOnManagerThread();
+  if (mShutdown) {
+    return IPC_OK();
+  }
   switch (aEvent) {
     case MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY:
       mOwner->NotifyEvent(ExternalEngineEvent::LoadedFirstFrame);
@@ -172,6 +189,9 @@ mozilla::ipc::IPCResult MFMediaEngineChild::RecvNotifyEvent(
 mozilla::ipc::IPCResult MFMediaEngineChild::RecvNotifyError(
     const MediaResult& aError) {
   AssertOnManagerThread();
+  if (mShutdown) {
+    return IPC_OK();
+  }
   mOwner->NotifyError(aError);
   return IPC_OK();
 }
@@ -198,6 +218,10 @@ mozilla::ipc::IPCResult MFMediaEngineChild::RecvUpdateStatisticData(
 
 mozilla::ipc::IPCResult MFMediaEngineChild::RecvNotifyResizing(
     uint32_t aWidth, uint32_t aHeight) {
+  AssertOnManagerThread();
+  if (mShutdown) {
+    return IPC_OK();
+  }
   mOwner->NotifyResizing(aWidth, aHeight);
   return IPC_OK();
 }
@@ -256,9 +280,9 @@ MFMediaEngineWrapper::MFMediaEngineWrapper(ExternalEngineStateMachine* aOwner,
       mCurrentTimeInSecond(0.0) {}
 
 RefPtr<GenericNonExclusivePromise> MFMediaEngineWrapper::Init(
-    bool aShouldPreload) {
+    const MediaInfo& aInfo, const InitFlagSet& aFlags) {
   WLOG("Init");
-  return mEngine->Init(aShouldPreload);
+  return mEngine->Init(aInfo, aFlags);
 }
 
 MFMediaEngineWrapper::~MFMediaEngineWrapper() { mEngine->OwnerDestroyed(); }
@@ -335,18 +359,6 @@ void MFMediaEngineWrapper::NotifyEndOfStream(TrackInfo::TrackType aType) {
       [engine = mEngine, aType] { engine->SendNotifyEndOfStream(aType); }));
 }
 
-void MFMediaEngineWrapper::SetMediaInfo(const MediaInfo& aInfo) {
-  WLOG("SetMediaInfo, hasAudio=%d, hasVideo=%d, encrypted=%d", aInfo.HasAudio(),
-       aInfo.HasVideo(), aInfo.IsEncrypted());
-  MOZ_ASSERT(IsInited());
-  Unused << ManagerThread()->Dispatch(NS_NewRunnableFunction(
-      "MFMediaEngineWrapper::SetMediaInfo", [engine = mEngine, aInfo] {
-        MediaInfoIPDL info(aInfo.HasAudio() ? Some(aInfo.mAudio) : Nothing(),
-                           aInfo.HasVideo() ? Some(aInfo.mVideo) : Nothing());
-        engine->SendNotifyMediaInfo(info);
-      }));
-}
-
 bool MFMediaEngineWrapper::SetCDMProxy(CDMProxy* aProxy) {
 #ifdef MOZ_WMF_CDM
   WMFCDMProxy* proxy = aProxy->AsWMFCDMProxy();
@@ -360,7 +372,9 @@ bool MFMediaEngineWrapper::SetCDMProxy(CDMProxy* aProxy) {
   MOZ_ASSERT(IsInited());
   Unused << ManagerThread()->Dispatch(NS_NewRunnableFunction(
       "MFMediaEngineWrapper::SetCDMProxy",
-      [engine = mEngine, proxyId] { engine->SendSetCDMProxyId(proxyId); }));
+      [engine = mEngine, proxy = RefPtr{aProxy}, proxyId] {
+        engine->SendSetCDMProxyId(proxyId);
+      }));
   return true;
 #else
   return false;
@@ -391,6 +405,7 @@ void MFMediaEngineWrapper::NotifyError(const MediaResult& aError) {
 }
 
 void MFMediaEngineWrapper::NotifyResizing(uint32_t aWidth, uint32_t aHeight) {
+  AssertOnManagerThread();
   WLOG("Video resizing, new size [%u,%u]", aWidth, aHeight);
   mOwner->NotifyResizing(aWidth, aHeight);
 }

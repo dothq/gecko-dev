@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/CSSStyleRule.h"
+#include "mozilla/dom/CSSStyleRuleBinding.h"
 
 #include "mozilla/CSSEnabledState.h"
 #include "mozilla/DeclarationBlock.h"
@@ -13,7 +14,6 @@
 #include "mozilla/dom/ShadowRoot.h"
 #include "nsCSSPseudoElements.h"
 
-#include "mozAutoDocUpdate.h"
 #include "nsISupports.h"
 
 namespace mozilla::dom {
@@ -66,6 +66,14 @@ DeclarationBlock* CSSStyleRuleDeclaration::GetOrCreateCSSDeclaration(
   return mDecls;
 }
 
+void CSSStyleRuleDeclaration::SetRawAfterClone(
+    RefPtr<StyleLockedDeclarationBlock> aRaw) {
+  auto block = MakeRefPtr<DeclarationBlock>(aRaw.forget());
+  mDecls->SetOwningRule(nullptr);
+  mDecls = std::move(block);
+  mDecls->SetOwningRule(Rule());
+}
+
 void CSSStyleRule::SetRawAfterClone(RefPtr<StyleLockedStyleRule> aRaw) {
   mRawRule = std::move(aRaw);
   mDecls.SetRawAfterClone(Servo_StyleRule_GetStyle(mRawRule).Consume());
@@ -76,36 +84,26 @@ already_AddRefed<StyleLockedCssRules> CSSStyleRule::GetOrCreateRawRules() {
   return Servo_StyleRule_EnsureRules(mRawRule, IsReadOnly()).Consume();
 }
 
-void CSSStyleRuleDeclaration::SetRawAfterClone(
-    RefPtr<StyleLockedDeclarationBlock> aRaw) {
-  RefPtr<DeclarationBlock> block = new DeclarationBlock(aRaw.forget());
-  mDecls->SetOwningRule(nullptr);
-  mDecls = std::move(block);
-  mDecls->SetOwningRule(Rule());
-}
-
 nsresult CSSStyleRuleDeclaration::SetCSSDeclaration(
     DeclarationBlock* aDecl, MutationClosureData* aClosureData) {
   CSSStyleRule* rule = Rule();
-
+  RefPtr<DeclarationBlock> oldDecls;
   if (StyleSheet* sheet = rule->GetStyleSheet()) {
     if (aDecl != mDecls) {
-      mDecls->SetOwningRule(nullptr);
-      RefPtr<DeclarationBlock> decls = aDecl;
-      Servo_StyleRule_SetStyle(rule->Raw(), decls->Raw());
-      mDecls = std::move(decls);
+      oldDecls = std::move(mDecls);
+      oldDecls->SetOwningRule(nullptr);
+      Servo_StyleRule_SetStyle(rule->Raw(), aDecl->Raw());
+      mDecls = aDecl;
       mDecls->SetOwningRule(rule);
     }
-    sheet->RuleChanged(rule, StyleRuleChangeKind::StyleRuleDeclarations);
+    sheet->RuleChanged(rule, {StyleRuleChangeKind::StyleRuleDeclarations,
+                              oldDecls ? oldDecls.get() : aDecl, aDecl});
   }
   return NS_OK;
 }
 
-Document* CSSStyleRuleDeclaration::DocToUpdate() { return nullptr; }
-
 nsDOMCSSDeclaration::ParsingEnvironment
-CSSStyleRuleDeclaration::GetParsingEnvironment(
-    nsIPrincipal* aSubjectPrincipal) const {
+CSSStyleRuleDeclaration::GetParsingEnvironment(nsIPrincipal*) const {
   return GetParsingEnvironmentForRule(Rule(), StyleCssRuleType::Style);
 }
 
@@ -182,9 +180,11 @@ void CSSStyleRule::GetCssText(nsACString& aCssText) const {
   Servo_StyleRule_GetCssText(mRawRule, &aCssText);
 }
 
-nsICSSDeclaration* CSSStyleRule::Style() { return &mDecls; }
-
 /* CSSStyleRule implementation */
+
+StyleLockedDeclarationBlock* CSSStyleRule::RawStyle() const {
+  return mDecls.mDecls->Raw();
+}
 
 void CSSStyleRule::GetSelectorText(nsACString& aSelectorText) {
   Servo_StyleRule_GetSelectorText(mRawRule, &aSelectorText);
@@ -195,15 +195,21 @@ void CSSStyleRule::SetSelectorText(const nsACString& aSelectorText) {
     return;
   }
 
-  if (StyleSheet* sheet = GetStyleSheet()) {
-    sheet->WillDirty();
+  StyleSheet* sheet = GetStyleSheet();
+  if (!sheet) {
+    return;
+  }
+  sheet->WillDirty();
 
-    // TODO(emilio): May actually be more efficient to handle this as rule
-    // removal + addition, from the point of view of invalidation...
-    const StyleStylesheetContents* contents = sheet->RawContents();
-    if (Servo_StyleRule_SetSelectorText(contents, mRawRule, &aSelectorText)) {
-      sheet->RuleChanged(this, StyleRuleChangeKind::Generic);
-    }
+  auto state = ContainingRuleState::From(mParentRule);
+
+  // TODO(emilio): May actually be more efficient to handle this as rule
+  // removal + addition, from the point of view of invalidation...
+  const StyleStylesheetContents* contents = sheet->RawContents();
+  if (Servo_StyleRule_SetSelectorText(
+          contents, mRawRule, &aSelectorText,
+          state.mParseRelativeType.ptrOr(nullptr))) {
+    sheet->RuleChanged(this, StyleRuleChangeKind::Generic);
   }
 }
 
@@ -249,9 +255,9 @@ bool CSSStyleRule::SelectorMatchesElement(uint32_t aSelectorIndex,
                                           Element& aElement,
                                           const nsAString& aPseudo,
                                           bool aRelevantLinkVisited) {
-  Maybe<PseudoStyleType> pseudoType = nsCSSPseudoElements::GetPseudoType(
+  Maybe<PseudoStyleRequest> pseudo = nsCSSPseudoElements::ParsePseudoElement(
       aPseudo, CSSEnabledState::IgnoreEnabledState);
-  if (!pseudoType) {
+  if (!pseudo) {
     return false;
   }
 
@@ -283,13 +289,11 @@ bool CSSStyleRule::SelectorMatchesElement(uint32_t aSelectorIndex,
   AutoTArray<const StyleLockedStyleRule*, 8> rules;
   CollectStyleRules(*this, /* aDesugared = */ true, rules);
 
+  // FIXME: Bug 1909173. This function is used for the devtool, so we may need
+  // to revist here once we finish the support of view-transitions.
   return Servo_StyleRule_SelectorMatchesElement(
-      &rules, &aElement, aSelectorIndex, host, *pseudoType,
+      &rules, &aElement, aSelectorIndex, host, pseudo->mType,
       aRelevantLinkVisited);
-}
-
-NotNull<DeclarationBlock*> CSSStyleRule::GetDeclarationBlock() const {
-  return WrapNotNull(mDecls.mDecls);
 }
 
 SelectorWarningKind ToWebIDLSelectorWarningKind(
@@ -312,6 +316,18 @@ void CSSStyleRule::GetSelectorWarnings(
     entry.mIndex = warning.index;
     entry.mKind = ToWebIDLSelectorWarningKind(warning.kind);
   }
+}
+
+already_AddRefed<nsINodeList> CSSStyleRule::QuerySelectorAll(nsINode& aRoot) {
+  AutoTArray<const StyleLockedStyleRule*, 8> rules;
+  CollectStyleRules(*this, /* aDesugared = */ true, rules);
+  StyleSelectorList* list = Servo_StyleRule_GetSelectorList(&rules);
+
+  auto contentList = MakeRefPtr<nsSimpleContentList>(&aRoot);
+  Servo_SelectorList_QueryAll(&aRoot, list, contentList.get(),
+                              /* useInvalidation */ false);
+  Servo_SelectorList_Drop(list);
+  return contentList.forget();
 }
 
 /* virtual */

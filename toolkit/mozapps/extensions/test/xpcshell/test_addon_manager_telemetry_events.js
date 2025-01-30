@@ -40,7 +40,7 @@ function getTelemetryEvents(includeMethods = EVENT_METHODS) {
   );
 
   return snapshot.parent
-    .filter(([timestamp, category, method]) => {
+    .filter(([, category, method]) => {
       const includeMethod = includeMethods
         ? includeMethods.includes(method)
         : true;
@@ -68,11 +68,9 @@ function assertNoTelemetryEvents() {
     return;
   }
 
-  let filteredEvents = snapshot.parent.filter(
-    ([timestamp, category, method]) => {
-      return category === EVENT_CATEGORY;
-    }
-  );
+  let filteredEvents = snapshot.parent.filter(([_timestamp, category]) => {
+    return category === EVENT_CATEGORY;
+  });
 
   Assert.deepEqual(filteredEvents, [], "Got no AMTelemetry events as expected");
 }
@@ -226,6 +224,7 @@ add_task(
       addon_id: "basic@test.extension",
       source: FAKE_INSTALL_TELEMETRY_INFO.source,
       source_method: FAKE_INSTALL_TELEMETRY_INFO.method,
+      blocklist_state: `${Ci.nsIBlocklistService.STATE_NOT_BLOCKED}`,
     };
     Assert.deepEqual(
       AddonTestUtils.getAMGleanEvents("manage"),
@@ -240,7 +239,10 @@ add_task(
     const manageEvents = amEvents.filter(evt =>
       EVENT_METHODS_MANAGE.includes(evt.method)
     );
-    const expectedExtra = FAKE_INSTALL_TELEMETRY_INFO;
+    const expectedExtra = {
+      ...FAKE_INSTALL_TELEMETRY_INFO,
+      blocklist_state: `${Ci.nsIBlocklistService.STATE_NOT_BLOCKED}`,
+    };
     const expectedManageEvents = [
       {
         method: "disable",
@@ -265,6 +267,19 @@ add_task(
       manageEvents,
       expectedManageEvents,
       "Got the expected addonsManager.manage events"
+    );
+
+    // NOTE: (Bug 1924488) The AddonsManaer Glean metrics defined in
+    // toolkit/mozapps/extensions/metrics_legacy.yaml are being mirrored
+    // to the legacy telemetry events verified right above.
+    // Despite the previous assertion may be successful, there is currently a chance
+    // for the related Glean metric to be out of sync with the extra keys defined in the
+    // legacy telemetry definition in Events.yaml and the following assertion to fail
+    // because the data collected is still invalid from a Glean metric schema perspective.
+    Assert.deepEqual(
+      AddonTestUtils.getAMGleanEvents("disableExtension"),
+      [{ value: gleanManage.addon_id, method: "disable", ...expectedExtra }],
+      "Verify disableExtension addonsManager metrics_legacy.yaml metric isn't invalid"
     );
 
     Services.fog.testResetFOG();

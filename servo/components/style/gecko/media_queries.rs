@@ -17,7 +17,7 @@ use crate::properties::ComputedValues;
 use crate::string_cache::Atom;
 use crate::values::computed::font::GenericFontFamily;
 use crate::values::computed::{ColorScheme, Length, NonNegativeLength};
-use crate::values::specified::color::SystemColor;
+use crate::values::specified::color::{ColorSchemeFlags, ForcedColors, SystemColor};
 use crate::values::specified::font::{FONT_MEDIUM_LINE_HEIGHT_PX, FONT_MEDIUM_PX};
 use crate::values::specified::ViewportVariant;
 use crate::values::{CustomIdent, KeyframesName};
@@ -172,10 +172,9 @@ impl Device {
         Length::new(f32::from_bits(self.root_font_size.load(Ordering::Relaxed)))
     }
 
-    /// Set the font size of the root element (for rem)
-    pub fn set_root_font_size(&self, size: Length) {
-        self.root_font_size
-            .store(size.px().to_bits(), Ordering::Relaxed)
+    /// Set the font size of the root element (for rem), in zoom-independent CSS pixels.
+    pub fn set_root_font_size(&self, size: f32) {
+        self.root_font_size.store(size.to_bits(), Ordering::Relaxed)
     }
 
     /// Get the line height of the root element (for rlh)
@@ -186,10 +185,10 @@ impl Device {
         ))
     }
 
-    /// Set the line height of the root element (for rlh)
-    pub fn set_root_line_height(&self, size: Length) {
+    /// Set the line height of the root element (for rlh), in zoom-independent CSS pixels.
+    pub fn set_root_line_height(&self, size: f32) {
         self.root_line_height
-            .store(size.px().to_bits(), Ordering::Relaxed);
+            .store(size.to_bits(), Ordering::Relaxed);
     }
 
     /// The quirks mode of the document.
@@ -498,26 +497,22 @@ impl Device {
 
     /// Returns whether document colors are enabled.
     #[inline]
-    pub fn use_document_colors(&self) -> bool {
-        let doc = self.document();
-        if doc.mIsBeingUsedAsImage() {
-            return true;
-        }
-        self.pref_sheet_prefs().mUseDocumentColors
+    pub fn forced_colors(&self) -> ForcedColors {
+        self.pres_context().map_or(ForcedColors::None, |pc| pc.mForcedColors)
     }
 
     /// Computes a system color and returns it as an nscolor.
     pub(crate) fn system_nscolor(
         &self,
         system_color: SystemColor,
-        color_scheme: &ColorScheme,
+        color_scheme: ColorSchemeFlags,
     ) -> u32 {
-        unsafe { bindings::Gecko_ComputeSystemColor(system_color, self.document(), color_scheme) }
+        unsafe { bindings::Gecko_ComputeSystemColor(system_color, self.document(), &color_scheme) }
     }
 
     /// Returns whether the used color-scheme for `color-scheme` should be dark.
-    pub(crate) fn is_dark_color_scheme(&self, color_scheme: &ColorScheme) -> bool {
-        unsafe { bindings::Gecko_IsDarkColorScheme(self.document(), color_scheme) }
+    pub(crate) fn is_dark_color_scheme(&self, color_scheme: ColorSchemeFlags) -> bool {
+        unsafe { bindings::Gecko_IsDarkColorScheme(self.document(), &color_scheme) }
     }
 
     /// Returns the default background color.
@@ -525,16 +520,14 @@ impl Device {
     /// This is only for forced-colors/high-contrast, so looking at light colors
     /// is ok.
     pub fn default_background_color(&self) -> AbsoluteColor {
-        let normal = ColorScheme::normal();
-        convert_nscolor_to_absolute_color(self.system_nscolor(SystemColor::Canvas, &normal))
+        convert_nscolor_to_absolute_color(self.system_nscolor(SystemColor::Canvas, ColorScheme::normal().bits))
     }
 
     /// Returns the default foreground color.
     ///
     /// See above for looking at light colors only.
     pub fn default_color(&self) -> AbsoluteColor {
-        let normal = ColorScheme::normal();
-        convert_nscolor_to_absolute_color(self.system_nscolor(SystemColor::Canvastext, &normal))
+        convert_nscolor_to_absolute_color(self.system_nscolor(SystemColor::Canvastext, ColorScheme::normal().bits))
     }
 
     /// Returns the current effective text zoom.

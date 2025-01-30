@@ -15,7 +15,7 @@ FINAL_TARGET_FILES.actors += [
 ]
 
 EXTRA_JS_MODULES.asrouter += [
-    "modules/ActorConstants.sys.mjs",
+    "modules/ActorConstants.mjs",
     "modules/ASRouter.sys.mjs",
     "modules/ASRouterDefaultConfig.sys.mjs",
     "modules/ASRouterNewTabHook.sys.mjs",
@@ -23,12 +23,14 @@ EXTRA_JS_MODULES.asrouter += [
     "modules/ASRouterPreferences.sys.mjs",
     "modules/ASRouterTargeting.sys.mjs",
     "modules/ASRouterTriggerListeners.sys.mjs",
+    "modules/BookmarksBarButton.sys.mjs",
     "modules/CFRMessageProvider.sys.mjs",
     "modules/CFRPageActions.sys.mjs",
     "modules/FeatureCallout.sys.mjs",
     "modules/FeatureCalloutBroker.sys.mjs",
     "modules/FeatureCalloutMessages.sys.mjs",
     "modules/InfoBar.sys.mjs",
+    "modules/MenuMessage.sys.mjs",
     "modules/MessagingExperimentConstants.sys.mjs",
     "modules/MomentsPageHub.sys.mjs",
     "modules/OnboardingMessageProvider.sys.mjs",
@@ -38,8 +40,9 @@ EXTRA_JS_MODULES.asrouter += [
     "modules/Spotlight.sys.mjs",
     "modules/ToastNotification.sys.mjs",
     "modules/ToolbarBadgeHub.sys.mjs",
-    "modules/ToolbarPanelHub.sys.mjs",
 ]
+
+MOCHITEST_CHROME_MANIFESTS += ["tests/chrome/chrome.toml"]
 
 BROWSER_CHROME_MANIFESTS += [
     "tests/browser/browser.toml",
@@ -54,10 +57,11 @@ TESTING_JS_MODULES += [
     "content-src/templates/CFR/templates/CFRUrlbarChiclet.schema.json",
     "content-src/templates/CFR/templates/ExtensionDoorhanger.schema.json",
     "content-src/templates/CFR/templates/InfoBar.schema.json",
+    "content-src/templates/OnboardingMessage/BookmarksBarButton.schema.json",
+    "content-src/templates/OnboardingMessage/MenuMessage.schema.json",
     "content-src/templates/OnboardingMessage/Spotlight.schema.json",
     "content-src/templates/OnboardingMessage/ToolbarBadgeMessage.schema.json",
     "content-src/templates/OnboardingMessage/UpdateAction.schema.json",
-    "content-src/templates/OnboardingMessage/WhatsNewMessage.schema.json",
     "content-src/templates/PBNewtab/NewtabPromoMessage.schema.json",
     "content-src/templates/ToastNotification/ToastNotification.schema.json",
     "tests/InflightAssetsMessageProvider.sys.mjs",

@@ -4,7 +4,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-TEST_DIRS += ["httpserver", "gtest", "http3server"]
+TEST_DIRS += ["httpserver"]
+
+if CONFIG["ENABLE_TESTS"]:
+    TEST_DIRS += ["http3server", "gtest"]
 
 BROWSER_CHROME_MANIFESTS += [
     "browser/browser.toml",
@@ -22,6 +25,7 @@ XPCSHELL_TESTS_MANIFESTS += [
 TESTING_JS_MODULES += [
     "browser/cookie_filtering_helper.sys.mjs",
     "browser/early_hint_preload_test_helper.sys.mjs",
+    "browser/simple_unknown_uri_helpers.sys.mjs",
     "unit/test_http3_prio_helpers.js",
 ]
 

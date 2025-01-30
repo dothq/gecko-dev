@@ -1,16 +1,5 @@
-/* import-globals-from ../../../common/tests/unit/head_helpers.js */
-
-const { RemoteSettings } = ChromeUtils.importESModule(
-  "resource://services-settings/remote-settings.sys.mjs"
-);
-const { UptakeTelemetry } = ChromeUtils.importESModule(
-  "resource://services-common/uptake-telemetry.sys.mjs"
-);
 const { Downloader } = ChromeUtils.importESModule(
   "resource://services-settings/Attachments.sys.mjs"
-);
-const { TelemetryTestUtils } = ChromeUtils.importESModule(
-  "resource://testing-common/TelemetryTestUtils.sys.mjs"
 );
 
 const RECORD = {
@@ -56,6 +45,15 @@ add_setup(() => {
     "/cdn/main-workspace/some-collection/",
     do_get_file("test_attachments_downloader")
   );
+  server.registerDirectory(
+    "/cdn/bundles/",
+    do_get_file("test_attachments_downloader")
+  );
+
+  // For this test, we are using a server other than production. Force
+  // LOAD_DUMPS to true so that we can still load attachments from dumps.
+  delete Utils.LOAD_DUMPS;
+  Utils.LOAD_DUMPS = true;
 });
 
 async function clear_state() {
@@ -65,15 +63,28 @@ async function clear_state() {
   );
 
   downloader = new Downloader("main", "some-collection");
-  const dummyCacheImpl = {
-    get: async () => {},
-    set: async () => {},
-    delete: async () => {},
+  downloader.cache = {};
+  const memCacheImpl = {
+    get: async id => {
+      return downloader.cache[id];
+    },
+    set: async (id, obj) => {
+      downloader.cache[id] = obj;
+    },
+    setMultiple: async idsObjs => {
+      idsObjs.forEach(([id, obj]) => (downloader.cache[id] = obj));
+    },
+    delete: async id => {
+      delete downloader.cache[id];
+    },
+    hasData: async () => {
+      return !!Object.keys(downloader.cache).length;
+    },
   };
   // The download() method requires a cacheImpl, but the Downloader
   // class does not have one. Define a dummy no-op one.
   Object.defineProperty(downloader, "cacheImpl", {
-    value: dummyCacheImpl,
+    value: memCacheImpl,
     // Writable to allow specific tests to override cacheImpl.
     writable: true,
   });
@@ -92,37 +103,12 @@ async function clear_state() {
     response.setHeader("Content-Type", "application/json; charset=UTF-8");
     response.setStatusLine(null, 200, "OK");
   });
+
+  // For tests that use a real client and DB cache, clear the local DB too.
+  const client = RemoteSettings("some-collection");
+  await client.db.clear();
+  await client.db.pruneAttachments([]);
 }
-
-add_task(clear_state);
-
-add_task(async function test_base_attachment_url_depends_on_server() {
-  const before = await downloader._baseAttachmentsURL();
-
-  Services.prefs.setStringPref(
-    "services.settings.server",
-    `http://localhost:${server.identity.primaryPort}/v2`
-  );
-
-  server.registerPathHandler("/v2/", (request, response) => {
-    response.write(
-      JSON.stringify({
-        capabilities: {
-          attachments: {
-            base_url: "http://some-cdn-url.org",
-          },
-        },
-      })
-    );
-    response.setHeader("Content-Type", "application/json; charset=UTF-8");
-    response.setStatusLine(null, 200, "OK");
-  });
-
-  const after = await downloader._baseAttachmentsURL();
-
-  Assert.notEqual(before, after, "base URL was changed");
-  Assert.equal(after, "http://some-cdn-url.org/", "A trailing slash is added");
-});
 add_task(clear_state);
 
 add_task(
@@ -619,6 +605,80 @@ add_task(async function test_download_from_dump() {
 // but added for consistency with other tests tasks around here.
 add_task(clear_state);
 
+add_task(
+  async function test_download_from_dump_fails_when_load_dumps_is_false() {
+    const client = RemoteSettings("dump-collection", {
+      bucketName: "dump-bucket",
+    });
+
+    // Temporarily replace the resource:-URL with another resource:-URL.
+    const orig_RESOURCE_BASE_URL = Downloader._RESOURCE_BASE_URL;
+    Downloader._RESOURCE_BASE_URL = "resource://rs-downloader-test";
+    const resProto = Services.io
+      .getProtocolHandler("resource")
+      .QueryInterface(Ci.nsIResProtocolHandler);
+    resProto.setSubstitution(
+      "rs-downloader-test",
+      Services.io.newFileURI(do_get_file("test_attachments_downloader"))
+    );
+
+    function checkInfo(
+      result,
+      expectedSource,
+      expectedRecord = RECORD_OF_DUMP
+    ) {
+      Assert.equal(
+        new TextDecoder().decode(new Uint8Array(result.buffer)),
+        "This would be a RS dump.\n",
+        "expected content from dump"
+      );
+      Assert.deepEqual(
+        result.record,
+        expectedRecord,
+        "expected record for dump"
+      );
+      Assert.equal(result._source, expectedSource, "expected source of dump");
+    }
+
+    // Download the dump so that we can use it to fill the cache.
+    const dump1 = await client.attachments.download(RECORD_OF_DUMP, {
+      // Note: attachmentId not set, so should fall back to record.id.
+      fallbackToDump: true,
+    });
+    checkInfo(dump1, "dump_match");
+
+    // Fill the cache with the same data as the dump for the next part.
+    await client.db.saveAttachment(RECORD_OF_DUMP.id, {
+      record: RECORD_OF_DUMP,
+      blob: new Blob([dump1.buffer]),
+    });
+
+    // Now turn off loading dumps, and check we no longer load from the dump,
+    // but use the cache instead.
+    Utils.LOAD_DUMPS = false;
+
+    const dump2 = await client.attachments.download(RECORD_OF_DUMP, {
+      // Note: attachmentId not set, so should fall back to record.id.
+      fallbackToDump: true,
+    });
+    checkInfo(dump2, "cache_match");
+
+    // When the record is not given, the dump would take precedence over the
+    // cache but we have disabled dumps, so we should load from the cache.
+    const dump4 = await client.attachments.download(null, {
+      attachmentId: RECORD_OF_DUMP.id,
+      fallbackToCache: true,
+      fallbackToDump: true,
+    });
+    checkInfo(dump4, "cache_fallback");
+
+    // Restore, just in case.
+    Utils.LOAD_DUMPS = true;
+    Downloader._RESOURCE_BASE_URL = orig_RESOURCE_BASE_URL;
+    resProto.setSubstitution("rs-downloader-test", null);
+  }
+);
+
 add_task(async function test_attachment_get() {
   // Since get() is largely a wrapper around the same code as download(),
   // we only test a couple of parts to check it functions as expected, and
@@ -766,4 +826,132 @@ add_task(
     );
   }
 );
+
+add_task(clear_state);
+
+add_task(async function test_cacheAll_happy_path() {
+  // verify bundle is downloaded succesfully
+  const allSuccess = await downloader.cacheAll();
+  Assert.ok(
+    allSuccess,
+    "Attachments cacheAll succesfully downloaded a bundle and saved all attachments"
+  );
+
+  // verify accuracy of attachments downloaded
+  Assert.equal(
+    downloader.cache["1"].record.title,
+    "test1",
+    "Test record 1 meta content appears accurate."
+  );
+  Assert.equal(
+    await downloader.cache["1"].blob.text(),
+    "test1\n",
+    "Test file 1 content is accurate."
+  );
+  Assert.equal(
+    downloader.cache["2"].record.title,
+    "test2",
+    "Test record 2 meta content appears accurate."
+  );
+  Assert.equal(
+    await downloader.cache["2"].blob.text(),
+    "test2\n",
+    "Test file 2 content is accurate."
+  );
+});
+
+add_task(async function test_cacheAll_using_real_db() {
+  const client = RemoteSettings("some-collection");
+
+  const allSuccess = await client.attachments.cacheAll();
+
+  Assert.ok(
+    allSuccess,
+    "Attachments cacheAll succesfully downloaded a bundle and saved all attachments"
+  );
+
+  Assert.equal(
+    (await client.attachments.cacheImpl.get("2")).record.title,
+    "test2",
+    "Test record 2 meta content appears accurate."
+  );
+  Assert.equal(
+    await (await client.attachments.cacheImpl.get("2")).blob.text(),
+    "test2\n",
+    "Test file 2 content is accurate."
+  );
+});
+
+add_task(clear_state);
+
+add_task(async function test_cacheAll_skips_with_existing_data() {
+  downloader.cache = {
+    1: "1",
+  };
+  const allSuccess = await downloader.cacheAll();
+  Assert.equal(
+    allSuccess,
+    null,
+    "Attachments cacheAll skips downloads if data already exists"
+  );
+});
+
+add_task(async function test_cacheAll_does_not_skip_if_force_is_true() {
+  downloader.cache = {
+    1: "1",
+  };
+  const allSuccess = await downloader.cacheAll(true);
+  Assert.equal(
+    allSuccess,
+    true,
+    "Attachments cacheAll does not skip downloads if force is true"
+  );
+});
+
+add_task(clear_state);
+
+add_task(async function test_cacheAll_failed_request() {
+  downloader.bucketName = "fake-bucket";
+  downloader.collectionName = "fake-collection";
+  const allSuccess = await downloader.cacheAll();
+  Assert.equal(
+    allSuccess,
+    false,
+    "Attachments cacheAll request failed to download a bundle and returned false"
+  );
+});
+
+add_task(clear_state);
+
+add_task(async function test_cacheAll_failed_unzip() {
+  downloader.bucketName = "error-bucket";
+  downloader.collectionName = "bad-zip";
+  const allSuccess = await downloader.cacheAll();
+  Assert.equal(
+    allSuccess,
+    false,
+    "Attachments cacheAll request failed to extract a bundle and returned false"
+  );
+});
+
+add_task(clear_state);
+
+add_task(async function test_cacheAll_failed_save() {
+  const client = RemoteSettings("some-collection");
+
+  const backup = client.db.saveAttachments;
+  client.db.saveAttachments = () => {
+    throw new Error("boom");
+  };
+
+  const allSuccess = await client.attachments.cacheAll();
+
+  Assert.equal(
+    allSuccess,
+    false,
+    "Attachments cacheAll failed to save entries in DB and returned false"
+  );
+  client.db.saveAttachments = backup;
+});
+
 add_task(clear_state);

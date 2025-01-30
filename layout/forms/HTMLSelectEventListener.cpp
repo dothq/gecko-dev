@@ -338,8 +338,7 @@ void HTMLSelectEventListener::CharacterDataChanged(
   }
 }
 
-void HTMLSelectEventListener::ContentRemoved(nsIContent* aChild,
-                                             nsIContent* aPreviousSibling) {
+void HTMLSelectEventListener::ContentWillBeRemoved(nsIContent* aChild) {
   if (nsContentUtils::IsInSameAnonymousTree(mElement, aChild)) {
     OptionValueMightHaveChanged(aChild);
     ComboboxMightHaveChanged();
@@ -412,7 +411,10 @@ nsresult HTMLSelectEventListener::MouseDown(dom::Event* aMouseEvent) {
   }
 
   if (mIsCombobox) {
-    uint16_t inputSource = mouseEvent->InputSource();
+    // inputSource is used to apply padding for touch events, but
+    // the dropdown is rendered in another process, the webpage won't
+    // have access to it. It is fine to use CallerType::System here.
+    uint16_t inputSource = mouseEvent->InputSource(CallerType::System);
     if (mElement->OpenInParentProcess()) {
       nsCOMPtr<nsIContent> target = do_QueryInterface(aMouseEvent->GetTarget());
       if (target && target->IsHTMLElement(nsGkAtoms::option)) {

@@ -81,7 +81,6 @@ export class NavigationListenerChild extends JSWindowActorChild {
    *       - browsingContextId: browsing context id
    *       - isTopBrowsingContext: flag that indicates if the browsing context is
    *         top level
-   *
    */
   #getBrowsingContextDetails(browsingContext) {
     return {
@@ -103,15 +102,35 @@ export class NavigationListenerChild extends JSWindowActorChild {
     if (stateFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
       const context = progress.browsingContext;
 
-      lazy.logger.trace(
-        `[${context.id}] NavigationListener onLocationChange,` +
-          lazy.truncate` location: ${location.spec}`
-      );
-
-      this.sendAsyncMessage("NavigationListenerChild:locationChanged", {
+      const payload = {
         contextDetails: this.#getBrowsingContextDetails(context),
         url: location.spec,
-      });
+      };
+
+      if (location.hasRef) {
+        // If the target URL contains a hash, handle the navigation as a
+        // fragment navigation.
+        this.#trace(
+          context.id,
+          lazy.truncate`Location=fragmentNavigated: ${location.spec}`
+        );
+
+        this.sendAsyncMessage(
+          "NavigationListenerChild:fragmentNavigated",
+          payload
+        );
+        return;
+      }
+
+      this.#trace(
+        context.id,
+        lazy.truncate`Location=sameDocumentChanged: ${location.spec}`
+      );
+
+      this.sendAsyncMessage(
+        "NavigationListenerChild:sameDocumentChanged",
+        payload
+      );
     }
   };
 
@@ -127,10 +146,10 @@ export class NavigationListenerChild extends JSWindowActorChild {
       const isNetwork = !!(
         stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK
       );
-      lazy.logger.trace(
-        `[${context.id}] NavigationListener onStateChange,` +
-          ` stateFlags: ${stateFlags}, status: ${status}, isStart: ${isStart},` +
-          ` isStop: ${isStop}, isNetwork: ${isNetwork},` +
+      this.#trace(
+        context.id,
+        `Loading state: flags: ${stateFlags}, status: ${status}, ` +
+          ` isStart: ${isStart}, isStop: ${isStop}, isNetwork: ${isNetwork},` +
           ` isBindingAborted: ${isBindingAborted},` +
           lazy.truncate` targetURI: ${targetURI?.spec}`
       );
@@ -152,6 +171,7 @@ export class NavigationListenerChild extends JSWindowActorChild {
         // change from the correct process later.
         this.sendAsyncMessage("NavigationListenerChild:navigationStopped", {
           contextDetails: this.#getBrowsingContextDetails(context),
+          status,
           url: targetURI?.spec,
         });
       }
@@ -164,4 +184,8 @@ export class NavigationListenerChild extends JSWindowActorChild {
       throw e;
     }
   };
+
+  #trace(contextId, message) {
+    lazy.logger.trace(`[${contextId}] ${this.constructor.name} ${message}`);
+  }
 }

@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MediaInfo.h"
+
 #include "MediaData.h"
 
 namespace mozilla {
@@ -50,7 +51,7 @@ nsCString TrackInfo::ToString() const {
       NS_ConvertUTF16toUTF8(mLabel).get(),
       NS_ConvertUTF16toUTF8(mLanguage).get(), mEnabled ? "true" : "false",
       mTrackId, mMimeType.get(), mDuration.ToString().get(),
-      mMediaTime.ToString().get(), CryptoSchemeToString(mCrypto.mCryptoScheme),
+      mMediaTime.ToString().get(), EnumValueToString(mCrypto.mCryptoScheme),
       mIsRenderedExternally ? "true" : "false", TrackTypeToStr(mType));
 
   if (!mTags.IsEmpty()) {
@@ -84,9 +85,9 @@ nsCString AudioInfo::ToString() const {
   nsCString rv;
 
   rv.AppendPrintf(
-      "AudioInfo: %" PRIu32 "Hz, %" PRIu32 "ch (%s) %" PRIu32
-      "-bits profile: %" PRIu8 " extended profile: %" PRIu8 ", %s extradata",
-      mRate, mChannels,
+      "AudioInfo: %s, %" PRIu32 "Hz, %" PRIu32 "ch (%s) %" PRIu32
+      "-bits, profile: %" PRIu8 ", extended profile: %" PRIu8 ", %s extradata",
+      mMimeType.get(), mRate, mChannels,
       AudioConfig::ChannelLayout::ChannelMapToString(mChannelMap).get(),
       mBitDepth, mProfile, mExtendedProfile,
       mCodecSpecificConfig.is<NoCodecSpecificData>() ? "no" : "with");

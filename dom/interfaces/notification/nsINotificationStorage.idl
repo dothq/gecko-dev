@@ -27,7 +27,6 @@ interface nsINotificationStorageCallback : nsISupports
               in AString tag,
               in AString icon,
               in AString data,
-              in AString behavior,
               in AString serviceWorkerRegistrationScope);
 
   /**
@@ -68,14 +67,13 @@ interface nsINotificationStorage : nsISupports
   void put(in AString origin,
            in AString id,
            in AString title,
-           in AString dir,
+           in ACString dir,
            in AString lang,
            in AString body,
            in AString tag,
            in AString icon,
            in AString alertName,
            in AString data,
-           in AString behavior,
            in AString serviceWorkerRegistrationScope);
 
   /**
@@ -102,4 +100,8 @@ interface nsINotificationStorage : nsISupports
 
 %{C++
 #define NS_NOTIFICATION_STORAGE_CONTRACTID "@mozilla.org/notificationStorage;1"
+%}
+
+%{C++
+#define NS_MEMORY_NOTIFICATION_STORAGE_CONTRACTID "@mozilla.org/memoryNotificationStorage;1"
 %}

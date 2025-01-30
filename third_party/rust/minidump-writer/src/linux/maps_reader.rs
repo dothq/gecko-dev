@@ -1,12 +1,11 @@
-use crate::auxv_reader::AuxvType;
+use crate::auxv::AuxvType;
 use crate::errors::MapsReaderError;
-use crate::thread_info::Pid;
 use byteorder::{NativeEndian, ReadBytesExt};
 use goblin::elf;
 use memmap2::{Mmap, MmapOptions};
 use procfs_core::process::{MMPermissions, MMapPath, MemoryMaps};
 use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::{fs::File, mem::size_of, path::PathBuf};
 
 pub const LINUX_GATE_LIBRARY_NAME: &str = "linux-gate.so";
@@ -64,6 +63,17 @@ fn is_mapping_a_path(pathname: Option<&OsStr>) -> bool {
     }
 }
 
+/// Sanitize mapped paths.
+///
+/// This removes a ` (deleted)` suffix, if present.
+fn sanitize_path(pathname: OsString) -> OsString {
+    if let Some(bytes) = pathname.as_bytes().strip_suffix(DELETED_SUFFIX) {
+        OsString::from_vec(bytes.to_owned())
+    } else {
+        pathname
+    }
+}
+
 impl MappingInfo {
     /// Return whether the `name` field is a path (contains a `/`).
     pub fn name_is_path(&self) -> bool {
@@ -87,7 +97,7 @@ impl MappingInfo {
             let mut offset: usize = mm.offset.try_into()?;
 
             let mut pathname: Option<OsString> = match mm.pathname {
-                MMapPath::Path(p) => Some(p.into()),
+                MMapPath::Path(p) => Some(sanitize_path(p.into())),
                 MMapPath::Heap => Some("[heap]".into()),
                 MMapPath::Stack => Some("[stack]".into()),
                 MMapPath::TStack(i) => Some(format!("[stack:{i}]").into()),
@@ -197,52 +207,6 @@ impl MappingInfo {
         Ok(mapped_file)
     }
 
-    /// Check whether the mapping refers to a deleted file, and if so try to find the file
-    /// elsewhere and return that path.
-    ///
-    /// Currently this only supports fixing a deleted file that was the main exe of the given
-    /// `pid`.
-    ///
-    /// Returns a tuple, where the first element is the file path (which is possibly different than
-    /// `self.name`), and the second element is the original file path if a different path was
-    /// used. If no mapping name exists, returns an error.
-    pub fn fixup_deleted_file(&self, pid: Pid) -> Result<(OsString, Option<&OsStr>)> {
-        // Check for ' (deleted)' in |path|.
-        // |path| has to be at least as long as "/x (deleted)".
-        let Some(path) = &self.name else {
-            return Err(MapsReaderError::AnonymousMapping);
-        };
-
-        let Some(old_path) = path.as_bytes().strip_suffix(DELETED_SUFFIX) else {
-            return Ok((path.clone(), None));
-        };
-
-        // Check |path| against the /proc/pid/exe 'symlink'.
-        let exe_link = format!("/proc/{}/exe", pid);
-        let link_path = std::fs::read_link(&exe_link)?;
-
-        // This is a no-op for now (until we want to support root_prefix for chroot-envs)
-        // if (!GetMappingAbsolutePath(new_mapping, new_path))
-        //   return false;
-
-        if &link_path != path {
-            return Err(MapsReaderError::SymlinkError(
-                PathBuf::from(path),
-                link_path,
-            ));
-        }
-
-        // Check to see if someone actually named their executable 'foo (deleted)'.
-
-        // This makes currently no sense, as exe_link == new_path
-        // if let (Some(exe_stat), Some(new_path_stat)) = (nix::stat::stat(exe_link), nix::stat::stat(new_path)) {
-        //     if exe_stat.st_dev == new_path_stat.st_dev && exe_stat.st_ino == new_path_stat.st_ino {
-        //         return Err("".into());
-        //     }
-        // }
-        Ok((exe_link.into(), Some(OsStr::from_bytes(old_path))))
-    }
-
     pub fn stack_has_pointer_to_mapping(&self, stack_copy: &[u8], sp_offset: usize) -> bool {
         // Loop over all stack words that would have been on the stack in
         // the target process (i.e. are word aligned, and at addresses >=
@@ -289,21 +253,27 @@ impl MappingInfo {
         true
     }
 
-    fn elf_file_so_name(&self) -> Result<String> {
-        // Find the shared object name (SONAME) by examining the ELF information
-        // for |mapping|. If the SONAME is found copy it into the passed buffer
-        // |soname| and return true. The size of the buffer is |soname_size|.
+    /// Find the shared object name (SONAME) by examining the ELF information
+    /// for the mapping.
+    fn so_name(&self) -> Result<String> {
+        use super::module_reader::{ReadFromModule, SoName};
+
         let mapped_file = MappingInfo::get_mmap(&self.name, self.offset)?;
-
-        let elf_obj = elf::Elf::parse(&mapped_file)?;
-
-        let soname = elf_obj.soname.ok_or_else(|| {
-            MapsReaderError::NoSoName(self.name.clone().unwrap_or_else(|| "None".into()))
-        })?;
-        Ok(soname.to_string())
+        Ok(SoName::read_from_module((&*mapped_file).into())
+            .map_err(|e| MapsReaderError::NoSoName(self.name.clone().unwrap_or_default(), e))?
+            .0
+            .to_string())
     }
 
-    pub fn get_mapping_effective_path_and_name(&self) -> Result<(PathBuf, String)> {
+    #[inline]
+    fn so_version(&self) -> Option<SoVersion> {
+        SoVersion::parse(self.name.as_deref()?)
+    }
+
+    pub fn get_mapping_effective_path_name_and_version(
+        &self,
+        soname: Option<String>,
+    ) -> Result<(PathBuf, String, Option<SoVersion>)> {
         let mut file_path = PathBuf::from(self.name.clone().unwrap_or_default());
 
         // Tools such as minidump_stackwalk use the name of the module to look up
@@ -312,16 +282,15 @@ impl MappingInfo {
         // filesystem name of the module.
 
         // Just use the filesystem name if no SONAME is present.
-        let file_name = if let Ok(name) = self.elf_file_so_name() {
-            name
-        } else {
+        let Some(file_name) = soname.or_else(|| self.so_name().ok()) else {
             //   file_path := /path/to/libname.so
             //   file_name := libname.so
             let file_name = file_path
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            return Ok((file_path, file_name));
+
+            return Ok((file_path, file_name, self.so_version()));
         };
 
         if self.is_executable() && self.offset != 0 {
@@ -337,7 +306,7 @@ impl MappingInfo {
             file_path.set_file_name(&file_name);
         }
 
-        Ok((file_path, file_name))
+        Ok((file_path, file_name, self.so_version()))
     }
 
     pub fn is_contained_in(&self, user_mapping_list: &MappingList) -> bool {
@@ -379,6 +348,97 @@ impl MappingInfo {
 
     pub fn is_writable(&self) -> bool {
         self.permissions.contains(MMPermissions::WRITE)
+    }
+}
+
+/// Version metadata retrieved from an .so filename
+///
+/// There is no standard for .so version numbers so this implementation just
+/// does a best effort to pull as much data as it can based on real .so schemes
+/// seen
+///
+/// That being said, the [libtool](https://www.gnu.org/software/libtool/manual/html_node/Libtool-versioning.html)
+/// versioning scheme is fairly common
+#[cfg_attr(test, derive(Debug))]
+pub struct SoVersion {
+    /// Might be non-zero if there is at least one non-zero numeric component after .so.
+    ///
+    /// Equivalent to `current` in libtool versions
+    pub major: u32,
+    /// The numeric component after the major version, if any
+    ///
+    /// Equivalent to `revision` in libtool versions
+    pub minor: u32,
+    /// The numeric component after the minor version, if any
+    ///
+    /// Equivalent to `age` in libtool versions
+    pub patch: u32,
+    /// The patch component may contain additional non-numeric metadata similar
+    /// to a semver prelease, this is any numeric data that suffixes that prerelease
+    /// string
+    pub prerelease: u32,
+}
+
+impl SoVersion {
+    /// Attempts to retrieve the .so version of the elf path via its filename
+    fn parse(so_path: &OsStr) -> Option<Self> {
+        let filename = std::path::Path::new(so_path).file_name()?;
+
+        // Avoid an allocation unless the string contains non-utf8
+        let filename = filename.to_string_lossy();
+
+        let (_, version) = filename.split_once(".so.")?;
+
+        let mut sov = Self {
+            major: 0,
+            minor: 0,
+            patch: 0,
+            prerelease: 0,
+        };
+
+        let comps = [
+            &mut sov.major,
+            &mut sov.minor,
+            &mut sov.patch,
+            &mut sov.prerelease,
+        ];
+
+        for (i, comp) in version.split('.').enumerate() {
+            if i <= 1 {
+                *comps[i] = comp.parse().unwrap_or_default();
+            } else if i >= 4 {
+                break;
+            } else {
+                // In some cases the release/patch version is alphanumeric (eg. '2rc5'),
+                // so try to parse either a single or two numbers
+                if let Some(pend) = comp.find(|c: char| !c.is_ascii_digit()) {
+                    if let Ok(patch) = comp[..pend].parse() {
+                        *comps[i] = patch;
+                    }
+
+                    if i >= comps.len() - 1 {
+                        break;
+                    }
+                    if let Some(pre) = comp.rfind(|c: char| !c.is_ascii_digit()) {
+                        if let Ok(pre) = comp[pre + 1..].parse() {
+                            *comps[i + 1] = pre;
+                            break;
+                        }
+                    }
+                } else {
+                    *comps[i] = comp.parse().unwrap_or_default();
+                }
+            }
+        }
+
+        Some(sov)
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<(u32, u32, u32, u32)> for SoVersion {
+    fn eq(&self, o: &(u32, u32, u32, u32)) -> bool {
+        self.major == o.0 && self.minor == o.1 && self.patch == o.2 && self.prerelease == o.3
     }
 }
 
@@ -628,11 +688,38 @@ a4840000-a4873000 rw-p 09021000 08:12 393449     /data/app/org.mozilla.firefox-1
         );
         assert_eq!(mappings.len(), 1);
 
-        let (file_path, file_name) = mappings[0]
-            .get_mapping_effective_path_and_name()
+        let (file_path, file_name, _version) = mappings[0]
+            .get_mapping_effective_path_name_and_version(None)
             .expect("Couldn't get effective name for mapping");
         assert_eq!(file_name, "libmozgtk.so");
         assert_eq!(file_path, PathBuf::from("/home/martin/Documents/mozilla/devel/mozilla-central/obj/widget/gtk/mozgtk/gtk3/libmozgtk.so"));
+    }
+
+    #[test]
+    fn test_elf_file_so_version() {
+        #[rustfmt::skip]
+        let test_cases = [
+            ("/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.32", (6, 0, 32, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libcairo-gobject.so.2.11800.0", (2, 11800, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libm.so.6", (6, 0, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libpthread.so.0", (0, 0, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0.7800.0", (0, 7800, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libabsl_time_zone.so.20220623.0.0", (20220623, 0, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libdbus-1.so.3.34.2rc5", (3, 34, 2, 5)),
+            ("/usr/lib/x86_64-linux-gnu/libdbus-1.so.3.34.2rc", (3, 34, 2, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libdbus-1.so.3.34.rc5", (3, 34, 0, 5)),
+            ("/usr/lib/x86_64-linux-gnu/libtoto.so.AAA", (0, 0, 0, 0)),
+            ("/usr/lib/x86_64-linux-gnu/libsemver-1.so.1.2.alpha.1", (1, 2, 0, 1)),
+            ("/usr/lib/x86_64-linux-gnu/libboop.so.1.2.3.4.5", (1, 2, 3, 4)),
+            ("/usr/lib/x86_64-linux-gnu/libboop.so.1.2.3pre4.5", (1, 2, 3, 4)),
+        ];
+
+        assert!(SoVersion::parse(OsStr::new("/home/alex/bin/firefox/libmozsandbox.so")).is_none());
+
+        for (path, expected) in test_cases {
+            let actual = SoVersion::parse(OsStr::new(path)).unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -640,19 +727,17 @@ a4840000-a4873000 rw-p 09021000 08:12 393449     /data/app/org.mozilla.firefox-1
         let mappings = get_mappings_for(
             "\
 10000000-20000000 r--p 00000000 00:3e 27136458                   libmoz    gtk.so
-20000000-30000000 r--p 00000000 00:3e 27136458                   libmozgtk.so (deleted)
 30000000-40000000 r--p 00000000 00:3e 27136458                   \"libmoz     gtk.so (deleted)\"
 30000000-40000000 r--p 00000000 00:3e 27136458                   ",
             0x7ffe091bf000,
         );
 
-        assert_eq!(mappings.len(), 4);
+        assert_eq!(mappings.len(), 3);
         assert_eq!(mappings[0].name, Some("libmoz    gtk.so".into()));
-        assert_eq!(mappings[1].name, Some("libmozgtk.so (deleted)".into()));
         assert_eq!(
-            mappings[2].name,
+            mappings[1].name,
             Some("\"libmoz     gtk.so (deleted)\"".into())
         );
-        assert_eq!(mappings[3].name, None);
+        assert_eq!(mappings[2].name, None);
     }
 }

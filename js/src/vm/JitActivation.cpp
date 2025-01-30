@@ -13,6 +13,7 @@
 #include <utility>   // std::move
 
 #include "debugger/DebugAPI.h"        // js::DebugAPI
+#include "jit/Invalidation.h"         // js::jit::Invalidate
 #include "jit/JSJitFrameIter.h"       // js::jit::InlineFrameIterator
 #include "jit/RematerializedFrame.h"  // js::jit::RematerializedFrame
 #include "js/AllocPolicy.h"           // js::ReportOutOfMemory
@@ -58,7 +59,9 @@ js::jit::JitActivation::~JitActivation() {
   // Traps get handled immediately.
   MOZ_ASSERT(!isWasmTrapping());
 
-  clearRematerializedFrames();
+  // Rematerialized frames must have been removed by either the bailout code or
+  // the exception handler.
+  MOZ_ASSERT_IF(rematerializedFrames_, rematerializedFrames_->empty());
 }
 
 void js::jit::JitActivation::setBailoutData(
@@ -82,20 +85,9 @@ void js::jit::JitActivation::removeRematerializedFrame(uint8_t* top) {
   }
 }
 
-void js::jit::JitActivation::clearRematerializedFrames() {
-  if (!rematerializedFrames_) {
-    return;
-  }
-
-  for (RematerializedFrameTable::Enum e(*rematerializedFrames_); !e.empty();
-       e.popFront()) {
-    e.removeFront();
-  }
-}
-
 js::jit::RematerializedFrame* js::jit::JitActivation::getRematerializedFrame(
     JSContext* cx, const JSJitFrameIter& iter, size_t inlineDepth,
-    MaybeReadFallback::FallbackConsequence consequence) {
+    IsLeavingFrame leaving) {
   MOZ_ASSERT(iter.activation() == this);
   MOZ_ASSERT(iter.isIonScripted());
 
@@ -117,12 +109,28 @@ js::jit::RematerializedFrame* js::jit::JitActivation::getRematerializedFrame(
     // preserve identity. Therefore, we always rematerialize an uninlined
     // frame and all its inlined frames at once.
     InlineFrameIterator inlineIter(cx, &iter);
+
+    // We can run recover instructions without invalidating if we're always
+    // leaving the frame.
+    MaybeReadFallback::FallbackConsequence consequence =
+        MaybeReadFallback::Fallback_Invalidate;
+    if (leaving == IsLeavingFrame::Yes) {
+      consequence = MaybeReadFallback::Fallback_DoNothing;
+    }
     MaybeReadFallback recover(cx, this, &iter, consequence);
 
     // Frames are often rematerialized with the cx inside a Debugger's
     // realm. To recover slots and to create CallObjects, we need to
     // be in the script's realm.
     AutoRealmUnchecked ar(cx, iter.script()->realm());
+
+    // The Ion frame must be invalidated to ensure the rematerialized frame will
+    // be removed by the bailout code or the exception handler. If we're always
+    // leaving the frame, the caller is responsible for cleaning up the
+    // rematerialized frame.
+    if (leaving == IsLeavingFrame::No && !iter.checkInvalidation()) {
+      jit::Invalidate(cx, iter.script());
+    }
 
     if (!RematerializedFrame::RematerializeInlineFrames(cx, top, inlineIter,
                                                         recover, frames)) {
@@ -220,7 +228,7 @@ void js::jit::JitActivation::traceIonRecovery(JSTracer* trc) {
 }
 
 void js::jit::JitActivation::startWasmTrap(wasm::Trap trap,
-                                           uint32_t bytecodeOffset,
+                                           const wasm::TrapSiteDesc& trapDesc,
                                            const wasm::RegisterState& state) {
   MOZ_ASSERT(!isWasmTrapping());
 
@@ -238,19 +246,24 @@ void js::jit::JitActivation::startWasmTrap(wasm::Trap trap,
   const wasm::Code& code = wasm::GetNearestEffectiveInstance(fp)->code();
   MOZ_RELEASE_ASSERT(&code == wasm::LookupCode(pc));
 
-  // If the frame was unwound, the bytecodeOffset must be recovered from the
-  // callsite so that it is accurate.
-  if (unwound) {
-    bytecodeOffset = code.lookupCallSite(pc)->lineOrBytecode();
-  }
-
   setWasmExitFP(fp);
   wasmTrapData_.emplace();
   wasmTrapData_->resumePC =
       ((uint8_t*)state.pc) + jit::WasmTrapInstructionLength;
   wasmTrapData_->unwoundPC = pc;
   wasmTrapData_->trap = trap;
-  wasmTrapData_->bytecodeOffset = bytecodeOffset;
+  // If the frame was unwound, the source location must be recovered from the
+  // callsite so that it is accurate.
+  if (unwound) {
+    wasm::CallSite site;
+    MOZ_ALWAYS_TRUE(code.lookupCallSite(pc, &site));
+    wasmTrapData_->trapSiteDesc.bytecodeOffset =
+        wasm::BytecodeOffset(site.lineOrBytecode());
+    wasmTrapData_->trapSiteDesc.inlinedCallerOffsets =
+        site.inlinedCallerOffsetsVector();
+  } else {
+    wasmTrapData_->trapSiteDesc = trapDesc;
+  }
   wasmTrapData_->failedUnwindSignatureMismatch =
       !unwound && trap == wasm::Trap::IndirectCallBadSig;
 

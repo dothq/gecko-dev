@@ -6,6 +6,7 @@
 
 #include "DecoderTraits.h"
 #include "MediaContainerType.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/Preferences.h"
 
 #include "OggDecoder.h"
@@ -45,14 +46,6 @@ bool DecoderTraits::IsHttpLiveStreamingType(const MediaContainerType& aType) {
       mimeType == MEDIAMIMETYPE("application/x-mpegurl") ||
       mimeType == MEDIAMIMETYPE("audio/mpegurl") ||
       mimeType == MEDIAMIMETYPE("audio/x-mpegurl");
-}
-
-/* static */
-bool DecoderTraits::IsMatroskaType(const MediaContainerType& aType) {
-  const auto& mimeType = aType.Type();
-  // https://matroska.org/technical/specs/notes.html
-  return mimeType == MEDIAMIMETYPE("audio/x-matroska") ||
-         mimeType == MEDIAMIMETYPE("video/x-matroska");
 }
 
 static CanPlayStatus CanHandleCodecsType(
@@ -127,18 +120,14 @@ static CanPlayStatus CanHandleCodecsType(
 static CanPlayStatus CanHandleMediaType(
     const MediaContainerType& aType, DecoderDoctorDiagnostics* aDiagnostics) {
   if (DecoderTraits::IsHttpLiveStreamingType(aType)) {
-    Telemetry::Accumulate(Telemetry::MEDIA_HLS_CANPLAY_REQUESTED, true);
+    glean::hls::canplay_requested.Add();
   }
 #ifdef MOZ_ANDROID_HLS_SUPPORT
   if (HLSDecoder::IsSupportedType(aType)) {
-    Telemetry::Accumulate(Telemetry::MEDIA_HLS_CANPLAY_SUPPORTED, true);
+    glean::hls::canplay_supported.Add();
     return CANPLAY_MAYBE;
   }
 #endif
-
-  if (DecoderTraits::IsMatroskaType(aType)) {
-    Telemetry::Accumulate(Telemetry::MEDIA_MKV_CANPLAY_REQUESTED, true);
-  }
 
   if (aType.ExtendedType().HaveCodecs()) {
     CanPlayStatus result = CanHandleCodecsType(aType, aDiagnostics);

@@ -2,13 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use crate::{id, RawString};
+use crate::{id, server::Global, RawString};
 use std::{borrow::Cow, ffi, slice};
-use wgc::{command::{compute_ffi, render_ffi, ComputePassDescriptor, ComputePassTimestampWrites, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPassTimestampWrites}, id::CommandEncoderId};
+use wgc::{
+    command::{
+        ComputePassDescriptor, PassTimestampWrites, RenderPassColorAttachment,
+        RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    },
+    id::CommandEncoderId,
+};
 use wgt::{BufferAddress, BufferSize, Color, DynamicOffset, IndexFormat};
 
-use serde::{Serialize, Deserialize};
 use arrayvec::ArrayVec;
+use serde::{Deserialize, Serialize};
 
 /// A stream of commands for a render pass or compute pass.
 ///
@@ -22,8 +28,7 @@ use arrayvec::ArrayVec;
 /// [`SetBindGroup`]: RenderCommand::SetBindGroup
 /// [`InsertDebugMarker`]: RenderCommand::InsertDebugMarker
 #[doc(hidden)]
-#[derive(Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BasePass<C> {
     pub label: Option<String>,
 
@@ -48,7 +53,7 @@ pub struct RecordedRenderPass {
     base: BasePass<RenderCommand>,
     color_attachments: ArrayVec<Option<RenderPassColorAttachment>, { wgh::MAX_COLOR_ATTACHMENTS }>,
     depth_stencil_attachment: Option<RenderPassDepthStencilAttachment>,
-    timestamp_writes: Option<RenderPassTimestampWrites>,
+    timestamp_writes: Option<PassTimestampWrites>,
     occlusion_query_set_id: Option<id::QuerySetId>,
 }
 
@@ -72,7 +77,7 @@ impl RecordedRenderPass {
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct RecordedComputePass {
     base: BasePass<ComputeCommand>,
-    timestamp_writes: Option<ComputePassTimestampWrites>,
+    timestamp_writes: Option<PassTimestampWrites>,
 }
 
 impl RecordedComputePass {
@@ -90,13 +95,12 @@ impl RecordedComputePass {
 }
 
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum RenderCommand {
     SetBindGroup {
         index: u32,
         num_dynamic_offsets: usize,
-        bind_group_id: id::BindGroupId,
+        bind_group_id: Option<id::BindGroupId>,
     },
     SetPipeline(id::RenderPipelineId),
     SetIndexBuffer {
@@ -114,11 +118,19 @@ pub enum RenderCommand {
     SetBlendConstant(Color),
     SetStencilReference(u32),
     SetViewport {
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         depth_min: f32,
         depth_max: f32,
     },
-    SetScissor { x: u32, y: u32, w: u32, h: u32 },
+    SetScissor {
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    },
     Draw {
         vertex_count: u32,
         instance_count: u32,
@@ -173,13 +185,12 @@ pub enum RenderCommand {
 }
 
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ComputeCommand {
     SetBindGroup {
         index: u32,
         num_dynamic_offsets: usize,
-        bind_group_id: id::BindGroupId,
+        bind_group_id: Option<id::BindGroupId>,
     },
     SetPipeline(id::ComputePipelineId),
     Dispatch([u32; 3]),
@@ -215,11 +226,12 @@ pub enum ComputeCommand {
 pub unsafe extern "C" fn wgpu_recorded_render_pass_set_bind_group(
     pass: &mut RecordedRenderPass,
     index: u32,
-    bind_group_id: id::BindGroupId,
+    bind_group_id: Option<id::BindGroupId>,
     offsets: *const DynamicOffset,
     offset_length: usize,
 ) {
-    pass.base.dynamic_offsets
+    pass.base
+        .dynamic_offsets
         .extend_from_slice(unsafe { slice::from_raw_parts(offsets, offset_length) });
 
     pass.base.commands.push(RenderCommand::SetBindGroup {
@@ -272,14 +284,20 @@ pub extern "C" fn wgpu_recorded_render_pass_set_index_buffer(
 }
 
 #[no_mangle]
-pub extern "C" fn wgpu_recorded_render_pass_set_blend_constant(pass: &mut RecordedRenderPass, color: &Color) {
+pub extern "C" fn wgpu_recorded_render_pass_set_blend_constant(
+    pass: &mut RecordedRenderPass,
+    color: &Color,
+) {
     pass.base
         .commands
         .push(RenderCommand::SetBlendConstant(*color));
 }
 
 #[no_mangle]
-pub extern "C" fn wgpu_recorded_render_pass_set_stencil_reference(pass: &mut RecordedRenderPass, value: u32) {
+pub extern "C" fn wgpu_recorded_render_pass_set_stencil_reference(
+    pass: &mut RecordedRenderPass,
+    value: u32,
+) {
     pass.base
         .commands
         .push(RenderCommand::SetStencilReference(value));
@@ -296,7 +314,10 @@ pub extern "C" fn wgpu_recorded_render_pass_set_viewport(
     depth_max: f32,
 ) {
     pass.base.commands.push(RenderCommand::SetViewport {
-        x, y, w, h,
+        x,
+        y,
+        w,
+        h,
         depth_min,
         depth_max,
     });
@@ -534,7 +555,9 @@ pub extern "C" fn wgpu_recorded_render_pass_begin_pipeline_statistics_query(
 }
 
 #[no_mangle]
-pub extern "C" fn wgpu_recorded_render_pass_end_pipeline_statistics_query(pass: &mut RecordedRenderPass) {
+pub extern "C" fn wgpu_recorded_render_pass_end_pipeline_statistics_query(
+    pass: &mut RecordedRenderPass,
+) {
     pass.base
         .commands
         .push(RenderCommand::EndPipelineStatisticsQuery);
@@ -550,8 +573,7 @@ pub unsafe extern "C" fn wgpu_recorded_render_pass_execute_bundles(
     render_bundle_ids: *const id::RenderBundleId,
     render_bundle_ids_length: usize,
 ) {
-    for &bundle_id in
-        unsafe { slice::from_raw_parts(render_bundle_ids, render_bundle_ids_length) }
+    for &bundle_id in unsafe { slice::from_raw_parts(render_bundle_ids, render_bundle_ids_length) }
     {
         pass.base
             .commands
@@ -567,11 +589,12 @@ pub unsafe extern "C" fn wgpu_recorded_render_pass_execute_bundles(
 pub unsafe extern "C" fn wgpu_recorded_compute_pass_set_bind_group(
     pass: &mut RecordedComputePass,
     index: u32,
-    bind_group_id: id::BindGroupId,
+    bind_group_id: Option<id::BindGroupId>,
     offsets: *const DynamicOffset,
     offset_length: usize,
 ) {
-    pass.base.dynamic_offsets
+    pass.base
+        .dynamic_offsets
         .extend_from_slice(unsafe { slice::from_raw_parts(offsets, offset_length) });
 
     pass.base.commands.push(ComputeCommand::SetBindGroup {
@@ -684,18 +707,21 @@ pub extern "C" fn wgpu_recorded_compute_pass_begin_pipeline_statistics_query(
 }
 
 #[no_mangle]
-pub extern "C" fn wgpu_recorded_compute_pass_end_pipeline_statistics_query(pass: &mut RecordedComputePass) {
+pub extern "C" fn wgpu_recorded_compute_pass_end_pipeline_statistics_query(
+    pass: &mut RecordedComputePass,
+) {
     pass.base
         .commands
         .push(ComputeCommand::EndPipelineStatisticsQuery);
 }
 
 pub fn replay_render_pass(
+    global: &Global,
     id: CommandEncoderId,
-    src_pass: &RecordedRenderPass
-) -> wgc::command::RenderPass {
-
-    let mut dst_pass = wgc::command::RenderPass::new(
+    src_pass: &RecordedRenderPass,
+    mut error_buf: crate::error::ErrorBuffer,
+) {
+    let (mut dst_pass, err) = global.command_encoder_create_render_pass(
         id,
         &wgc::command::RenderPassDescriptor {
             label: src_pass.base.label.as_ref().map(|s| s.as_str().into()),
@@ -705,7 +731,29 @@ pub fn replay_render_pass(
             occlusion_query_set: src_pass.occlusion_query_set_id,
         },
     );
+    if let Some(err) = err {
+        error_buf.init(err);
+        return;
+    }
+    match replay_render_pass_impl(global, src_pass, &mut dst_pass) {
+        Ok(()) => (),
+        Err(err) => {
+            error_buf.init(err);
+            return;
+        }
+    };
 
+    match global.render_pass_end(&mut dst_pass) {
+        Ok(()) => (),
+        Err(err) => error_buf.init(err),
+    }
+}
+
+pub fn replay_render_pass_impl(
+    global: &Global,
+    src_pass: &RecordedRenderPass,
+    dst_pass: &mut wgc::command::RenderPass,
+) -> Result<(), wgc::command::RenderPassError> {
     let mut dynamic_offsets = src_pass.base.dynamic_offsets.as_slice();
     let mut dynamic_offsets = |len| {
         let offsets;
@@ -726,18 +774,10 @@ pub fn replay_render_pass(
                 bind_group_id,
             } => {
                 let offsets = dynamic_offsets(num_dynamic_offsets);
-                unsafe {
-                    render_ffi::wgpu_render_pass_set_bind_group(
-                        &mut dst_pass,
-                        index,
-                        bind_group_id,
-                        offsets.as_ptr(),
-                        offsets.len(),
-                    );
-                }
+                global.render_pass_set_bind_group(dst_pass, index, bind_group_id, offsets)
             }
             RenderCommand::SetPipeline(pipeline_id) => {
-                render_ffi::wgpu_render_pass_set_pipeline(&mut dst_pass, pipeline_id);
+                global.render_pass_set_pipeline(dst_pass, pipeline_id)
             }
             RenderCommand::SetIndexBuffer {
                 buffer_id,
@@ -745,113 +785,73 @@ pub fn replay_render_pass(
                 offset,
                 size,
             } => {
-                render_ffi::wgpu_render_pass_set_index_buffer(
-                    &mut dst_pass,
-                    buffer_id,
-                    index_format,
-                    offset,
-                    size
-                );
+                global.render_pass_set_index_buffer(dst_pass, buffer_id, index_format, offset, size)
             }
             RenderCommand::SetVertexBuffer {
                 slot,
                 buffer_id,
                 offset,
                 size,
-            } => {
-                render_ffi::wgpu_render_pass_set_vertex_buffer(
-                    &mut dst_pass,
-                    slot,
-                    buffer_id,
-                    offset,
-                    size
-                )
-            }
-            RenderCommand::SetBlendConstant(ref color) => {
-                render_ffi::wgpu_render_pass_set_blend_constant(&mut dst_pass, color);
+            } => global.render_pass_set_vertex_buffer(dst_pass, slot, buffer_id, offset, size),
+            RenderCommand::SetBlendConstant(color) => {
+                global.render_pass_set_blend_constant(dst_pass, color)
             }
             RenderCommand::SetStencilReference(value) => {
-                render_ffi::wgpu_render_pass_set_stencil_reference(&mut dst_pass, value);
+                global.render_pass_set_stencil_reference(dst_pass, value)
             }
             RenderCommand::SetViewport {
-                x, y, w, h,
+                x,
+                y,
+                w,
+                h,
                 depth_min,
                 depth_max,
-            } => {
-                render_ffi::wgpu_render_pass_set_viewport(
-                    &mut dst_pass,
-                    x, y, w, h,
-                    depth_min,
-                    depth_max,
-                );
-            }
+            } => global.render_pass_set_viewport(dst_pass, x, y, w, h, depth_min, depth_max),
             RenderCommand::SetScissor { x, y, w, h } => {
-                render_ffi::wgpu_render_pass_set_scissor_rect(
-                    &mut dst_pass,
-                    x, y, w, h
-                );
+                global.render_pass_set_scissor_rect(dst_pass, x, y, w, h)
             }
             RenderCommand::Draw {
                 vertex_count,
                 instance_count,
                 first_vertex,
                 first_instance,
-            } => {
-                render_ffi::wgpu_render_pass_draw(
-                    &mut dst_pass,
-                    vertex_count,
-                    instance_count,
-                    first_vertex,
-                    first_instance,
-                );
-            }
+            } => global.render_pass_draw(
+                dst_pass,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            ),
             RenderCommand::DrawIndexed {
                 index_count,
                 instance_count,
                 first_index,
                 base_vertex,
                 first_instance,
-            } => {
-                render_ffi::wgpu_render_pass_draw_indexed(
-                    &mut dst_pass,
-                    index_count,
-                    instance_count,
-                    first_index,
-                    base_vertex,
-                    first_instance,
-                );
-            }
+            } => global.render_pass_draw_indexed(
+                dst_pass,
+                index_count,
+                instance_count,
+                first_index,
+                base_vertex,
+                first_instance,
+            ),
             RenderCommand::MultiDrawIndirect {
                 buffer_id,
                 offset,
                 count,
                 indexed,
-            } => {
-                match (indexed, count) {
-                    (false, Some(count)) => render_ffi::wgpu_render_pass_multi_draw_indirect(
-                        &mut dst_pass,
-                        buffer_id,
-                        offset,
-                        count,
-                    ),
-                    (false, None) => render_ffi::wgpu_render_pass_draw_indirect(
-                        &mut dst_pass,
-                        buffer_id,
-                        offset,
-                    ),
-                    (true, Some(count)) => render_ffi::wgpu_render_pass_multi_draw_indexed_indirect(
-                        &mut dst_pass,
-                        buffer_id,
-                        offset,
-                        count,
-                    ),
-                    (true, None) => render_ffi::wgpu_render_pass_draw_indexed_indirect(
-                        &mut dst_pass,
-                        buffer_id,
-                        offset,
-                    ),
-                };
-            }
+            } => match (indexed, count) {
+                (false, Some(count)) => {
+                    global.render_pass_multi_draw_indirect(dst_pass, buffer_id, offset, count)
+                }
+                (false, None) => global.render_pass_draw_indirect(dst_pass, buffer_id, offset),
+                (true, Some(count)) => global
+                    .render_pass_multi_draw_indexed_indirect(dst_pass, buffer_id, offset, count),
+                (true, None) => {
+                    global.render_pass_draw_indexed_indirect(dst_pass, buffer_id, offset)
+                }
+            },
             RenderCommand::MultiDrawIndirectCount {
                 buffer_id,
                 offset,
@@ -861,109 +861,91 @@ pub fn replay_render_pass(
                 indexed,
             } => {
                 if indexed {
-                    render_ffi::wgpu_render_pass_multi_draw_indexed_indirect_count(
-                        &mut dst_pass,
+                    global.render_pass_multi_draw_indexed_indirect_count(
+                        dst_pass,
                         buffer_id,
                         offset,
                         count_buffer_id,
                         count_buffer_offset,
                         max_count,
-                    );
+                    )
                 } else {
-                    render_ffi::wgpu_render_pass_multi_draw_indirect_count(
-                        &mut dst_pass,
+                    global.render_pass_multi_draw_indirect_count(
+                        dst_pass,
                         buffer_id,
                         offset,
                         count_buffer_id,
                         count_buffer_offset,
                         max_count,
-                    );
+                    )
                 }
             }
             RenderCommand::PushDebugGroup { color, len } => {
                 let label = strings(len);
-                let label = std::ffi::CString::new(label).unwrap();
-                unsafe {
-                    render_ffi::wgpu_render_pass_push_debug_group(
-                        &mut dst_pass,
-                        label.as_ptr(),
-                        color
-                    );
-                }
+                let label = std::str::from_utf8(label).unwrap();
+                global.render_pass_push_debug_group(dst_pass, label, color)
             }
-            RenderCommand::PopDebugGroup => {
-                render_ffi::wgpu_render_pass_pop_debug_group(&mut dst_pass);
-            }
+            RenderCommand::PopDebugGroup => global.render_pass_pop_debug_group(dst_pass),
             RenderCommand::InsertDebugMarker { color, len } => {
                 let label = strings(len);
-                let label = std::ffi::CString::new(label).unwrap();
-                unsafe {
-                    render_ffi::wgpu_render_pass_insert_debug_marker(
-                        &mut dst_pass,
-                        label.as_ptr(),
-                        color,
-                    );
-                }
+                let label = std::str::from_utf8(label).unwrap();
+                global.render_pass_insert_debug_marker(dst_pass, label, color)
             }
             RenderCommand::WriteTimestamp {
                 query_set_id,
                 query_index,
-            } => {
-                render_ffi::wgpu_render_pass_write_timestamp(
-                    &mut dst_pass,
-                    query_set_id,
-                    query_index,
-                );
-            }
+            } => global.render_pass_write_timestamp(dst_pass, query_set_id, query_index),
             RenderCommand::BeginOcclusionQuery { query_index } => {
-                render_ffi::wgpu_render_pass_begin_occlusion_query(
-                    &mut dst_pass,
-                    query_index
-                );
+                global.render_pass_begin_occlusion_query(dst_pass, query_index)
             }
-            RenderCommand::EndOcclusionQuery => {
-                render_ffi::wgpu_render_pass_end_occlusion_query(&mut dst_pass);
-            }
+            RenderCommand::EndOcclusionQuery => global.render_pass_end_occlusion_query(dst_pass),
             RenderCommand::BeginPipelineStatisticsQuery {
                 query_set_id,
                 query_index,
-            } => {
-                render_ffi::wgpu_render_pass_begin_pipeline_statistics_query(
-                    &mut dst_pass,
-                    query_set_id,
-                    query_index,
-                );
-            }
+            } => global.render_pass_begin_pipeline_statistics_query(
+                dst_pass,
+                query_set_id,
+                query_index,
+            ),
             RenderCommand::EndPipelineStatisticsQuery => {
-                render_ffi::wgpu_render_pass_end_pipeline_statistics_query(&mut dst_pass);
+                global.render_pass_end_pipeline_statistics_query(dst_pass)
             }
             RenderCommand::ExecuteBundle(bundle_id) => {
-                unsafe {
-                    render_ffi::wgpu_render_pass_execute_bundles(
-                        &mut dst_pass,
-                        &bundle_id,
-                        1,
-                    );
-                }
+                global.render_pass_execute_bundles(dst_pass, &[bundle_id])
             }
-        }
+        }?
     }
 
-    dst_pass
+    Ok(())
 }
 
 pub fn replay_compute_pass(
+    global: &Global,
     id: CommandEncoderId,
-    src_pass: &RecordedComputePass
-) -> wgc::command::ComputePass {
-    let mut dst_pass = wgc::command::ComputePass::new(
+    src_pass: &RecordedComputePass,
+    mut error_buf: crate::error::ErrorBuffer,
+) {
+    let (mut dst_pass, err) = global.command_encoder_create_compute_pass(
         id,
         &wgc::command::ComputePassDescriptor {
             label: src_pass.base.label.as_ref().map(|s| s.as_str().into()),
             timestamp_writes: src_pass.timestamp_writes.as_ref(),
         },
     );
+    if let Some(err) = err {
+        error_buf.init(err);
+        return;
+    }
+    if let Err(err) = replay_compute_pass_impl(global, src_pass, &mut dst_pass) {
+        error_buf.init(err);
+    }
+}
 
+fn replay_compute_pass_impl(
+    global: &Global,
+    src_pass: &RecordedComputePass,
+    dst_pass: &mut wgc::command::ComputePass,
+) -> Result<(), wgc::command::ComputePassError> {
     let mut dynamic_offsets = src_pass.base.dynamic_offsets.as_slice();
     let mut dynamic_offsets = |len| {
         let offsets;
@@ -984,79 +966,51 @@ pub fn replay_compute_pass(
                 bind_group_id,
             } => {
                 let offsets = dynamic_offsets(num_dynamic_offsets);
-                unsafe {
-                    compute_ffi::wgpu_compute_pass_set_bind_group(
-                        &mut dst_pass,
-                        index,
-                        bind_group_id,
-                        offsets.as_ptr(),
-                        offsets.len()
-                    );
-                }
+                global.compute_pass_set_bind_group(dst_pass, index, bind_group_id, offsets)?;
             }
             ComputeCommand::SetPipeline(pipeline_id) => {
-                compute_ffi::wgpu_compute_pass_set_pipeline(&mut dst_pass, pipeline_id)
+                global.compute_pass_set_pipeline(dst_pass, pipeline_id)?;
             }
             ComputeCommand::Dispatch([x, y, z]) => {
-                compute_ffi::wgpu_compute_pass_dispatch_workgroups(&mut dst_pass, x, y, z);
+                global.compute_pass_dispatch_workgroups(dst_pass, x, y, z)?;
             }
             ComputeCommand::DispatchIndirect { buffer_id, offset } => {
-                compute_ffi::wgpu_compute_pass_dispatch_workgroups_indirect(
-                    &mut dst_pass,
-                    buffer_id,
-                    offset,
-                );
+                global.compute_pass_dispatch_workgroups_indirect(dst_pass, buffer_id, offset)?;
             }
             ComputeCommand::PushDebugGroup { color, len } => {
                 let label = strings(len);
-                let label = std::ffi::CString::new(label).unwrap();
-                unsafe {
-                    compute_ffi::wgpu_compute_pass_push_debug_group(
-                        &mut dst_pass,
-                        label.as_ptr(),
-                        color
-                    );
-                }
+                let label = std::str::from_utf8(label).unwrap();
+                global.compute_pass_push_debug_group(dst_pass, label, color)?;
             }
             ComputeCommand::PopDebugGroup => {
-                compute_ffi::wgpu_compute_pass_pop_debug_group(&mut dst_pass);
+                global.compute_pass_pop_debug_group(dst_pass)?;
             }
             ComputeCommand::InsertDebugMarker { color, len } => {
                 let label = strings(len);
-                let label = std::ffi::CString::new(label).unwrap();
-                unsafe {
-                    compute_ffi::wgpu_compute_pass_insert_debug_marker(
-                        &mut dst_pass,
-                        label.as_ptr(),
-                        color,
-                    );
-                }
+                let label = std::str::from_utf8(label).unwrap();
+                global.compute_pass_insert_debug_marker(dst_pass, label, color)?;
             }
             ComputeCommand::WriteTimestamp {
                 query_set_id,
                 query_index,
             } => {
-                compute_ffi::wgpu_compute_pass_write_timestamp(
-                    &mut dst_pass,
-                    query_set_id,
-                    query_index,
-                );
+                global.compute_pass_write_timestamp(dst_pass, query_set_id, query_index)?;
             }
             ComputeCommand::BeginPipelineStatisticsQuery {
                 query_set_id,
                 query_index,
             } => {
-                compute_ffi::wgpu_compute_pass_begin_pipeline_statistics_query(
-                    &mut dst_pass,
+                global.compute_pass_begin_pipeline_statistics_query(
+                    dst_pass,
                     query_set_id,
                     query_index,
-                );
+                )?;
             }
             ComputeCommand::EndPipelineStatisticsQuery => {
-                compute_ffi::wgpu_compute_pass_end_pipeline_statistics_query(&mut dst_pass);
+                global.compute_pass_end_pipeline_statistics_query(dst_pass)?;
             }
         }
     }
 
-    dst_pass
+    global.compute_pass_end(dst_pass)
 }

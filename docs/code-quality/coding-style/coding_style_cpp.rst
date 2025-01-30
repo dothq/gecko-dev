@@ -137,12 +137,17 @@ C++ namespaces
 
 Mozilla project C++ declarations should be in the ``mozilla``
 namespace. Modules should avoid adding nested namespaces under
-``mozilla``, unless they are meant to contain names which have a high
-probability of colliding with other names in the code base. For example,
-``Point``, ``Path``, etc. Such symbols can be put under
-module-specific namespaces, under ``mozilla``, with short
-all-lowercase names. Other global namespaces besides ``mozilla`` are
-not allowed.
+``mozilla``. A couple of exceptions to this rule are:
+
+- Names which have a high probability of colliding with other names in the
+  code base. For example, ``Point``, ``Path``, etc. Such symbols can be put
+  under module-specific namespaces, under ``mozilla``, with short
+  all-lowercase names.
+- Classes that implement WebIDL bindings tend to live in ``mozilla::dom``,
+  though this is not strictly required and can be customized via
+  ``Bindings.conf``. See :ref:`Web IDL bindings` for more information.
+
+Other global namespaces besides ``mozilla`` are not allowed.
 
 No ``using`` directives are allowed in header files, except inside class
 definitions or functions. (We don't want to pollute the global scope of
@@ -389,6 +394,14 @@ C/C++ practices
 -  One-argument constructors, that are not copy or move constructors,
    should generally be marked explicit. Exceptions should be annotated
    with ``MOZ_IMPLICIT``.
+-  Global variables with runtime initialization should be avoided. Flagging
+   them as ``constexpr`` or ``MOZ_CONSTINIT`` is a good way to make sure the
+   initialization happens at compile-time. If runtime initialization cannot be
+   avoided, use the attribute ``MOZ_RUNINIT`` to identify those and tell the
+   linter to ignore that variable. If a variable is flagged as ``MOZ_RUNINIT``
+   while the linter detects it could be ``MOZ_CONSTINIT``, you get an error. In
+   case where the status of the global variable varies (e.g. depending on
+   template parameter), just flag it ``MOZ_GLOBINIT``.
 -  Use ``char32_t`` as the return type or argument type of a method that
    returns or takes as argument a single Unicode scalar value. (Don't
    use UTF-32 strings, though.)
@@ -1139,8 +1152,8 @@ Use the standard-library functions (``std::max``), instead of
 Use ``mozilla::Abs`` instead of ``PR_ABS``. All ``PR_ABS`` calls in C++ code have
 been replaced with ``mozilla::Abs`` calls, in `bug
 847480 <https://bugzilla.mozilla.org/show_bug.cgi?id=847480>`__. All new
-code in ``Firefox/core/toolkit`` needs to ``#include "nsAlgorithm.h"`` and
-use the ``NS_foo`` variants instead of ``PR_foo``, or
+code in ``Firefox/core/toolkit`` needs to use the ``NS_foo`` variants
+instead of ``PR_foo``, or
 ``#include "mozilla/MathAlgorithms.h"`` for ``mozilla::Abs``.
 
 Use of SpiderMonkey rooting typedefs

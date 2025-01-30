@@ -6,6 +6,7 @@
 
 #include "WMFCDMProxy.h"
 
+#include "MediaData.h"
 #include "mozilla/dom/MediaKeysBinding.h"
 #include "mozilla/dom/MediaKeySession.h"
 #include "mozilla/dom/MediaKeySystemAccessBinding.h"
@@ -122,12 +123,16 @@ WMFCDMProxy::GenerateMFCDMMediaCapabilities(
       EME_LOG("WMFCDMProxy::Init %p, robustness=%s", this,
               NS_ConvertUTF16toUTF8(capabilities.mRobustness).get());
       outCapabilites.AppendElement(MFCDMMediaCapability{
-          capabilities.mContentType, capabilities.mRobustness});
+          capabilities.mContentType,
+          {StringToCryptoScheme(capabilities.mEncryptionScheme)},
+          capabilities.mRobustness});
     } else {
       EME_LOG("WMFCDMProxy::Init %p, force to robustness=%s", this,
               NS_ConvertUTF16toUTF8(*forcedRobustness).get());
-      outCapabilites.AppendElement(
-          MFCDMMediaCapability{capabilities.mContentType, *forcedRobustness});
+      outCapabilites.AppendElement(MFCDMMediaCapability{
+          capabilities.mContentType,
+          {StringToCryptoScheme(capabilities.mEncryptionScheme)},
+          *forcedRobustness});
     }
   }
   return outCapabilites;
@@ -158,7 +163,7 @@ void WMFCDMProxy::ResolvePromiseWithKeyStatus(
     RETURN_IF_SHUTDOWN();
     EME_LOG("WMFCDMProxy::ResolvePromiseWithKeyStatus(this=%p, pid=%" PRIu32
             ", status=%s)",
-            this, aId, ToMediaKeyStatusStr(aStatus));
+            this, aId, dom::GetEnumString(aStatus).get());
     if (!mKeys.IsNull()) {
       mKeys->ResolvePromiseWithKeyStatus(aId, aStatus);
     } else {
@@ -230,7 +235,7 @@ void WMFCDMProxy::CreateSession(uint32_t aCreateSessionToken,
   const auto sessionType = ConvertToKeySystemConfigSessionType(aSessionType);
   EME_LOG("WMFCDMProxy::CreateSession(this=%p, pid=%" PRIu32
           "), sessionType=%s",
-          this, aPromiseId, SessionTypeToStr(sessionType));
+          this, aPromiseId, KeySystemConfig::EnumValueToString(sessionType));
   mCDM->CreateSession(aPromiseId, sessionType, aInitDataType, aInitData)
       ->Then(
           mMainThread, __func__,
@@ -267,7 +272,7 @@ void WMFCDMProxy::LoadSession(PromiseId aPromiseId,
   const auto sessionType = ConvertToKeySystemConfigSessionType(aSessionType);
   EME_LOG("WMFCDMProxy::LoadSession(this=%p, pid=%" PRIu32
           "), sessionType=%s, sessionId=%s",
-          this, aPromiseId, SessionTypeToStr(sessionType),
+          this, aPromiseId, KeySystemConfig::EnumValueToString(sessionType),
           NS_ConvertUTF16toUTF8(aSessionId).get());
   PERFORM_ON_CDM(LoadSession, aPromiseId, sessionType, aSessionId);
 }

@@ -70,10 +70,12 @@ __webpack_require__.d(__webpack_exports__, {
   renderWithoutState: () => (/* binding */ renderWithoutState)
 });
 
-;// CONCATENATED MODULE: ./common/Actions.sys.mjs
+;// CONCATENATED MODULE: ./common/Actions.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// This file is accessed from both content and system scopes.
 
 const MAIN_MESSAGE_TYPE = "ActivityStream:Main";
 const CONTENT_MESSAGE_TYPE = "ActivityStream:Content";
@@ -101,18 +103,17 @@ for (const type of [
   "ADDONS_INFO_REQUEST",
   "ADDONS_INFO_RESPONSE",
   "ARCHIVE_FROM_POCKET",
-  "AS_ROUTER_INITIALIZED",
-  "AS_ROUTER_PREF_CHANGED",
-  "AS_ROUTER_TARGETING_UPDATE",
-  "AS_ROUTER_TELEMETRY_USER_EVENT",
+  "BLOCK_SECTION",
   "BLOCK_URL",
   "BOOKMARK_URL",
+  "CARD_SECTION_IMPRESSION",
   "CLEAR_PREF",
   "COPY_DOWNLOAD_LINK",
   "DELETE_BOOKMARK_BY_ID",
   "DELETE_FROM_POCKET",
   "DELETE_HISTORY_URL",
   "DIALOG_CANCEL",
+  "DIALOG_CLOSE",
   "DIALOG_OPEN",
   "DISABLE_SEARCH",
   "DISCOVERY_STREAM_COLLECTION_DISMISSIBLE_TOGGLE",
@@ -121,8 +122,12 @@ for (const type of [
   "DISCOVERY_STREAM_CONFIG_RESET_DEFAULTS",
   "DISCOVERY_STREAM_CONFIG_SETUP",
   "DISCOVERY_STREAM_CONFIG_SET_VALUE",
+  "DISCOVERY_STREAM_DEV_BLOCKS",
+  "DISCOVERY_STREAM_DEV_BLOCKS_RESET",
   "DISCOVERY_STREAM_DEV_EXPIRE_CACHE",
   "DISCOVERY_STREAM_DEV_IDLE_DAILY",
+  "DISCOVERY_STREAM_DEV_IMPRESSIONS",
+  "DISCOVERY_STREAM_DEV_SHOW_PLACEHOLDER",
   "DISCOVERY_STREAM_DEV_SYNC_RS",
   "DISCOVERY_STREAM_DEV_SYSTEM_TICK",
   "DISCOVERY_STREAM_EXPERIMENT_DATA",
@@ -150,13 +155,18 @@ for (const type of [
   "DISCOVERY_STREAM_SPOCS_UPDATE",
   "DISCOVERY_STREAM_SPOC_BLOCKED",
   "DISCOVERY_STREAM_SPOC_IMPRESSION",
+  "DISCOVERY_STREAM_TOPICS_LOADING",
   "DISCOVERY_STREAM_USER_EVENT",
   "DOWNLOAD_CHANGED",
+  "FAKESPOT_CTA_CLICK",
+  "FAKESPOT_DISMISS",
   "FAKE_FOCUS_SEARCH",
   "FILL_SEARCH_TERM",
+  "FOLLOW_SECTION",
   "HANDOFF_SEARCH_TO_AWESOMEBAR",
   "HIDE_PERSONALIZE",
   "HIDE_PRIVACY_INFO",
+  "HIDE_TOAST_MESSAGE",
   "INIT",
   "NEW_TAB_INIT",
   "NEW_TAB_INITIAL_STATE",
@@ -164,6 +174,7 @@ for (const type of [
   "NEW_TAB_REHYDRATED",
   "NEW_TAB_STATE_REQUEST",
   "NEW_TAB_UNLOAD",
+  "OPEN_ABOUT_FAKESPOT",
   "OPEN_DOWNLOAD_FILE",
   "OPEN_LINK",
   "OPEN_NEW_WINDOW",
@@ -180,6 +191,8 @@ for (const type of [
   "POCKET_CTA",
   "POCKET_LINK_DELETED_OR_ARCHIVED",
   "POCKET_LOGGED_IN",
+  "POCKET_THUMBS_DOWN",
+  "POCKET_THUMBS_UP",
   "POCKET_WAITING_FOR_SPOC",
   "PREFS_INITIAL_VALUES",
   "PREF_CHANGED",
@@ -207,6 +220,7 @@ for (const type of [
   "SHOW_PERSONALIZE",
   "SHOW_PRIVACY_INFO",
   "SHOW_SEARCH",
+  "SHOW_TOAST_MESSAGE",
   "SKIPPED_SIGNIN",
   "SOV_UPDATED",
   "SUBMIT_EMAIL",
@@ -214,6 +228,13 @@ for (const type of [
   "SYSTEM_TICK",
   "TELEMETRY_IMPRESSION_STATS",
   "TELEMETRY_USER_EVENT",
+  "TOPIC_SELECTION_IMPRESSION",
+  "TOPIC_SELECTION_MAYBE_LATER",
+  "TOPIC_SELECTION_SPOTLIGHT_CLOSE",
+  "TOPIC_SELECTION_SPOTLIGHT_OPEN",
+  "TOPIC_SELECTION_USER_DISMISS",
+  "TOPIC_SELECTION_USER_OPEN",
+  "TOPIC_SELECTION_USER_SAVE",
   "TOP_SITES_CANCEL_EDIT",
   "TOP_SITES_CLOSE_SEARCH_SHORTCUTS_MODAL",
   "TOP_SITES_EDIT",
@@ -227,10 +248,28 @@ for (const type of [
   "TOP_SITES_UPDATED",
   "TOTAL_BOOKMARKS_REQUEST",
   "TOTAL_BOOKMARKS_RESPONSE",
+  "UNFOLLOW_SECTION",
   "UNINIT",
   "UPDATE_PINNED_SEARCH_SHORTCUTS",
   "UPDATE_SEARCH_SHORTCUTS",
   "UPDATE_SECTION_PREFS",
+  "WALLPAPERS_CATEGORY_SET",
+  "WALLPAPERS_FEATURE_HIGHLIGHT_COUNTER_INCREMENT",
+  "WALLPAPERS_FEATURE_HIGHLIGHT_CTA_CLICKED",
+  "WALLPAPERS_FEATURE_HIGHLIGHT_DISMISSED",
+  "WALLPAPERS_FEATURE_HIGHLIGHT_SEEN",
+  "WALLPAPERS_SET",
+  "WALLPAPER_CATEGORY_CLICK",
+  "WALLPAPER_CLICK",
+  "WEATHER_IMPRESSION",
+  "WEATHER_LOAD_ERROR",
+  "WEATHER_LOCATION_DATA_UPDATE",
+  "WEATHER_LOCATION_SEARCH_UPDATE",
+  "WEATHER_LOCATION_SUGGESTIONS_UPDATE",
+  "WEATHER_OPEN_PROVIDER_URL",
+  "WEATHER_QUERY_UPDATE",
+  "WEATHER_SEARCH_ACTIVE",
+  "WEATHER_UPDATE",
   "WEBEXT_CLICK",
   "WEBEXT_DISMISS",
 ]) {
@@ -380,20 +419,6 @@ function DiscoveryStreamUserEvent(data) {
 }
 
 /**
- * ASRouterUserEvent - A telemetry ping indicating a user action from AS router. This should only
- *                     be sent from the UI during a user session.
- *
- * @param  {object} data Fields to include in the ping (source, etc.)
- * @return {object} An AlsoToMain action
- */
-function ASRouterUserEvent(data) {
-  return AlsoToMain({
-    type: actionTypes.AS_ROUTER_TELEMETRY_USER_EVENT,
-    data,
-  });
-}
-
-/**
  * ImpressionStats - A telemetry ping indicating an impression stats.
  *
  * @param  {object} data Fields to include in the ping
@@ -444,8 +469,11 @@ function DiscoveryStreamLoadedContent(
   return importContext === UI_CODE ? AlsoToMain(action) : action;
 }
 
-function SetPref(name, value, importContext = globalImportContext) {
-  const action = { type: actionTypes.SET_PREF, data: { name, value } };
+function SetPref(prefName, value, importContext = globalImportContext) {
+  const action = {
+    type: actionTypes.SET_PREF,
+    data: { name: prefName, value },
+  };
   return importContext === UI_CODE ? AlsoToMain(action) : action;
 }
 
@@ -463,7 +491,6 @@ const actionCreators = {
   BroadcastToContent,
   UserEvent,
   DiscoveryStreamUserEvent,
-  ASRouterUserEvent,
   ImpressionStats,
   AlsoToOneContent,
   OnlyToOneContent,
@@ -545,19 +572,19 @@ class SimpleHashRouter extends (external_React_default()).PureComponent {
     super(props);
     this.onHashChange = this.onHashChange.bind(this);
     this.state = {
-      hash: __webpack_require__.g.location.hash
+      hash: globalThis.location.hash
     };
   }
   onHashChange() {
     this.setState({
-      hash: __webpack_require__.g.location.hash
+      hash: globalThis.location.hash
     });
   }
   componentWillMount() {
-    __webpack_require__.g.addEventListener("hashchange", this.onHashChange);
+    globalThis.addEventListener("hashchange", this.onHashChange);
   }
   componentWillUnmount() {
-    __webpack_require__.g.removeEventListener("hashchange", this.onHashChange);
+    globalThis.removeEventListener("hashchange", this.onHashChange);
   }
   render() {
     const [, ...routes] = this.state.hash.split("-");
@@ -665,20 +692,29 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     this.setConfigValue = this.setConfigValue.bind(this);
     this.expireCache = this.expireCache.bind(this);
     this.refreshCache = this.refreshCache.bind(this);
+    this.showPlaceholder = this.showPlaceholder.bind(this);
     this.idleDaily = this.idleDaily.bind(this);
     this.systemTick = this.systemTick.bind(this);
     this.syncRemoteSettings = this.syncRemoteSettings.bind(this);
     this.onStoryToggle = this.onStoryToggle.bind(this);
+    this.handleWeatherSubmit = this.handleWeatherSubmit.bind(this);
+    this.handleWeatherUpdate = this.handleWeatherUpdate.bind(this);
+    this.resetBlocks = this.resetBlocks.bind(this);
+    this.refreshTopicSelectionCache = this.refreshTopicSelectionCache.bind(this);
+    this.toggleTBRFeed = this.toggleTBRFeed.bind(this);
+    this.handleSectionsToggle = this.handleSectionsToggle.bind(this);
+    this.toggleIABBanners = this.toggleIABBanners.bind(this);
     this.state = {
-      toggledStories: {}
+      toggledStories: {},
+      weatherQuery: ""
     };
   }
-  setConfigValue(name, value) {
+  setConfigValue(configName, configValue) {
     this.props.dispatch(actionCreators.OnlyToMain({
       type: actionTypes.DISCOVERY_STREAM_CONFIG_SET_VALUE,
       data: {
-        name,
-        value
+        name: configName,
+        value: configValue
       }
     }));
   }
@@ -696,9 +732,18 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
       data: config
     }));
   }
+  refreshTopicSelectionCache() {
+    this.props.dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.displayCount", 0));
+    this.props.dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", true));
+  }
   dispatchSimpleAction(type) {
     this.props.dispatch(actionCreators.OnlyToMain({
       type
+    }));
+  }
+  resetBlocks() {
+    this.props.dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.DISCOVERY_STREAM_DEV_BLOCKS_RESET
     }));
   }
   systemTick() {
@@ -707,11 +752,70 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
   expireCache() {
     this.dispatchSimpleAction(actionTypes.DISCOVERY_STREAM_DEV_EXPIRE_CACHE);
   }
+  showPlaceholder() {
+    this.dispatchSimpleAction(actionTypes.DISCOVERY_STREAM_DEV_SHOW_PLACEHOLDER);
+  }
+  toggleTBRFeed(e) {
+    const feed = e.target.value;
+    const selectedFeed = "discoverystream.contextualContent.selectedFeed";
+    this.props.dispatch(actionCreators.SetPref(selectedFeed, feed));
+  }
   idleDaily() {
     this.dispatchSimpleAction(actionTypes.DISCOVERY_STREAM_DEV_IDLE_DAILY);
   }
   syncRemoteSettings() {
     this.dispatchSimpleAction(actionTypes.DISCOVERY_STREAM_DEV_SYNC_RS);
+  }
+  handleWeatherUpdate(e) {
+    this.setState({
+      weatherQuery: e.target.value || ""
+    });
+  }
+  handleWeatherSubmit(e) {
+    e.preventDefault();
+    const {
+      weatherQuery
+    } = this.state;
+    this.props.dispatch(actionCreators.SetPref("weather.query", weatherQuery));
+  }
+  toggleIABBanners(e) {
+    const {
+      pressed,
+      id
+    } = e.target;
+    const billboardEnabled = this.props.otherPrefs["newtabAdSize.billboard"];
+    const leaderboardEnabled = this.props.otherPrefs["newtabAdSize.leaderboard"];
+    let spocValue;
+    let spocCount;
+    if (id === "billboard") {
+      this.props.dispatch(actionCreators.SetPref("newtabAdSize.billboard", pressed));
+      if (pressed) {
+        spocValue = `newtab_spocs, newtab_billboard${leaderboardEnabled ? ", newtab_leaderboard" : ""}`;
+        spocCount = `6,1${leaderboardEnabled ? ",1" : ""}`;
+      } else {
+        spocValue = `newtab_spocs${leaderboardEnabled ? ", newtab_leaderboard" : ""}`;
+        spocCount = `6${leaderboardEnabled ? ",1" : ""}`;
+      }
+    } else if (id === "leaderboard") {
+      this.props.dispatch(actionCreators.SetPref("newtabAdSize.leaderboard", pressed));
+      if (pressed) {
+        spocValue = `newtab_spocs, newtab_leaderboard${billboardEnabled ? ", newtab_billboard" : ""}`;
+        spocCount = `6,1${billboardEnabled ? ",1" : ""}`;
+      } else {
+        spocValue = `newtab_spocs${billboardEnabled ? ", newtab_billboard" : ""}`;
+        spocCount = `6${billboardEnabled ? ",1" : ""}`;
+      }
+    }
+    this.props.dispatch(actionCreators.SetPref("discoverystream.placements.spocs", spocValue));
+    this.props.dispatch(actionCreators.SetPref("discoverystream.placements.spocs.counts", spocCount));
+  }
+  handleSectionsToggle(e) {
+    const {
+      pressed
+    } = e.target;
+    this.props.dispatch(actionCreators.SetPref("discoverystream.sections.enabled", pressed));
+    this.props.dispatch(actionCreators.SetPref("discoverystream.sections.cards.enabled", pressed));
+    this.props.dispatch(actionCreators.SetPref("discoverystream.sections.cards.thumbsUpDown.enabled", pressed));
   }
   renderComponent(width, component) {
     return /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
@@ -719,6 +823,38 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     }, "Type"), /*#__PURE__*/external_React_default().createElement("td", null, component.type)), /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
     }, "Width"), /*#__PURE__*/external_React_default().createElement("td", null, width)), component.feed && this.renderFeed(component.feed)));
+  }
+  renderWeatherData() {
+    const {
+      suggestions
+    } = this.props.state.Weather;
+    let weatherTable;
+    if (suggestions) {
+      weatherTable = /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weather-section"
+      }, /*#__PURE__*/external_React_default().createElement("form", {
+        onSubmit: this.handleWeatherSubmit
+      }, /*#__PURE__*/external_React_default().createElement("label", {
+        htmlFor: "weather-query"
+      }, "Weather query"), /*#__PURE__*/external_React_default().createElement("input", {
+        type: "text",
+        min: "3",
+        max: "10",
+        id: "weather-query",
+        onChange: this.handleWeatherUpdate,
+        value: this.weatherQuery
+      }), /*#__PURE__*/external_React_default().createElement("button", {
+        type: "submit"
+      }, "Submit")), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, suggestions.map(suggestion => /*#__PURE__*/external_React_default().createElement("tr", {
+        className: "message-item",
+        key: suggestion.city_name
+      }, /*#__PURE__*/external_React_default().createElement("td", {
+        className: "message-id"
+      }, /*#__PURE__*/external_React_default().createElement("span", null, suggestion.city_name, " ", /*#__PURE__*/external_React_default().createElement("br", null))), /*#__PURE__*/external_React_default().createElement("td", {
+        className: "message-summary"
+      }, /*#__PURE__*/external_React_default().createElement("pre", null, JSON.stringify(suggestion, null, 2))))))));
+    }
+    return weatherTable;
   }
   renderFeedData(url) {
     const {
@@ -733,17 +869,46 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     } = this.props.state.DiscoveryStream;
     return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, Object.keys(feeds.data).map(url => this.renderFeedData(url)));
   }
+  renderImpressionsData() {
+    const {
+      impressions
+    } = this.props.state.DiscoveryStream;
+    return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("h4", null, "Feed Impressions"), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, Object.keys(impressions.feed).map(key => {
+      return /*#__PURE__*/external_React_default().createElement(Row, {
+        key: key
+      }, /*#__PURE__*/external_React_default().createElement("td", {
+        className: "min"
+      }, key), /*#__PURE__*/external_React_default().createElement("td", null, relativeTime(impressions.feed[key]) || "(no data)"));
+    }))));
+  }
+  renderBlocksData() {
+    const {
+      blocks
+    } = this.props.state.DiscoveryStream;
+    return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("h4", null, "Blocks"), /*#__PURE__*/external_React_default().createElement("button", {
+      className: "button",
+      onClick: this.resetBlocks
+    }, "Reset Blocks"), " ", /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, Object.keys(blocks).map(key => {
+      return /*#__PURE__*/external_React_default().createElement(Row, {
+        key: key
+      }, /*#__PURE__*/external_React_default().createElement("td", {
+        className: "min"
+      }, key));
+    }))));
+  }
   renderSpocs() {
     const {
       spocs
     } = this.props.state.DiscoveryStream;
+    const unifiedAdsSpocsEnabled = this.props.otherPrefs["unifiedAds.spocs.enabled"];
+    const unifiedAdsEndpoint = this.props.otherPrefs["unifiedAds.endpoint"];
     let spocsData = [];
-    if (spocs.data && spocs.data.spocs && spocs.data.spocs.items) {
-      spocsData = spocs.data.spocs.items || [];
+    if (spocs.data && spocs.data.newtab_spocs && spocs.data.newtab_spocs.items) {
+      spocsData = spocs.data.newtab_spocs.items || [];
     }
     return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
-    }, "spocs_endpoint"), /*#__PURE__*/external_React_default().createElement("td", null, spocs.spocs_endpoint)), /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
+    }, "spocs_endpoint"), /*#__PURE__*/external_React_default().createElement("td", null, unifiedAdsSpocsEnabled ? unifiedAdsEndpoint : spocs.spocs_endpoint)), /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
     }, "Data last fetched"), /*#__PURE__*/external_React_default().createElement("td", null, relativeTime(spocs.lastUpdated))))), /*#__PURE__*/external_React_default().createElement("h4", null, "Spoc data"), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, spocsData.map(spoc => this.renderStoryData(spoc)))), /*#__PURE__*/external_React_default().createElement("h4", null, "Spoc frequency caps"), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, spocs.frequency_caps.map(spoc => this.renderStoryData(spoc)))));
   }
@@ -795,6 +960,16 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
       layout
     } = this.props.state.DiscoveryStream;
     const personalized = this.props.otherPrefs["discoverystream.personalization.enabled"];
+    const selectedFeed = this.props.otherPrefs["discoverystream.contextualContent.selectedFeed"];
+    const sectionsEnabled = this.props.otherPrefs["discoverystream.sections.enabled"];
+    const TBRFeeds = this.props.otherPrefs["discoverystream.contextualContent.feeds"].split(",").map(s => s.trim()).filter(item => item);
+
+    // Prefs for IAB Banners
+    const billboardsEnabled = this.props.otherPrefs["newtabAdSize.billboard"];
+    const leaderboardEnabled = this.props.otherPrefs["newtabAdSize.leaderboard"];
+    const spocPlacements = this.props.otherPrefs["discoverystream.placements.spocs"];
+    const billboardPressed = billboardsEnabled && spocPlacements.includes("newtab_billboard");
+    const leaderboardPressed = leaderboardEnabled && spocPlacements.includes("newtab_leaderboard");
     return /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("button", {
       className: "button",
       onClick: this.restorePrefDefaults
@@ -813,7 +988,43 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     }, "Trigger Idle Daily"), /*#__PURE__*/external_React_default().createElement("br", null), /*#__PURE__*/external_React_default().createElement("button", {
       className: "button",
       onClick: this.syncRemoteSettings
-    }, "Sync Remote Settings"), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, prefToggles.map(pref => /*#__PURE__*/external_React_default().createElement(Row, {
+    }, "Sync Remote Settings"), " ", /*#__PURE__*/external_React_default().createElement("button", {
+      className: "button",
+      onClick: this.refreshTopicSelectionCache
+    }, "Refresh Topic selection count"), /*#__PURE__*/external_React_default().createElement("br", null), /*#__PURE__*/external_React_default().createElement("button", {
+      className: "button",
+      onClick: this.showPlaceholder
+    }, "Show Placeholder Cards"), " ", /*#__PURE__*/external_React_default().createElement("select", {
+      className: "button",
+      onChange: this.toggleTBRFeed,
+      value: selectedFeed
+    }, TBRFeeds.map(feed => /*#__PURE__*/external_React_default().createElement("option", {
+      key: feed,
+      value: feed
+    }, feed))), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "toggle-wrapper"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "sections-toggle",
+      pressed: sectionsEnabled || null,
+      onToggle: this.handleSectionsToggle,
+      label: "Toggle DS Sections"
+    })), /*#__PURE__*/external_React_default().createElement("details", {
+      className: "details-section"
+    }, /*#__PURE__*/external_React_default().createElement("summary", null, "IAB Banner Ad Sizes"), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "toggle-wrapper"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "leaderboard",
+      pressed: leaderboardPressed || null,
+      onToggle: this.toggleIABBanners,
+      label: "Enable IAB Leaderboard"
+    })), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "toggle-wrapper"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "billboard",
+      pressed: billboardPressed || null,
+      onToggle: this.toggleIABBanners,
+      label: "Enable IAB Billboard"
+    }))), /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, prefToggles.map(pref => /*#__PURE__*/external_React_default().createElement(Row, {
       key: pref
     }, /*#__PURE__*/external_React_default().createElement("td", null, /*#__PURE__*/external_React_default().createElement(TogglePrefCheckbox, {
       checked: config[pref],
@@ -830,7 +1041,13 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
       state: {
         Personalization: this.props.state.Personalization
       }
-    }), /*#__PURE__*/external_React_default().createElement("h3", null, "Spocs"), this.renderSpocs(), /*#__PURE__*/external_React_default().createElement("h3", null, "Feeds Data"), this.renderFeedsData());
+    }), /*#__PURE__*/external_React_default().createElement("h3", null, "Spocs"), this.renderSpocs(), /*#__PURE__*/external_React_default().createElement("h3", null, "Feeds Data"), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "large-data-container"
+    }, this.renderFeedsData()), /*#__PURE__*/external_React_default().createElement("h3", null, "Impressions Data"), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "large-data-container"
+    }, this.renderImpressionsData()), /*#__PURE__*/external_React_default().createElement("h3", null, "Blocked Data"), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "large-data-container"
+    }, this.renderBlocksData()), /*#__PURE__*/external_React_default().createElement("h3", null, "Weather Data"), this.renderWeatherData());
   }
 }
 class DiscoveryStreamAdminInner extends (external_React_default()).PureComponent {
@@ -853,7 +1070,8 @@ class DiscoveryStreamAdminInner extends (external_React_default()).PureComponent
     }, "Click here"))), /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement(DiscoveryStreamAdminUI, {
       state: {
         DiscoveryStream: this.props.DiscoveryStream,
-        Personalization: this.props.Personalization
+        Personalization: this.props.Personalization,
+        Weather: this.props.Weather
       },
       otherPrefs: this.props.Prefs.values,
       dispatch: this.props.dispatch
@@ -882,9 +1100,9 @@ class CollapseToggle extends (external_React_default()).PureComponent {
   }
   setBodyClass() {
     if (this.renderAdmin && !this.state.collapsed) {
-      __webpack_require__.g.document.body.classList.add("no-scroll");
+      globalThis.document.body.classList.add("no-scroll");
     } else {
-      __webpack_require__.g.document.body.classList.remove("no-scroll");
+      globalThis.document.body.classList.remove("no-scroll");
     }
   }
   componentDidMount() {
@@ -894,7 +1112,7 @@ class CollapseToggle extends (external_React_default()).PureComponent {
     this.setBodyClass();
   }
   componentWillUnmount() {
-    __webpack_require__.g.document.body.classList.remove("no-scroll");
+    globalThis.document.body.classList.remove("no-scroll");
   }
   render() {
     const {
@@ -923,7 +1141,8 @@ const DiscoveryStreamAdmin = (0,external_ReactRedux_namespaceObject.connect)(sta
   Sections: state.Sections,
   DiscoveryStream: state.DiscoveryStream,
   Personalization: state.Personalization,
-  Prefs: state.Prefs
+  Prefs: state.Prefs,
+  Weather: state.Weather
 }))(_DiscoveryStreamAdmin);
 ;// CONCATENATED MODULE: ./content-src/components/ConfirmDialog/ConfirmDialog.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1262,11 +1481,11 @@ class ContextMenu extends (external_React_default()).PureComponent {
   componentDidMount() {
     this.onShow();
     setTimeout(() => {
-      __webpack_require__.g.addEventListener("click", this.hideContext);
+      globalThis.addEventListener("click", this.hideContext);
     }, 0);
   }
   componentWillUnmount() {
-    __webpack_require__.g.removeEventListener("click", this.hideContext);
+    globalThis.removeEventListener("click", this.hideContext);
   }
   onClick(event) {
     // Eat all clicks on the context menu so they don't bubble up to window.
@@ -1321,15 +1540,17 @@ class _ContextMenuItem extends (external_React_default()).PureComponent {
 
   // This selects the correct node based on the key pressed
   focusSibling(target, key) {
-    const parent = target.parentNode;
+    const {
+      parentNode
+    } = target;
     const closestSiblingSelector = key === "ArrowUp" ? "previousSibling" : "nextSibling";
-    if (!parent[closestSiblingSelector]) {
+    if (!parentNode[closestSiblingSelector]) {
       return;
     }
-    if (parent[closestSiblingSelector].firstElementChild) {
-      parent[closestSiblingSelector].firstElementChild.focus();
+    if (parentNode[closestSiblingSelector].firstElementChild) {
+      parentNode[closestSiblingSelector].firstElementChild.focus();
     } else {
-      parent[closestSiblingSelector][closestSiblingSelector].firstElementChild.focus();
+      parentNode[closestSiblingSelector][closestSiblingSelector].firstElementChild.focus();
     }
   }
   onKeyDown(event) {
@@ -1373,12 +1594,14 @@ class _ContextMenuItem extends (external_React_default()).PureComponent {
     const {
       option
     } = this.props;
+    const listItemClassNames = [option.className || ""].join(" ");
+    const buttonClassNames = [option.disabled ? "disabled" : ""].join(" ");
     return /*#__PURE__*/external_React_default().createElement("li", {
       role: "presentation",
-      className: "context-menu-item"
+      className: `context-menu-item ${listItemClassNames}`
     }, /*#__PURE__*/external_React_default().createElement("button", {
-      className: option.disabled ? "disabled" : "",
       role: "menuitem",
+      className: buttonClassNames,
       onClick: this.onClick,
       onKeyDown: this.onKeyDown,
       onKeyUp: this.onKeyUp,
@@ -1392,10 +1615,11 @@ class _ContextMenuItem extends (external_React_default()).PureComponent {
 const ContextMenuItem = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   Prefs: state.Prefs
 }))(_ContextMenuItem);
-;// CONCATENATED MODULE: ./content-src/lib/link-menu-options.js
+;// CONCATENATED MODULE: ./content-src/lib/link-menu-options.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 
 const _OpenInPrivateWindow = site => ({
@@ -1403,12 +1627,9 @@ const _OpenInPrivateWindow = site => ({
   icon: "new-window-private",
   action: actionCreators.OnlyToMain({
     type: actionTypes.OPEN_PRIVATE_WINDOW,
-    data: {
-      url: site.url,
-      referrer: site.referrer
-    }
+    data: { url: site.url, referrer: site.referrer },
   }),
-  userEvent: "OPEN_PRIVATE_WINDOW"
+  userEvent: "OPEN_PRIVATE_WINDOW",
 });
 
 /**
@@ -1417,19 +1638,15 @@ const _OpenInPrivateWindow = site => ({
  * the index of the site.
  */
 const LinkMenuOptions = {
-  Separator: () => ({
-    type: "separator"
-  }),
-  EmptyItem: () => ({
-    type: "empty"
-  }),
+  Separator: () => ({ type: "separator" }),
+  EmptyItem: () => ({ type: "empty" }),
   ShowPrivacyInfo: () => ({
     id: "newtab-menu-show-privacy-info",
     icon: "info",
     action: {
-      type: actionTypes.SHOW_PRIVACY_INFO
+      type: actionTypes.SHOW_PRIVACY_INFO,
     },
-    userEvent: "SHOW_PRIVACY_INFO"
+    userEvent: "SHOW_PRIVACY_INFO",
   }),
   AboutSponsored: site => ({
     id: "newtab-menu-show-privacy-info",
@@ -1439,32 +1656,29 @@ const LinkMenuOptions = {
       data: {
         advertiser_name: (site.label || site.hostname).toLocaleLowerCase(),
         position: site.sponsored_position,
-        tile_id: site.sponsored_tile_id
-      }
+        tile_id: site.sponsored_tile_id,
+        block_key: site.block_key,
+      },
     }),
-    userEvent: "TOPSITE_SPONSOR_INFO"
+    userEvent: "TOPSITE_SPONSOR_INFO",
   }),
   RemoveBookmark: site => ({
     id: "newtab-menu-remove-bookmark",
     icon: "bookmark-added",
     action: actionCreators.AlsoToMain({
       type: actionTypes.DELETE_BOOKMARK_BY_ID,
-      data: site.bookmarkGuid
+      data: site.bookmarkGuid,
     }),
-    userEvent: "BOOKMARK_DELETE"
+    userEvent: "BOOKMARK_DELETE",
   }),
   AddBookmark: site => ({
     id: "newtab-menu-bookmark",
     icon: "bookmark-hollow",
     action: actionCreators.AlsoToMain({
       type: actionTypes.BOOKMARK_URL,
-      data: {
-        url: site.url,
-        title: site.title,
-        type: site.type
-      }
+      data: { url: site.url, title: site.title, type: site.type },
     }),
-    userEvent: "BOOKMARK_ADD"
+    userEvent: "BOOKMARK_ADD",
   }),
   OpenInNewWindow: site => ({
     id: "newtab-menu-open-new-window",
@@ -1475,10 +1689,17 @@ const LinkMenuOptions = {
         referrer: site.referrer,
         typedBonus: site.typedBonus,
         url: site.url,
-        sponsored_tile_id: site.sponsored_tile_id
-      }
+        sponsored_tile_id: site.sponsored_tile_id,
+        ...(site.section
+          ? {
+              section: site.section,
+              section_position: site.section_position,
+              is_secton_followed: site.is_secton_followed,
+            }
+          : {}),
+      },
     }),
-    userEvent: "OPEN_NEW_WINDOW"
+    userEvent: "OPEN_NEW_WINDOW",
   }),
   // This blocks the url for regular stories,
   // but also sends a message to DiscoveryStream with flight_id.
@@ -1497,22 +1718,41 @@ const LinkMenuOptions = {
         url: site.original_url || site.open_url || site.url,
         // pocket_id is only for pocket stories being in highlights, and then dismissed.
         pocket_id: site.pocket_id,
+        tile_id: site.tile_id,
+        ...(site.block_key ? { block_key: site.block_key } : {}),
+        recommendation_id: site.recommendation_id,
+        scheduled_corpus_item_id: site.scheduled_corpus_item_id,
+        corpus_item_id: site.corpus_item_id,
+        received_rank: site.received_rank,
+        recommended_at: site.recommended_at,
         // used by PlacesFeed and TopSitesFeed for sponsored top sites blocking.
         isSponsoredTopSite: site.sponsored_position,
-        ...(site.flight_id ? {
-          flight_id: site.flight_id
-        } : {}),
+        type: site.type,
+        card_type: site.card_type,
+        ...(site.shim && site.shim.delete ? { shim: site.shim.delete } : {}),
+        ...(site.flight_id ? { flight_id: site.flight_id } : {}),
         // If not sponsored, hostname could be anything (Cat3 Data!).
         // So only put in advertiser_name for sponsored topsites.
-        ...(site.sponsored_position ? {
-          advertiser_name: (site.label || site.hostname)?.toLocaleLowerCase()
-        } : {}),
+        ...(site.sponsored_position
+          ? {
+              advertiser_name: (
+                site.label || site.hostname
+              )?.toLocaleLowerCase(),
+            }
+          : {}),
         position: pos,
-        ...(site.sponsored_tile_id ? {
-          tile_id: site.sponsored_tile_id
-        } : {}),
-        is_pocket_card: site.type === "CardGrid"
-      }))
+        ...(site.sponsored_tile_id ? { tile_id: site.sponsored_tile_id } : {}),
+        is_pocket_card: site.type === "CardGrid",
+        is_list_card: site.is_list_card,
+        ...(site.format ? { format: site.format } : {}),
+        ...(site.section
+          ? {
+              section: site.section,
+              section_position: site.section_position,
+              is_secton_followed: site.is_secton_followed,
+            }
+          : {}),
+      })),
     }),
     impression: actionCreators.ImpressionStats({
       source: eventSource,
@@ -1520,13 +1760,12 @@ const LinkMenuOptions = {
       tiles: tiles.map((site, index) => ({
         id: site.guid,
         pos: pos + index,
-        ...(site.shim && site.shim.delete ? {
-          shim: site.shim.delete
-        } : {})
-      }))
+        ...(site.shim && site.shim.delete ? { shim: site.shim.delete } : {}),
+      })),
     }),
-    userEvent: "BLOCK"
+    userEvent: "BLOCK",
   }),
+
   // This is an option for web extentions which will result in remove items from
   // memory and notify the web extenion, rather than using the built-in block list.
   WebExtDismiss: (site, index, eventSource) => ({
@@ -1536,8 +1775,8 @@ const LinkMenuOptions = {
     action: actionCreators.WebExtEvent(actionTypes.WEBEXT_DISMISS, {
       source: eventSource,
       url: site.url,
-      action_position: index
-    })
+      action_position: index,
+    }),
   }),
   DeleteUrl: (site, index, eventSource, isEnabled, siteInfo) => ({
     id: "newtab-menu-delete-history",
@@ -1545,77 +1784,79 @@ const LinkMenuOptions = {
     action: {
       type: actionTypes.DIALOG_OPEN,
       data: {
-        onConfirm: [actionCreators.AlsoToMain({
-          type: actionTypes.DELETE_HISTORY_URL,
-          data: {
-            url: site.url,
-            pocket_id: site.pocket_id,
-            forceBlock: site.bookmarkGuid
-          }
-        }), actionCreators.UserEvent(Object.assign({
-          event: "DELETE",
-          source: eventSource,
-          action_position: index
-        }, siteInfo))],
+        onConfirm: [
+          actionCreators.AlsoToMain({
+            type: actionTypes.DELETE_HISTORY_URL,
+            data: {
+              url: site.url,
+              pocket_id: site.pocket_id,
+              forceBlock: site.bookmarkGuid,
+            },
+          }),
+          actionCreators.UserEvent(
+            Object.assign(
+              { event: "DELETE", source: eventSource, action_position: index },
+              siteInfo
+            )
+          ),
+          // Also broadcast that this url has been deleted so that
+          // the confirmation dialog knows it needs to disappear now.
+          actionCreators.AlsoToMain({
+            type: actionTypes.DIALOG_CLOSE,
+          }),
+        ],
         eventSource,
-        body_string_id: ["newtab-confirm-delete-history-p1", "newtab-confirm-delete-history-p2"],
+        body_string_id: [
+          "newtab-confirm-delete-history-p1",
+          "newtab-confirm-delete-history-p2",
+        ],
         confirm_button_string_id: "newtab-topsites-delete-history-button",
         cancel_button_string_id: "newtab-topsites-cancel-button",
-        icon: "modal-delete"
-      }
+        icon: "modal-delete",
+      },
     },
-    userEvent: "DIALOG_OPEN"
+    userEvent: "DIALOG_OPEN",
   }),
   ShowFile: site => ({
     id: "newtab-menu-show-file",
     icon: "search",
     action: actionCreators.OnlyToMain({
       type: actionTypes.SHOW_DOWNLOAD_FILE,
-      data: {
-        url: site.url
-      }
-    })
+      data: { url: site.url },
+    }),
   }),
   OpenFile: site => ({
     id: "newtab-menu-open-file",
     icon: "open-file",
     action: actionCreators.OnlyToMain({
       type: actionTypes.OPEN_DOWNLOAD_FILE,
-      data: {
-        url: site.url
-      }
-    })
+      data: { url: site.url },
+    }),
   }),
   CopyDownloadLink: site => ({
     id: "newtab-menu-copy-download-link",
     icon: "copy",
     action: actionCreators.OnlyToMain({
       type: actionTypes.COPY_DOWNLOAD_LINK,
-      data: {
-        url: site.url
-      }
-    })
+      data: { url: site.url },
+    }),
   }),
   GoToDownloadPage: site => ({
     id: "newtab-menu-go-to-download-page",
     icon: "download",
     action: actionCreators.OnlyToMain({
       type: actionTypes.OPEN_LINK,
-      data: {
-        url: site.referrer
-      }
+      data: { url: site.referrer },
     }),
-    disabled: !site.referrer
+    disabled: !site.referrer,
   }),
   RemoveDownload: site => ({
     id: "newtab-menu-remove-download",
     icon: "delete",
     action: actionCreators.OnlyToMain({
       type: actionTypes.REMOVE_DOWNLOAD_FILE,
-      data: {
-        url: site.url
-      }
-    })
+      data: { url: site.url },
+    }),
   }),
   PinTopSite: (site, index) => ({
     id: "newtab-menu-pin",
@@ -1624,89 +1865,248 @@ const LinkMenuOptions = {
       type: actionTypes.TOP_SITES_PIN,
       data: {
         site,
-        index
-      }
+        index,
+      },
     }),
-    userEvent: "PIN"
+    userEvent: "PIN",
   }),
   UnpinTopSite: site => ({
     id: "newtab-menu-unpin",
     icon: "unpin",
     action: actionCreators.AlsoToMain({
       type: actionTypes.TOP_SITES_UNPIN,
-      data: {
-        site: {
-          url: site.url
-        }
-      }
+      data: { site: { url: site.url } },
     }),
-    userEvent: "UNPIN"
+    userEvent: "UNPIN",
   }),
   SaveToPocket: (site, index, eventSource = "CARDGRID") => ({
     id: "newtab-menu-save-to-pocket",
     icon: "pocket-save",
+    className: "stp-context-menu",
     action: actionCreators.AlsoToMain({
       type: actionTypes.SAVE_TO_POCKET,
       data: {
-        site: {
-          url: site.url,
-          title: site.title
-        }
-      }
+        site: { url: site.url, title: site.title },
+      },
     }),
     impression: actionCreators.ImpressionStats({
       source: eventSource,
       pocket: 0,
-      tiles: [{
-        id: site.guid,
-        pos: index,
-        ...(site.shim && site.shim.save ? {
-          shim: site.shim.save
-        } : {})
-      }]
+      tiles: [
+        {
+          id: site.guid,
+          pos: index,
+          ...(site.shim && site.shim.save ? { shim: site.shim.save } : {}),
+        },
+      ],
     }),
-    userEvent: "SAVE_TO_POCKET"
+    userEvent: "SAVE_TO_POCKET",
   }),
   DeleteFromPocket: site => ({
     id: "newtab-menu-delete-pocket",
     icon: "pocket-delete",
     action: actionCreators.AlsoToMain({
       type: actionTypes.DELETE_FROM_POCKET,
-      data: {
-        pocket_id: site.pocket_id
-      }
+      data: { pocket_id: site.pocket_id },
     }),
-    userEvent: "DELETE_FROM_POCKET"
+    userEvent: "DELETE_FROM_POCKET",
   }),
   ArchiveFromPocket: site => ({
     id: "newtab-menu-archive-pocket",
     icon: "pocket-archive",
     action: actionCreators.AlsoToMain({
       type: actionTypes.ARCHIVE_FROM_POCKET,
-      data: {
-        pocket_id: site.pocket_id
-      }
+      data: { pocket_id: site.pocket_id },
     }),
-    userEvent: "ARCHIVE_FROM_POCKET"
+    userEvent: "ARCHIVE_FROM_POCKET",
   }),
   EditTopSite: (site, index) => ({
     id: "newtab-menu-edit-topsites",
     icon: "edit",
     action: {
       type: actionTypes.TOP_SITES_EDIT,
-      data: {
-        index
-      }
-    }
+      data: { index },
+    },
   }),
-  CheckBookmark: site => site.bookmarkGuid ? LinkMenuOptions.RemoveBookmark(site) : LinkMenuOptions.AddBookmark(site),
-  CheckPinTopSite: (site, index) => site.isPinned ? LinkMenuOptions.UnpinTopSite(site) : LinkMenuOptions.PinTopSite(site, index),
-  CheckSavedToPocket: (site, index, source) => site.pocket_id ? LinkMenuOptions.DeleteFromPocket(site) : LinkMenuOptions.SaveToPocket(site, index, source),
-  CheckBookmarkOrArchive: site => site.pocket_id ? LinkMenuOptions.ArchiveFromPocket(site) : LinkMenuOptions.CheckBookmark(site),
-  CheckArchiveFromPocket: site => site.pocket_id ? LinkMenuOptions.ArchiveFromPocket(site) : LinkMenuOptions.EmptyItem(),
-  CheckDeleteFromPocket: site => site.pocket_id ? LinkMenuOptions.DeleteFromPocket(site) : LinkMenuOptions.EmptyItem(),
-  OpenInPrivateWindow: (site, index, eventSource, isEnabled) => isEnabled ? _OpenInPrivateWindow(site) : LinkMenuOptions.EmptyItem()
+  CheckBookmark: site =>
+    site.bookmarkGuid
+      ? LinkMenuOptions.RemoveBookmark(site)
+      : LinkMenuOptions.AddBookmark(site),
+  CheckPinTopSite: (site, index) =>
+    site.isPinned
+      ? LinkMenuOptions.UnpinTopSite(site)
+      : LinkMenuOptions.PinTopSite(site, index),
+  CheckSavedToPocket: (site, index, source) =>
+    site.pocket_id
+      ? LinkMenuOptions.DeleteFromPocket(site)
+      : LinkMenuOptions.SaveToPocket(site, index, source),
+  CheckBookmarkOrArchive: site =>
+    site.pocket_id
+      ? LinkMenuOptions.ArchiveFromPocket(site)
+      : LinkMenuOptions.CheckBookmark(site),
+  CheckArchiveFromPocket: site =>
+    site.pocket_id
+      ? LinkMenuOptions.ArchiveFromPocket(site)
+      : LinkMenuOptions.EmptyItem(),
+  CheckDeleteFromPocket: site =>
+    site.pocket_id
+      ? LinkMenuOptions.DeleteFromPocket(site)
+      : LinkMenuOptions.EmptyItem(),
+  OpenInPrivateWindow: (site, index, eventSource, isEnabled) =>
+    isEnabled ? _OpenInPrivateWindow(site) : LinkMenuOptions.EmptyItem(),
+  ChangeWeatherLocation: () => ({
+    id: "newtab-weather-menu-change-location",
+    action: actionCreators.BroadcastToContent({
+      type: actionTypes.WEATHER_SEARCH_ACTIVE,
+      data: true,
+    }),
+  }),
+  ChangeWeatherDisplaySimple: () => ({
+    id: "newtab-weather-menu-change-weather-display-simple",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "weather.display",
+        value: "simple",
+      },
+    }),
+  }),
+  ChangeWeatherDisplayDetailed: () => ({
+    id: "newtab-weather-menu-change-weather-display-detailed",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "weather.display",
+        value: "detailed",
+      },
+    }),
+  }),
+  ChangeTempUnitFahrenheit: () => ({
+    id: "newtab-weather-menu-change-temperature-units-fahrenheit",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "weather.temperatureUnits",
+        value: "f",
+      },
+    }),
+  }),
+  ChangeTempUnitCelsius: () => ({
+    id: "newtab-weather-menu-change-temperature-units-celsius",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "weather.temperatureUnits",
+        value: "c",
+      },
+    }),
+  }),
+  HideWeather: () => ({
+    id: "newtab-weather-menu-hide-weather",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "showWeather",
+        value: false,
+      },
+    }),
+  }),
+  OpenLearnMoreURL: site => ({
+    id: "newtab-weather-menu-learn-more",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.OPEN_LINK,
+      data: { url: site.url },
+    }),
+  }),
+  FakespotDismiss: () => ({
+    id: "newtab-menu-dismiss",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "discoverystream.contextualContent.fakespot.enabled",
+        value: false,
+      },
+    }),
+    impression: actionCreators.OnlyToMain({
+      type: actionTypes.FAKESPOT_DISMISS,
+    }),
+  }),
+  AboutFakespot: site => ({
+    id: "newtab-menu-about-fakespot",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.OPEN_LINK,
+      data: { url: site.url },
+    }),
+    impression: actionCreators.OnlyToMain({
+      type: actionTypes.OPEN_ABOUT_FAKESPOT,
+    }),
+  }),
+  SectionBlock: ({ blockedSections, sectionKey, sectionPosition }) => ({
+    id: "newtab-menu-section-block",
+    icon: "delete",
+    action: {
+      // Open the confirmation dialog to block a section.
+      type: actionTypes.DIALOG_OPEN,
+      data: {
+        onConfirm: [
+          // Once the user confirmed their intention to block this section,
+          // update their preferences.
+          actionCreators.AlsoToMain({
+            type: actionTypes.SET_PREF,
+            data: {
+              name: "discoverystream.sections.blocked",
+              value: [...blockedSections, sectionKey].join(", "),
+            },
+          }),
+          // Telemetry
+          actionCreators.OnlyToMain({
+            type: actionTypes.BLOCK_SECTION,
+            data: {
+              section: sectionKey,
+              section_position: sectionPosition,
+              event_source: "CONTEXT_MENU",
+            },
+          }),
+          // Also broadcast that this section has been blocked so that
+          // the confirmation dialog knows it needs to disappear now.
+          actionCreators.AlsoToMain({
+            type: actionTypes.DIALOG_CLOSE,
+          }),
+        ],
+        // Pass Fluent strings to ConfirmDialog component for the copy
+        // of the prompt to block sections.
+        body_string_id: [
+          "newtab-section-confirm-block-section-p1",
+          "newtab-section-confirm-block-section-p2",
+        ],
+        confirm_button_string_id: "newtab-section-block-section-button",
+        cancel_button_string_id: "newtab-section-cancel-button",
+      },
+    },
+    userEvent: "DIALOG_OPEN",
+  }),
+  SectionUnfollow: ({ followedSections, sectionKey, sectionPosition }) => ({
+    id: "newtab-menu-section-unfollow",
+    action: actionCreators.AlsoToMain({
+      type: actionTypes.SET_PREF,
+      data: {
+        name: "discoverystream.sections.following",
+        value: [...followedSections.filter(item => item !== sectionKey)].join(
+          ", "
+        ),
+      },
+    }),
+    impression: actionCreators.OnlyToMain({
+      type: actionTypes.UNFOLLOW_SECTION,
+      data: {
+        section: sectionKey,
+        section_position: sectionPosition,
+        event_source: "CONTEXT_MENU",
+      },
+    }),
+  }),
 };
+
 ;// CONCATENATED MODULE: ./content-src/components/LinkMenu/LinkMenu.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -1893,6 +2293,10 @@ class DSLinkMenu extends (external_React_default()).PureComponent {
       if (this.props.pocket_button_enabled) {
         pocketMenuOptions = this.props.saveToPocketCard ? ["CheckDeleteFromPocket"] : ["CheckSavedToPocket"];
       }
+      // Override pocketMenuOptions to add Save to Pocket btn link to all section cards
+      if (this.props.isSectionsCard) {
+        pocketMenuOptions = ["CheckSavedToPocket"];
+      }
       TOP_STORIES_CONTEXT_MENU_OPTIONS = ["CheckBookmark", "CheckArchiveFromPocket", ...pocketMenuOptions, "Separator", "OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl", ...(this.props.showPrivacyInfo ? ["ShowPrivacyInfo"] : [])];
     }
     const type = this.props.type || "DISCOVERY_STREAM";
@@ -1920,28 +2324,70 @@ class DSLinkMenu extends (external_React_default()).PureComponent {
         url: this.props.url,
         guid: this.props.id,
         pocket_id: this.props.pocket_id,
+        card_type: this.props.card_type,
         shim: this.props.shim,
         bookmarkGuid: this.props.bookmarkGuid,
-        flight_id: this.props.flightId
+        flight_id: this.props.flightId,
+        tile_id: this.props.tile_id,
+        recommendation_id: this.props.recommendation_id,
+        corpus_item_id: this.props.corpus_item_id,
+        scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+        recommended_at: this.props.recommended_at,
+        received_rank: this.props.received_rank,
+        is_list_card: this.props.is_list_card,
+        ...(this.props.format ? {
+          format: this.props.format
+        } : {}),
+        ...(this.props.section ? {
+          section: this.props.section,
+          section_position: this.props.section_position,
+          is_secton_followed: this.props.is_secton_followed
+        } : {})
       }
     })));
   }
 }
-;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSitesConstants.js
+;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSitesConstants.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const TOP_SITES_SOURCE = "TOP_SITES";
-const TOP_SITES_CONTEXT_MENU_OPTIONS = ["CheckPinTopSite", "EditTopSite", "Separator", "OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl", "DeleteUrl"];
-const TOP_SITES_SPOC_CONTEXT_MENU_OPTIONS = ["OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl", "ShowPrivacyInfo"];
-const TOP_SITES_SPONSORED_POSITION_CONTEXT_MENU_OPTIONS = ["OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl", "AboutSponsored"];
+const TOP_SITES_CONTEXT_MENU_OPTIONS = [
+  "CheckPinTopSite",
+  "EditTopSite",
+  "Separator",
+  "OpenInNewWindow",
+  "OpenInPrivateWindow",
+  "Separator",
+  "BlockUrl",
+  "DeleteUrl",
+];
+const TOP_SITES_SPOC_CONTEXT_MENU_OPTIONS = [
+  "OpenInNewWindow",
+  "OpenInPrivateWindow",
+  "Separator",
+  "BlockUrl",
+  "ShowPrivacyInfo",
+];
+const TOP_SITES_SPONSORED_POSITION_CONTEXT_MENU_OPTIONS = [
+  "OpenInNewWindow",
+  "OpenInPrivateWindow",
+  "Separator",
+  "BlockUrl",
+  "AboutSponsored",
+];
 // the special top site for search shortcut experiment can only have the option to unpin (which removes) the topsite
-const TOP_SITES_SEARCH_SHORTCUTS_CONTEXT_MENU_OPTIONS = ["CheckPinTopSite", "Separator", "BlockUrl"];
+const TOP_SITES_SEARCH_SHORTCUTS_CONTEXT_MENU_OPTIONS = [
+  "CheckPinTopSite",
+  "Separator",
+  "BlockUrl",
+];
 // minimum size necessary to show a rich icon instead of a screenshot
 const MIN_RICH_FAVICON_SIZE = 96;
 // minimum size necessary to show any icon
 const MIN_SMALL_FAVICON_SIZE = 16;
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamImpressionStats/ImpressionStats.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -1963,7 +2409,7 @@ const INTERSECTION_RATIO = 0.5;
 /**
  * Impression wrapper for Discovery Stream related React components.
  *
- * It makses use of the Intersection Observer API to detect the visibility,
+ * It makes use of the Intersection Observer API to detect the visibility,
  * and relies on page visibility to ensure the impression is reported
  * only when the component is visible on the page.
  *
@@ -1994,6 +2440,9 @@ class ImpressionStats_ImpressionStats extends (external_React_default()).PureCom
     const {
       props
     } = this;
+    const {
+      isFakespot
+    } = props;
     const cards = props.rows;
     if (this.props.flightId) {
       this.props.dispatch(actionCreators.OnlyToMain({
@@ -2022,21 +2471,50 @@ class ImpressionStats_ImpressionStats extends (external_React_default()).PureCom
       }
     }
     if (this._needsImpressionStats(cards)) {
-      props.dispatch(actionCreators.DiscoveryStreamImpressionStats({
-        source: props.source.toUpperCase(),
-        window_inner_width: window.innerWidth,
-        window_inner_height: window.innerHeight,
-        tiles: cards.map(link => ({
-          id: link.id,
-          pos: link.pos,
-          type: this.props.flightId ? "spoc" : "organic",
-          ...(link.shim ? {
-            shim: link.shim
-          } : {}),
-          recommendation_id: link.recommendation_id
-        }))
-      }));
-      this.impressionCardGuids = cards.map(link => link.id);
+      if (isFakespot) {
+        props.dispatch(actionCreators.DiscoveryStreamImpressionStats({
+          source: props.source.toUpperCase(),
+          window_inner_width: window.innerWidth,
+          window_inner_height: window.innerHeight,
+          tiles: cards.map(link => ({
+            id: link.id,
+            type: "fakespot",
+            category: link.category
+          }))
+        }));
+      } else {
+        props.dispatch(actionCreators.DiscoveryStreamImpressionStats({
+          source: props.source.toUpperCase(),
+          window_inner_width: window.innerWidth,
+          window_inner_height: window.innerHeight,
+          tiles: cards.map(link => ({
+            id: link.id,
+            pos: link.pos,
+            type: this.props.flightId ? "spoc" : "organic",
+            ...(link.shim ? {
+              shim: link.shim
+            } : {}),
+            recommendation_id: link.recommendation_id,
+            fetchTimestamp: link.fetchTimestamp,
+            corpus_item_id: link.corpus_item_id,
+            scheduled_corpus_item_id: link.scheduled_corpus_item_id,
+            recommended_at: link.recommended_at,
+            received_rank: link.received_rank,
+            topic: link.topic,
+            is_list_card: link.is_list_card,
+            ...(link.format ? {
+              format: link.format
+            } : {}),
+            ...(link.section ? {
+              section: link.section,
+              section_position: link.section_position,
+              is_secton_followed: link.is_secton_followed
+            } : {})
+          })),
+          firstVisibleTimestamp: this.props.firstVisibleTimestamp
+        }));
+        this.impressionCardGuids = cards.map(link => link.id);
+      }
     }
   }
 
@@ -2146,8 +2624,8 @@ class ImpressionStats_ImpressionStats extends (external_React_default()).PureCom
   }
 }
 ImpressionStats_ImpressionStats.defaultProps = {
-  IntersectionObserver: __webpack_require__.g.IntersectionObserver,
-  document: __webpack_require__.g.document,
+  IntersectionObserver: globalThis.IntersectionObserver,
+  document: globalThis.document,
   rows: [],
   source: ""
 };
@@ -2184,7 +2662,7 @@ class SafeAnchor extends (external_React_default()).PureComponent {
             metaKey,
             shiftKey
           },
-          referrer: "https://getpocket.com/recommendations",
+          referrer: this.props.referrer || "https://getpocket.com/recommendations",
           // Use the anchor's url, which could have been cleaned up
           url: event.currentTarget.href
         }
@@ -2224,7 +2702,7 @@ class SafeAnchor extends (external_React_default()).PureComponent {
     }, this.props.children);
   }
 }
-;// CONCATENATED MODULE: ./content-src/components/Card/types.js
+;// CONCATENATED MODULE: ./content-src/components/Card/types.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -2232,29 +2710,30 @@ class SafeAnchor extends (external_React_default()).PureComponent {
 const cardContextTypes = {
   history: {
     fluentID: "newtab-label-visited",
-    icon: "history-item"
+    icon: "history-item",
   },
   removedBookmark: {
     fluentID: "newtab-label-removed-bookmark",
-    icon: "bookmark-removed"
+    icon: "bookmark-removed",
   },
   bookmark: {
     fluentID: "newtab-label-bookmarked",
-    icon: "bookmark-added"
+    icon: "bookmark-added",
   },
   trending: {
     fluentID: "newtab-label-recommended",
-    icon: "trending"
+    icon: "trending",
   },
   pocket: {
     fluentID: "newtab-label-saved",
-    icon: "pocket"
+    icon: "pocket",
   },
   download: {
     fluentID: "newtab-label-download",
-    icon: "download"
-  }
+    icon: "download",
+  },
 };
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/FeatureHighlight.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -2271,21 +2750,26 @@ function FeatureHighlight({
   ariaLabel,
   feature = "FEATURE_HIGHLIGHT_DEFAULT",
   dispatch = () => {},
-  windowObj = __webpack_require__.g
+  windowObj = __webpack_require__.g,
+  openedOverride = false,
+  showButtonIcon = true,
+  dismissCallback = () => {},
+  outsideClickCallback = () => {}
 }) {
-  const [opened, setOpened] = (0,external_React_namespaceObject.useState)(false);
+  const [opened, setOpened] = (0,external_React_namespaceObject.useState)(openedOverride);
   const ref = (0,external_React_namespaceObject.useRef)(null);
   (0,external_React_namespaceObject.useEffect)(() => {
     const handleOutsideClick = e => {
       if (!ref?.current?.contains(e.target)) {
         setOpened(false);
+        outsideClickCallback();
       }
     };
     windowObj.document.addEventListener("click", handleOutsideClick);
     return () => {
       windowObj.document.removeEventListener("click", handleOutsideClick);
     };
-  }, [windowObj]);
+  }, [windowObj, outsideClickCallback]);
   const onToggleClick = (0,external_React_namespaceObject.useCallback)(() => {
     if (!opened) {
       dispatch(actionCreators.DiscoveryStreamUserEvent({
@@ -2298,6 +2782,11 @@ function FeatureHighlight({
     }
     setOpened(!opened);
   }, [dispatch, feature, opened]);
+  const onDismissClick = (0,external_React_namespaceObject.useCallback)(() => {
+    setOpened(false);
+    dismissCallback();
+  }, [dismissCallback]);
+  const hideButtonClass = showButtonIcon ? `` : `isHidden`;
   const openedClassname = opened ? `opened` : `closed`;
   return /*#__PURE__*/external_React_default().createElement("div", {
     ref: ref,
@@ -2306,17 +2795,16 @@ function FeatureHighlight({
     title: title,
     "aria-haspopup": "true",
     "aria-label": ariaLabel,
-    className: "toggle-button",
+    className: `toggle-button ${hideButtonClass}`,
     onClick: onToggleClick
   }, toggle), /*#__PURE__*/external_React_default().createElement("div", {
     className: `feature-highlight-modal ${position} ${openedClassname}`
   }, /*#__PURE__*/external_React_default().createElement("div", {
     className: "message-icon"
   }, icon), /*#__PURE__*/external_React_default().createElement("p", null, message), /*#__PURE__*/external_React_default().createElement("button", {
-    title: "Dismiss",
-    "aria-label": "Close sponsored content more info popup",
+    "data-l10n-id": "feature-highlight-dismiss-button",
     className: "icon icon-dismiss",
-    onClick: () => setOpened(false)
+    onClick: onDismissClick
   })));
 }
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/SponsoredContentHighlight.jsx
@@ -2400,6 +2888,7 @@ class FluentOrText extends (external_React_default()).PureComponent {
 
 
 
+// eslint-disable-next-line no-shadow
 
 
 
@@ -2409,13 +2898,14 @@ const ANIMATION_DURATION = 3000;
 const DSMessageLabel = props => {
   const {
     context,
-    context_type
+    context_type,
+    mayHaveSectionsCards
   } = props;
   const {
     icon,
     fluentID
   } = cardContextTypes[context_type] || {};
-  if (!context && context_type) {
+  if (!context && context_type && !mayHaveSectionsCards) {
     return /*#__PURE__*/external_React_default().createElement(external_ReactTransitionGroup_namespaceObject.TransitionGroup, {
       component: null
     }, /*#__PURE__*/external_React_default().createElement(external_ReactTransitionGroup_namespaceObject.CSSTransition, {
@@ -2486,7 +2976,8 @@ class DSContextFooter extends (external_React_default()).PureComponent {
       cta_button_variant,
       source,
       spocMessageVariant,
-      dispatch
+      dispatch,
+      mayHaveSectionsCards
     } = this.props;
     const sponsorLabel = SponsorLabel({
       sponsored_by_override,
@@ -2495,7 +2986,8 @@ class DSContextFooter extends (external_React_default()).PureComponent {
     });
     const dsMessageLabel = DSMessageLabel({
       context,
-      context_type
+      context_type,
+      mayHaveSectionsCards
     });
     if (cta_button_variant === "variant-a") {
       return /*#__PURE__*/external_React_default().createElement("div", {
@@ -2512,7 +3004,7 @@ class DSContextFooter extends (external_React_default()).PureComponent {
         className: "source clamp cta-footer-source"
       }, source));
     }
-    if (sponsorLabel || dsMessageLabel) {
+    if (sponsorLabel || dsMessageLabel && context_type !== "pocket") {
       return /*#__PURE__*/external_React_default().createElement("div", {
         className: "story-footer"
       }, sponsorLabel, sponsorLabel && spocMessageVariant === "variant-b" && /*#__PURE__*/external_React_default().createElement(SponsoredContentHighlight, {
@@ -2542,10 +3034,40 @@ const DSMessageFooter = props => {
     className: "story-footer"
   }, dsMessageLabel);
 };
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/DSThumbsUpDownButtons/DSThumbsUpDownButtons.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+function DSThumbsUpDownButtons({
+  sponsor,
+  onThumbsUpClick,
+  onThumbsDownClick,
+  isThumbsUpActive,
+  isThumbsDownActive
+}) {
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "card-stp-thumbs-buttons-wrapper"
+  }, !sponsor && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "card-stp-thumbs-buttons"
+  }, /*#__PURE__*/external_React_default().createElement("button", {
+    onClick: onThumbsUpClick,
+    className: `card-stp-thumbs-button icon icon-thumbs-up ${isThumbsUpActive ? "is-active" : null}`,
+    "data-l10n-id": "newtab-pocket-thumbs-up-tooltip"
+  }), /*#__PURE__*/external_React_default().createElement("button", {
+    onClick: onThumbsDownClick,
+    className: `card-stp-thumbs-button icon icon-thumbs-down ${isThumbsDownActive ? "is-active" : null}`,
+    "data-l10n-id": "newtab-pocket-thumbs-down-tooltip"
+  })));
+}
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/DSCard/DSCard.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
 
 
 
@@ -2623,43 +3145,82 @@ const DefaultMeta = ({
   saveToPocketCard,
   ctaButtonVariant,
   dispatch,
-  spocMessageVariant
-}) => /*#__PURE__*/external_React_default().createElement("div", {
-  className: "meta"
-}, /*#__PURE__*/external_React_default().createElement("div", {
-  className: "info-wrap"
-}, ctaButtonVariant !== "variant-b" && /*#__PURE__*/external_React_default().createElement(DSSource, {
-  source: source,
-  timeToRead: timeToRead,
-  newSponsoredLabel: newSponsoredLabel,
-  context: context,
-  sponsor: sponsor,
-  sponsored_by_override: sponsored_by_override
-}), /*#__PURE__*/external_React_default().createElement("header", {
-  className: "title clamp"
-}, title), excerpt && /*#__PURE__*/external_React_default().createElement("p", {
-  className: "excerpt clamp"
-}, excerpt)), !newSponsoredLabel && /*#__PURE__*/external_React_default().createElement(DSContextFooter, {
-  context_type: context_type,
-  context: context,
-  sponsor: sponsor,
-  sponsored_by_override: sponsored_by_override,
-  cta_button_variant: ctaButtonVariant,
-  source: source,
-  dispatch: dispatch,
-  spocMessageVariant: spocMessageVariant
-}), newSponsoredLabel && /*#__PURE__*/external_React_default().createElement(DSMessageFooter, {
-  context_type: context_type,
-  context: null,
-  saveToPocketCard: saveToPocketCard
-}));
+  spocMessageVariant,
+  mayHaveSectionsCards,
+  mayHaveThumbsUpDown,
+  onThumbsUpClick,
+  onThumbsDownClick,
+  isListCard,
+  state,
+  format,
+  topic,
+  isSectionsCard,
+  showTopics
+}) => {
+  const shouldHaveThumbs = !isListCard && format !== "rectangle" && mayHaveSectionsCards && mayHaveThumbsUpDown;
+  const shouldHaveFooterSection = isSectionsCard && (shouldHaveThumbs || showTopics);
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "meta"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "info-wrap"
+  }, ctaButtonVariant !== "variant-b" && format !== "rectangle" && /*#__PURE__*/external_React_default().createElement(DSSource, {
+    source: source,
+    timeToRead: timeToRead,
+    newSponsoredLabel: newSponsoredLabel,
+    context: context,
+    sponsor: sponsor,
+    sponsored_by_override: sponsored_by_override
+  }), format !== "rectangle" && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("h3", {
+    className: "title clamp"
+  }, title), excerpt && /*#__PURE__*/external_React_default().createElement("p", {
+    className: "excerpt clamp"
+  }, excerpt)), format === "rectangle" && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("h3", {
+    className: "title clamp"
+  }, "Sponsored"), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "excerpt clamp"
+  }, "Sponsored content supports our mission to build a better web."))), !isListCard && format !== "rectangle" && !mayHaveSectionsCards && mayHaveThumbsUpDown && /*#__PURE__*/external_React_default().createElement(DSThumbsUpDownButtons, {
+    onThumbsDownClick: onThumbsDownClick,
+    onThumbsUpClick: onThumbsUpClick,
+    sponsor: sponsor,
+    isThumbsDownActive: state.isThumbsDownActive,
+    isThumbsUpActive: state.isThumbsUpActive
+  }), shouldHaveFooterSection && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sections-card-footer"
+  }, shouldHaveThumbs && /*#__PURE__*/external_React_default().createElement(DSThumbsUpDownButtons, {
+    onThumbsDownClick: onThumbsDownClick,
+    onThumbsUpClick: onThumbsUpClick,
+    sponsor: sponsor,
+    isThumbsDownActive: state.isThumbsDownActive,
+    isThumbsUpActive: state.isThumbsUpActive
+  }), showTopics && /*#__PURE__*/external_React_default().createElement("span", {
+    className: "ds-card-topic",
+    "data-l10n-id": `newtab-topic-label-${topic}`
+  })), !newSponsoredLabel && /*#__PURE__*/external_React_default().createElement(DSContextFooter, {
+    context_type: context_type,
+    context: context,
+    sponsor: sponsor,
+    sponsored_by_override: sponsored_by_override,
+    cta_button_variant: ctaButtonVariant,
+    source: source,
+    dispatch: dispatch,
+    spocMessageVariant: spocMessageVariant,
+    mayHaveSectionsCards: mayHaveSectionsCards
+  }), newSponsoredLabel && /*#__PURE__*/external_React_default().createElement(DSMessageFooter, {
+    context_type: context_type,
+    context: null,
+    saveToPocketCard: saveToPocketCard
+  }));
+};
 class _DSCard extends (external_React_default()).PureComponent {
   constructor(props) {
     super(props);
     this.onLinkClick = this.onLinkClick.bind(this);
+    this.doesLinkTopicMatchSelectedTopic = this.doesLinkTopicMatchSelectedTopic.bind(this);
     this.onSaveClick = this.onSaveClick.bind(this);
     this.onMenuUpdate = this.onMenuUpdate.bind(this);
     this.onMenuShow = this.onMenuShow.bind(this);
+    this.onThumbsUpClick = this.onThumbsUpClick.bind(this);
+    this.onThumbsDownClick = this.onThumbsDownClick.bind(this);
     this.setContextMenuButtonHostRef = element => {
       this.contextMenuButtonHostElement = element;
     };
@@ -2667,7 +3228,9 @@ class _DSCard extends (external_React_default()).PureComponent {
       this.placeholderElement = element;
     };
     this.state = {
-      isSeen: false
+      isSeen: false,
+      isThumbsUpActive: false,
+      isThumbsDownActive: false
     };
 
     // If this is for the about:home startup cache, then we always want
@@ -2697,40 +3260,118 @@ class _DSCard extends (external_React_default()).PureComponent {
       width: 202,
       height: 101
     }];
+    this.largeCardImageSizes = [{
+      mediaMatcher: "(min-width: 1122px)",
+      width: 220,
+      height: 220
+    }, {
+      mediaMatcher: "(min-width: 866px)",
+      width: 218,
+      height: 109
+    }, {
+      mediaMatcher: "(max-width: 610px)",
+      width: 202,
+      height: 101
+    }];
+    this.listCardImageSizes = [{
+      mediaMatcher: "(min-width: 1122px)",
+      width: 75,
+      height: 75
+    }, {
+      mediaMatcher: "default",
+      width: 50,
+      height: 50
+    }];
+  }
+  doesLinkTopicMatchSelectedTopic() {
+    // Edge case for clicking on a card when topic selections have not be set
+    if (!this.props.selectedTopics) {
+      return "not-set";
+    }
+
+    // Edge case the topic of the card is not one of the available topics
+    if (!this.props.availableTopics.includes(this.props.topic)) {
+      return "topic-not-selectable";
+    }
+    if (this.props.selectedTopics.includes(this.props.topic)) {
+      return "true";
+    }
+    return "false";
   }
   onLinkClick() {
+    const matchesSelectedTopic = this.doesLinkTopicMatchSelectedTopic();
     if (this.props.dispatch) {
-      this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
-        event: "CLICK",
-        source: this.props.type.toUpperCase(),
-        action_position: this.props.pos,
-        value: {
-          card_type: this.props.flightId ? "spoc" : "organic",
-          recommendation_id: this.props.recommendation_id,
-          tile_id: this.props.id,
-          ...(this.props.shim && this.props.shim.click ? {
-            shim: this.props.shim.click
-          } : {})
-        }
-      }));
-      this.props.dispatch(actionCreators.ImpressionStats({
-        source: this.props.type.toUpperCase(),
-        click: 0,
-        window_inner_width: this.props.windowObj.innerWidth,
-        window_inner_height: this.props.windowObj.innerHeight,
-        tiles: [{
-          id: this.props.id,
-          pos: this.props.pos,
-          ...(this.props.shim && this.props.shim.click ? {
-            shim: this.props.shim.click
-          } : {}),
-          type: this.props.flightId ? "spoc" : "organic",
-          recommendation_id: this.props.recommendation_id
-        }]
-      }));
+      if (this.props.isFakespot) {
+        this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
+          event: "FAKESPOT_CLICK",
+          value: {
+            product_id: this.props.id,
+            category: this.props.category || ""
+          }
+        }));
+      } else {
+        this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
+          event: "CLICK",
+          source: this.props.type.toUpperCase(),
+          action_position: this.props.pos,
+          value: {
+            card_type: this.props.flightId ? "spoc" : "organic",
+            recommendation_id: this.props.recommendation_id,
+            tile_id: this.props.id,
+            ...(this.props.shim && this.props.shim.click ? {
+              shim: this.props.shim.click
+            } : {}),
+            fetchTimestamp: this.props.fetchTimestamp,
+            firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+            corpus_item_id: this.props.corpus_item_id,
+            scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+            recommended_at: this.props.recommended_at,
+            received_rank: this.props.received_rank,
+            topic: this.props.topic,
+            matches_selected_topic: matchesSelectedTopic,
+            selected_topics: this.props.selectedTopics,
+            is_list_card: this.props.isListCard,
+            ...(this.props.format ? {
+              format: this.props.format
+            } : {}),
+            ...(this.props.section ? {
+              section: this.props.section,
+              section_position: this.props.sectionPosition,
+              is_secton_followed: this.props.sectionFollowed
+            } : {})
+          }
+        }));
+        this.props.dispatch(actionCreators.ImpressionStats({
+          source: this.props.type.toUpperCase(),
+          click: 0,
+          window_inner_width: this.props.windowObj.innerWidth,
+          window_inner_height: this.props.windowObj.innerHeight,
+          tiles: [{
+            id: this.props.id,
+            pos: this.props.pos,
+            ...(this.props.shim && this.props.shim.click ? {
+              shim: this.props.shim.click
+            } : {}),
+            type: this.props.flightId ? "spoc" : "organic",
+            recommendation_id: this.props.recommendation_id,
+            topic: this.props.topic,
+            selected_topics: this.props.selectedTopics,
+            is_list_card: this.props.isListCard,
+            ...(this.props.format ? {
+              format: this.props.format
+            } : {}),
+            ...(this.props.section ? {
+              section: this.props.section,
+              section_position: this.props.sectionPosition,
+              is_secton_followed: this.props.sectionFollowed
+            } : {})
+          }]
+        }));
+      }
     }
   }
   onSaveClick() {
+    const matchesSelectedTopic = this.doesLinkTopicMatchSelectedTopic();
     if (this.props.dispatch) {
       this.props.dispatch(actionCreators.AlsoToMain({
         type: actionTypes.SAVE_TO_POCKET,
@@ -2751,6 +3392,24 @@ class _DSCard extends (external_React_default()).PureComponent {
           tile_id: this.props.id,
           ...(this.props.shim && this.props.shim.save ? {
             shim: this.props.shim.save
+          } : {}),
+          fetchTimestamp: this.props.fetchTimestamp,
+          firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+          corpus_item_id: this.props.corpus_item_id,
+          scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+          recommended_at: this.props.recommended_at,
+          received_rank: this.props.received_rank,
+          topic: this.props.topic,
+          matches_selected_topic: matchesSelectedTopic,
+          selected_topics: this.props.selectedTopics,
+          is_list_card: this.props.isListCard,
+          ...(this.props.format ? {
+            format: this.props.format
+          } : {}),
+          ...(this.props.section ? {
+            section: this.props.section,
+            section_position: this.props.sectionPosition,
+            is_secton_followed: this.props.sectionFollowed
           } : {})
         }
       }));
@@ -2763,9 +3422,142 @@ class _DSCard extends (external_React_default()).PureComponent {
           ...(this.props.shim && this.props.shim.save ? {
             shim: this.props.shim.save
           } : {}),
-          recommendation_id: this.props.recommendation_id
+          recommendation_id: this.props.recommendation_id,
+          topic: this.props.topic,
+          selected_topics: this.props.selectedTopics,
+          is_list_card: this.props.isListCard,
+          ...(this.props.format ? {
+            format: this.props.format
+          } : {}),
+          ...(this.props.section ? {
+            section: this.props.section,
+            section_position: this.props.sectionPosition,
+            is_secton_followed: this.props.sectionFollowed
+          } : {})
         }]
       }));
+    }
+  }
+  onThumbsUpClick(event) {
+    event.stopPropagation();
+    event.preventDefault();
+
+    // Toggle active state for thumbs up button to show CSS animation
+    const currentState = this.state.isThumbsUpActive;
+
+    // If thumbs up has been clicked already, do nothing.
+    if (currentState) {
+      return;
+    }
+    this.setState({
+      isThumbsUpActive: !currentState
+    });
+
+    // Record thumbs up telemetry event
+    this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
+      event: "POCKET_THUMBS_UP",
+      source: "THUMBS_UI",
+      value: {
+        recommendation_id: this.props.recommendation_id,
+        tile_id: this.props.id,
+        corpus_item_id: this.props.corpus_item_id,
+        scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+        recommended_at: this.props.recommended_at,
+        received_rank: this.props.received_rank,
+        thumbs_up: true,
+        thumbs_down: false,
+        topic: this.props.topic,
+        ...(this.props.section ? {
+          section: this.props.section,
+          section_position: this.props.sectionPosition,
+          is_secton_followed: this.props.sectionFollowed
+        } : {})
+      }
+    }));
+
+    // Show Toast
+    this.props.dispatch(actionCreators.OnlyToOneContent({
+      type: actionTypes.SHOW_TOAST_MESSAGE,
+      data: {
+        showNotifications: true,
+        toastId: "thumbsUpToast"
+      }
+    }, "ActivityStream:Content"));
+  }
+  onThumbsDownClick(event) {
+    event.stopPropagation();
+    event.preventDefault();
+
+    // Toggle active state for thumbs down button to show CSS animation
+    const currentState = this.state.isThumbsDownActive;
+    this.setState({
+      isThumbsDownActive: !currentState
+    });
+
+    // Run dismiss event after 0.5 second delay
+    if (this.props.dispatch && this.props.type && this.props.id && this.props.url) {
+      const index = this.props.pos;
+      const source = this.props.type.toUpperCase();
+      const spocData = {
+        url: this.props.url,
+        guid: this.props.id,
+        type: "CardGrid",
+        card_type: "organic",
+        recommendation_id: this.props.recommendation_id,
+        tile_id: this.props.id,
+        corpus_item_id: this.props.corpus_item_id,
+        scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+        recommended_at: this.props.recommended_at,
+        received_rank: this.props.received_rank
+      };
+      const blockUrlOption = LinkMenuOptions.BlockUrl(spocData, index, source);
+      const {
+        action,
+        impression,
+        userEvent
+      } = blockUrlOption;
+      setTimeout(() => {
+        this.props.dispatch(action);
+        this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
+          event: userEvent,
+          source,
+          action_position: index
+        }));
+      }, 500);
+      if (impression) {
+        this.props.dispatch(impression);
+      }
+
+      // Record thumbs down telemetry event
+      this.props.dispatch(actionCreators.DiscoveryStreamUserEvent({
+        event: "POCKET_THUMBS_DOWN",
+        source: "THUMBS_UI",
+        value: {
+          recommendation_id: this.props.recommendation_id,
+          tile_id: this.props.id,
+          corpus_item_id: this.props.corpus_item_id,
+          scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+          recommended_at: this.props.recommended_at,
+          received_rank: this.props.received_rank,
+          thumbs_up: false,
+          thumbs_down: true,
+          topic: this.props.topic,
+          ...(this.props.section ? {
+            section: this.props.section,
+            section_position: this.props.sectionPosition,
+            is_secton_followed: this.props.sectionFollowed
+          } : {})
+        }
+      }));
+
+      // Show Toast
+      this.props.dispatch(actionCreators.OnlyToOneContent({
+        type: actionTypes.SHOW_TOAST_MESSAGE,
+        data: {
+          showNotifications: true,
+          toastId: "thumbsDownToast"
+        }
+      }, "ActivityStream:Content"));
     }
   }
   onMenuUpdate(showContextMenu) {
@@ -2829,17 +3621,32 @@ class _DSCard extends (external_React_default()).PureComponent {
     }
   }
   render() {
-    if (this.props.placeholder || !this.state.isSeen) {
-      return /*#__PURE__*/external_React_default().createElement("div", {
-        className: "ds-card placeholder",
-        ref: this.setPlaceholderRef
-      });
-    }
     const {
       isRecentSave,
       DiscoveryStream,
-      saveToPocketCard
+      saveToPocketCard,
+      isListCard,
+      isFakespot,
+      mayHaveSectionsCards,
+      format,
+      alt_text
     } = this.props;
+    if (this.props.placeholder || !this.state.isSeen) {
+      // placeholder-seen is used to ensure the loading animation is only used if the card is visible.
+      const placeholderClassName = this.state.isSeen ? `placeholder-seen` : ``;
+      return /*#__PURE__*/external_React_default().createElement("div", {
+        className: `ds-card placeholder ${placeholderClassName} ${isListCard ? "list-card-placeholder" : ""}`,
+        ref: this.setPlaceholderRef
+      }, /*#__PURE__*/external_React_default().createElement("div", {
+        className: "placeholder-image placeholder-fill"
+      }), /*#__PURE__*/external_React_default().createElement("div", {
+        className: "placeholder-label placeholder-fill"
+      }), /*#__PURE__*/external_React_default().createElement("div", {
+        className: "placeholder-header placeholder-fill"
+      }), /*#__PURE__*/external_React_default().createElement("div", {
+        className: "placeholder-description placeholder-fill"
+      }));
+    }
     let source = this.props.source || this.props.publisher;
     if (!source) {
       try {
@@ -2870,42 +3677,70 @@ class _DSCard extends (external_React_default()).PureComponent {
     const ctaButtonClassName = ctaButtonEnabled ? `ds-card-cta-button` : ``;
     const compactImagesClassName = compactImages ? `ds-card-compact-image` : ``;
     const imageGradientClassName = imageGradient ? `ds-card-image-gradient` : ``;
+    const listCardClassName = isListCard ? `list-feed-card` : ``;
+    const fakespotClassName = isFakespot ? `fakespot` : ``;
+    const sectionsCardsClassName = [mayHaveSectionsCards ? `sections-card-ui` : ``, this.props.sectionsClassNames].join(" ");
     const titleLinesName = `ds-card-title-lines-${titleLines}`;
     const descLinesClassName = `ds-card-desc-lines-${descLines}`;
+    const isMediumRectangle = format === "rectangle";
+    const spocFormatClassName = isMediumRectangle ? `ds-spoc-rectangle` : ``;
+
+    // Only update the "Saved" Pocket button UI for the Sections experiment.
+    const compactPocketSavedButtonClassName = mayHaveSectionsCards && this.props.context_type === "pocket" ? `ds-compact-pocket-saved-button` : ``;
+    let sizes = [];
+    if (!isMediumRectangle) {
+      sizes = isListCard ? this.listCardImageSizes : this.dsImageSizes;
+    }
+
+    // TODO: Add logic to assign this.largeCardImageSizes
+
     let stpButton = () => {
       return /*#__PURE__*/external_React_default().createElement("button", {
         className: "card-stp-button",
         onClick: this.onSaveClick
       }, this.props.context_type === "pocket" ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
+        "data-l10n-id": "newtab-pocket-image",
+        role: "img",
         className: "story-badge-icon icon icon-pocket"
       }), /*#__PURE__*/external_React_default().createElement("span", {
-        "data-l10n-id": "newtab-pocket-saved"
+        "data-l10n-id": "newtab-pocket-saved",
+        className: "pocket-saved-copy"
       })) : /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
+        "data-l10n-id": "newtab-pocket-image",
+        role: "img",
         className: "story-badge-icon icon icon-pocket-save"
       }), /*#__PURE__*/external_React_default().createElement("span", {
         "data-l10n-id": "newtab-pocket-save"
       })));
     };
     return /*#__PURE__*/external_React_default().createElement("article", {
-      className: `ds-card ${compactImagesClassName} ${imageGradientClassName} ${titleLinesName} ${descLinesClassName} ${ctaButtonClassName} ${ctaButtonVariantClassName}`,
-      ref: this.setContextMenuButtonHostRef
-    }, /*#__PURE__*/external_React_default().createElement("div", {
-      className: "img-wrapper"
-    }, /*#__PURE__*/external_React_default().createElement(DSImage, {
-      extraClassNames: "img",
-      source: this.props.image_src,
-      rawSource: this.props.raw_image_src,
-      sizes: this.dsImageSizes,
-      url: this.props.url,
-      title: this.props.title,
-      isRecentSave: isRecentSave
-    })), /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
+      className: `ds-card ${listCardClassName} ${fakespotClassName} ${sectionsCardsClassName} ${compactImagesClassName} ${imageGradientClassName} ${titleLinesName} ${descLinesClassName} ${spocFormatClassName} ${ctaButtonClassName} ${ctaButtonVariantClassName}`,
+      ref: this.setContextMenuButtonHostRef,
+      "data-position-one": this.props["data-position-one"],
+      "data-position-two": this.props["data-position-one"],
+      "data-position-three": this.props["data-position-one"],
+      "data-position-four": this.props["data-position-one"]
+    }, /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
       className: "ds-card-link",
       dispatch: this.props.dispatch,
       onLinkClick: !this.props.placeholder ? this.onLinkClick : undefined,
       url: this.props.url,
       title: this.props.title
-    }, /*#__PURE__*/external_React_default().createElement(ImpressionStats_ImpressionStats, {
+    }, this.props.showTopics && !this.props.mayHaveSectionsCards && this.props.topic && !isListCard && /*#__PURE__*/external_React_default().createElement("span", {
+      className: "ds-card-topic",
+      "data-l10n-id": `newtab-topic-label-${this.props.topic}`
+    }), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "img-wrapper"
+    }, /*#__PURE__*/external_React_default().createElement(DSImage, {
+      extraClassNames: "img",
+      source: this.props.image_src,
+      rawSource: this.props.raw_image_src,
+      sizes: sizes,
+      url: this.props.url,
+      title: this.props.title,
+      isRecentSave: isRecentSave,
+      alt_text: alt_text
+    })), /*#__PURE__*/external_React_default().createElement(ImpressionStats_ImpressionStats, {
       flightId: this.props.flightId,
       rows: [{
         id: this.props.id,
@@ -2913,13 +3748,38 @@ class _DSCard extends (external_React_default()).PureComponent {
         ...(this.props.shim && this.props.shim.impression ? {
           shim: this.props.shim.impression
         } : {}),
-        recommendation_id: this.props.recommendation_id
+        recommendation_id: this.props.recommendation_id,
+        fetchTimestamp: this.props.fetchTimestamp,
+        corpus_item_id: this.props.corpus_item_id,
+        scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+        recommended_at: this.props.recommended_at,
+        received_rank: this.props.received_rank,
+        topic: this.props.topic,
+        is_list_card: isListCard,
+        ...(format ? {
+          format
+        } : {}),
+        isFakespot,
+        category: this.props.category,
+        ...(this.props.section ? {
+          section: this.props.section,
+          section_position: this.props.sectionPosition,
+          is_secton_followed: this.props.sectionFollowed
+        } : {})
       }],
       dispatch: this.props.dispatch,
-      source: this.props.type
-    })), ctaButtonVariant === "variant-b" && /*#__PURE__*/external_React_default().createElement("div", {
+      isFakespot: isFakespot,
+      source: this.props.type,
+      firstVisibleTimestamp: this.props.firstVisibleTimestamp
+    }), ctaButtonVariant === "variant-b" && /*#__PURE__*/external_React_default().createElement("div", {
       className: "cta-header"
-    }, "Shop Now"), /*#__PURE__*/external_React_default().createElement(DefaultMeta, {
+    }, "Shop Now"), isFakespot ? /*#__PURE__*/external_React_default().createElement("div", {
+      className: "meta"
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      className: "info-wrap"
+    }, /*#__PURE__*/external_React_default().createElement("h3", {
+      className: "title clamp"
+    }, this.props.title))) : /*#__PURE__*/external_React_default().createElement(DefaultMeta, {
       source: source,
       title: this.props.title,
       excerpt: excerpt,
@@ -2932,12 +3792,22 @@ class _DSCard extends (external_React_default()).PureComponent {
       saveToPocketCard: saveToPocketCard,
       ctaButtonVariant: ctaButtonVariant,
       dispatch: this.props.dispatch,
-      spocMessageVariant: this.props.spocMessageVariant
-    }), saveToPocketCard && /*#__PURE__*/external_React_default().createElement("div", {
-      className: "card-stp-button-hover-background"
+      spocMessageVariant: this.props.spocMessageVariant,
+      mayHaveThumbsUpDown: this.props.mayHaveThumbsUpDown,
+      mayHaveSectionsCards: this.props.mayHaveSectionsCards,
+      onThumbsUpClick: this.onThumbsUpClick,
+      onThumbsDownClick: this.onThumbsDownClick,
+      state: this.state,
+      isListCard: isListCard,
+      showTopics: this.props.showTopics,
+      isSectionsCard: this.props.mayHaveSectionsCards && this.props.topic && !isListCard,
+      format: format,
+      topic: this.props.topic
+    })), /*#__PURE__*/external_React_default().createElement("div", {
+      className: `card-stp-button-hover-background ${compactPocketSavedButtonClassName}`
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "card-stp-button-position-wrapper"
-    }, !this.props.flightId && stpButton(), /*#__PURE__*/external_React_default().createElement(DSLinkMenu, {
+    }, saveToPocketCard && !isListCard && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, !this.props.flightId && stpButton()), !isFakespot && /*#__PURE__*/external_React_default().createElement(DSLinkMenu, {
       id: this.props.id,
       index: this.props.pos,
       dispatch: this.props.dispatch,
@@ -2945,6 +3815,7 @@ class _DSCard extends (external_React_default()).PureComponent {
       title: this.props.title,
       source: source,
       type: this.props.type,
+      card_type: this.props.flightId ? "spoc" : "organic",
       pocket_id: this.props.pocket_id,
       shim: this.props.shim,
       bookmarkGuid: this.props.bookmarkGuid,
@@ -2954,26 +3825,21 @@ class _DSCard extends (external_React_default()).PureComponent {
       onMenuShow: this.onMenuShow,
       saveToPocketCard: saveToPocketCard,
       pocket_button_enabled: pocketButtonEnabled,
-      isRecentSave: isRecentSave
-    }))), !saveToPocketCard && /*#__PURE__*/external_React_default().createElement(DSLinkMenu, {
-      id: this.props.id,
-      index: this.props.pos,
-      dispatch: this.props.dispatch,
-      url: this.props.url,
-      title: this.props.title,
-      source: source,
-      type: this.props.type,
-      pocket_id: this.props.pocket_id,
-      shim: this.props.shim,
-      bookmarkGuid: this.props.bookmarkGuid,
-      flightId: !this.props.is_collection ? this.props.flightId : undefined,
-      showPrivacyInfo: !!this.props.flightId,
-      hostRef: this.contextMenuButtonHostRef,
-      onMenuUpdate: this.onMenuUpdate,
-      onMenuShow: this.onMenuShow,
-      pocket_button_enabled: pocketButtonEnabled,
-      isRecentSave: isRecentSave
-    }));
+      isRecentSave: isRecentSave,
+      recommendation_id: this.props.recommendation_id,
+      tile_id: this.props.id,
+      block_key: this.props.id,
+      corpus_item_id: this.props.corpus_item_id,
+      scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+      recommended_at: this.props.recommended_at,
+      received_rank: this.props.received_rank,
+      is_list_card: this.props.isListCard,
+      section: this.props.section,
+      section_position: this.props.sectionPosition,
+      is_secton_followed: this.props.sectionFollowed,
+      format: format,
+      isSectionsCard: this.props.mayHaveSectionsCards
+    }))));
   }
 }
 _DSCard.defaultProps = {
@@ -3241,6 +4107,280 @@ _TopicsWidget.defaultProps = {
 const TopicsWidget = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   DiscoveryStream: state.DiscoveryStream
 }))(_TopicsWidget);
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/ListFeed/ListFeed.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+
+
+const PREF_LISTFEED_TITLE = "discoverystream.contextualContent.listFeedTitle";
+const PREF_FAKESPOT_CATEGROY = "discoverystream.contextualContent.fakespot.defaultCategoryTitle";
+const PREF_FAKESPOT_FOOTER = "discoverystream.contextualContent.fakespot.footerCopy";
+const PREF_FAKESPOT_CTA_COPY = "discoverystream.contextualContent.fakespot.ctaCopy";
+const PREF_FAKESPOT_CTA_URL = "discoverystream.contextualContent.fakespot.ctaUrl";
+const PREF_CONTEXTUAL_CONTENT_SELECTED_FEED = "discoverystream.contextualContent.selectedFeed";
+function ListFeed({
+  type,
+  firstVisibleTimestamp,
+  recs,
+  categories,
+  dispatch
+}) {
+  const [selectedFakespotFeed, setSelectedFakespotFeed] = (0,external_React_namespaceObject.useState)("");
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const listFeedTitle = prefs[PREF_LISTFEED_TITLE];
+  const categoryTitle = prefs[PREF_FAKESPOT_CATEGROY];
+  const footerCopy = prefs[PREF_FAKESPOT_FOOTER];
+  const ctaCopy = prefs[PREF_FAKESPOT_CTA_COPY];
+  const ctaUrl = prefs[PREF_FAKESPOT_CTA_URL];
+  const isFakespot = prefs[PREF_CONTEXTUAL_CONTENT_SELECTED_FEED] === "fakespot";
+  // Todo: need to remove ads while using default recommendations, remove this line once API has been updated.
+  let listFeedRecs = selectedFakespotFeed ? recs.filter(rec => rec.category === selectedFakespotFeed) : recs;
+  function handleCtaClick() {
+    dispatch(actionCreators.OnlyToMain({
+      type: "FAKESPOT_CTA_CLICK"
+    }));
+  }
+  function handleChange(e) {
+    setSelectedFakespotFeed(e.target.value);
+    dispatch(actionCreators.DiscoveryStreamUserEvent({
+      event: "FAKESPOT_CATEGORY",
+      value: {
+        category: e.target.value || ""
+      }
+    }));
+  }
+  const contextMenuOptions = ["FakespotDismiss", "AboutFakespot"];
+  const {
+    length: listLength
+  } = listFeedRecs;
+  // determine if the list should take up all availible height or not
+  const fullList = listLength >= 5;
+  return listLength > 0 && /*#__PURE__*/external_React_default().createElement("div", {
+    className: `list-feed ${fullList ? "full-height" : ""} ${listLength > 2 ? "span-2" : "span-1"}`
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "list-feed-inner-wrapper"
+  }, isFakespot ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "fakespot-heading"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "dropdown-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("select", {
+    className: "fakespot-dropdown",
+    name: "fakespot-categories",
+    value: selectedFakespotFeed,
+    onChange: handleChange
+  }, /*#__PURE__*/external_React_default().createElement("option", {
+    value: ""
+  }, categoryTitle || "Holiday Gift Guide"), categories.map(category => /*#__PURE__*/external_React_default().createElement("option", {
+    key: category,
+    value: category
+  }, category))), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "context-menu-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement(ContextMenuButton, null, /*#__PURE__*/external_React_default().createElement(LinkMenu, {
+    dispatch: dispatch,
+    options: contextMenuOptions,
+    shouldSendImpressionStats: true,
+    site: {
+      url: "https://www.fakespot.com"
+    }
+  })))), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "fakespot-desc"
+  }, listFeedTitle)) : /*#__PURE__*/external_React_default().createElement("h1", {
+    className: "list-feed-title",
+    id: "list-feed-title"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "icon icon-newsfeed"
+  }), listFeedTitle), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "list-feed-content",
+    role: "menu",
+    "aria-labelledby": "list-feed-title"
+  }, listFeedRecs.slice(0, 5).map((rec, index) => {
+    if (!rec || rec.placeholder) {
+      return /*#__PURE__*/external_React_default().createElement(DSCard, {
+        key: `list-card-${index}`,
+        placeholder: true,
+        isListCard: true
+      });
+    }
+    return /*#__PURE__*/external_React_default().createElement(DSCard, {
+      key: `list-card-${index}`,
+      pos: index,
+      flightId: rec.flight_id,
+      image_src: rec.image_src,
+      raw_image_src: rec.raw_image_src,
+      word_count: rec.word_count,
+      time_to_read: rec.time_to_read,
+      title: rec.title,
+      topic: rec.topic,
+      excerpt: rec.excerpt,
+      url: rec.url,
+      id: rec.id,
+      shim: rec.shim,
+      type: type,
+      context: rec.context,
+      sponsor: rec.sponsor,
+      sponsored_by_override: rec.sponsored_by_override,
+      dispatch: dispatch,
+      source: rec.domain,
+      publisher: rec.publisher,
+      pocket_id: rec.pocket_id,
+      context_type: rec.context_type,
+      bookmarkGuid: rec.bookmarkGuid,
+      firstVisibleTimestamp: firstVisibleTimestamp,
+      corpus_item_id: rec.corpus_item_id,
+      scheduled_corpus_item_id: rec.scheduled_corpus_item_id,
+      recommended_at: rec.recommended_at,
+      received_rank: rec.received_rank,
+      isListCard: true,
+      isFakespot: isFakespot,
+      category: rec.category
+    });
+  }), isFakespot && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "fakespot-footer"
+  }, /*#__PURE__*/external_React_default().createElement("p", null, footerCopy), /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
+    className: "fakespot-cta",
+    url: ctaUrl,
+    referrer: "",
+    onLinkClick: handleCtaClick,
+    dispatch: dispatch
+  }, ctaCopy)))));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/AdBanner/AdBanner.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+const AdBanner = ({
+  spoc,
+  dispatch,
+  firstVisibleTimestamp,
+  row,
+  type
+}) => {
+  const getDimensions = format => {
+    switch (format) {
+      case "leaderboard":
+        return {
+          width: "728",
+          height: "90"
+        };
+      case "billboard":
+        return {
+          width: "970",
+          height: "250"
+        };
+    }
+    return {
+      // image will still render with default values
+      width: undefined,
+      height: undefined
+    };
+  };
+  const {
+    width: imgWidth,
+    height: imgHeight
+  } = getDimensions(spoc.format);
+  const handleDismissClick = () => {
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.BLOCK_URL,
+      data: [{
+        block_key: spoc.block_key,
+        fetchTimestamp: spoc.fetchTimestamp,
+        flight_id: spoc.flight_id,
+        format: spoc.format,
+        id: spoc.id,
+        card_type: "spoc",
+        is_pocket_card: true,
+        position: row,
+        sponsor: spoc.sponsor,
+        title: spoc.title,
+        url: spoc.url || spoc.shim.url,
+        personalization_models: spoc.personalization_models,
+        priority: spoc.priority,
+        score: spoc.score,
+        alt_text: spoc.alt_text
+      }]
+    }));
+  };
+  const onLinkClick = () => {
+    dispatch(actionCreators.DiscoveryStreamUserEvent({
+      event: "CLICK",
+      source: type.toUpperCase(),
+      // Banner ads dont have a position, but a row number
+      action_position: row,
+      value: {
+        card_type: "spoc",
+        tile_id: spoc.id,
+        ...(spoc.shim?.click ? {
+          shim: spoc.shim.click
+        } : {}),
+        fetchTimestamp: spoc.fetchTimestamp,
+        firstVisibleTimestamp,
+        format: spoc.format
+      }
+    }));
+  };
+
+  // in the default card grid 1 would come before the 1st row of cards and 9 comes after the last row
+  // using clamp to make sure its between valid values (1-9)
+  const clampedRow = Math.max(1, Math.min(9, row));
+  return /*#__PURE__*/external_React_default().createElement("aside", {
+    className: "ad-banner-wrapper",
+    style: {
+      gridRow: clampedRow
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: `ad-banner-inner ${spoc.format}`
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ad-banner-dismiss"
+  }, /*#__PURE__*/external_React_default().createElement("button", {
+    className: "icon icon-dismiss",
+    onClick: handleDismissClick,
+    "data-l10n-id": "newtab-toast-dismiss-button"
+  })), /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
+    className: "ad-banner-link",
+    url: spoc.url,
+    title: spoc.title,
+    onLinkClick: onLinkClick,
+    dispatch: dispatch
+  }, /*#__PURE__*/external_React_default().createElement(ImpressionStats_ImpressionStats, {
+    flightId: spoc.flight_id,
+    rows: [{
+      id: spoc.id,
+      card_type: "spoc",
+      pos: row,
+      recommended_at: spoc.recommended_at,
+      received_rank: spoc.received_rank,
+      format: spoc.format
+    }],
+    dispatch: dispatch,
+    firstVisibleTimestamp: firstVisibleTimestamp
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ad-banner-content"
+  }, /*#__PURE__*/external_React_default().createElement("img", {
+    src: spoc.raw_image_src,
+    alt: spoc.alt_text,
+    loading: "eager",
+    width: imgWidth,
+    height: imgHeight
+  }))), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ad-banner-sponsored"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "ad-banner-sponsored-label",
+    "data-l10n-id": "newtab-topsite-sponsored"
+  }))));
+};
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/CardGrid/CardGrid.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -3255,7 +4395,22 @@ const TopicsWidget = (0,external_ReactRedux_namespaceObject.connect)(state => ({
 
 
 
+
+
 const PREF_ONBOARDING_EXPERIENCE_DISMISSED = "discoverystream.onboardingExperience.dismissed";
+const PREF_SECTIONS_CARDS_ENABLED = "discoverystream.sections.cards.enabled";
+const PREF_THUMBS_UP_DOWN_ENABLED = "discoverystream.thumbsUpDown.enabled";
+const PREF_TOPICS_ENABLED = "discoverystream.topicLabels.enabled";
+const PREF_TOPICS_SELECTED = "discoverystream.topicSelection.selectedTopics";
+const PREF_TOPICS_AVAILABLE = "discoverystream.topicSelection.topics";
+const PREF_SPOCS_STARTUPCACHE_ENABLED = "discoverystream.spocs.startupCache.enabled";
+const PREF_LIST_FEED_ENABLED = "discoverystream.contextualContent.enabled";
+const PREF_LIST_FEED_SELECTED_FEED = "discoverystream.contextualContent.selectedFeed";
+const PREF_FAKESPOT_ENABLED = "discoverystream.contextualContent.fakespot.enabled";
+const PREF_BILLBOARD_ENABLED = "newtabAdSize.billboard";
+const PREF_LEADERBOARD_ENABLED = "newtabAdSize.leaderboard";
+const PREF_LEADERBOARD_POSITION = "newtabAdSize.leaderboard.position";
+const PREF_BILLBOARD_POSITION = "newtabAdSize.billboard.position";
 const CardGrid_INTERSECTION_RATIO = 0.5;
 const CardGrid_VISIBLE = "visible";
 const CardGrid_VISIBILITY_CHANGE_EVENT = "visibilitychange";
@@ -3273,7 +4428,7 @@ function DSSubHeader({
 }
 function OnboardingExperience({
   dispatch,
-  windowObj = __webpack_require__.g
+  windowObj = globalThis
 }) {
   const [dismissed, setDismissed] = (0,external_React_namespaceObject.useState)(false);
   const [maxHeight, setMaxHeight] = (0,external_React_namespaceObject.useState)(null);
@@ -3360,6 +4515,8 @@ function OnboardingExperience({
     className: "ds-onboarding-graphic"
   })))));
 }
+
+// eslint-disable-next-line no-shadow
 function CardGrid_IntersectionObserver({
   children,
   windowObj = window,
@@ -3504,14 +4661,12 @@ function RecentSavesContainer({
   }, recentSavesCards));
 }
 class _CardGrid extends (external_React_default()).PureComponent {
+  // eslint-disable-next-line max-statements
   renderCards() {
     const prefs = this.props.Prefs.values;
     const {
       items,
-      hybridLayout,
-      hideCardBackground,
       fourCardLayout,
-      compactGrid,
       essentialReadsHeader,
       editorsPicksHeader,
       onboardingExperience,
@@ -3520,21 +4675,32 @@ class _CardGrid extends (external_React_default()).PureComponent {
       spocMessageVariant,
       widgets,
       recentSavesEnabled,
-      hideDescriptions,
       DiscoveryStream
     } = this.props;
     const {
-      saveToPocketCard
+      saveToPocketCard,
+      topicsLoading
     } = DiscoveryStream;
     const showRecentSaves = prefs.showRecentSaves && recentSavesEnabled;
     const isOnboardingExperienceDismissed = prefs[PREF_ONBOARDING_EXPERIENCE_DISMISSED];
-    const recs = this.props.data.recommendations.slice(0, items);
+    const mayHaveSectionsCards = prefs[PREF_SECTIONS_CARDS_ENABLED];
+    const mayHaveThumbsUpDown = prefs[PREF_THUMBS_UP_DOWN_ENABLED];
+    const showTopics = prefs[PREF_TOPICS_ENABLED];
+    const selectedTopics = prefs[PREF_TOPICS_SELECTED];
+    const availableTopics = prefs[PREF_TOPICS_AVAILABLE];
+    const spocsStartupCacheEnabled = prefs[PREF_SPOCS_STARTUPCACHE_ENABLED];
+    const listFeedEnabled = prefs[PREF_LIST_FEED_ENABLED];
+    const listFeedSelectedFeed = prefs[PREF_LIST_FEED_SELECTED_FEED];
+    const billboardEnabled = prefs[PREF_BILLBOARD_ENABLED];
+    const leaderboardEnabled = prefs[PREF_LEADERBOARD_ENABLED];
+    // filter out recs that should be in ListFeed
+    const recs = this.props.data.recommendations.filter(item => !item.feedName).slice(0, items);
     const cards = [];
     let essentialReadsCards = [];
     let editorsPicksCards = [];
     for (let index = 0; index < items; index++) {
       const rec = recs[index];
-      cards.push(!rec || rec.placeholder ? /*#__PURE__*/external_React_default().createElement(PlaceholderDSCard, {
+      cards.push(topicsLoading || !rec || rec.placeholder || rec.flight_id && !spocsStartupCacheEnabled && this.props.App.isForStartupCache ? /*#__PURE__*/external_React_default().createElement(PlaceholderDSCard, {
         key: `dscard-${index}`
       }) : /*#__PURE__*/external_React_default().createElement(DSCard, {
         key: `dscard-${rec.id}`,
@@ -3545,10 +4711,15 @@ class _CardGrid extends (external_React_default()).PureComponent {
         word_count: rec.word_count,
         time_to_read: rec.time_to_read,
         title: rec.title,
+        topic: rec.topic,
+        showTopics: showTopics,
+        selectedTopics: selectedTopics,
+        availableTopics: availableTopics,
         excerpt: rec.excerpt,
         url: rec.url,
         id: rec.id,
         shim: rec.shim,
+        fetchTimestamp: rec.fetchTimestamp,
         type: this.props.type,
         context: rec.context,
         sponsor: rec.sponsor,
@@ -3564,7 +4735,16 @@ class _CardGrid extends (external_React_default()).PureComponent {
         ctaButtonSponsors: ctaButtonSponsors,
         ctaButtonVariant: ctaButtonVariant,
         spocMessageVariant: spocMessageVariant,
-        recommendation_id: rec.recommendation_id
+        recommendation_id: rec.recommendation_id,
+        firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+        mayHaveThumbsUpDown: mayHaveThumbsUpDown,
+        mayHaveSectionsCards: mayHaveSectionsCards,
+        corpus_item_id: rec.corpus_item_id,
+        scheduled_corpus_item_id: rec.scheduled_corpus_item_id,
+        recommended_at: rec.recommended_at,
+        received_rank: rec.received_rank,
+        format: rec.format,
+        alt_text: rec.alt_text
       }));
     }
     if (widgets?.positions?.length && widgets?.data?.length) {
@@ -3596,6 +4776,63 @@ class _CardGrid extends (external_React_default()).PureComponent {
         }
       }
     }
+    if (listFeedEnabled) {
+      const isFakespot = listFeedSelectedFeed === "fakespot";
+      const fakespotEnabled = prefs[PREF_FAKESPOT_ENABLED];
+      if (!isFakespot || isFakespot && fakespotEnabled) {
+        // Place the list feed as the 3rd element in the card grid
+        cards.splice(2, 1, this.renderListFeed(this.props.data.recommendations, listFeedSelectedFeed));
+      }
+    }
+
+    // if a banner ad is enabled and we have any available, place them in the grid
+    const {
+      spocs
+    } = this.props.DiscoveryStream;
+    if ((billboardEnabled || leaderboardEnabled) && spocs.data.newtab_spocs) {
+      // Only render one AdBanner in the grid -
+      // Prioritize rendering a leaderboard if it exists,
+      // otherwise render a billboard
+      const spocToRender = spocs.data.newtab_spocs.items.find(({
+        format
+      }) => format === "leaderboard" && leaderboardEnabled) || spocs.data.newtab_spocs.items.find(({
+        format
+      }) => format === "billboard" && billboardEnabled);
+      if (spocToRender && !spocs.blocked.includes(spocToRender.url)) {
+        const row = spocToRender.format === "leaderboard" ? prefs[PREF_LEADERBOARD_POSITION] : prefs[PREF_BILLBOARD_POSITION];
+        function displayCardsPerRow() {
+          // Determines the number of cards per row based on the window width:
+          // width <= 1122px: 2 cards per row
+          // width 1123px to 1697px: 3 cards per row
+          // width >= 1698px: 4 cards per row
+          if (window.innerWidth <= 1122) {
+            return 2;
+          } else if (window.innerWidth > 1122 && window.innerWidth < 1698) {
+            return 3;
+          }
+          return 4;
+        }
+        const injectAdBanner = bannerIndex => {
+          // .splice() inserts the AdBanner at the desired index, ensuring correct DOM order for accessibility and keyboard navigation.
+          // .push() would place it at the end, which is visually incorrect even if adjusted with CSS.
+          cards.splice(bannerIndex, 0, /*#__PURE__*/external_React_default().createElement(AdBanner, {
+            spoc: spocToRender,
+            key: `dscard-${spocToRender.id}`,
+            dispatch: this.props.dispatch,
+            type: this.props.type,
+            firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+            row: row
+          }));
+        };
+        const getBannerIndex = () => {
+          // Calculate the index for where the AdBanner should be added, depending on number of cards per row on the grid
+          const cardsPerRow = displayCardsPerRow();
+          let bannerIndex = (row - 1) * cardsPerRow;
+          return bannerIndex;
+        };
+        injectAdBanner(getBannerIndex());
+      }
+    }
     let moreRecsHeader = "";
     // For now this is English only.
     if (showRecentSaves || essentialReadsHeader && editorsPicksHeader) {
@@ -3613,12 +4850,7 @@ class _CardGrid extends (external_React_default()).PureComponent {
         editorsPicksCards = [...cards.splice(0, cards.length)];
       }
     }
-    const hideCardBackgroundClass = hideCardBackground ? `ds-card-grid-hide-background` : ``;
-    const fourCardLayoutClass = fourCardLayout ? `ds-card-grid-four-card-variant` : ``;
-    const hideDescriptionsClassName = !hideDescriptions ? `ds-card-grid-include-descriptions` : ``;
-    const compactGridClassName = compactGrid ? `ds-card-grid-compact` : ``;
-    const hybridLayoutClassName = hybridLayout ? `ds-card-grid-hybrid-layout` : ``;
-    const gridClassName = `ds-card-grid ${hybridLayoutClassName} ${hideCardBackgroundClass} ${fourCardLayoutClass} ${hideDescriptionsClassName} ${compactGridClassName}`;
+    const gridClassName = this.renderGridClassName();
     return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, !isOnboardingExperienceDismissed && onboardingExperience && /*#__PURE__*/external_React_default().createElement(OnboardingExperience, {
       dispatch: this.props.dispatch
     }), essentialReadsCards?.length > 0 && /*#__PURE__*/external_React_default().createElement("div", {
@@ -3639,6 +4871,49 @@ class _CardGrid extends (external_React_default()).PureComponent {
     }))), /*#__PURE__*/external_React_default().createElement("div", {
       className: gridClassName
     }, cards)));
+  }
+  renderListFeed(recommendations, selectedFeed) {
+    const recs = recommendations.filter(item => item.feedName === selectedFeed);
+    const isFakespot = selectedFeed === "fakespot";
+    // remove duplicates from category list
+    const categories = [...new Set(recs.map(({
+      category
+    }) => category))];
+    const listFeed = /*#__PURE__*/external_React_default().createElement(ListFeed
+    // only display recs that match selectedFeed for ListFeed
+    , {
+      recs: recs,
+      categories: isFakespot ? categories : [],
+      firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+      type: this.props.type,
+      dispatch: this.props.dispatch
+    });
+    return listFeed;
+  }
+  renderGridClassName() {
+    const prefs = this.props.Prefs.values;
+    const {
+      hybridLayout,
+      hideCardBackground,
+      fourCardLayout,
+      compactGrid,
+      hideDescriptions
+    } = this.props;
+    const adSizingVariantAEnabled = prefs["newtabAdSize.variant-a"];
+    const adSizingVariantBEnabled = prefs["newtabAdSize.variant-b"];
+    const adSizingVariantEnabled = adSizingVariantAEnabled || adSizingVariantBEnabled;
+    let adSizingVariantClassName = "";
+    if (adSizingVariantEnabled) {
+      // Ad sizing experiment variant, we want to ensure only 1 of these is ever enabled.
+      adSizingVariantClassName = adSizingVariantAEnabled ? `ad-sizing-variant-a` : `ad-sizing-variant-b`;
+    }
+    const hideCardBackgroundClass = hideCardBackground ? `ds-card-grid-hide-background` : ``;
+    const fourCardLayoutClass = fourCardLayout ? `ds-card-grid-four-card-variant` : ``;
+    const hideDescriptionsClassName = !hideDescriptions ? `ds-card-grid-include-descriptions` : ``;
+    const compactGridClassName = compactGrid ? `ds-card-grid-compact` : ``;
+    const hybridLayoutClassName = hybridLayout ? `ds-card-grid-hybrid-layout` : ``;
+    const gridClassName = `ds-card-grid ${hybridLayoutClassName} ${hideCardBackgroundClass} ${fourCardLayoutClass} ${hideDescriptionsClassName} ${compactGridClassName} ${adSizingVariantClassName}`;
+    return gridClassName;
   }
   render() {
     const {
@@ -3674,6 +4949,7 @@ _CardGrid.defaultProps = {
 };
 const CardGrid = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   Prefs: state.Prefs,
+  App: state.App,
   DiscoveryStream: state.DiscoveryStream
 }))(_CardGrid);
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/CollectionCardGrid/CollectionCardGrid.jsx
@@ -3914,6 +5190,7 @@ ErrorBoundary.defaultProps = {
 
 
 
+
 /**
  * A section that can collapse. As of bug 1710937, it can no longer collapse.
  * See bug 1727365 for follow-up work to simplify this component.
@@ -3925,11 +5202,12 @@ class _CollapsibleSection extends (external_React_default()).PureComponent {
     this.onMenuButtonMouseEnter = this.onMenuButtonMouseEnter.bind(this);
     this.onMenuButtonMouseLeave = this.onMenuButtonMouseLeave.bind(this);
     this.onMenuUpdate = this.onMenuUpdate.bind(this);
+    this.setContextMenuButtonRef = this.setContextMenuButtonRef.bind(this);
+    this.handleTopicSelectionButtonClick = this.handleTopicSelectionButtonClick.bind(this);
     this.state = {
       menuButtonHover: false,
       showContextMenu: false
     };
-    this.setContextMenuButtonRef = this.setContextMenuButtonRef.bind(this);
   }
   setContextMenuButtonRef(element) {
     this.contextMenuButtonRef = element;
@@ -3952,6 +5230,19 @@ class _CollapsibleSection extends (external_React_default()).PureComponent {
       showContextMenu
     });
   }
+  handleTopicSelectionButtonClick() {
+    const maybeDisplay = this.props.Prefs.values["discoverystream.topicSelection.onboarding.maybeDisplay"];
+    this.props.dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.TOPIC_SELECTION_USER_OPEN
+    }));
+    if (maybeDisplay) {
+      // if still part of onboarding, remove user from onboarding flow
+      this.props.dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", false));
+    }
+    this.props.dispatch(actionCreators.BroadcastToContent({
+      type: actionTypes.TOPIC_SELECTION_SPOTLIGHT_OPEN
+    }));
+  }
   render() {
     const {
       isAnimating,
@@ -3962,10 +5253,11 @@ class _CollapsibleSection extends (external_React_default()).PureComponent {
     const {
       id,
       collapsed,
-      learnMore,
       title,
       subTitle,
-      mayHaveSponsoredStories
+      mayHaveSponsoredStories,
+      mayHaveTopicsSelection,
+      sectionsEnabled
     } = this.props;
     const active = menuButtonHover || showContextMenu;
     let bodyStyle;
@@ -3985,35 +5277,36 @@ class _CollapsibleSection extends (external_React_default()).PureComponent {
       };
     }
     const hasSubtitleClassName = subTitle ? `has-subtitle` : ``;
+    const hasBeenUpdatedPreviously = this.props.Prefs.values["discoverystream.topicSelection.hasBeenUpdatedPreviously"];
+    const selectedTopics = this.props.Prefs.values["discoverystream.topicSelection.selectedTopics"];
+    const topicsHaveBeenPreviouslySet = hasBeenUpdatedPreviously || selectedTopics;
     return /*#__PURE__*/external_React_default().createElement("section", {
       className: `collapsible-section ${this.props.className}${active ? " active" : ""}`
       // Note: data-section-id is used for web extension api tests in mozilla central
       ,
       "data-section-id": id
-    }, /*#__PURE__*/external_React_default().createElement("div", {
+    }, !sectionsEnabled && /*#__PURE__*/external_React_default().createElement("div", {
       className: "section-top-bar"
-    }, /*#__PURE__*/external_React_default().createElement("h3", {
+    }, /*#__PURE__*/external_React_default().createElement("h2", {
       className: `section-title-container ${hasSubtitleClassName}`,
       style: titleStyle
     }, /*#__PURE__*/external_React_default().createElement("span", {
       className: "section-title"
     }, /*#__PURE__*/external_React_default().createElement(FluentOrText, {
       message: title
-    })), /*#__PURE__*/external_React_default().createElement("span", {
-      className: "learn-more-link-wrapper"
-    }, learnMore && /*#__PURE__*/external_React_default().createElement("span", {
-      className: "learn-more-link"
-    }, /*#__PURE__*/external_React_default().createElement(FluentOrText, {
-      message: learnMore.link.message
-    }, /*#__PURE__*/external_React_default().createElement("a", {
-      href: learnMore.link.href
-    })))), subTitle && /*#__PURE__*/external_React_default().createElement("span", {
+    })), subTitle && /*#__PURE__*/external_React_default().createElement("span", {
       className: "section-sub-title"
     }, /*#__PURE__*/external_React_default().createElement(FluentOrText, {
       message: subTitle
     })), mayHaveSponsoredStories && this.props.spocMessageVariant === "variant-a" && /*#__PURE__*/external_React_default().createElement(SponsoredContentHighlight, {
       position: "inset-block-start inset-inline-start",
       dispatch: this.props.dispatch
+    })), mayHaveTopicsSelection && /*#__PURE__*/external_React_default().createElement("div", {
+      className: "button-topic-selection"
+    }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+      "data-l10n-id": topicsHaveBeenPreviouslySet ? "newtab-topic-selection-button-update-interests" : "newtab-topic-selection-button-pick-interests",
+      type: topicsHaveBeenPreviouslySet ? "default" : "primary",
+      onClick: this.handleTopicSelectionButtonClick
     }))), /*#__PURE__*/external_React_default().createElement(ErrorBoundary, {
       className: "section-body-fallback"
     }, /*#__PURE__*/external_React_default().createElement("div", {
@@ -4023,7 +5316,7 @@ class _CollapsibleSection extends (external_React_default()).PureComponent {
   }
 }
 _CollapsibleSection.defaultProps = {
-  document: __webpack_require__.g.document || {
+  document: globalThis.document || {
     addEventListener: () => {},
     removeEventListener: () => {},
     visibilityState: "hidden"
@@ -4069,50 +5362,50 @@ class DSMessage extends (external_React_default()).PureComponent {
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-class ModalOverlayWrapper extends (external_React_default()).PureComponent {
-  constructor(props) {
-    super(props);
-    this.onKeyDown = this.onKeyDown.bind(this);
+function ModalOverlayWrapper({
+  // eslint-disable-next-line no-shadow
+  document = globalThis.document,
+  unstyled,
+  innerClassName,
+  onClose,
+  children,
+  headerId,
+  id
+}) {
+  const modalRef = (0,external_React_namespaceObject.useRef)(null);
+  let className = unstyled ? "" : "modalOverlayInner active";
+  if (innerClassName) {
+    className += ` ${innerClassName}`;
   }
 
   // The intended behaviour is to listen for an escape key
   // but not for a click; see Bug 1582242
-  onKeyDown(event) {
+  const onKeyDown = (0,external_React_namespaceObject.useCallback)(event => {
     if (event.key === "Escape") {
-      this.props.onClose(event);
+      onClose(event);
     }
-  }
-  componentWillMount() {
-    this.props.document.addEventListener("keydown", this.onKeyDown);
-    this.props.document.body.classList.add("modal-open");
-  }
-  componentWillUnmount() {
-    this.props.document.removeEventListener("keydown", this.onKeyDown);
-    this.props.document.body.classList.remove("modal-open");
-  }
-  render() {
-    const {
-      props
-    } = this;
-    let className = props.unstyled ? "" : "modalOverlayInner active";
-    if (props.innerClassName) {
-      className += ` ${props.innerClassName}`;
-    }
-    return /*#__PURE__*/external_React_default().createElement("div", {
-      className: "modalOverlayOuter active",
-      onKeyDown: this.onKeyDown,
-      role: "presentation"
-    }, /*#__PURE__*/external_React_default().createElement("div", {
-      className: className,
-      "aria-labelledby": props.headerId,
-      id: props.id,
-      role: "dialog"
-    }, props.children));
-  }
+  }, [onClose]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    document.addEventListener("keydown", onKeyDown);
+    document.body.classList.add("modal-open");
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.classList.remove("modal-open");
+    };
+  }, [document, onKeyDown]);
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "modalOverlayOuter active",
+    onKeyDown: onKeyDown,
+    role: "presentation"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: className,
+    "aria-labelledby": headerId,
+    id: id,
+    role: "dialog",
+    ref: modalRef
+  }, children));
 }
-ModalOverlayWrapper.defaultProps = {
-  document: __webpack_require__.g.document
-};
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/DSPrivacyModal/DSPrivacyModal.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -4443,7 +5736,7 @@ class DSTextPromo extends (external_React_default()).PureComponent {
     })));
   }
 }
-;// CONCATENATED MODULE: ./content-src/lib/screenshot-utils.js
+;// CONCATENATED MODULE: ./content-src/lib/screenshot-utils.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -4462,8 +5755,13 @@ class DSTextPromo extends (external_React_default()).PureComponent {
  */
 const ScreenshotUtils = {
   isBlob(isLocal, image) {
-    return !!(image && image.path && (!isLocal && image.data || isLocal && image.url));
+    return !!(
+      image &&
+      image.path &&
+      ((!isLocal && image.data) || (isLocal && image.url))
+    );
   },
+
   // This should always be called with a remote image and not a local image.
   createLocalImageObject(remoteImage) {
     if (!remoteImage) {
@@ -4471,33 +5769,36 @@ const ScreenshotUtils = {
     }
     if (this.isBlob(false, remoteImage)) {
       return {
-        url: __webpack_require__.g.URL.createObjectURL(remoteImage.data),
-        path: remoteImage.path
+        url: globalThis.URL.createObjectURL(remoteImage.data),
+        path: remoteImage.path,
       };
     }
-    return {
-      url: remoteImage
-    };
+    return { url: remoteImage };
   },
+
   // Revokes the object URL of the image if the local image is a blob.
   // This should always be called with a local image and not a remote image.
   maybeRevokeBlobObjectURL(localImage) {
     if (this.isBlob(true, localImage)) {
-      __webpack_require__.g.URL.revokeObjectURL(localImage.url);
+      globalThis.URL.revokeObjectURL(localImage.url);
     }
   },
+
   // Checks if remoteImage and localImage are the same.
   isRemoteImageLocal(localImage, remoteImage) {
     // Both remoteImage and localImage are present.
     if (remoteImage && localImage) {
-      return this.isBlob(false, remoteImage) ? localImage.path === remoteImage.path : localImage.url === remoteImage;
+      return this.isBlob(false, remoteImage)
+        ? localImage.path === remoteImage.path
+        : localImage.url === remoteImage;
     }
 
     // This will only handle the remaining three possible outcomes.
     // (i.e. everything except when both image and localImage are present)
     return !remoteImage && !localImage;
-  }
+  },
 };
+
 ;// CONCATENATED MODULE: ./content-src/components/Card/Card.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -4822,14 +6123,13 @@ const PlaceholderCard = props => /*#__PURE__*/external_React_default().createEle
   placeholder: true,
   className: props.className
 });
-;// CONCATENATED MODULE: ./content-src/lib/perf-service.js
+;// CONCATENATED MODULE: ./content-src/lib/perf-service.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
-
 let usablePerfObj = window.performance;
+
 function _PerfService(options) {
   // For testing, so that we can use a fake Window.performance object with
   // known state.
@@ -4839,6 +6139,7 @@ function _PerfService(options) {
     this._perf = usablePerfObj;
   }
 }
+
 _PerfService.prototype = {
   /**
    * Calls the underlying mark() method on the appropriate Window.performance
@@ -4851,6 +6152,7 @@ _PerfService.prototype = {
   mark: function mark(str) {
     this._perf.mark(str);
   },
+
   /**
    * Calls the underlying getEntriesByName on the appropriate Window.performance
    * object.
@@ -4859,9 +6161,10 @@ _PerfService.prototype = {
    * @param  {String} type eg "mark"
    * @return {Array}       Performance* objects
    */
-  getEntriesByName: function getEntriesByName(name, type) {
-    return this._perf.getEntriesByName(name, type);
+  getEntriesByName: function getEntriesByName(entryName, type) {
+    return this._perf.getEntriesByName(entryName, type);
   },
+
   /**
    * The timeOrigin property from the appropriate performance object.
    * Used to ensure that timestamps from the add-on code and the content code
@@ -4880,6 +6183,7 @@ _PerfService.prototype = {
   get timeOrigin() {
     return this._perf.timeOrigin;
   },
+
   /**
    * Returns the "absolute" version of performance.now(), i.e. one that
    * should ([bug 1401406](https://bugzilla.mozilla.org/show_bug.cgi?id=1401406)
@@ -4890,6 +6194,7 @@ _PerfService.prototype = {
   absNow: function absNow() {
     return this.timeOrigin + this._perf.now();
   },
+
   /**
    * This returns the absolute startTime from the most recent performance.mark()
    * with the given name.
@@ -4908,16 +6213,20 @@ _PerfService.prototype = {
    * See [bug 1369303](https://bugzilla.mozilla.org/show_bug.cgi?id=1369303)
    * for more info.
    */
-  getMostRecentAbsMarkStartByName(name) {
-    let entries = this.getEntriesByName(name, "mark");
+  getMostRecentAbsMarkStartByName(entryName) {
+    let entries = this.getEntriesByName(entryName, "mark");
+
     if (!entries.length) {
-      throw new Error(`No marks with the name ${name}`);
+      throw new Error(`No marks with the name ${entryName}`);
     }
+
     let mostRecentEntry = entries[entries.length - 1];
     return this._perf.timeOrigin + mostRecentEntry.startTime;
-  }
+  },
 };
+
 const perfService = new _PerfService();
+
 ;// CONCATENATED MODULE: ./content-src/components/ComponentPerfTimer/ComponentPerfTimer.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -5126,40 +6435,6 @@ class _PocketLoggedInCta extends (external_React_default()).PureComponent {
 const PocketLoggedInCta = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   Pocket: state.Pocket
 }))(_PocketLoggedInCta);
-;// CONCATENATED MODULE: ./content-src/components/Topics/Topics.jsx
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-
-class Topic extends (external_React_default()).PureComponent {
-  render() {
-    const {
-      url,
-      name
-    } = this.props;
-    return /*#__PURE__*/external_React_default().createElement("li", null, /*#__PURE__*/external_React_default().createElement("a", {
-      key: name,
-      href: url
-    }, name));
-  }
-}
-class Topics extends (external_React_default()).PureComponent {
-  render() {
-    const {
-      topics
-    } = this.props;
-    return /*#__PURE__*/external_React_default().createElement("span", {
-      className: "topics"
-    }, /*#__PURE__*/external_React_default().createElement("span", {
-      "data-l10n-id": "newtab-pocket-read-more"
-    }), /*#__PURE__*/external_React_default().createElement("ul", null, topics && topics.map(t => /*#__PURE__*/external_React_default().createElement(Topic, {
-      key: t.name,
-      url: t.url,
-      name: t.name
-    }))));
-  }
-}
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/SearchShortcutsForm.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -5232,14 +6507,14 @@ class SearchShortcutsForm extends (external_React_default()).PureComponent {
       target
     } = event;
     const {
-      name,
+      name: targetName,
       checked
     } = target;
     this.setState(prevState => {
       const shortcuts = prevState.shortcuts.slice();
       let shortcut = shortcuts.find(({
         keyword
-      }) => keyword === name);
+      }) => keyword === targetName);
       shortcut.isSelected = checked;
       return {
         shortcuts
@@ -5397,7 +6672,6 @@ const INITIAL_STATE = {
     isForStartupCache: false,
     customizeMenuVisible: false,
   },
-  ASRouter: { initialized: false },
   TopSites: {
     // Have we received real data from history yet?
     initialized: false,
@@ -5439,12 +6713,19 @@ const INITIAL_STATE = {
     layout: [],
     isPrivacyInfoModalVisible: false,
     isCollectionDismissible: false,
+    topicsLoading: false,
     feeds: {
       data: {
         // "https://foo.com/feed1": {lastUpdated: 123, data: [], personalized: false}
       },
       loaded: false,
     },
+    // Used to show impressions in newtab devtools.
+    impressions: {
+      feed: {},
+    },
+    // Used to show blocks in newtab devtools.
+    blocks: {},
     spocs: {
       spocs_endpoint: "",
       lastUpdated: null,
@@ -5465,6 +6746,15 @@ const INITIAL_STATE = {
     recentSavesData: [],
     isUserLoggedIn: false,
     recentSavesEnabled: false,
+    showTopicSelection: false,
+  },
+  Notifications: {
+    showNotifications: false,
+    toastCounter: 0,
+    toastId: "",
+    // This queue is reset each time SHOW_TOAST_MESSAGE is ran.
+    // For can be a queue in the future, but for now is one item
+    toastQueue: [],
   },
   Personalization: {
     lastUpdated: null,
@@ -5478,6 +6768,26 @@ const INITIAL_STATE = {
     fakeFocus: false,
     // Hide the search box after handing off to AwesomeBar and user starts typing.
     hide: false,
+  },
+  Wallpapers: {
+    wallpaperList: [],
+    highlightSeenCounter: 0,
+    categories: [],
+  },
+  Weather: {
+    initialized: false,
+    lastUpdated: null,
+    query: "",
+    suggestions: [],
+    locationData: {
+      city: "",
+      adminArea: "",
+      country: "",
+    },
+    // Display search input in Weather widget
+    searchActive: false,
+    locationSearchString: "",
+    suggestedLocations: [],
   },
 };
 
@@ -5493,6 +6803,12 @@ function App(prevState = INITIAL_STATE.App, action) {
       return Object.assign({}, prevState, action.data || {}, {
         isForStartupCache: false,
       });
+    case actionTypes.DISCOVERY_STREAM_SPOCS_UPDATE:
+      // Toggle `isForStartupCache` when receiving the `DISCOVERY_STREAM_SPOCS_UPDATE_STARTUPCACHE` action
+      // so that spoc cards can be rendered as usual.
+      return Object.assign({}, prevState, action.data || {}, {
+        isForStartupCache: false,
+      });
     case actionTypes.SHOW_PERSONALIZE:
       return Object.assign({}, prevState, {
         customizeMenuVisible: true,
@@ -5501,15 +6817,6 @@ function App(prevState = INITIAL_STATE.App, action) {
       return Object.assign({}, prevState, {
         customizeMenuVisible: false,
       });
-    default:
-      return prevState;
-  }
-}
-
-function ASRouter(prevState = INITIAL_STATE.ASRouter, action) {
-  switch (action.type) {
-    case actionTypes.AS_ROUTER_INITIALIZED:
-      return { ...action.data, initialized: true };
     default:
       return prevState;
   }
@@ -5668,12 +6975,13 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
       return Object.assign({}, prevState, { rows: newRows });
     case actionTypes.UPDATE_SEARCH_SHORTCUTS:
       return { ...prevState, searchShortcuts: action.data.searchShortcuts };
-    case actionTypes.SOV_UPDATED:
+    case actionTypes.SOV_UPDATED: {
       const sov = {
         ready: action.data.ready,
         positions: action.data.positions,
       };
       return { ...prevState, sov };
+    }
     default:
       return prevState;
   }
@@ -5685,7 +6993,8 @@ function Dialog(prevState = INITIAL_STATE.Dialog, action) {
       return Object.assign({}, prevState, { visible: true, data: action.data });
     case actionTypes.DIALOG_CANCEL:
       return Object.assign({}, prevState, { visible: false });
-    case actionTypes.DELETE_HISTORY_URL:
+    case actionTypes.DIALOG_CLOSE:
+      // Reset and hide the confirmation dialog once the action is complete.
       return Object.assign({}, INITIAL_STATE.Dialog);
     default:
       return prevState;
@@ -6023,6 +7332,11 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
         ...prevState,
         isCollectionDismissible: action.data.value,
       };
+    case actionTypes.DISCOVERY_STREAM_TOPICS_LOADING:
+      return {
+        ...prevState,
+        topicsLoading: action.data,
+      };
     case actionTypes.DISCOVERY_STREAM_PREFS_SETUP:
       return {
         ...prevState,
@@ -6067,7 +7381,7 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
           loaded: true,
         },
       };
-    case actionTypes.DISCOVERY_STREAM_FEED_UPDATE:
+    case actionTypes.DISCOVERY_STREAM_FEED_UPDATE: {
       const newData = {};
       newData[action.data.url] = action.data.feed;
       return {
@@ -6079,6 +7393,20 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
             ...newData,
           },
         },
+      };
+    }
+    case actionTypes.DISCOVERY_STREAM_DEV_IMPRESSIONS:
+      return {
+        ...prevState,
+        impressions: {
+          ...prevState.impressions,
+          feed: action.data,
+        },
+      };
+    case actionTypes.DISCOVERY_STREAM_DEV_BLOCKS:
+      return {
+        ...prevState,
+        blocks: action.data,
       };
     case actionTypes.DISCOVERY_STREAM_SPOCS_CAPS:
       return {
@@ -6136,7 +7464,7 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
             items.filter(item => item.url !== action.data.url)
           );
 
-    case actionTypes.PLACES_SAVED_TO_POCKET:
+    case actionTypes.PLACES_SAVED_TO_POCKET: {
       const addPocketInfo = item => {
         if (item.url === action.data.url) {
           return Object.assign({}, item, {
@@ -6150,7 +7478,7 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
       return isNotReady()
         ? prevState
         : nextState(items => items.map(addPocketInfo));
-
+    }
     case actionTypes.DELETE_FROM_POCKET:
     case actionTypes.ARCHIVE_FROM_POCKET:
       return isNotReady()
@@ -6159,7 +7487,7 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
             items.filter(item => item.pocket_id !== action.data.pocket_id)
           );
 
-    case actionTypes.PLACES_BOOKMARK_ADDED:
+    case actionTypes.PLACES_BOOKMARK_ADDED: {
       const updateBookmarkInfo = item => {
         if (item.url === action.data.url) {
           const { bookmarkGuid, bookmarkTitle, dateAdded } = action.data;
@@ -6175,8 +7503,8 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
       return isNotReady()
         ? prevState
         : nextState(items => items.map(updateBookmarkInfo));
-
-    case actionTypes.PLACES_BOOKMARKS_REMOVED:
+    }
+    case actionTypes.PLACES_BOOKMARKS_REMOVED: {
       const removeBookmarkInfo = item => {
         if (action.data.urls.includes(item.url)) {
           const newSite = Object.assign({}, item);
@@ -6193,6 +7521,7 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
       return isNotReady()
         ? prevState
         : nextState(items => items.map(removeBookmarkInfo));
+    }
     case actionTypes.PREF_CHANGED:
       if (action.data.name === PREF_COLLECTION_DISMISSIBLE) {
         return {
@@ -6201,6 +7530,22 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
         };
       }
       return prevState;
+    case actionTypes.TOPIC_SELECTION_SPOTLIGHT_OPEN:
+      return {
+        ...prevState,
+        showTopicSelection: true,
+      };
+    case actionTypes.TOPIC_SELECTION_SPOTLIGHT_CLOSE:
+      return {
+        ...prevState,
+        showTopicSelection: false,
+      };
+    case actionTypes.SECTION_BLOCKED:
+      return {
+        ...prevState,
+        showBlockSectionConfirmation: true,
+        sectionData: action.data,
+      };
     default:
       return prevState;
   }
@@ -6219,17 +7564,81 @@ function Search(prevState = INITIAL_STATE.Search, action) {
   }
 }
 
+function Wallpapers(prevState = INITIAL_STATE.Wallpapers, action) {
+  switch (action.type) {
+    case actionTypes.WALLPAPERS_SET:
+      return {
+        ...prevState,
+        wallpaperList: action.data,
+      };
+    case actionTypes.WALLPAPERS_FEATURE_HIGHLIGHT_COUNTER_INCREMENT:
+      return {
+        ...prevState,
+        highlightSeenCounter: action.data,
+      };
+    case actionTypes.WALLPAPERS_CATEGORY_SET:
+      return { ...prevState, categories: action.data };
+    default:
+      return prevState;
+  }
+}
+
+function Notifications(prevState = INITIAL_STATE.Notifications, action) {
+  switch (action.type) {
+    case actionTypes.SHOW_TOAST_MESSAGE:
+      return {
+        ...prevState,
+        showNotifications: action.data.showNotifications,
+        toastCounter: prevState.toastCounter + 1,
+        toastId: action.data.toastId,
+        toastQueue: [action.data.toastId],
+      };
+    case actionTypes.HIDE_TOAST_MESSAGE:
+      return {
+        ...prevState,
+        showNotifications: action.data.showNotifications,
+      };
+    default:
+      return prevState;
+  }
+}
+
+function Weather(prevState = INITIAL_STATE.Weather, action) {
+  switch (action.type) {
+    case actionTypes.WEATHER_UPDATE:
+      return {
+        ...prevState,
+        suggestions: action.data.suggestions,
+        lastUpdated: action.data.date,
+        locationData: action.data.locationData || prevState.locationData,
+        initialized: true,
+      };
+    case actionTypes.WEATHER_SEARCH_ACTIVE:
+      return { ...prevState, searchActive: action.data };
+    case actionTypes.WEATHER_LOCATION_SEARCH_UPDATE:
+      return { ...prevState, locationSearchString: action.data };
+    case actionTypes.WEATHER_LOCATION_SUGGESTIONS_UPDATE:
+      return { ...prevState, suggestedLocations: action.data };
+    case actionTypes.WEATHER_LOCATION_DATA_UPDATE:
+      return { ...prevState, locationData: action.data };
+    default:
+      return prevState;
+  }
+}
+
 const reducers = {
   TopSites,
   App,
-  ASRouter,
   Prefs,
   Dialog,
   Sections,
+  Notifications,
   Pocket,
   Personalization: Reducers_sys_Personalization,
   DiscoveryStream,
   Search,
+  Wallpapers,
+  Weather,
 };
 
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSiteFormInput.jsx
@@ -6448,8 +7857,8 @@ class TopSiteImpressionWrapper extends (external_React_default()).PureComponent 
   }
 }
 TopSiteImpressionWrapper.defaultProps = {
-  IntersectionObserver: __webpack_require__.g.IntersectionObserver,
-  document: __webpack_require__.g.document,
+  IntersectionObserver: globalThis.IntersectionObserver,
+  document: globalThis.document,
   actionType: null,
   tile: null
 };
@@ -7245,9 +8654,11 @@ class _TopSiteList extends (external_React_default()).PureComponent {
       }
       topSitesUI.push(topSiteLink);
     }
-    return /*#__PURE__*/external_React_default().createElement("ul", {
+    return /*#__PURE__*/external_React_default().createElement("div", {
+      className: "top-sites-list-wrapper"
+    }, /*#__PURE__*/external_React_default().createElement("ul", {
       className: `top-sites-list${this.state.draggedSite ? " dnd-active" : ""}`
-    }, topSitesUI);
+    }, topSitesUI));
   }
 }
 const TopSiteList = (0,external_ReactRedux_namespaceObject.connect)(state => ({
@@ -7601,7 +9012,7 @@ class _TopSites extends (external_React_default()).PureComponent {
     // We hide 2 sites per row when not in the wide layout.
     let sitesPerRow = TOP_SITES_MAX_SITES_PER_ROW;
     // $break-point-widest = 1072px (from _variables.scss)
-    if (!__webpack_require__.g.matchMedia(`(min-width: 1072px)`).matches) {
+    if (!globalThis.matchMedia(`(min-width: 1072px)`).matches) {
       sitesPerRow -= 2;
     }
     return this.props.TopSites.rows.slice(0, this.props.TopSitesRows * sitesPerRow);
@@ -7714,7 +9125,6 @@ function Sections_extends() { Sections_extends = Object.assign ? Object.assign.b
 
 
 
-
 const Sections_VISIBLE = "visible";
 const Sections_VISIBILITY_CHANGE_EVENT = "visibilitychange";
 const CARDS_PER_ROW_DEFAULT = 3;
@@ -7733,7 +9143,7 @@ class Section extends (external_React_default()).PureComponent {
       props
     } = this;
     let cardsPerRow = CARDS_PER_ROW_DEFAULT;
-    if (props.compactCards && __webpack_require__.g.matchMedia(`(min-width: 1072px)`).matches) {
+    if (props.compactCards && globalThis.matchMedia(`(min-width: 1072px)`).matches) {
       // If the section has compact cards and the viewport is wide enough, we show
       // 4 columns instead of 3.
       // $break-point-widest = 1072px (from _variables.scss)
@@ -7847,7 +9257,6 @@ class Section extends (external_React_default()).PureComponent {
       title,
       rows,
       Pocket,
-      topics,
       emptyState,
       dispatch,
       compactCards,
@@ -7874,19 +9283,8 @@ class Section extends (external_React_default()).PureComponent {
     const {
       useCta
     } = pocketCta || {};
-
-    // Don't display anything until we have a definitve result from Pocket,
-    // to avoid a flash of logged out state while we render.
-    const isPocketLoggedInDefined = isUserLoggedIn === true || isUserLoggedIn === false;
-    const hasTopics = topics && !!topics.length;
     const shouldShowPocketCta = id === "topstories" && useCta && isUserLoggedIn === false;
-
-    // Show topics only for top stories and if it has loaded with topics.
-    // The classs .top-stories-bottom-container ensures content doesn't shift as things load.
-    const shouldShowTopics = id === "topstories" && hasTopics && (useCta && isUserLoggedIn === true || !useCta && isPocketLoggedInDefined);
-
-    // We use topics to determine language support for read more.
-    const shouldShowReadMore = read_more_endpoint && hasTopics;
+    const shouldShowReadMore = read_more_endpoint;
     const realRows = rows.slice(0, maxCards);
 
     // The empty state should only be shown after we have initialized and there is no content.
@@ -7955,11 +9353,7 @@ class Section extends (external_React_default()).PureComponent {
       className: "empty-state-message"
     })))), id === "topstories" && /*#__PURE__*/external_React_default().createElement("div", {
       className: "top-stories-bottom-container"
-    }, shouldShowTopics && /*#__PURE__*/external_React_default().createElement("div", {
-      className: "wrapper-topics"
-    }, /*#__PURE__*/external_React_default().createElement(Topics, {
-      topics: this.props.topics
-    })), shouldShowPocketCta && /*#__PURE__*/external_React_default().createElement("div", {
+    }, shouldShowPocketCta && /*#__PURE__*/external_React_default().createElement("div", {
       className: "wrapper-cta"
     }, /*#__PURE__*/external_React_default().createElement(PocketLoggedInCta, null)), /*#__PURE__*/external_React_default().createElement("div", {
       className: "wrapper-more-recommendations"
@@ -7969,7 +9363,7 @@ class Section extends (external_React_default()).PureComponent {
   }
 }
 Section.defaultProps = {
-  document: __webpack_require__.g.document,
+  document: globalThis.document,
   rows: [],
   emptyState: {},
   pref: {},
@@ -8063,7 +9457,7 @@ class HorizontalRule extends (external_React_default()).PureComponent {
 
 
 
-class Navigation_Topic extends (external_React_default()).PureComponent {
+class Topic extends (external_React_default()).PureComponent {
   constructor(props) {
     super(props);
     this.onLinkClick = this.onLinkClick.bind(this);
@@ -8083,13 +9477,13 @@ class Navigation_Topic extends (external_React_default()).PureComponent {
   render() {
     const {
       url,
-      name
+      name: topicName
     } = this.props;
     return /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
       onLinkClick: this.onLinkClick,
       className: this.props.className,
       url: url
-    }, name);
+    }, topicName);
   }
 }
 class Navigation extends (external_React_default()).PureComponent {
@@ -8122,7 +9516,7 @@ class Navigation extends (external_React_default()).PureComponent {
       className: "ds-navigation-header"
     })) : null, english ? /*#__PURE__*/external_React_default().createElement("ul", null, links && links.map(t => /*#__PURE__*/external_React_default().createElement("li", {
       key: t.name
-    }, /*#__PURE__*/external_React_default().createElement(Navigation_Topic, {
+    }, /*#__PURE__*/external_React_default().createElement(Topic, {
       url: t.url,
       name: t.name,
       dispatch: this.props.dispatch
@@ -8188,20 +9582,13 @@ class SectionTitle extends (external_React_default()).PureComponent {
     }, subtitle) : null);
   }
 }
-;// CONCATENATED MODULE: ./content-src/lib/selectLayoutRender.js
+;// CONCATENATED MODULE: ./content-src/lib/selectLayoutRender.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const selectLayoutRender = ({
-  state = {},
-  prefs = {}
-}) => {
-  const {
-    layout,
-    feeds,
-    spocs
-  } = state;
+const selectLayoutRender = ({ state = {}, prefs = {} }) => {
+  const { layout, feeds, spocs } = state;
   let spocIndexPlacementMap = {};
 
   /* This function fills spoc positions on a per placement basis with available spocs.
@@ -8210,12 +9597,20 @@ const selectLayoutRender = ({
    * If it sees the same placement again, it remembers the previous spoc index, and continues.
    * If it sees a blocked spoc, it skips that position leaving in a regular story.
    */
-  function fillSpocPositionsForPlacement(data, spocsConfig, spocsData, placementName) {
-    if (!spocIndexPlacementMap[placementName] && spocIndexPlacementMap[placementName] !== 0) {
+  function fillSpocPositionsForPlacement(
+    data,
+    spocsPositions,
+    spocsData,
+    placementName
+  ) {
+    if (
+      !spocIndexPlacementMap[placementName] &&
+      spocIndexPlacementMap[placementName] !== 0
+    ) {
       spocIndexPlacementMap[placementName] = 0;
     }
     const results = [...data];
-    for (let position of spocsConfig.positions) {
+    for (let position of spocsPositions) {
       const spoc = spocsData[spocIndexPlacementMap[placementName]];
       // If there are no spocs left, we can stop filling positions.
       if (!spoc) {
@@ -8234,107 +9629,230 @@ const selectLayoutRender = ({
         results.splice(position.index, 0, spoc);
       }
     }
+
     return results;
   }
+
   const positions = {};
-  const DS_COMPONENTS = ["Message", "TextPromo", "SectionTitle", "Signup", "Navigation", "CardGrid", "CollectionCardGrid", "HorizontalRule", "PrivacyLink"];
+  const DS_COMPONENTS = [
+    "Message",
+    "TextPromo",
+    "SectionTitle",
+    "Signup",
+    "Navigation",
+    "CardGrid",
+    "CollectionCardGrid",
+    "HorizontalRule",
+    "PrivacyLink",
+  ];
+
   const filterArray = [];
+
   if (!prefs["feeds.topsites"]) {
     filterArray.push("TopSites");
   }
-  const pocketEnabled = prefs["feeds.section.topstories"] && prefs["feeds.system.topstories"];
+
+  const pocketEnabled =
+    prefs["feeds.section.topstories"] && prefs["feeds.system.topstories"];
   if (!pocketEnabled) {
     filterArray.push(...DS_COMPONENTS);
   }
+
+  // function to determine amount of tiles shown per section per viewport
+  function getMaxTiles(responsiveLayouts) {
+    return responsiveLayouts
+      .flatMap(responsiveLayout => responsiveLayout)
+      .reduce((acc, t) => {
+        acc[t.columnCount] = t.tiles.length;
+
+        // Update maxTile if current tile count is greater
+        if (!acc.maxTile || t.tiles.length > acc.maxTile) {
+          acc.maxTile = t.tiles.length;
+        }
+        return acc;
+      }, {});
+  }
+
   const placeholderComponent = component => {
     if (!component.feed) {
       // TODO we now need a placeholder for topsites and textPromo.
       return {
         ...component,
         data: {
-          spocs: []
-        }
+          spocs: [],
+        },
       };
     }
     const data = {
-      recommendations: []
+      recommendations: [],
+      sections: [
+        {
+          layout: {
+            responsiveLayouts: [],
+          },
+          data: [],
+        },
+      ],
     };
+
     let items = 0;
     if (component.properties && component.properties.items) {
       items = component.properties.items;
     }
     for (let i = 0; i < items; i++) {
-      data.recommendations.push({
-        placeholder: true
-      });
+      data.recommendations.push({ placeholder: true });
     }
-    return {
-      ...component,
-      data
-    };
+
+    const sectionsEnabled = prefs["discoverystream.sections.enabled"];
+    if (sectionsEnabled) {
+      for (let i = 0; i < items; i++) {
+        data.sections[0].data.push({ placeholder: true });
+      }
+    }
+
+    return { ...component, data };
   };
 
   // TODO update devtools to show placements
-  const handleSpocs = (data, component) => {
+  const handleSpocs = (data = [], spocsPositions, spocsPlacement) => {
     let result = [...data];
     // Do we ever expect to possibly have a spoc.
-    if (component.spocs && component.spocs.positions && component.spocs.positions.length) {
-      const placement = component.placement || {};
-      const placementName = placement.name || "spocs";
+    if (spocsPositions?.length) {
+      const placement = spocsPlacement || {};
+      const placementName = placement.name || "newtab_spocs";
       const spocsData = spocs.data[placementName];
+
       // We expect a spoc, spocs are loaded, and the server returned spocs.
-      if (spocs.loaded && spocsData && spocsData.items && spocsData.items.length) {
-        result = fillSpocPositionsForPlacement(result, component.spocs, spocsData.items, placementName);
+      if (spocs.loaded && spocsData?.items?.length) {
+        // Since banner-type ads are placed by row and don't use the normal spoc position,
+        // dont combine with content
+        const excludedSpocs = ["billboard", "leaderboard"];
+        const filteredSpocs = spocsData?.items?.filter(
+          item => !excludedSpocs.includes(item.format)
+        );
+        result = fillSpocPositionsForPlacement(
+          result,
+          spocsPositions,
+          filteredSpocs,
+          placementName
+        );
       }
     }
     return result;
   };
+
+  const handleSections = (sections = [], recommendations = []) => {
+    let result = sections.sort((a, b) => a.receivedRank - b.receivedRank);
+
+    const sectionsMap = recommendations.reduce((acc, recommendation) => {
+      const { section } = recommendation;
+      acc[section] = acc[section] || [];
+      acc[section].push(recommendation);
+      return acc;
+    }, {});
+
+    result.forEach(section => {
+      const { sectionKey } = section;
+      section.data = sectionsMap[sectionKey];
+    });
+
+    return result;
+  };
+
   const handleComponent = component => {
-    if (component.spocs && component.spocs.positions && component.spocs.positions.length) {
+    if (component?.spocs?.positions?.length) {
       const placement = component.placement || {};
-      const placementName = placement.name || "spocs";
+      const placementName = placement.name || "newtab_spocs";
       const spocsData = spocs.data[placementName];
-      if (spocs.loaded && spocsData && spocsData.items && spocsData.items.length) {
+      if (spocs.loaded && spocsData?.items?.length) {
         return {
           ...component,
           data: {
-            spocs: spocsData.items.filter(spoc => spoc && !spocs.blocked.includes(spoc.url)).map((spoc, index) => ({
-              ...spoc,
-              pos: index
-            }))
-          }
+            spocs: spocsData.items
+              .filter(spoc => spoc && !spocs.blocked.includes(spoc.url))
+              .map((spoc, index) => ({
+                ...spoc,
+                pos: index,
+              })),
+          },
         };
       }
     }
     return {
       ...component,
       data: {
-        spocs: []
-      }
+        spocs: [],
+      },
     };
   };
+
   const handleComponentWithFeed = component => {
     positions[component.type] = positions[component.type] || 0;
     let data = {
-      recommendations: []
+      recommendations: [],
+      sections: [],
     };
+
     const feed = feeds.data[component.feed.url];
-    if (feed && feed.data) {
+    if (feed?.data) {
       data = {
         ...feed.data,
-        recommendations: [...(feed.data.recommendations || [])]
+        recommendations: [...(feed.data.recommendations || [])],
+        sections: [...(feed.data.sections || [])],
       };
     }
+
     if (component && component.properties && component.properties.offset) {
       data = {
         ...data,
-        recommendations: data.recommendations.slice(component.properties.offset)
+        recommendations: data.recommendations.slice(
+          component.properties.offset
+        ),
       };
     }
+    const spocsPositions = component?.spocs?.positions;
+    const spocsPlacement = component?.placement;
+
+    const sectionsEnabled = prefs["discoverystream.sections.enabled"];
     data = {
       ...data,
-      recommendations: handleSpocs(data.recommendations, component)
+      ...(sectionsEnabled
+        ? {
+            sections: handleSections(data.sections, data.recommendations).map(
+              section => {
+                const sectionsSpocsPositions = [];
+                section.layout.responsiveLayouts
+                  // Initial position for spocs is going to be for the smallest breakpoint.
+                  // We can then move it from there via breakpoints.
+                  .find(item => item.columnCount === 1)
+                  .tiles.forEach(tile => {
+                    if (tile.hasAd) {
+                      sectionsSpocsPositions.push({ index: tile.position });
+                    }
+                  });
+                return {
+                  ...section,
+                  data: handleSpocs(
+                    section.data,
+                    sectionsSpocsPositions,
+                    spocsPlacement
+                  ),
+                };
+              }
+            ),
+            // We don't fill spocs in recs if sections are enabled,
+            // because recs are not going to be seen.
+            recommendations: data.recommendations,
+          }
+        : {
+            recommendations: handleSpocs(
+              data.recommendations,
+              spocsPositions,
+              spocsPlacement
+            ),
+          }),
     };
+
     let items = 0;
     if (component.properties && component.properties.items) {
       items = Math.min(component.properties.items, data.recommendations.length);
@@ -8346,31 +9864,54 @@ const selectLayoutRender = ({
     for (let i = 0; i < items; i++) {
       data.recommendations[i] = {
         ...data.recommendations[i],
-        pos: positions[component.type]++
+        pos: positions[component.type]++,
       };
     }
-    return {
-      ...component,
-      data
-    };
+
+    // Setup absolute positions for sections layout.
+    if (sectionsEnabled) {
+      let currentPosition = 0;
+      data.sections.forEach(section => {
+        // We assume the count for the breakpoint with the most tiles.
+        const { maxTile } = getMaxTiles(section?.layout?.responsiveLayouts);
+        for (let i = 0; i < maxTile; i++) {
+          if (section.data[i]) {
+            section.data[i] = {
+              ...section.data[i],
+              pos: currentPosition++,
+            };
+          }
+        }
+      });
+    }
+
+    return { ...component, data };
   };
+
   const renderLayout = () => {
     const renderedLayoutArray = [];
-    for (const row of layout.filter(r => r.components.filter(c => !filterArray.includes(c.type)).length)) {
+    for (const row of layout.filter(
+      r => r.components.filter(c => !filterArray.includes(c.type)).length
+    )) {
       let components = [];
       renderedLayoutArray.push({
         ...row,
-        components
+        components,
       });
-      for (const component of row.components.filter(c => !filterArray.includes(c.type))) {
+      for (const component of row.components.filter(
+        c => !filterArray.includes(c.type)
+      )) {
         const spocsConfig = component.spocs;
         if (spocsConfig || component.feed) {
-          // TODO make sure this still works for different loading cases.
-          if (component.feed && !feeds.data[component.feed.url] || spocsConfig && spocsConfig.positions && spocsConfig.positions.length && !spocs.loaded) {
+          if (
+            (component.feed && !feeds.data[component.feed.url]) ||
+            (spocsConfig &&
+              spocsConfig.positions &&
+              spocsConfig.positions.length &&
+              !spocs.loaded)
+          ) {
             components.push(placeholderComponent(component));
-            return renderedLayoutArray;
-          }
-          if (component.feed) {
+          } else if (component.feed) {
             components.push(handleComponentWithFeed(component));
           } else {
             components.push(handleComponent(component));
@@ -8382,15 +9923,418 @@ const selectLayoutRender = ({
     }
     return renderedLayoutArray;
   };
+
   const layoutRender = renderLayout();
-  return {
-    layoutRender
-  };
+
+  return { layoutRender };
 };
+
+;// CONCATENATED MODULE: ./content-src/lib/hooks.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+/**
+ * A custom react hook that sets up an IntersectionObserver to observe a single
+ * or list of elements and triggers a callback when the element comes into the viewport
+ * Note: The refs used should be an array type
+ * @function useIntersectionObserver
+ * @param {function} callback - The function to call when an element comes into the viewport
+ * @param {Object} options - Options object passed to Intersection Observer:
+ * https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver/IntersectionObserver#options
+ * @param {Boolean} [isSingle = false] Boolean if the elements are an array or single element
+ *
+ * @returns {React.MutableRefObject} a ref containing an array of elements or single element
+ *
+ *
+ *
+ */
+function useIntersectionObserver(callback, threshold = 0.3) {
+  const elementsRef = (0,external_React_namespaceObject.useRef)([]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          callback(entry.target);
+          observer.unobserve(entry.target);
+        }
+      });
+    }, {
+      threshold
+    });
+    elementsRef.current.forEach(el => {
+      if (el) {
+        observer.observe(el);
+      }
+    });
+  }, [callback, threshold]);
+  return elementsRef;
+}
+
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/SectionContextMenu/SectionContextMenu.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+
+
+/**
+ * A context menu for blocking, following and unfollowing sections.
+ *
+ * @param props
+ * @returns {React.FunctionComponent}
+ */
+function SectionContextMenu({
+  type = "DISCOVERY_STREAM",
+  title,
+  source,
+  index,
+  dispatch,
+  sectionKey,
+  following,
+  followedSections,
+  blockedSections,
+  sectionPosition
+}) {
+  // Initial context menu options: block this section only.
+  const SECTIONS_CONTEXT_MENU_OPTIONS = ["SectionBlock"];
+  const [showContextMenu, setShowContextMenu] = (0,external_React_namespaceObject.useState)(false);
+  if (following) {
+    SECTIONS_CONTEXT_MENU_OPTIONS.push("SectionUnfollow");
+  }
+  const onClick = e => {
+    e.preventDefault();
+    setShowContextMenu(!showContextMenu);
+  };
+  const onUpdate = () => {
+    setShowContextMenu(!showContextMenu);
+  };
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "section-context-menu"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    type: "icon",
+    size: "default",
+    iconsrc: "chrome://global/skin/icons/more.svg",
+    title: title || source,
+    onClick: onClick
+  }), showContextMenu && /*#__PURE__*/external_React_default().createElement(LinkMenu, {
+    onUpdate: onUpdate,
+    dispatch: dispatch,
+    index: index,
+    source: type.toUpperCase(),
+    options: SECTIONS_CONTEXT_MENU_OPTIONS,
+    shouldSendImpressionStats: true,
+    site: {
+      followedSections,
+      blockedSections,
+      sectionKey,
+      sectionPosition
+    }
+  }));
+}
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/CardSections/CardSections.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+
+
+
+// Prefs
+const CardSections_PREF_SECTIONS_CARDS_ENABLED = "discoverystream.sections.cards.enabled";
+const PREF_SECTIONS_CARDS_THUMBS_UP_DOWN_ENABLED = "discoverystream.sections.cards.thumbsUpDown.enabled";
+const PREF_SECTIONS_PERSONALIZATION_ENABLED = "discoverystream.sections.personalization.enabled";
+const CardSections_PREF_TOPICS_ENABLED = "discoverystream.topicLabels.enabled";
+const CardSections_PREF_TOPICS_SELECTED = "discoverystream.topicSelection.selectedTopics";
+const PREF_FOLLOWED_SECTIONS = "discoverystream.sections.following";
+const PREF_BLOCKED_SECTIONS = "discoverystream.sections.blocked";
+const CardSections_PREF_TOPICS_AVAILABLE = "discoverystream.topicSelection.topics";
+const CardSections_PREF_THUMBS_UP_DOWN_ENABLED = "discoverystream.thumbsUpDown.enabled";
+function getLayoutData(responsiveLayouts, index) {
+  let layoutData = {
+    classNames: []
+  };
+  responsiveLayouts.forEach(layout => {
+    layout.tiles.forEach((tile, tileIndex) => {
+      if (tile.position === index) {
+        layoutData.classNames.push(`col-${layout.columnCount}-${tile.size}`);
+        layoutData.classNames.push(`col-${layout.columnCount}-position-${tileIndex}`);
+      }
+    });
+  });
+  return layoutData;
+}
+
+// function to determine amount of tiles shown per section per viewport
+function getMaxTiles(responsiveLayouts) {
+  return responsiveLayouts.flatMap(responsiveLayout => responsiveLayout).reduce((acc, t) => {
+    acc[t.columnCount] = t.tiles.length;
+
+    // Update maxTile if current tile count is greater
+    if (!acc.maxTile || t.tiles.length > acc.maxTile) {
+      acc.maxTile = t.tiles.length;
+    }
+    return acc;
+  }, {});
+}
+
+/**
+ * Transforms a comma-separated string of topics in user preferences
+ * into a cleaned-up array.
+ *
+ * @param pref
+ * @returns string[]
+ */
+const getTopics = pref => {
+  return pref.split(",").map(item => item.trim()).filter(item => item);
+};
+function CardSection({
+  sectionPosition,
+  section,
+  dispatch,
+  type,
+  firstVisibleTimestamp,
+  is_collection,
+  spocMessageVariant,
+  ctaButtonVariant,
+  ctaButtonSponsors
+}) {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const showTopics = prefs[CardSections_PREF_TOPICS_ENABLED];
+  const mayHaveSectionsCards = prefs[CardSections_PREF_SECTIONS_CARDS_ENABLED];
+  const mayHaveSectionsCardsThumbsUpDown = prefs[PREF_SECTIONS_CARDS_THUMBS_UP_DOWN_ENABLED];
+  const mayHaveThumbsUpDown = prefs[CardSections_PREF_THUMBS_UP_DOWN_ENABLED];
+  const selectedTopics = prefs[CardSections_PREF_TOPICS_SELECTED];
+  const availableTopics = prefs[CardSections_PREF_TOPICS_AVAILABLE];
+  const followedSectionsPref = prefs[PREF_FOLLOWED_SECTIONS] || "";
+  const blockedSectionsPref = prefs[PREF_BLOCKED_SECTIONS] || "";
+  const {
+    saveToPocketCard
+  } = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.DiscoveryStream);
+  const mayHaveSectionsPersonalization = prefs[PREF_SECTIONS_PERSONALIZATION_ENABLED];
+  const {
+    sectionKey,
+    title,
+    subtitle
+  } = section;
+  const {
+    responsiveLayouts
+  } = section.layout;
+  const followedSections = getTopics(followedSectionsPref);
+  const following = followedSections.includes(sectionKey);
+  const blockedSections = getTopics(blockedSectionsPref);
+  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.CARD_SECTION_IMPRESSION,
+      data: {
+        section: sectionKey,
+        section_position: sectionPosition,
+        is_secton_followed: following
+      }
+    }));
+  }, [dispatch, sectionKey, sectionPosition, following]);
+
+  // Ref to hold the section element
+  const sectionRefs = useIntersectionObserver(handleIntersection);
+
+  // Only show thumbs up/down buttons if both default thumbs and sections thumbs prefs are enabled
+  const mayHaveCombinedThumbsUpDown = mayHaveSectionsCardsThumbsUpDown && mayHaveThumbsUpDown;
+  const onFollowClick = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.SetPref(PREF_FOLLOWED_SECTIONS, [...followedSections, sectionKey].join(", ")));
+    // Telemetry Event Dispatch
+    dispatch(actionCreators.OnlyToMain({
+      type: "FOLLOW_SECTION",
+      data: {
+        section: sectionKey,
+        section_position: sectionPosition,
+        event_source: "MOZ_BUTTON"
+      }
+    }));
+  }, [dispatch, followedSections, sectionKey, sectionPosition]);
+  const onUnfollowClick = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.SetPref(PREF_FOLLOWED_SECTIONS, [...followedSections.filter(item => item !== sectionKey)].join(", ")));
+    // Telemetry Event Dispatch
+    dispatch(actionCreators.OnlyToMain({
+      type: "UNFOLLOW_SECTION",
+      data: {
+        section: sectionKey,
+        section_position: sectionPosition,
+        event_source: "MOZ_BUTTON"
+      }
+    }));
+  }, [dispatch, followedSections, sectionKey, sectionPosition]);
+  const {
+    maxTile
+  } = getMaxTiles(responsiveLayouts);
+  const displaySections = section.data.slice(0, maxTile);
+  const isSectionEmpty = !displaySections?.length;
+  const shouldShowLabels = sectionKey === "top_stories_section" && showTopics;
+  if (isSectionEmpty) {
+    return null;
+  }
+  const sectionContextWrapper = /*#__PURE__*/external_React_default().createElement("div", {
+    className: "section-context-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: following ? "section-follow following" : "section-follow"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    onClick: following ? onUnfollowClick : onFollowClick,
+    type: "default",
+    index: sectionPosition,
+    section: sectionKey
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "section-button-follow-text",
+    "data-l10n-id": "newtab-section-follow-button"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "section-button-following-text",
+    "data-l10n-id": "newtab-section-following-button"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "section-button-unfollow-text",
+    "data-l10n-id": "newtab-section-unfollow-button"
+  }))), /*#__PURE__*/external_React_default().createElement(SectionContextMenu, {
+    dispatch: dispatch,
+    index: sectionPosition,
+    following: following,
+    followedSections: followedSections,
+    blockedSections: blockedSections,
+    sectionKey: sectionKey,
+    title: title,
+    type: type,
+    sectionPosition: sectionPosition
+  }));
+  return /*#__PURE__*/external_React_default().createElement("section", {
+    className: "ds-section",
+    ref: el => {
+      sectionRefs.current[0] = el;
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "section-heading"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "section-title-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("h2", {
+    className: "section-title"
+  }, title), subtitle && /*#__PURE__*/external_React_default().createElement("p", {
+    className: "section-subtitle"
+  }, subtitle)), mayHaveSectionsPersonalization ? sectionContextWrapper : null), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ds-section-grid ds-card-grid"
+  }, section.data.slice(0, maxTile).map((rec, index) => {
+    const {
+      classNames
+    } = getLayoutData(responsiveLayouts, index);
+    if (!rec || rec.placeholder) {
+      return /*#__PURE__*/external_React_default().createElement(PlaceholderDSCard, {
+        key: `dscard-${index}`
+      });
+    }
+    return /*#__PURE__*/external_React_default().createElement(DSCard, {
+      key: `dscard-${rec.id}`,
+      pos: rec.pos,
+      flightId: rec.flight_id,
+      image_src: rec.image_src,
+      raw_image_src: rec.raw_image_src,
+      word_count: rec.word_count,
+      time_to_read: rec.time_to_read,
+      title: rec.title,
+      topic: rec.topic,
+      excerpt: rec.excerpt,
+      url: rec.url,
+      id: rec.id,
+      shim: rec.shim,
+      fetchTimestamp: rec.fetchTimestamp,
+      type: type,
+      context: rec.context,
+      sponsor: rec.sponsor,
+      sponsored_by_override: rec.sponsored_by_override,
+      dispatch: dispatch,
+      source: rec.domain,
+      publisher: rec.publisher,
+      pocket_id: rec.pocket_id,
+      context_type: rec.context_type,
+      bookmarkGuid: rec.bookmarkGuid,
+      recommendation_id: rec.recommendation_id,
+      firstVisibleTimestamp: firstVisibleTimestamp,
+      corpus_item_id: rec.corpus_item_id,
+      scheduled_corpus_item_id: rec.scheduled_corpus_item_id,
+      recommended_at: rec.recommended_at,
+      received_rank: rec.received_rank,
+      format: rec.format,
+      alt_text: rec.alt_text,
+      mayHaveThumbsUpDown: mayHaveCombinedThumbsUpDown,
+      mayHaveSectionsCards: mayHaveSectionsCards,
+      showTopics: shouldShowLabels,
+      selectedTopics: selectedTopics,
+      availableTopics: availableTopics,
+      is_collection: is_collection,
+      saveToPocketCard: saveToPocketCard,
+      ctaButtonSponsors: ctaButtonSponsors,
+      ctaButtonVariant: ctaButtonVariant,
+      spocMessageVariant: spocMessageVariant,
+      sectionsClassNames: classNames.join(" "),
+      section: sectionKey,
+      sectionPosition: sectionPosition,
+      sectionFollowed: following
+    });
+  })));
+}
+function CardSections({
+  data,
+  feed,
+  dispatch,
+  type,
+  firstVisibleTimestamp,
+  is_collection,
+  spocMessageVariant,
+  ctaButtonVariant,
+  ctaButtonSponsors
+}) {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+
+  // Handle a render before feed has been fetched by displaying nothing
+  if (!data) {
+    return null;
+  }
+
+  // Retrieve blocked sections
+  const blockedSections = getTopics(prefs[PREF_BLOCKED_SECTIONS] || "");
+
+  // Only show sections that haven't been blocked by the user
+  const sections = data.sections.filter(section => !blockedSections.includes(section.sectionKey));
+  const isEmpty = sections.length === 0;
+  return isEmpty ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ds-card-grid empty"
+  }, /*#__PURE__*/external_React_default().createElement(DSEmptyState, {
+    status: data.status,
+    dispatch: dispatch,
+    feed: feed
+  })) : /*#__PURE__*/external_React_default().createElement("div", {
+    className: "ds-section-wrapper"
+  }, sections.map((section, sectionPosition) => {
+    return /*#__PURE__*/external_React_default().createElement(CardSection, {
+      key: `section-${section.sectionKey}`,
+      sectionPosition: sectionPosition,
+      section: section,
+      dispatch: dispatch,
+      type: type,
+      firstVisibleTimestamp: firstVisibleTimestamp,
+      is_collection: is_collection,
+      spocMessageVariant: spocMessageVariant,
+      ctaButtonVariant: ctaButtonVariant,
+      ctaButtonSponsors: ctaButtonSponsors
+    });
+  }));
+}
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamBase/DiscoveryStreamBase.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 
 
@@ -8528,41 +10472,60 @@ class _DiscoveryStreamBase extends (external_React_default()).PureComponent {
           privacyNoticeURL: component.properties.privacyNoticeURL
         });
       case "CollectionCardGrid":
-        const {
-          DiscoveryStream
-        } = this.props;
-        return /*#__PURE__*/external_React_default().createElement(CollectionCardGrid, {
-          data: component.data,
-          feed: component.feed,
-          spocs: DiscoveryStream.spocs,
-          placement: component.placement,
-          type: component.type,
-          items: component.properties.items,
-          dismissible: this.props.DiscoveryStream.isCollectionDismissible,
-          dispatch: this.props.dispatch
-        });
+        {
+          const {
+            DiscoveryStream
+          } = this.props;
+          return /*#__PURE__*/external_React_default().createElement(CollectionCardGrid, {
+            data: component.data,
+            feed: component.feed,
+            spocs: DiscoveryStream.spocs,
+            placement: component.placement,
+            type: component.type,
+            items: component.properties.items,
+            dismissible: this.props.DiscoveryStream.isCollectionDismissible,
+            dispatch: this.props.dispatch
+          });
+        }
       case "CardGrid":
-        return /*#__PURE__*/external_React_default().createElement(CardGrid, {
-          title: component.header && component.header.title,
-          data: component.data,
-          feed: component.feed,
-          widgets: component.widgets,
-          type: component.type,
-          dispatch: this.props.dispatch,
-          items: component.properties.items,
-          hybridLayout: component.properties.hybridLayout,
-          hideCardBackground: component.properties.hideCardBackground,
-          fourCardLayout: component.properties.fourCardLayout,
-          compactGrid: component.properties.compactGrid,
-          essentialReadsHeader: component.properties.essentialReadsHeader,
-          onboardingExperience: component.properties.onboardingExperience,
-          ctaButtonSponsors: component.properties.ctaButtonSponsors,
-          ctaButtonVariant: component.properties.ctaButtonVariant,
-          spocMessageVariant: component.properties.spocMessageVariant,
-          editorsPicksHeader: component.properties.editorsPicksHeader,
-          recentSavesEnabled: this.props.DiscoveryStream.recentSavesEnabled,
-          hideDescriptions: this.props.DiscoveryStream.hideDescriptions
-        });
+        {
+          const sectionsEnabled = this.props.Prefs.values["discoverystream.sections.enabled"];
+          if (sectionsEnabled) {
+            return /*#__PURE__*/external_React_default().createElement(CardSections, {
+              feed: component.feed,
+              data: component.data,
+              dispatch: this.props.dispatch,
+              type: component.type,
+              firstVisibleTimestamp: this.props.firstVisibleTimestamp,
+              is_collection: true,
+              ctaButtonSponsors: component.properties.ctaButtonSponsors,
+              ctaButtonVariant: component.properties.ctaButtonVariant,
+              spocMessageVariant: component.properties.spocMessageVariant
+            });
+          }
+          return /*#__PURE__*/external_React_default().createElement(CardGrid, {
+            title: component.header && component.header.title,
+            data: component.data,
+            feed: component.feed,
+            widgets: component.widgets,
+            type: component.type,
+            dispatch: this.props.dispatch,
+            items: component.properties.items,
+            hybridLayout: component.properties.hybridLayout,
+            hideCardBackground: component.properties.hideCardBackground,
+            fourCardLayout: component.properties.fourCardLayout,
+            compactGrid: component.properties.compactGrid,
+            essentialReadsHeader: component.properties.essentialReadsHeader,
+            onboardingExperience: component.properties.onboardingExperience,
+            ctaButtonSponsors: component.properties.ctaButtonSponsors,
+            ctaButtonVariant: component.properties.ctaButtonVariant,
+            spocMessageVariant: component.properties.spocMessageVariant,
+            editorsPicksHeader: component.properties.editorsPicksHeader,
+            recentSavesEnabled: this.props.DiscoveryStream.recentSavesEnabled,
+            hideDescriptions: this.props.DiscoveryStream.hideDescriptions,
+            firstVisibleTimestamp: this.props.firstVisibleTimestamp
+          });
+        }
       case "HorizontalRule":
         return /*#__PURE__*/external_React_default().createElement(HorizontalRule, null);
       case "PrivacyLink":
@@ -8596,9 +10559,11 @@ class _DiscoveryStreamBase extends (external_React_default()).PureComponent {
       prefs: this.props.Prefs.values,
       locale
     });
+    const sectionsEnabled = this.props.Prefs.values["discoverystream.sections.enabled"];
     const {
       config
     } = this.props.DiscoveryStream;
+    const topicSelectionEnabled = this.props.Prefs.values["discoverystream.topicSelection.enabled"];
 
     // Allow rendering without extracting special components
     if (!config.collapsible) {
@@ -8666,7 +10631,8 @@ class _DiscoveryStreamBase extends (external_React_default()).PureComponent {
       dispatch: this.props.dispatch
     }), topSites && this.renderLayout([{
       width: 12,
-      components: [topSites]
+      components: [topSites],
+      sectionType: "topsites"
     }]), sponsoredCollection && this.renderLayout([{
       width: 12,
       components: [sponsoredCollection]
@@ -8682,6 +10648,8 @@ class _DiscoveryStreamBase extends (external_React_default()).PureComponent {
       title: sectionTitle,
       subTitle: subTitle,
       mayHaveSponsoredStories: mayHaveSponsoredStories,
+      mayHaveTopicsSelection: topicSelectionEnabled,
+      sectionsEnabled: sectionsEnabled,
       spocMessageVariant: message?.properties?.spocMessageVariant,
       eventSource: "CARDGRID"
     }, this.renderLayout(layoutRender)), this.renderLayout([{
@@ -8696,8 +10664,11 @@ class _DiscoveryStreamBase extends (external_React_default()).PureComponent {
   }
   renderLayout(layoutRender) {
     const styles = [];
+    let [data] = layoutRender;
+    // Add helper class for topsites
+    const topsitesClass = data.sectionType ? "ds-layout-topsites" : "";
     return /*#__PURE__*/external_React_default().createElement("div", {
-      className: "discovery-stream ds-layout"
+      className: `discovery-stream ds-layout ${topsitesClass}`
     }, layoutRender.map((row, rowIndex) => /*#__PURE__*/external_React_default().createElement("div", {
       key: `row-${rowIndex}`,
       className: `ds-column ds-column-${row.width}`
@@ -8718,24 +10689,321 @@ const DiscoveryStreamBase = (0,external_ReactRedux_namespaceObject.connect)(stat
   DiscoveryStream: state.DiscoveryStream,
   Prefs: state.Prefs,
   Sections: state.Sections,
-  document: __webpack_require__.g.document,
+  document: globalThis.document,
   App: state.App
 }))(_DiscoveryStreamBase);
-;// CONCATENATED MODULE: ./content-src/components/CustomizeMenu/BackgroundsSection/BackgroundsSection.jsx
+;// CONCATENATED MODULE: ./content-src/components/WallpapersSection/WallpapersSection.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-class BackgroundsSection extends (external_React_default()).PureComponent {
+
+
+class _WallpapersSection extends (external_React_default()).PureComponent {
+  constructor(props) {
+    super(props);
+    this.handleChange = this.handleChange.bind(this);
+    this.handleReset = this.handleReset.bind(this);
+    this.prefersHighContrastQuery = null;
+    this.prefersDarkQuery = null;
+  }
+  componentDidMount() {
+    this.prefersDarkQuery = globalThis.matchMedia("(prefers-color-scheme: dark)");
+  }
+  handleChange(event) {
+    const {
+      id
+    } = event.target;
+    const prefs = this.props.Prefs.values;
+    const colorMode = this.prefersDarkQuery?.matches ? "dark" : "light";
+    if (prefs["newtabWallpapers.v2.enabled"]) {
+      // If we don't care about color mode, set both to the same wallpaper.
+      this.props.setPref(`newtabWallpapers.wallpaper-dark`, id);
+      this.props.setPref(`newtabWallpapers.wallpaper-light`, id);
+    } else {
+      this.props.setPref(`newtabWallpapers.wallpaper-${colorMode}`, id);
+      // bug 1892095
+      if (prefs["newtabWallpapers.wallpaper-dark"] === "" && colorMode === "light") {
+        this.props.setPref("newtabWallpapers.wallpaper-dark", id.replace("light", "dark"));
+      }
+      if (prefs["newtabWallpapers.wallpaper-light"] === "" && colorMode === "dark") {
+        this.props.setPref(`newtabWallpapers.wallpaper-light`, id.replace("dark", "light"));
+      }
+    }
+    this.handleUserEvent({
+      selected_wallpaper: id,
+      hadPreviousWallpaper: !!this.props.activeWallpaper
+    });
+  }
+  handleReset() {
+    const prefs = this.props.Prefs.values;
+    const colorMode = this.prefersDarkQuery?.matches ? "dark" : "light";
+    if (prefs["newtabWallpapers.v2.enabled"]) {
+      this.props.setPref("newtabWallpapers.wallpaper-light", "");
+      this.props.setPref("newtabWallpapers.wallpaper-dark", "");
+    } else {
+      this.props.setPref(`newtabWallpapers.wallpaper-${colorMode}`, "");
+    }
+    this.handleUserEvent({
+      selected_wallpaper: "none",
+      hadPreviousWallpaper: !!this.props.activeWallpaper
+    });
+  }
+
+  // Record user interaction when changing wallpaper and reseting wallpaper to default
+  handleUserEvent(data) {
+    this.props.dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WALLPAPER_CLICK,
+      data
+    }));
+  }
   render() {
-    return /*#__PURE__*/external_React_default().createElement("div", null);
+    const {
+      wallpaperList
+    } = this.props.Wallpapers;
+    const {
+      activeWallpaper
+    } = this.props;
+    const prefs = this.props.Prefs.values;
+    let fieldsetClassname = `wallpaper-list`;
+    if (prefs["newtabWallpapers.v2.enabled"]) {
+      fieldsetClassname += " ignore-color-mode";
+    }
+    return /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("fieldset", {
+      className: fieldsetClassname
+    }, wallpaperList.map(({
+      title,
+      theme,
+      fluent_id
+    }) => {
+      return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("input", {
+        onChange: this.handleChange,
+        type: "radio",
+        name: `wallpaper-${title}`,
+        id: title,
+        value: title,
+        checked: title === activeWallpaper,
+        "aria-checked": title === activeWallpaper,
+        className: `wallpaper-input theme-${theme} ${title}`
+      }), /*#__PURE__*/external_React_default().createElement("label", {
+        htmlFor: title,
+        className: "sr-only",
+        "data-l10n-id": fluent_id
+      }, fluent_id));
+    })), /*#__PURE__*/external_React_default().createElement("button", {
+      className: "wallpapers-reset",
+      onClick: this.handleReset,
+      "data-l10n-id": "newtab-wallpaper-reset"
+    }));
   }
 }
+const WallpapersSection = (0,external_ReactRedux_namespaceObject.connect)(state => {
+  return {
+    Wallpapers: state.Wallpapers,
+    Prefs: state.Prefs
+  };
+})(_WallpapersSection);
+;// CONCATENATED MODULE: ./content-src/components/WallpapersSection/WallpaperCategories.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+// eslint-disable-next-line no-shadow
+
+class _WallpaperCategories extends (external_React_default()).PureComponent {
+  constructor(props) {
+    super(props);
+    this.handleChange = this.handleChange.bind(this);
+    this.handleReset = this.handleReset.bind(this);
+    this.handleCategory = this.handleCategory.bind(this);
+    this.handleBack = this.handleBack.bind(this);
+    this.prefersHighContrastQuery = null;
+    this.prefersDarkQuery = null;
+    this.state = {
+      activeCategory: null,
+      activeCategoryFluentID: null
+    };
+  }
+  componentDidMount() {
+    this.prefersDarkQuery = globalThis.matchMedia("(prefers-color-scheme: dark)");
+  }
+  handleChange(event) {
+    const {
+      id
+    } = event.target;
+    this.props.setPref("newtabWallpapers.wallpaper-light", id);
+    this.props.setPref("newtabWallpapers.wallpaper-dark", id);
+    // Setting this now so when we remove v1 we don't have to migrate v1 values.
+    this.props.setPref("newtabWallpapers.wallpaper", id);
+    this.handleUserEvent(actionTypes.WALLPAPER_CLICK, {
+      selected_wallpaper: id,
+      had_previous_wallpaper: !!this.props.activeWallpaper
+    });
+  }
+  handleReset() {
+    this.props.setPref("newtabWallpapers.wallpaper-light", "");
+    this.props.setPref("newtabWallpapers.wallpaper-dark", "");
+    // Setting this now so when we remove v1 we don't have to migrate v1 values.
+    this.props.setPref("newtabWallpapers.wallpaper", "");
+    this.handleUserEvent(actionTypes.WALLPAPER_CLICK, {
+      selected_wallpaper: "none",
+      had_previous_wallpaper: !!this.props.activeWallpaper
+    });
+  }
+  handleCategory = event => {
+    this.setState({
+      activeCategory: event.target.id
+    });
+    this.handleUserEvent(actionTypes.WALLPAPER_CATEGORY_CLICK, event.target.id);
+    let fluent_id;
+    switch (event.target.id) {
+      case "photographs":
+        fluent_id = "newtab-wallpaper-category-title-photographs";
+        break;
+      case "abstracts":
+        fluent_id = "newtab-wallpaper-category-title-abstract";
+        break;
+      case "solid-colors":
+        fluent_id = "newtab-wallpaper-category-title-colors";
+    }
+    this.setState({
+      activeCategoryFluentID: fluent_id
+    });
+  };
+  handleBack() {
+    this.setState({
+      activeCategory: null
+    });
+  }
+
+  // Record user interaction when changing wallpaper and reseting wallpaper to default
+  handleUserEvent(type, data) {
+    this.props.dispatch(actionCreators.OnlyToMain({
+      type,
+      data
+    }));
+  }
+  render() {
+    const prefs = this.props.Prefs.values;
+    const {
+      wallpaperList,
+      categories
+    } = this.props.Wallpapers;
+    const {
+      activeWallpaper
+    } = this.props;
+    const {
+      activeCategory
+    } = this.state;
+    const {
+      activeCategoryFluentID
+    } = this.state;
+    const filteredWallpapers = wallpaperList.filter(wallpaper => wallpaper.category === activeCategory);
+    let categorySectionClassname = "category wallpaper-list";
+    if (prefs["newtabWallpapers.v2.enabled"]) {
+      categorySectionClassname += " ignore-color-mode";
+    }
+    return /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("div", {
+      className: "category-header"
+    }, /*#__PURE__*/external_React_default().createElement("h2", {
+      "data-l10n-id": "newtab-wallpaper-title"
+    }), /*#__PURE__*/external_React_default().createElement("button", {
+      className: "wallpapers-reset",
+      onClick: this.handleReset,
+      "data-l10n-id": "newtab-wallpaper-reset"
+    })), /*#__PURE__*/external_React_default().createElement("fieldset", {
+      className: "category-list"
+    }, categories.map(category => {
+      const filteredList = wallpaperList.filter(wallpaper => wallpaper.category === category);
+      const activeWallpaperObj = activeWallpaper && filteredList.find(wp => wp.title === activeWallpaper);
+      const thumbnail = activeWallpaperObj || filteredList[0];
+      let fluent_id;
+      switch (category) {
+        case "photographs":
+          fluent_id = "newtab-wallpaper-category-title-photographs";
+          break;
+        case "abstracts":
+          fluent_id = "newtab-wallpaper-category-title-abstract";
+          break;
+        case "solid-colors":
+          fluent_id = "newtab-wallpaper-category-title-colors";
+      }
+      let style = {};
+      if (thumbnail?.wallpaperUrl) {
+        style.backgroundImage = `url(${thumbnail.wallpaperUrl})`;
+      } else {
+        style.backgroundColor = thumbnail?.solid_color || "";
+      }
+      return /*#__PURE__*/external_React_default().createElement("div", {
+        key: category
+      }, /*#__PURE__*/external_React_default().createElement("input", {
+        id: category,
+        style: style,
+        type: "radio",
+        onClick: this.handleCategory,
+        className: "wallpaper-input"
+      }), /*#__PURE__*/external_React_default().createElement("label", {
+        htmlFor: category,
+        "data-l10n-id": fluent_id
+      }, fluent_id));
+    })), /*#__PURE__*/external_React_default().createElement(external_ReactTransitionGroup_namespaceObject.CSSTransition, {
+      in: !!activeCategory,
+      timeout: 300,
+      classNames: "wallpaper-list",
+      unmountOnExit: true
+    }, /*#__PURE__*/external_React_default().createElement("section", {
+      className: categorySectionClassname
+    }, /*#__PURE__*/external_React_default().createElement("button", {
+      className: "arrow-button",
+      "data-l10n-id": activeCategoryFluentID,
+      onClick: this.handleBack
+    }), /*#__PURE__*/external_React_default().createElement("fieldset", null, filteredWallpapers.map(({
+      title,
+      theme,
+      fluent_id,
+      solid_color,
+      wallpaperUrl
+    }) => {
+      let style = {};
+      if (wallpaperUrl) {
+        style.backgroundImage = `url(${wallpaperUrl})`;
+      } else {
+        style.backgroundColor = solid_color || "";
+      }
+      return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("input", {
+        onChange: this.handleChange,
+        style: style,
+        type: "radio",
+        name: `wallpaper-${title}`,
+        id: title,
+        value: title,
+        checked: title === activeWallpaper,
+        "aria-checked": title === activeWallpaper,
+        className: `wallpaper-input theme-${theme}`
+      }), /*#__PURE__*/external_React_default().createElement("label", {
+        htmlFor: title,
+        className: "sr-only",
+        "data-l10n-id": fluent_id
+      }, fluent_id));
+    })))));
+  }
+}
+const WallpaperCategories = (0,external_ReactRedux_namespaceObject.connect)(state => {
+  return {
+    Wallpapers: state.Wallpapers,
+    Prefs: state.Prefs
+  };
+})(_WallpaperCategories);
 ;// CONCATENATED MODULE: ./content-src/components/CustomizeMenu/ContentSection/ContentSection.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
 
 
 
@@ -8749,18 +11017,18 @@ class ContentSection extends (external_React_default()).PureComponent {
     this.topSitesDrawerRef = /*#__PURE__*/external_React_default().createRef();
     this.pocketDrawerRef = /*#__PURE__*/external_React_default().createRef();
   }
-  inputUserEvent(eventSource, status) {
+  inputUserEvent(eventSource, eventValue) {
     this.props.dispatch(actionCreators.UserEvent({
       event: "PREF_CHANGED",
       source: eventSource,
       value: {
-        status,
+        status: eventValue,
         menu_source: "CUSTOMIZE_MENU"
       }
     }));
   }
   onPreferenceSelect(e) {
-    // eventSource: TOP_SITES | TOP_STORIES | HIGHLIGHTS
+    // eventSource: TOP_SITES | TOP_STORIES | HIGHLIGHTS | WEATHER
     const {
       preference,
       eventSource
@@ -8800,11 +11068,10 @@ class ContentSection extends (external_React_default()).PureComponent {
     } else {
       return;
     }
-    let drawerHeight;
     if (drawerRef) {
-      drawerHeight = parseFloat(window.getComputedStyle(drawerRef)?.height);
+      let drawerHeight = parseFloat(window.getComputedStyle(drawerRef)?.height) || 0;
       if (isOpen) {
-        drawerRef.style.marginTop = `0`;
+        drawerRef.style.marginTop = "var(--space-large)";
       } else {
         drawerRef.style.marginTop = `-${drawerHeight}px`;
       }
@@ -8817,13 +11084,19 @@ class ContentSection extends (external_React_default()).PureComponent {
       pocketRegion,
       mayHaveSponsoredStories,
       mayHaveRecentSaves,
+      mayHaveWeather,
       openPreferences,
-      spocMessageVariant
+      spocMessageVariant,
+      wallpapersEnabled,
+      wallpapersV2Enabled,
+      activeWallpaper,
+      setPref
     } = this.props;
     const {
       topSitesEnabled,
       pocketEnabled,
       highlightsEnabled,
+      weatherEnabled,
       showSponsoredTopSitesEnabled,
       showSponsoredPocketEnabled,
       showRecentSavesEnabled,
@@ -8831,6 +11104,18 @@ class ContentSection extends (external_React_default()).PureComponent {
     } = enabledSections;
     return /*#__PURE__*/external_React_default().createElement("div", {
       className: "home-section"
+    }, !wallpapersV2Enabled && wallpapersEnabled && /*#__PURE__*/external_React_default().createElement("div", {
+      className: "wallpapers-section"
+    }, /*#__PURE__*/external_React_default().createElement(WallpapersSection, {
+      setPref: setPref,
+      activeWallpaper: activeWallpaper
+    })), wallpapersV2Enabled && /*#__PURE__*/external_React_default().createElement("div", {
+      className: "wallpapers-section"
+    }, /*#__PURE__*/external_React_default().createElement(WallpaperCategories, {
+      setPref: setPref,
+      activeWallpaper: activeWallpaper
+    })), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "settings-toggles"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       id: "shortcuts-section",
       className: "section"
@@ -8840,9 +11125,10 @@ class ContentSection extends (external_React_default()).PureComponent {
       onToggle: this.onPreferenceSelect,
       "data-preference": "feeds.topsites",
       "data-eventSource": "TOP_SITES",
-      "data-l10n-id": "newtab-custom-shortcuts-toggle",
-      "data-l10n-attrs": "label, description"
-    }), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("div", {
+      "data-l10n-id": "newtab-custom-shortcuts-toggle"
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      slot: "nested"
+    }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-info-top-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-information",
@@ -8888,11 +11174,9 @@ class ContentSection extends (external_React_default()).PureComponent {
       className: "sponsored",
       htmlFor: "sponsored-shortcuts",
       "data-l10n-id": "newtab-custom-sponsored-sites"
-    })))))), pocketRegion && /*#__PURE__*/external_React_default().createElement("div", {
+    }))))))), pocketRegion && /*#__PURE__*/external_React_default().createElement("div", {
       id: "pocket-section",
       className: "section"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      className: "switch"
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "pocket-toggle",
       pressed: pocketEnabled || null,
@@ -8900,9 +11184,10 @@ class ContentSection extends (external_React_default()).PureComponent {
       "aria-describedby": "custom-pocket-subtitle",
       "data-preference": "feeds.section.topstories",
       "data-eventSource": "TOP_STORIES",
-      "data-l10n-id": "newtab-custom-stories-toggle",
-      "data-l10n-attrs": "label, description"
-    })), /*#__PURE__*/external_React_default().createElement("div", null, (mayHaveSponsoredStories || mayHaveRecentSaves) && /*#__PURE__*/external_React_default().createElement("div", {
+      "data-l10n-id": "newtab-custom-stories-toggle"
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      slot: "nested"
+    }, (mayHaveSponsoredStories || mayHaveRecentSaves) && /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-info-pocket-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-information",
@@ -8939,27 +11224,34 @@ class ContentSection extends (external_React_default()).PureComponent {
       className: "sponsored",
       htmlFor: "recent-saves-pocket",
       "data-l10n-id": "newtab-custom-pocket-show-recent-saves"
-    })))))), /*#__PURE__*/external_React_default().createElement("div", {
+    }))))))), /*#__PURE__*/external_React_default().createElement("div", {
       id: "recent-section",
       className: "section"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      className: "switch"
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "highlights-toggle",
       pressed: highlightsEnabled || null,
       onToggle: this.onPreferenceSelect,
       "data-preference": "feeds.section.highlights",
       "data-eventSource": "HIGHLIGHTS",
-      "data-l10n-id": "newtab-custom-recent-toggle",
-      "data-l10n-attrs": "label, description"
-    }))), pocketRegion && mayHaveSponsoredStories && spocMessageVariant === "variant-c" && /*#__PURE__*/external_React_default().createElement("div", {
+      "data-l10n-id": "newtab-custom-recent-toggle"
+    })), mayHaveWeather && /*#__PURE__*/external_React_default().createElement("div", {
+      id: "weather-section",
+      className: "section"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "weather-toggle",
+      pressed: weatherEnabled || null,
+      onToggle: this.onPreferenceSelect,
+      "data-preference": "showWeather",
+      "data-eventSource": "WEATHER",
+      "data-l10n-id": "newtab-custom-weather-toggle"
+    })), pocketRegion && mayHaveSponsoredStories && spocMessageVariant === "variant-c" && /*#__PURE__*/external_React_default().createElement("div", {
       className: "sponsored-content-info"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "icon icon-help"
     }), /*#__PURE__*/external_React_default().createElement("div", null, "Sponsored content supports our mission to build a better web.", " ", /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
       dispatch: this.props.dispatch,
       url: "https://support.mozilla.org/kb/pocket-sponsored-stories-new-tabs"
-    }, "Find out how"))), /*#__PURE__*/external_React_default().createElement("span", {
+    }, "Find out how")))), /*#__PURE__*/external_React_default().createElement("span", {
       className: "divider",
       role: "separator"
     }), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("button", {
@@ -8978,7 +11270,7 @@ class ContentSection extends (external_React_default()).PureComponent {
 
 
 
-
+// eslint-disable-next-line no-shadow
 
 class _CustomizeMenu extends (external_React_default()).PureComponent {
   constructor(props) {
@@ -9005,7 +11297,12 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("button", {
       className: "icon icon-settings personalize-button",
       onClick: () => this.props.onOpen(),
-      "data-l10n-id": "newtab-personalize-icon-label",
+      onKeyDown: e => {
+        if (e.key === "Enter") {
+          this.props.onOpen();
+        }
+      },
+      "data-l10n-id": "newtab-personalize-settings-icon-label",
       ref: c => this.openButton = c
     })), /*#__PURE__*/external_React_default().createElement(external_ReactTransitionGroup_namespaceObject.CSSTransition, {
       timeout: 250,
@@ -9017,20 +11314,26 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "customize-menu",
       role: "dialog",
-      "data-l10n-id": "newtab-personalize-dialog-label"
+      "data-l10n-id": "newtab-settings-dialog-label"
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      className: "close-button-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("button", {
       onClick: () => this.props.onClose(),
       className: "close-button",
       "data-l10n-id": "newtab-custom-close-button",
       ref: c => this.closeButton = c
-    }), /*#__PURE__*/external_React_default().createElement(BackgroundsSection, null), /*#__PURE__*/external_React_default().createElement(ContentSection, {
+    })), /*#__PURE__*/external_React_default().createElement(ContentSection, {
       openPreferences: this.props.openPreferences,
       setPref: this.props.setPref,
       enabledSections: this.props.enabledSections,
+      wallpapersEnabled: this.props.wallpapersEnabled,
+      wallpapersV2Enabled: this.props.wallpapersV2Enabled,
+      activeWallpaper: this.props.activeWallpaper,
       pocketRegion: this.props.pocketRegion,
       mayHaveSponsoredTopSites: this.props.mayHaveSponsoredTopSites,
       mayHaveSponsoredStories: this.props.mayHaveSponsoredStories,
       mayHaveRecentSaves: this.props.DiscoveryStream.recentSavesEnabled,
+      mayHaveWeather: this.props.mayHaveWeather,
       spocMessageVariant: this.props.spocMessageVariant,
       dispatch: this.props.dispatch
     }))));
@@ -9039,50 +11342,73 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
 const CustomizeMenu = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   DiscoveryStream: state.DiscoveryStream
 }))(_CustomizeMenu);
-;// CONCATENATED MODULE: ./content-src/lib/constants.js
+;// CONCATENATED MODULE: ./content-src/lib/constants.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const IS_NEWTAB = __webpack_require__.g.document && __webpack_require__.g.document.documentURI === "about:newtab";
+const IS_NEWTAB =
+  globalThis.document && globalThis.document.documentURI === "about:newtab";
 const NEWTAB_DARK_THEME = {
   ntp_background: {
     r: 42,
     g: 42,
     b: 46,
-    a: 1
+    a: 1,
   },
   ntp_card_background: {
     r: 66,
     g: 65,
     b: 77,
-    a: 1
+    a: 1,
   },
   ntp_text: {
     r: 249,
     g: 249,
     b: 250,
-    a: 1
+    a: 1,
   },
   sidebar: {
     r: 56,
     g: 56,
     b: 61,
-    a: 1
+    a: 1,
   },
   sidebar_text: {
     r: 249,
     g: 249,
     b: 250,
-    a: 1
-  }
+    a: 1,
+  },
 };
+
+;// CONCATENATED MODULE: ./content-src/components/Logo/Logo.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+function Logo() {
+  return /*#__PURE__*/external_React_default().createElement("h1", {
+    className: "logo-and-wordmark-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "logo-and-wordmark",
+    role: "img",
+    "data-l10n-id": "newtab-logo-and-wordmark"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "logo"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "wordmark"
+  })));
+}
+
 ;// CONCATENATED MODULE: ./content-src/components/Search/Search.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* globals ContentSearchUIController, ContentSearchHandoffUIController */
+
 
 
 
@@ -9198,13 +11524,7 @@ class _Search extends (external_React_default()).PureComponent {
     const wrapperClassName = ["search-wrapper", this.props.disable && "search-disabled", this.props.fakeFocus && "fake-focus"].filter(v => v).join(" ");
     return /*#__PURE__*/external_React_default().createElement("div", {
       className: wrapperClassName
-    }, this.props.showLogo && /*#__PURE__*/external_React_default().createElement("div", {
-      className: "logo-and-wordmark"
-    }, /*#__PURE__*/external_React_default().createElement("div", {
-      className: "logo"
-    }), /*#__PURE__*/external_React_default().createElement("div", {
-      className: "wordmark"
-    })), !this.props.handoffEnabled && /*#__PURE__*/external_React_default().createElement("div", {
+    }, this.props.showLogo && /*#__PURE__*/external_React_default().createElement(Logo, null), !this.props.handoffEnabled && /*#__PURE__*/external_React_default().createElement("div", {
       className: "search-inner-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("input", {
       id: "newtab-search-text",
@@ -9242,6 +11562,844 @@ class _Search extends (external_React_default()).PureComponent {
 const Search_Search = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   Prefs: state.Prefs
 }))(_Search);
+;// CONCATENATED MODULE: ./content-src/components/Weather/LocationSearch.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+function LocationSearch({
+  outerClassName
+}) {
+  // should be the location object from suggestedLocations
+  const [selectedLocation, setSelectedLocation] = (0,external_React_namespaceObject.useState)("");
+  const suggestedLocations = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Weather.suggestedLocations);
+  const locationSearchString = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Weather.locationSearchString);
+  const [userInput, setUserInput] = (0,external_React_namespaceObject.useState)(locationSearchString || "");
+  const inputRef = (0,external_React_namespaceObject.useRef)(null);
+  const dispatch = (0,external_ReactRedux_namespaceObject.useDispatch)();
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (selectedLocation) {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.WEATHER_LOCATION_DATA_UPDATE,
+        data: {
+          city: selectedLocation.localized_name,
+          adminName: selectedLocation.administrative_area,
+          country: selectedLocation.country
+        }
+      }));
+      dispatch(actionCreators.SetPref("weather.query", selectedLocation.key));
+      dispatch(actionCreators.BroadcastToContent({
+        type: actionTypes.WEATHER_SEARCH_ACTIVE,
+        data: false
+      }));
+    }
+  }, [selectedLocation, dispatch]);
+
+  // when component mounts, set focus to input
+  (0,external_React_namespaceObject.useEffect)(() => {
+    inputRef?.current?.focus();
+  }, [inputRef]);
+  function handleChange(event) {
+    const {
+      value
+    } = event.target;
+    setUserInput(value);
+    // if the user input contains less than three characters and suggestedLocations is not an empty array,
+    // reset suggestedLocations to [] so there arent incorrect items in the datalist
+    if (value.length < 3 && suggestedLocations.length) {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.WEATHER_LOCATION_SUGGESTIONS_UPDATE,
+        data: []
+      }));
+    }
+    // find match in suggestedLocation array
+    const match = suggestedLocations?.find(({
+      key
+    }) => key === value);
+    if (match) {
+      setSelectedLocation(match);
+      setUserInput(`${match.localized_name}, ${match.administrative_area.localized_name}`);
+    } else if (value.length >= 3 && !match) {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.WEATHER_LOCATION_SEARCH_UPDATE,
+        data: value
+      }));
+    }
+  }
+  function handleCloseSearch() {
+    dispatch(actionCreators.BroadcastToContent({
+      type: actionTypes.WEATHER_SEARCH_ACTIVE,
+      data: false
+    }));
+    setUserInput("");
+  }
+  function handleKeyDown(e) {
+    if (e.key === "Escape") {
+      handleCloseSearch();
+    }
+  }
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: `${outerClassName} location-search`
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "location-input-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "search-icon"
+  }), /*#__PURE__*/external_React_default().createElement("input", {
+    ref: inputRef,
+    list: "merino-location-list",
+    type: "text",
+    "data-l10n-id": "newtab-weather-change-location-search-input-placeholder",
+    onChange: handleChange,
+    value: userInput,
+    onKeyDown: handleKeyDown
+  }), /*#__PURE__*/external_React_default().createElement("moz-button", {
+    class: "close-icon",
+    type: "icon ghost",
+    size: "small",
+    iconSrc: "chrome://global/skin/icons/close.svg",
+    onClick: handleCloseSearch
+  }), /*#__PURE__*/external_React_default().createElement("datalist", {
+    id: "merino-location-list"
+  }, (suggestedLocations || []).map(merinoLcation => /*#__PURE__*/external_React_default().createElement("option", {
+    value: merinoLcation.key,
+    key: merinoLcation.key
+  }, merinoLcation.localized_name, ",", " ", merinoLcation.administrative_area.localized_name)))));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Weather/Weather.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+const Weather_VISIBLE = "visible";
+const Weather_VISIBILITY_CHANGE_EVENT = "visibilitychange";
+class _Weather extends (external_React_default()).PureComponent {
+  constructor(props) {
+    super(props);
+    this.state = {
+      contextMenuKeyboard: false,
+      showContextMenu: false,
+      url: "https://example.com",
+      impressionSeen: false,
+      errorSeen: false
+    };
+    this.setImpressionRef = element => {
+      this.impressionElement = element;
+    };
+    this.setErrorRef = element => {
+      this.errorElement = element;
+    };
+    this.onClick = this.onClick.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
+    this.onUpdate = this.onUpdate.bind(this);
+    this.onProviderClick = this.onProviderClick.bind(this);
+  }
+  componentDidMount() {
+    const {
+      props
+    } = this;
+    if (!props.dispatch) {
+      return;
+    }
+    if (props.document.visibilityState === Weather_VISIBLE) {
+      // Setup the impression observer once the page is visible.
+      this.setImpressionObservers();
+    } else {
+      // We should only ever send the latest impression stats ping, so remove any
+      // older listeners.
+      if (this._onVisibilityChange) {
+        props.document.removeEventListener(Weather_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+      }
+      this._onVisibilityChange = () => {
+        if (props.document.visibilityState === Weather_VISIBLE) {
+          // Setup the impression observer once the page is visible.
+          this.setImpressionObservers();
+          props.document.removeEventListener(Weather_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+        }
+      };
+      props.document.addEventListener(Weather_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+    }
+  }
+  componentWillUnmount() {
+    // Remove observers on unmount
+    if (this.observer && this.impressionElement) {
+      this.observer.unobserve(this.impressionElement);
+    }
+    if (this.observer && this.errorElement) {
+      this.observer.unobserve(this.errorElement);
+    }
+    if (this._onVisibilityChange) {
+      this.props.document.removeEventListener(Weather_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+    }
+  }
+  setImpressionObservers() {
+    if (this.impressionElement) {
+      this.observer = new IntersectionObserver(this.onImpression.bind(this));
+      this.observer.observe(this.impressionElement);
+    }
+    if (this.errorElement) {
+      this.observer = new IntersectionObserver(this.onError.bind(this));
+      this.observer.observe(this.errorElement);
+    }
+  }
+  onImpression(entries) {
+    if (this.state) {
+      const entry = entries.find(e => e.isIntersecting);
+      if (entry) {
+        if (this.impressionElement) {
+          this.observer.unobserve(this.impressionElement);
+        }
+        this.props.dispatch(actionCreators.OnlyToMain({
+          type: actionTypes.WEATHER_IMPRESSION
+        }));
+
+        // Stop observing since element has been seen
+        this.setState({
+          impressionSeen: true
+        });
+      }
+    }
+  }
+  onError(entries) {
+    if (this.state) {
+      const entry = entries.find(e => e.isIntersecting);
+      if (entry) {
+        if (this.errorElement) {
+          this.observer.unobserve(this.errorElement);
+        }
+        this.props.dispatch(actionCreators.OnlyToMain({
+          type: actionTypes.WEATHER_LOAD_ERROR
+        }));
+
+        // Stop observing since element has been seen
+        this.setState({
+          errorSeen: true
+        });
+      }
+    }
+  }
+  openContextMenu(isKeyBoard) {
+    if (this.props.onUpdate) {
+      this.props.onUpdate(true);
+    }
+    this.setState({
+      showContextMenu: true,
+      contextMenuKeyboard: isKeyBoard
+    });
+  }
+  onClick(event) {
+    event.preventDefault();
+    this.openContextMenu(false, event);
+  }
+  onKeyDown(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      this.openContextMenu(true, event);
+    }
+  }
+  onUpdate(showContextMenu) {
+    if (this.props.onUpdate) {
+      this.props.onUpdate(showContextMenu);
+    }
+    this.setState({
+      showContextMenu
+    });
+  }
+  onProviderClick() {
+    this.props.dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WEATHER_OPEN_PROVIDER_URL,
+      data: {
+        source: "WEATHER"
+      }
+    }));
+  }
+  render() {
+    // Check if weather should be rendered
+    const isWeatherEnabled = this.props.Prefs.values["system.showWeather"];
+    if (!isWeatherEnabled || !this.props.Weather.initialized) {
+      return false;
+    }
+    const {
+      showContextMenu
+    } = this.state;
+    const {
+      props
+    } = this;
+    const {
+      className,
+      index,
+      dispatch,
+      eventSource,
+      shouldSendImpressionStats,
+      Prefs,
+      Weather
+    } = props;
+    const WEATHER_SUGGESTION = Weather.suggestions?.[0];
+    const isContextMenuOpen = this.state.activeCard === index;
+    const outerClassName = ["weather", className, isContextMenuOpen && !Weather.searchActive && "active", props.placeholder && "placeholder", Weather.searchActive && "search"].filter(v => v).join(" ");
+    const showDetailedView = Prefs.values["weather.display"] === "detailed";
+
+    // Note: The temperature units/display options will become secondary menu items
+    const WEATHER_SOURCE_CONTEXT_MENU_OPTIONS = [...(this.props.Prefs.values["weather.locationSearchEnabled"] ? ["ChangeWeatherLocation"] : []), ...(this.props.Prefs.values["weather.temperatureUnits"] === "f" ? ["ChangeTempUnitCelsius"] : ["ChangeTempUnitFahrenheit"]), ...(this.props.Prefs.values["weather.display"] === "simple" ? ["ChangeWeatherDisplayDetailed"] : ["ChangeWeatherDisplaySimple"]), "HideWeather", "OpenLearnMoreURL"];
+    const WEATHER_SOURCE_ERROR_CONTEXT_MENU_OPTIONS = [...(this.props.Prefs.values["weather.locationSearchEnabled"] ? ["ChangeWeatherLocation"] : []), "HideWeather", "OpenLearnMoreURL"];
+    const contextMenu = contextOpts => /*#__PURE__*/external_React_default().createElement("div", {
+      className: "weatherButtonContextMenuWrapper"
+    }, /*#__PURE__*/external_React_default().createElement("button", {
+      "aria-haspopup": "true",
+      onKeyDown: this.onKeyDown,
+      onClick: this.onClick,
+      "data-l10n-id": "newtab-menu-section-tooltip",
+      className: "weatherButtonContextMenu"
+    }, showContextMenu ? /*#__PURE__*/external_React_default().createElement(LinkMenu, {
+      dispatch: dispatch,
+      index: index,
+      source: eventSource,
+      onUpdate: this.onUpdate,
+      options: contextOpts,
+      site: {
+        url: "https://support.mozilla.org/kb/customize-items-on-firefox-new-tab-page"
+      },
+      link: "https://support.mozilla.org/kb/customize-items-on-firefox-new-tab-page",
+      shouldSendImpressionStats: shouldSendImpressionStats
+    }) : null));
+    if (Weather.searchActive) {
+      return /*#__PURE__*/external_React_default().createElement(LocationSearch, {
+        outerClassName: outerClassName
+      });
+    } else if (WEATHER_SUGGESTION) {
+      return /*#__PURE__*/external_React_default().createElement("div", {
+        ref: this.setImpressionRef,
+        className: outerClassName
+      }, /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherCard"
+      }, /*#__PURE__*/external_React_default().createElement("a", {
+        "data-l10n-id": "newtab-weather-see-forecast",
+        "data-l10n-args": "{\"provider\": \"AccuWeather\"}",
+        href: WEATHER_SUGGESTION.forecast.url,
+        className: "weatherInfoLink",
+        onClick: this.onProviderClick
+      }, /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherIconCol"
+      }, /*#__PURE__*/external_React_default().createElement("span", {
+        className: `weatherIcon iconId${WEATHER_SUGGESTION.current_conditions.icon_id}`
+      })), /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherText"
+      }, /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherForecastRow"
+      }, /*#__PURE__*/external_React_default().createElement("span", {
+        className: "weatherTemperature"
+      }, WEATHER_SUGGESTION.current_conditions.temperature[this.props.Prefs.values["weather.temperatureUnits"]], "\xB0", this.props.Prefs.values["weather.temperatureUnits"])), /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherCityRow"
+      }, /*#__PURE__*/external_React_default().createElement("span", {
+        className: "weatherCity"
+      }, Weather.locationData.city)), showDetailedView ? /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherDetailedSummaryRow"
+      }, /*#__PURE__*/external_React_default().createElement("div", {
+        className: "weatherHighLowTemps"
+      }, /*#__PURE__*/external_React_default().createElement("span", null, WEATHER_SUGGESTION.forecast.high[this.props.Prefs.values["weather.temperatureUnits"]], "\xB0", this.props.Prefs.values["weather.temperatureUnits"]), /*#__PURE__*/external_React_default().createElement("span", null, "\u2022"), /*#__PURE__*/external_React_default().createElement("span", null, WEATHER_SUGGESTION.forecast.low[this.props.Prefs.values["weather.temperatureUnits"]], "\xB0", this.props.Prefs.values["weather.temperatureUnits"])), /*#__PURE__*/external_React_default().createElement("span", {
+        className: "weatherTextSummary"
+      }, WEATHER_SUGGESTION.current_conditions.summary)) : null)), contextMenu(WEATHER_SOURCE_CONTEXT_MENU_OPTIONS)), /*#__PURE__*/external_React_default().createElement("span", {
+        className: "weatherSponsorText"
+      }, /*#__PURE__*/external_React_default().createElement("span", {
+        "data-l10n-id": "newtab-weather-sponsored",
+        "data-l10n-args": "{\"provider\": \"AccuWeather\"}"
+      })));
+    }
+    return /*#__PURE__*/external_React_default().createElement("div", {
+      ref: this.setErrorRef,
+      className: outerClassName
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      className: "weatherNotAvailable"
+    }, /*#__PURE__*/external_React_default().createElement("span", {
+      className: "icon icon-info-warning"
+    }), " ", /*#__PURE__*/external_React_default().createElement("p", {
+      "data-l10n-id": "newtab-weather-error-not-available"
+    }), contextMenu(WEATHER_SOURCE_ERROR_CONTEXT_MENU_OPTIONS)));
+  }
+}
+const Weather_Weather = (0,external_ReactRedux_namespaceObject.connect)(state => ({
+  Weather: state.Weather,
+  Prefs: state.Prefs,
+  IntersectionObserver: globalThis.IntersectionObserver,
+  document: globalThis.document
+}))(_Weather);
+;// CONCATENATED MODULE: ./content-src/components/Notifications/Toasts/ThumbsUpToast.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+function ThumbsUpToast({
+  onDismissClick
+}) {
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "notification-feed-item is-success"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "icon icon-check-filled icon-themed"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "notification-feed-item-text",
+    "data-l10n-id": "newtab-toast-thumbs-up-or-down"
+  }), /*#__PURE__*/external_React_default().createElement("button", {
+    onClick: onDismissClick,
+    className: "icon icon-dismiss",
+    "data-l10n-id": "newtab-toast-dismiss-button"
+  }));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Notifications/Toasts/ThumbsDownToast.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+function ThumbsDownToast({
+  onDismissClick
+}) {
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "notification-feed-item is-success"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "icon icon-check-filled icon-themed"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "notification-feed-item-text",
+    "data-l10n-id": "newtab-toast-thumbs-up-or-down"
+  }), /*#__PURE__*/external_React_default().createElement("button", {
+    onClick: onDismissClick,
+    className: "icon icon-dismiss",
+    "data-l10n-id": "newtab-toast-dismiss-button"
+  }));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Notifications/Notifications.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+function Notifications_Notifications({
+  dispatch
+}) {
+  const toastQueue = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Notifications.toastQueue);
+  const toastCounter = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Notifications.toastCounter);
+  const onDismissClick = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.OnlyToOneContent({
+      type: actionTypes.HIDE_TOAST_MESSAGE,
+      data: {
+        showNotifications: false
+      }
+    }, "ActivityStream:Content"));
+  }, [dispatch]);
+  const getToast = (0,external_React_namespaceObject.useCallback)(() => {
+    // Note: This architecture could expand to support multiple toast notifications at once
+    const latestToastItem = toastQueue[toastQueue.length - 1];
+    switch (latestToastItem) {
+      case "thumbsDownToast":
+        return /*#__PURE__*/external_React_default().createElement(ThumbsDownToast, {
+          onDismissClick: onDismissClick,
+          key: toastCounter
+        });
+      case "thumbsUpToast":
+        return /*#__PURE__*/external_React_default().createElement(ThumbsUpToast, {
+          onDismissClick: onDismissClick,
+          key: toastCounter
+        });
+      default:
+        throw new Error("No toast found");
+    }
+  }, [onDismissClick, toastCounter, toastQueue]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    getToast();
+  }, [toastQueue, getToast]);
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "notification-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("ul", {
+    className: "notification-feed"
+  }, getToast()));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/TopicSelection/TopicSelection.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+const EMOJI_LABELS = {
+  business: "💼",
+  arts: "🎭",
+  food: "🍕",
+  health: "🩺",
+  finance: "💰",
+  government: "🏛️",
+  sports: "⚽️",
+  tech: "💻",
+  travel: "✈️",
+  "education-science": "🧪",
+  society: "💡"
+};
+function TopicSelection({
+  supportUrl
+}) {
+  const dispatch = (0,external_ReactRedux_namespaceObject.useDispatch)();
+  const inputRef = (0,external_React_namespaceObject.useRef)(null);
+  const modalRef = (0,external_React_namespaceObject.useRef)(null);
+  const checkboxWrapperRef = (0,external_React_namespaceObject.useRef)(null);
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const topics = prefs["discoverystream.topicSelection.topics"].split(", ");
+  const selectedTopics = prefs["discoverystream.topicSelection.selectedTopics"];
+  const suggestedTopics = prefs["discoverystream.topicSelection.suggestedTopics"]?.split(", ");
+  const displayCount = prefs["discoverystream.topicSelection.onboarding.displayCount"];
+  const topicsHaveBeenPreviouslySet = prefs["discoverystream.topicSelection.hasBeenUpdatedPreviously"];
+  const [isFirstRun] = (0,external_React_namespaceObject.useState)(displayCount === 0);
+  const displayCountRef = (0,external_React_namespaceObject.useRef)(displayCount);
+  const preselectedTopics = () => {
+    if (selectedTopics) {
+      return selectedTopics.split(", ");
+    }
+    return isFirstRun ? suggestedTopics : [];
+  };
+  const [topicsToSelect, setTopicsToSelect] = (0,external_React_namespaceObject.useState)(preselectedTopics);
+  function isFirstSave() {
+    // Only return true if the user has not previous set prefs
+    // and the selected topics pref is empty
+    if (selectedTopics === "" && !topicsHaveBeenPreviouslySet) {
+      return true;
+    }
+    return false;
+  }
+  function handleModalClose() {
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.TOPIC_SELECTION_USER_DISMISS
+    }));
+    dispatch(actionCreators.BroadcastToContent({
+      type: actionTypes.TOPIC_SELECTION_SPOTLIGHT_CLOSE
+    }));
+  }
+  function handleUserClose(e) {
+    const id = e?.target?.id;
+    if (id === "first-run") {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.TOPIC_SELECTION_MAYBE_LATER
+      }));
+      dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", true));
+    } else {
+      dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", false));
+    }
+    handleModalClose();
+  }
+
+  // By doing this, the useEffect that sets up the IntersectionObserver
+  // will not re-run every time displayCount changes,
+  // but the observer callback will always have access
+  // to the latest displayCount value through the ref.
+  (0,external_React_namespaceObject.useEffect)(() => {
+    displayCountRef.current = displayCount;
+  }, [displayCount]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const {
+      current
+    } = modalRef;
+    let observer;
+    if (current) {
+      observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) {
+          // if the user has seen the modal more than 3 times,
+          // automatically remove them from onboarding
+          if (displayCountRef.current > 3) {
+            dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", false));
+          }
+          observer.unobserve(modalRef.current);
+          dispatch(actionCreators.AlsoToMain({
+            type: actionTypes.TOPIC_SELECTION_IMPRESSION
+          }));
+        }
+      });
+      observer.observe(current);
+    }
+    return () => {
+      if (current) {
+        observer.unobserve(current);
+      }
+    };
+  }, [modalRef, dispatch]);
+
+  // when component mounts, set focus to input
+  (0,external_React_namespaceObject.useEffect)(() => {
+    inputRef?.current?.focus();
+  }, [inputRef]);
+  const handleFocus = (0,external_React_namespaceObject.useCallback)(e => {
+    // this list will have to be updated with other reusable components that get used inside of this modal
+    const tabbableElements = modalRef.current.querySelectorAll('a[href], button, moz-button, input[tabindex="0"]');
+    const [firstTabableEl] = tabbableElements;
+    const lastTabbableEl = tabbableElements[tabbableElements.length - 1];
+    let isTabPressed = e.key === "Tab" || e.keyCode === 9;
+    let isArrowPressed = e.key === "ArrowUp" || e.key === "ArrowDown";
+    if (isTabPressed) {
+      if (e.shiftKey) {
+        if (document.activeElement === firstTabableEl) {
+          lastTabbableEl.focus();
+          e.preventDefault();
+        }
+      } else if (document.activeElement === lastTabbableEl) {
+        firstTabableEl.focus();
+        e.preventDefault();
+      }
+    } else if (isArrowPressed && checkboxWrapperRef.current.contains(document.activeElement)) {
+      const checkboxElements = checkboxWrapperRef.current.querySelectorAll("input");
+      const [firstInput] = checkboxElements;
+      const lastInput = checkboxElements[checkboxElements.length - 1];
+      const inputArr = Array.from(checkboxElements);
+      const currentIndex = inputArr.indexOf(document.activeElement);
+      let nextEl;
+      if (e.key === "ArrowUp") {
+        nextEl = document.activeElement === firstInput ? lastInput : checkboxElements[currentIndex - 1];
+      } else if (e.key === "ArrowDown") {
+        nextEl = document.activeElement === lastInput ? firstInput : checkboxElements[currentIndex + 1];
+      }
+      nextEl.tabIndex = 0;
+      document.activeElement.tabIndex = -1;
+      nextEl.focus();
+    }
+  }, []);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const ref = modalRef.current;
+    ref.addEventListener("keydown", handleFocus);
+    inputRef.current.tabIndex = 0;
+    return () => {
+      ref.removeEventListener("keydown", handleFocus);
+    };
+  }, [handleFocus]);
+  function handleChange(e) {
+    const topic = e.target.name;
+    const isChecked = e.target.checked;
+    if (isChecked) {
+      setTopicsToSelect([...topicsToSelect, topic]);
+    } else {
+      const updatedTopics = topicsToSelect.filter(t => t !== topic);
+      setTopicsToSelect(updatedTopics);
+    }
+  }
+  function handleSubmit() {
+    const topicsString = topicsToSelect.join(", ");
+    dispatch(actionCreators.SetPref("discoverystream.topicSelection.selectedTopics", topicsString));
+    dispatch(actionCreators.SetPref("discoverystream.topicSelection.onboarding.maybeDisplay", false));
+    if (!topicsHaveBeenPreviouslySet) {
+      dispatch(actionCreators.SetPref("discoverystream.topicSelection.hasBeenUpdatedPreviously", true));
+    }
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.TOPIC_SELECTION_USER_SAVE,
+      data: {
+        topics: topicsString,
+        previous_topics: selectedTopics,
+        first_save: isFirstSave()
+      }
+    }));
+    handleModalClose();
+  }
+  return /*#__PURE__*/external_React_default().createElement(ModalOverlayWrapper, {
+    onClose: handleUserClose,
+    innerClassName: "topic-selection-container"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "topic-selection-form",
+    ref: modalRef
+  }, /*#__PURE__*/external_React_default().createElement("button", {
+    className: "dismiss-button",
+    title: "dismiss",
+    onClick: handleUserClose
+  }), /*#__PURE__*/external_React_default().createElement("h1", {
+    className: "title",
+    "data-l10n-id": "newtab-topic-selection-title"
+  }), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "subtitle",
+    "data-l10n-id": "newtab-topic-selection-subtitle"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "topic-list",
+    ref: checkboxWrapperRef
+  }, topics.map((topic, i) => {
+    const checked = topicsToSelect.includes(topic);
+    return /*#__PURE__*/external_React_default().createElement("label", {
+      className: `topic-item`,
+      key: topic
+    }, /*#__PURE__*/external_React_default().createElement("input", {
+      type: "checkbox",
+      id: topic,
+      name: topic,
+      ref: i === 0 ? inputRef : null,
+      onChange: handleChange,
+      checked: checked,
+      "aria-checked": checked,
+      tabIndex: -1
+    }), /*#__PURE__*/external_React_default().createElement("div", {
+      className: `topic-custom-checkbox`
+    }, /*#__PURE__*/external_React_default().createElement("span", {
+      className: "topic-icon"
+    }, EMOJI_LABELS[`${topic}`]), /*#__PURE__*/external_React_default().createElement("span", {
+      className: "topic-checked"
+    })), /*#__PURE__*/external_React_default().createElement("span", {
+      className: "topic-item-label",
+      "data-l10n-id": `newtab-topic-label-${topic}`
+    }));
+  })), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "modal-footer"
+  }, /*#__PURE__*/external_React_default().createElement("a", {
+    href: supportUrl,
+    "data-l10n-id": "newtab-topic-selection-privacy-link"
+  }), /*#__PURE__*/external_React_default().createElement("moz-button-group", {
+    className: "button-group"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    id: isFirstRun ? "first-run" : "",
+    "data-l10n-id": isFirstRun ? "newtab-topic-selection-button-maybe-later" : "newtab-topic-selection-cancel-button",
+    onClick: handleUserClose
+  }), /*#__PURE__*/external_React_default().createElement("moz-button", {
+    "data-l10n-id": "newtab-topic-selection-save-button",
+    type: "primary",
+    onClick: handleSubmit
+  })))));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/WallpaperFeatureHighlight.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+const WallpaperFeatureHighlight_INTERSECTION_RATIO = 1;
+const WallpaperFeatureHighlight_VISIBLE = "visible";
+const WallpaperFeatureHighlight_VISIBILITY_CHANGE_EVENT = "visibilitychange";
+const WALLPAPER_HIGHLIGHT_DISMISSED_PREF = "newtabWallpapers.highlightDismissed";
+function WallpaperFeatureHighlight({
+  position,
+  dispatch,
+  windowObj = globalThis
+}) {
+  const [highlightVisibilityTimeoutID, setHighlightVisibilityTimeoutID] = (0,external_React_namespaceObject.useState)("");
+  const heightElement = (0,external_React_namespaceObject.useRef)(null);
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const highlightHeaderText = prefs["newtabWallpapers.highlightHeaderText"];
+  const highlightContentText = prefs["newtabWallpapers.highlightContentText"];
+  const highlightCtaText = prefs["newtabWallpapers.highlightCtaText"];
+
+  // Event triggered by the CTA click event in the FeatureHighlight component.
+  const onToggleClick = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.SetPref(WALLPAPER_HIGHLIGHT_DISMISSED_PREF, true));
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WALLPAPERS_FEATURE_HIGHLIGHT_CTA_CLICKED
+    }));
+  }, [dispatch]);
+
+  // Event triggered by the onDismiss click event in the FeatureHighlight component.
+  const onDismissCallback = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.SetPref(WALLPAPER_HIGHLIGHT_DISMISSED_PREF, true));
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WALLPAPERS_FEATURE_HIGHLIGHT_DISMISSED
+    }));
+  }, [dispatch]);
+
+  // Event triggered by the onOutsideClick click event in the FeatureHighlight component.
+  const onOutsideClickCallback = () => {
+    clearTimeout(highlightVisibilityTimeoutID);
+  };
+
+  // Update the counter everytime the Wallpaper Highlight is viewed for more than 3 seconds
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const options = {
+      threshold: WallpaperFeatureHighlight_INTERSECTION_RATIO
+    };
+    const intersectionObserver = new windowObj.IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= WallpaperFeatureHighlight_INTERSECTION_RATIO)) {
+        intersectionObserver.unobserve(heightElement.current);
+
+        // Set the timeout ID so that it can be cleared independently
+        // if there is an outside click detected
+        setHighlightVisibilityTimeoutID(setTimeout(() => {
+          dispatch(actionCreators.OnlyToMain({
+            type: actionTypes.WALLPAPERS_FEATURE_HIGHLIGHT_SEEN
+          }));
+        }, 3000));
+      }
+    }, options);
+    const onVisibilityChange = () => {
+      intersectionObserver.observe(heightElement.current);
+      windowObj.document.removeEventListener(WallpaperFeatureHighlight_VISIBILITY_CHANGE_EVENT, onVisibilityChange);
+    };
+    if (heightElement.current) {
+      if (windowObj.document.visibilityState === WallpaperFeatureHighlight_VISIBLE) {
+        intersectionObserver.observe(heightElement.current);
+      } else {
+        windowObj.document.addEventListener(WallpaperFeatureHighlight_VISIBILITY_CHANGE_EVENT, onVisibilityChange);
+      }
+    }
+    return () => {
+      intersectionObserver?.disconnect();
+      windowObj.document.removeEventListener(WallpaperFeatureHighlight_VISIBILITY_CHANGE_EVENT, onVisibilityChange);
+    };
+  }, [dispatch, windowObj]);
+  let header = /*#__PURE__*/external_React_default().createElement("span", {
+    className: "highlightHeader",
+    "data-l10n-id": "newtab-wallpaper-feature-highlight-header"
+  });
+  let content = /*#__PURE__*/external_React_default().createElement("span", {
+    className: "highlightContent",
+    "data-l10n-id": "newtab-wallpaper-feature-highlight-content"
+  });
+  let button = /*#__PURE__*/external_React_default().createElement("button", {
+    onClick: onToggleClick,
+    "data-l10n-id": "newtab-wallpaper-feature-highlight-button"
+  });
+  if (highlightHeaderText) {
+    header = /*#__PURE__*/external_React_default().createElement("span", {
+      className: "highlightHeader"
+    }, highlightHeaderText);
+  }
+  if (highlightContentText) {
+    content = /*#__PURE__*/external_React_default().createElement("span", {
+      className: "highlightContent"
+    }, highlightContentText);
+  }
+  if (highlightCtaText) {
+    button = /*#__PURE__*/external_React_default().createElement("button", {
+      onClick: onToggleClick
+    }, highlightCtaText);
+  }
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "wallpaper-feature-highlight",
+    ref: heightElement
+  }, /*#__PURE__*/external_React_default().createElement(FeatureHighlight, {
+    position: position,
+    "data-l10n-id": "feature-highlight-wallpaper",
+    feature: "FEATURE_HIGHLIGHT_WALLPAPER",
+    dispatch: dispatch,
+    message: /*#__PURE__*/external_React_default().createElement("div", {
+      className: "wallpaper-feature-highlight-content"
+    }, header, content, button),
+    icon: /*#__PURE__*/external_React_default().createElement("div", {
+      className: "customize-icon"
+    }),
+    toggle: /*#__PURE__*/external_React_default().createElement("div", {
+      className: "icon icon-help"
+    }),
+    openedOverride: true,
+    showButtonIcon: false,
+    dismissCallback: onDismissCallback,
+    outsideClickCallback: onOutsideClickCallback
+  }));
+}
 ;// CONCATENATED MODULE: ./content-src/components/Base/Base.jsx
 function Base_extends() { Base_extends = Object.assign ? Object.assign.bind() : function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; }; return Base_extends.apply(this, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -9258,6 +12416,16 @@ function Base_extends() { Base_extends = Object.assign ? Object.assign.bind() : 
 
 
 
+
+
+
+
+
+const Base_VISIBLE = "visible";
+const Base_VISIBILITY_CHANGE_EVENT = "visibilitychange";
+const Base_WALLPAPER_HIGHLIGHT_DISMISSED_PREF = "newtabWallpapers.highlightDismissed";
+const Base_PREF_THUMBS_UP_DOWN_ENABLED = "discoverystream.thumbsUpDown.enabled";
+const PREF_THUMBS_UP_DOWN_LAYOUT_ENABLED = "discoverystream.thumbsUpDown.searchTopsitesCompact";
 const PrefsButton = ({
   onClick,
   icon
@@ -9306,7 +12474,7 @@ class _Base extends (external_React_default()).PureComponent {
     // If we skipped the about:welcome overlay and removed the CSS classes
     // we don't want to add them back to the Activity Stream view
     document.body.classList.contains("inline-onboarding") ? "inline-onboarding" : ""].filter(v => v).join(" ");
-    __webpack_require__.g.document.body.className = bodyClassName;
+    globalThis.document.body.className = bodyClassName;
   }
   render() {
     const {
@@ -9337,28 +12505,153 @@ class BaseContent extends (external_React_default()).PureComponent {
     this.handleOnKeyDown = this.handleOnKeyDown.bind(this);
     this.onWindowScroll = debounce(this.onWindowScroll.bind(this), 5);
     this.setPref = this.setPref.bind(this);
+    this.shouldShowWallpapersHighlight = this.shouldShowWallpapersHighlight.bind(this);
+    this.updateWallpaper = this.updateWallpaper.bind(this);
+    this.prefersDarkQuery = null;
+    this.handleColorModeChange = this.handleColorModeChange.bind(this);
+    this.shouldDisplayTopicSelectionModal = this.shouldDisplayTopicSelectionModal.bind(this);
     this.state = {
-      fixedSearch: false
+      fixedSearch: false,
+      firstVisibleTimestamp: null,
+      colorMode: "",
+      fixedNavStyle: {}
     };
+  }
+  setFirstVisibleTimestamp() {
+    if (!this.state.firstVisibleTimestamp) {
+      this.setState({
+        firstVisibleTimestamp: Date.now()
+      });
+    }
   }
   componentDidMount() {
     __webpack_require__.g.addEventListener("scroll", this.onWindowScroll);
     __webpack_require__.g.addEventListener("keydown", this.handleOnKeyDown);
+    if (this.props.document.visibilityState === Base_VISIBLE) {
+      this.setFirstVisibleTimestamp();
+      this.shouldDisplayTopicSelectionModal();
+    } else {
+      this._onVisibilityChange = () => {
+        if (this.props.document.visibilityState === Base_VISIBLE) {
+          this.setFirstVisibleTimestamp();
+          this.shouldDisplayTopicSelectionModal();
+          this.props.document.removeEventListener(Base_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+          this._onVisibilityChange = null;
+        }
+      };
+      this.props.document.addEventListener(Base_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+    }
+    // track change event to dark/light mode
+    this.prefersDarkQuery = globalThis.matchMedia("(prefers-color-scheme: dark)");
+    this.prefersDarkQuery.addEventListener("change", this.handleColorModeChange);
+    this.handleColorModeChange();
+  }
+  handleColorModeChange() {
+    const colorMode = this.prefersDarkQuery?.matches ? "dark" : "light";
+    this.setState({
+      colorMode
+    });
   }
   componentWillUnmount() {
+    this.prefersDarkQuery?.removeEventListener("change", this.handleColorModeChange);
     __webpack_require__.g.removeEventListener("scroll", this.onWindowScroll);
     __webpack_require__.g.removeEventListener("keydown", this.handleOnKeyDown);
+    if (this._onVisibilityChange) {
+      this.props.document.removeEventListener(Base_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+    }
   }
   onWindowScroll() {
+    if (window.innerHeight <= 700) {
+      // Bug 1937296: Only apply fixed-search logic
+      // if the page is tall enough to support it.
+      return;
+    }
     const prefs = this.props.Prefs.values;
-    const SCROLL_THRESHOLD = prefs["logowordmark.alwaysVisible"] ? 179 : 34;
+    const logoAlwaysVisible = prefs["logowordmark.alwaysVisible"];
+    const layoutsVariantAEnabled = prefs["newtabLayouts.variant-a"];
+    const layoutsVariantBEnabled = prefs["newtabLayouts.variant-b"];
+    const layoutsVariantAorB = layoutsVariantAEnabled || layoutsVariantBEnabled;
+    const thumbsUpDownEnabled = prefs[Base_PREF_THUMBS_UP_DOWN_ENABLED];
+    // For the compact layout to be active,
+    // thumbs also has to be enabled until Bug 1932242 is fixed
+    const thumbsUpDownLayoutEnabled = prefs[PREF_THUMBS_UP_DOWN_LAYOUT_ENABLED] && thumbsUpDownEnabled;
+
+    /* Bug 1917937: The logic presented below is fragile but accurate to the pixel. As new tab experiments with layouts, we have a tech debt of competing styles and classes the slightly modify where the search bar sits on the page. The larger solution for this is to replace everything with an intersection observer, but would require a larger refactor of this file. In the interim, we can programmatically calculate when to fire the fixed-scroll event and account for the moved elements so that topsites/etc stays in the same place. The CSS this references has been flagged to reference this logic so (hopefully) keep them in sync. */
+
+    let SCROLL_THRESHOLD = 0; // When the fixed-scroll event fires
+    let MAIN_OFFSET_PADDING = 0; // The padding to compensate for the moved elements
+
+    let layout = {
+      outerWrapperPaddingTop: 30,
+      searchWrapperPaddingTop: 34,
+      searchWrapperPaddingBottom: 38,
+      searchWrapperFixedScrollPaddingTop: 27,
+      searchWrapperFixedScrollPaddingBottom: 27,
+      searchInnerWrapperMinHeight: 52,
+      logoAndWordmarkWrapperHeight: 64,
+      logoAndWordmarkWrapperMarginBottom: 48
+    };
+    const CSS_VAR_SPACE_XXLARGE = 34.2; // Custom Acorn themed variable (8 * 0.267rem);
+
+    // Experimental layouts
+    // (Note these if statements are ordered to match the CSS cascade)
+    if (thumbsUpDownLayoutEnabled || layoutsVariantAorB) {
+      // Thumbs Compact View Layout
+      if (thumbsUpDownLayoutEnabled) {
+        layout.logoAndWordmarkWrapperMarginBottom = CSS_VAR_SPACE_XXLARGE;
+        if (!logoAlwaysVisible) {
+          layout.searchWrapperPaddingTop = CSS_VAR_SPACE_XXLARGE;
+          layout.searchWrapperPaddingBottom = CSS_VAR_SPACE_XXLARGE;
+        }
+      }
+
+      // Variant B Layout
+      if (layoutsVariantAEnabled) {
+        layout.outerWrapperPaddingTop = 24;
+        if (!thumbsUpDownLayoutEnabled) {
+          layout.searchWrapperPaddingTop = 0;
+          layout.searchWrapperPaddingBottom = 32;
+          layout.logoAndWordmarkWrapperMarginBottom = 32;
+        }
+      }
+
+      // Variant B Layout
+      if (layoutsVariantBEnabled) {
+        layout.outerWrapperPaddingTop = 24;
+        // Logo is positioned absolute, so remove it
+        layout.logoAndWordmarkWrapperHeight = 0;
+        layout.logoAndWordmarkWrapperMarginBottom = 0;
+        layout.searchWrapperPaddingTop = 16;
+        layout.searchWrapperPaddingBottom = CSS_VAR_SPACE_XXLARGE;
+        if (!thumbsUpDownLayoutEnabled) {
+          layout.searchWrapperPaddingBottom = 32;
+        }
+      }
+    }
+
+    // Logo visibility applies to all layouts
+    if (!logoAlwaysVisible) {
+      layout.logoAndWordmarkWrapperHeight = 0;
+      layout.logoAndWordmarkWrapperMarginBottom = 0;
+    }
+    SCROLL_THRESHOLD = layout.outerWrapperPaddingTop + layout.searchWrapperPaddingTop + layout.logoAndWordmarkWrapperHeight + layout.logoAndWordmarkWrapperMarginBottom - layout.searchWrapperFixedScrollPaddingTop;
+    MAIN_OFFSET_PADDING = layout.searchWrapperPaddingTop + layout.searchWrapperPaddingBottom + layout.searchInnerWrapperMinHeight + layout.logoAndWordmarkWrapperHeight + layout.logoAndWordmarkWrapperMarginBottom;
+
+    // Edge case if logo and thums are turned off, but Var A is enabled
+    if (SCROLL_THRESHOLD < 1) {
+      SCROLL_THRESHOLD = 1;
+    }
     if (__webpack_require__.g.scrollY > SCROLL_THRESHOLD && !this.state.fixedSearch) {
       this.setState({
-        fixedSearch: true
+        fixedSearch: true,
+        fixedNavStyle: {
+          paddingBlockStart: `${MAIN_OFFSET_PADDING}px`
+        }
       });
     } else if (__webpack_require__.g.scrollY <= SCROLL_THRESHOLD && this.state.fixedSearch) {
       this.setState({
-        fixedSearch: false
+        fixedSearch: false,
+        fixedNavStyle: {}
       });
     }
   }
@@ -9396,18 +12689,186 @@ class BaseContent extends (external_React_default()).PureComponent {
   setPref(pref, value) {
     this.props.dispatch(actionCreators.SetPref(pref, value));
   }
+  renderWallpaperAttribution() {
+    const {
+      wallpaperList
+    } = this.props.Wallpapers;
+    const activeWallpaper = this.props.Prefs.values[`newtabWallpapers.wallpaper-${this.state.colorMode}`];
+    const selected = wallpaperList.find(wp => wp.title === activeWallpaper);
+    // make sure a wallpaper is selected and that the attribution also exists
+    if (!selected?.attribution) {
+      return null;
+    }
+    const {
+      name: authorDetails,
+      webpage
+    } = selected.attribution;
+    if (activeWallpaper && wallpaperList && authorDetails.url) {
+      return /*#__PURE__*/external_React_default().createElement("p", {
+        className: `wallpaper-attribution`,
+        key: authorDetails.string,
+        "data-l10n-id": "newtab-wallpaper-attribution",
+        "data-l10n-args": JSON.stringify({
+          author_string: authorDetails.string,
+          author_url: authorDetails.url,
+          webpage_string: webpage.string,
+          webpage_url: webpage.url
+        })
+      }, /*#__PURE__*/external_React_default().createElement("a", {
+        "data-l10n-name": "name-link",
+        href: authorDetails.url
+      }, authorDetails.string), /*#__PURE__*/external_React_default().createElement("a", {
+        "data-l10n-name": "webpage-link",
+        href: webpage.url
+      }, webpage.string));
+    }
+    return null;
+  }
+  async updateWallpaper() {
+    const prefs = this.props.Prefs.values;
+    const wallpaperLight = prefs["newtabWallpapers.wallpaper-light"];
+    const wallpaperDark = prefs["newtabWallpapers.wallpaper-dark"];
+    const {
+      wallpaperList
+    } = this.props.Wallpapers;
+    if (wallpaperList) {
+      const lightWallpaper = wallpaperList.find(wp => wp.title === wallpaperLight) || "";
+      const darkWallpaper = wallpaperList.find(wp => wp.title === wallpaperDark) || "";
+      const wallpaperColor = darkWallpaper?.solid_color || lightWallpaper?.solid_color || "";
+      __webpack_require__.g.document?.body.style.setProperty(`--newtab-wallpaper-light`, `url(${lightWallpaper?.wallpaperUrl || ""})`);
+      __webpack_require__.g.document?.body.style.setProperty(`--newtab-wallpaper-dark`, `url(${darkWallpaper?.wallpaperUrl || ""})`);
+      __webpack_require__.g.document?.body.style.setProperty(`--newtab-wallpaper-color`, wallpaperColor || "transparent");
+      let wallpaperTheme = "";
+
+      // If we have a solid colour set, let's see how dark it is.
+      if (wallpaperColor) {
+        const rgbColors = this.getRGBColors(wallpaperColor);
+        const isColorDark = this.isWallpaperColorDark(rgbColors);
+        wallpaperTheme = isColorDark ? "dark" : "light";
+      } else {
+        // Grab the contrast of the currently displayed wallpaper.
+        const {
+          theme
+        } = this.state.colorMode === "light" ? lightWallpaper : darkWallpaper;
+        if (theme) {
+          wallpaperTheme = theme;
+        }
+      }
+
+      // Add helper class to body if user has a wallpaper selected
+      if (wallpaperTheme === "light") {
+        __webpack_require__.g.document?.body.classList.add("lightWallpaper");
+        __webpack_require__.g.document?.body.classList.remove("darkWallpaper");
+      }
+      if (wallpaperTheme === "dark") {
+        __webpack_require__.g.document?.body.classList.add("darkWallpaper");
+        __webpack_require__.g.document?.body.classList.remove("lightWallpaper");
+      }
+    }
+  }
+
+  // Contains all the logic to show the wallpapers Feature Highlight
+  shouldShowWallpapersHighlight() {
+    const prefs = this.props.Prefs.values;
+
+    // If wallpapers (or v2 wallpapers) are not enabled, don't show the highlight.
+    const wallpapersEnabled = prefs["newtabWallpapers.enabled"];
+    const wallpapersV2Enabled = prefs["newtabWallpapers.v2.enabled"];
+    if (!wallpapersEnabled || !wallpapersV2Enabled) {
+      return false;
+    }
+
+    // If user has interacted/dismissed the highlight, don't show
+    const wallpapersHighlightDismissed = prefs[Base_WALLPAPER_HIGHLIGHT_DISMISSED_PREF];
+    if (wallpapersHighlightDismissed) {
+      return false;
+    }
+
+    // If the user has selected a wallpaper, don't show the pop-up
+    const activeWallpaperLight = prefs[`newtabWallpapers.wallpaper-light`];
+    const activeWallpaperDark = prefs[`newtabWallpapers.wallpaper-dark`];
+    if (activeWallpaperLight || activeWallpaperDark) {
+      this.props.dispatch(actionCreators.SetPref(Base_WALLPAPER_HIGHLIGHT_DISMISSED_PREF, true));
+      return false;
+    }
+
+    // If the user has seen* the highlight more than three times
+    // *Seen means they loaded HNT page and the highlight was observed for more than 3 seconds
+    const {
+      highlightSeenCounter
+    } = this.props.Wallpapers;
+    if (highlightSeenCounter.value > 3) {
+      return false;
+    }
+
+    // Show the highlight if available
+    const wallpapersHighlightEnabled = prefs["newtabWallpapers.highlightEnabled"];
+    if (wallpapersHighlightEnabled) {
+      return true;
+    }
+
+    // Default return value
+    return false;
+  }
+  getRGBColors(input) {
+    if (input.length !== 7) {
+      return [];
+    }
+    const r = parseInt(input.substr(1, 2), 16);
+    const g = parseInt(input.substr(3, 2), 16);
+    const b = parseInt(input.substr(5, 2), 16);
+    return [r, g, b];
+  }
+  isWallpaperColorDark([r, g, b]) {
+    return 0.2125 * r + 0.7154 * g + 0.0721 * b <= 110;
+  }
+  shouldDisplayTopicSelectionModal() {
+    const prefs = this.props.Prefs.values;
+    const pocketEnabled = prefs["feeds.section.topstories"] && prefs["feeds.system.topstories"];
+    const topicSelectionOnboardingEnabled = prefs["discoverystream.topicSelection.onboarding.enabled"] && pocketEnabled;
+    const maybeShowModal = prefs["discoverystream.topicSelection.onboarding.maybeDisplay"];
+    const displayTimeout = prefs["discoverystream.topicSelection.onboarding.displayTimeout"];
+    const lastDisplayed = prefs["discoverystream.topicSelection.onboarding.lastDisplayed"];
+    const displayCount = prefs["discoverystream.topicSelection.onboarding.displayCount"];
+    if (!maybeShowModal || !prefs["discoverystream.topicSelection.enabled"] || !topicSelectionOnboardingEnabled) {
+      return;
+    }
+    const day = 24 * 60 * 60 * 1000;
+    const now = new Date().getTime();
+    const timeoutOccured = now - parseFloat(lastDisplayed) > displayTimeout;
+    if (displayCount < 3) {
+      if (displayCount === 0 || timeoutOccured) {
+        this.props.dispatch(actionCreators.BroadcastToContent({
+          type: actionTypes.TOPIC_SELECTION_SPOTLIGHT_OPEN
+        }));
+        this.setPref("discoverystream.topicSelection.onboarding.displayTimeout", day);
+      }
+    }
+  }
   render() {
     const {
       props
     } = this;
     const {
-      App
+      App,
+      DiscoveryStream
     } = props;
     const {
       initialized,
       customizeMenuVisible
     } = App;
     const prefs = props.Prefs.values;
+    const layoutsVariantAEnabled = prefs["newtabLayouts.variant-a"];
+    const layoutsVariantBEnabled = prefs["newtabLayouts.variant-b"];
+    const layoutsVariantAorB = layoutsVariantAEnabled || layoutsVariantBEnabled;
+    const activeWallpaper = prefs[`newtabWallpapers.wallpaper-${this.state.colorMode}`];
+    const wallpapersEnabled = prefs["newtabWallpapers.enabled"];
+    const wallpapersV2Enabled = prefs["newtabWallpapers.v2.enabled"];
+    const weatherEnabled = prefs.showWeather;
+    const {
+      showTopicSelection
+    } = DiscoveryStream;
+    const mayShowTopicSelection = showTopicSelection && prefs["discoverystream.topicSelection.enabled"];
     const {
       pocketConfig
     } = prefs;
@@ -9427,64 +12888,109 @@ class BaseContent extends (external_React_default()).PureComponent {
       showSponsoredTopSitesEnabled: prefs.showSponsoredTopSites,
       showSponsoredPocketEnabled: prefs.showSponsored,
       showRecentSavesEnabled: prefs.showRecentSaves,
-      topSitesRowsCount: prefs.topSitesRows
+      topSitesRowsCount: prefs.topSitesRows,
+      weatherEnabled: prefs.showWeather
     };
     const pocketRegion = prefs["feeds.system.topstories"];
     const mayHaveSponsoredStories = prefs["system.showSponsored"];
+    const mayHaveWeather = prefs["system.showWeather"];
     const {
       mayHaveSponsoredTopSites
     } = prefs;
-    const outerClassName = ["outer-wrapper", isDiscoveryStream && pocketEnabled && "ds-outer-wrapper-search-alignment", isDiscoveryStream && "ds-outer-wrapper-breakpoint-override", prefs.showSearch && this.state.fixedSearch && !noSectionsEnabled && "fixed-search", prefs.showSearch && noSectionsEnabled && "only-search", prefs["logowordmark.alwaysVisible"] && "visible-logo"].filter(v => v).join(" ");
-    return /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement(CustomizeMenu, {
+    const supportUrl = prefs["support.url"];
+    const hasThumbsUpDownLayout = prefs["discoverystream.thumbsUpDown.searchTopsitesCompact"];
+    const hasThumbsUpDown = prefs["discoverystream.thumbsUpDown.enabled"];
+    const sectionsEnabled = prefs["discoverystream.sections.enabled"];
+    const featureClassName = [weatherEnabled && mayHaveWeather && "has-weather",
+    // Show is weather is enabled/visible
+    prefs.showSearch ? "has-search" : "no-search", layoutsVariantAEnabled ? "layout-variant-a" : "",
+    // Layout experiment variant A
+    layoutsVariantBEnabled ? "layout-variant-b" : "",
+    // Layout experiment variant B
+    pocketEnabled ? "has-recommended-stories" : "no-recommended-stories", sectionsEnabled ? "has-sections-grid" : ""].filter(v => v).join(" ");
+    const outerClassName = ["outer-wrapper", isDiscoveryStream && pocketEnabled && "ds-outer-wrapper-search-alignment", isDiscoveryStream && "ds-outer-wrapper-breakpoint-override", prefs.showSearch && this.state.fixedSearch && !noSectionsEnabled && "fixed-search", prefs.showSearch && noSectionsEnabled && "only-search", prefs["feeds.topsites"] && !pocketEnabled && !prefs.showSearch && "only-topsites", noSectionsEnabled && "no-sections", prefs["logowordmark.alwaysVisible"] && "visible-logo", hasThumbsUpDownLayout && hasThumbsUpDown && "thumbs-ui-compact"].filter(v => v).join(" ");
+    if (wallpapersEnabled || wallpapersV2Enabled) {
+      this.updateWallpaper();
+    }
+    return /*#__PURE__*/external_React_default().createElement("div", {
+      className: featureClassName
+    }, /*#__PURE__*/external_React_default().createElement("menu", {
+      className: "personalizeButtonWrapper"
+    }, /*#__PURE__*/external_React_default().createElement(CustomizeMenu, {
       onClose: this.closeCustomizationMenu,
       onOpen: this.openCustomizationMenu,
       openPreferences: this.openPreferences,
       setPref: this.setPref,
       enabledSections: enabledSections,
+      wallpapersEnabled: wallpapersEnabled,
+      wallpapersV2Enabled: wallpapersV2Enabled,
+      activeWallpaper: activeWallpaper,
       pocketRegion: pocketRegion,
       mayHaveSponsoredTopSites: mayHaveSponsoredTopSites,
       mayHaveSponsoredStories: mayHaveSponsoredStories,
+      mayHaveWeather: mayHaveWeather,
       spocMessageVariant: spocMessageVariant,
       showing: customizeMenuVisible
-    }), /*#__PURE__*/external_React_default().createElement("div", {
+    }), this.shouldShowWallpapersHighlight() && /*#__PURE__*/external_React_default().createElement(WallpaperFeatureHighlight, {
+      position: "inset-block-end inset-inline-start",
+      dispatch: this.props.dispatch
+    })), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "weatherWrapper"
+    }, weatherEnabled && /*#__PURE__*/external_React_default().createElement(ErrorBoundary, null, /*#__PURE__*/external_React_default().createElement(Weather_Weather, null))), /*#__PURE__*/external_React_default().createElement("div", {
       className: outerClassName,
       onClick: this.closeCustomizationMenu
-    }, /*#__PURE__*/external_React_default().createElement("main", null, prefs.showSearch && /*#__PURE__*/external_React_default().createElement("div", {
+    }, /*#__PURE__*/external_React_default().createElement("main", {
+      className: "newtab-main",
+      style: this.state.fixedNavStyle
+    }, prefs.showSearch && /*#__PURE__*/external_React_default().createElement("div", {
       className: "non-collapsible-section"
     }, /*#__PURE__*/external_React_default().createElement(ErrorBoundary, null, /*#__PURE__*/external_React_default().createElement(Search_Search, Base_extends({
       showLogo: noSectionsEnabled || prefs["logowordmark.alwaysVisible"],
       handoffEnabled: searchHandoffEnabled
-    }, props.Search)))), /*#__PURE__*/external_React_default().createElement("div", {
+    }, props.Search)))), !prefs.showSearch && layoutsVariantAorB && !noSectionsEnabled && /*#__PURE__*/external_React_default().createElement(Logo, null), /*#__PURE__*/external_React_default().createElement("div", {
       className: `body-wrapper${initialized ? " on" : ""}`
     }, isDiscoveryStream ? /*#__PURE__*/external_React_default().createElement(ErrorBoundary, {
       className: "borderless-error"
     }, /*#__PURE__*/external_React_default().createElement(DiscoveryStreamBase, {
       locale: props.App.locale,
-      mayHaveSponsoredStories: mayHaveSponsoredStories
-    })) : /*#__PURE__*/external_React_default().createElement(Sections_Sections, null)), /*#__PURE__*/external_React_default().createElement(ConfirmDialog, null))));
+      mayHaveSponsoredStories: mayHaveSponsoredStories,
+      firstVisibleTimestamp: this.state.firstVisibleTimestamp
+    })) : /*#__PURE__*/external_React_default().createElement(Sections_Sections, null)), /*#__PURE__*/external_React_default().createElement(ConfirmDialog, null), wallpapersEnabled && this.renderWallpaperAttribution()), /*#__PURE__*/external_React_default().createElement("aside", null, this.props.Notifications?.showNotifications && /*#__PURE__*/external_React_default().createElement(ErrorBoundary, null, /*#__PURE__*/external_React_default().createElement(Notifications_Notifications, {
+      dispatch: this.props.dispatch
+    }))), mayShowTopicSelection && pocketEnabled && /*#__PURE__*/external_React_default().createElement(TopicSelection, {
+      supportUrl: supportUrl
+    })));
   }
 }
+BaseContent.defaultProps = {
+  document: __webpack_require__.g.document
+};
 const Base = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   App: state.App,
   Prefs: state.Prefs,
   Sections: state.Sections,
   DiscoveryStream: state.DiscoveryStream,
-  Search: state.Search
+  Notifications: state.Notifications,
+  Search: state.Search,
+  Wallpapers: state.Wallpapers,
+  Weather: state.Weather
 }))(_Base);
-;// CONCATENATED MODULE: ./content-src/lib/detect-user-session-start.js
+;// CONCATENATED MODULE: ./content-src/lib/detect-user-session-start.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 
+
 const detect_user_session_start_VISIBLE = "visible";
 const detect_user_session_start_VISIBILITY_CHANGE_EVENT = "visibilitychange";
+
 class DetectUserSessionStart {
   constructor(store, options = {}) {
     this._store = store;
     // Overrides for testing
-    this.document = options.document || __webpack_require__.g.document;
+    this.document = options.document || globalThis.document;
     this._perfService = options.perfService || perfService;
     this._onVisibilityChange = this._onVisibilityChange.bind(this);
   }
@@ -9502,7 +13008,10 @@ class DetectUserSessionStart {
       this._sendEvent();
     } else {
       // If the document is not visible, listen for when it does become visible.
-      this.document.addEventListener(detect_user_session_start_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+      this.document.addEventListener(
+        detect_user_session_start_VISIBILITY_CHANGE_EVENT,
+        this._onVisibilityChange
+      );
     }
   }
 
@@ -9513,14 +13022,23 @@ class DetectUserSessionStart {
    */
   _sendEvent() {
     this._perfService.mark("visibility_event_rcvd_ts");
+
     try {
-      let visibility_event_rcvd_ts = this._perfService.getMostRecentAbsMarkStartByName("visibility_event_rcvd_ts");
-      this._store.dispatch(actionCreators.AlsoToMain({
-        type: actionTypes.SAVE_SESSION_PERF_DATA,
-        data: {
-          visibility_event_rcvd_ts
-        }
-      }));
+      let visibility_event_rcvd_ts =
+        this._perfService.getMostRecentAbsMarkStartByName(
+          "visibility_event_rcvd_ts"
+        );
+
+      this._store.dispatch(
+        actionCreators.AlsoToMain({
+          type: actionTypes.SAVE_SESSION_PERF_DATA,
+          data: {
+            visibility_event_rcvd_ts,
+            window_inner_width: window.innerWidth,
+            window_inner_height: window.innerHeight,
+          },
+        })
+      );
     } catch (ex) {
       // If this failed, it's likely because the `privacy.resistFingerprinting`
       // pref is true.  We should at least not blow up.
@@ -9534,19 +13052,27 @@ class DetectUserSessionStart {
   _onVisibilityChange() {
     if (this.document.visibilityState === detect_user_session_start_VISIBLE) {
       this._sendEvent();
-      this.document.removeEventListener(detect_user_session_start_VISIBILITY_CHANGE_EVENT, this._onVisibilityChange);
+      this.document.removeEventListener(
+        detect_user_session_start_VISIBILITY_CHANGE_EVENT,
+        this._onVisibilityChange
+      );
     }
   }
 }
+
 ;// CONCATENATED MODULE: external "Redux"
 const external_Redux_namespaceObject = Redux;
-;// CONCATENATED MODULE: ./content-src/lib/init-store.js
+;// CONCATENATED MODULE: ./content-src/lib/init-store.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* eslint-env mozilla/remote-page */
 
+
+// We disable import checking here as redux is installed via the npm packages
+// at the newtab level, rather than in the top-level package.json.
+// eslint-disable-next-line import/no-unresolved
 
 
 const MERGE_STORE_ACTION = "NEW_TAB_INITIAL_STATE";
@@ -9572,11 +13098,9 @@ const INCOMING_MESSAGE_NAME = "ActivityStream:MainToContent";
 function mergeStateReducer(mainReducer) {
   return (prevState, action) => {
     if (action.type === MERGE_STORE_ACTION) {
-      return {
-        ...prevState,
-        ...action.data
-      };
+      return { ...prevState, ...action.data };
     }
+
     return mainReducer(prevState, action);
   };
 }
@@ -9593,9 +13117,8 @@ const messageMiddleware = () => next => action => {
     next(action);
   }
 };
-const rehydrationMiddleware = ({
-  getState
-}) => {
+
+const rehydrationMiddleware = ({ getState }) => {
   // NB: The parameter here is MiddlewareAPI which looks like a Store and shares
   // the same getState, so attached properties are accessible from the store.
   getState.didRehydrate = false;
@@ -9604,17 +13127,24 @@ const rehydrationMiddleware = ({
     if (getState.didRehydrate || window.__FROM_STARTUP_CACHE__) {
       // Startup messages can be safely ignored by the about:home document
       // stored in the startup cache.
-      if (window.__FROM_STARTUP_CACHE__ && action.meta && action.meta.isStartup) {
+      if (
+        window.__FROM_STARTUP_CACHE__ &&
+        action.meta &&
+        action.meta.isStartup
+      ) {
         return null;
       }
       return next(action);
     }
+
     const isMergeStoreAction = action.type === MERGE_STORE_ACTION;
     const isRehydrationRequest = action.type === actionTypes.NEW_TAB_STATE_REQUEST;
+
     if (isRehydrationRequest) {
       getState.didRequestInitialState = true;
       return next(action);
     }
+
     if (isMergeStoreAction) {
       getState.didRehydrate = true;
       return next(action);
@@ -9622,16 +13152,20 @@ const rehydrationMiddleware = ({
 
     // If init happened after our request was made, we need to re-request
     if (getState.didRequestInitialState && action.type === actionTypes.INIT) {
-      return next(actionCreators.AlsoToMain({
-        type: actionTypes.NEW_TAB_STATE_REQUEST
-      }));
+      return next(actionCreators.AlsoToMain({ type: actionTypes.NEW_TAB_STATE_REQUEST }));
     }
-    if (actionUtils.isBroadcastToContent(action) || actionUtils.isSendToOneContent(action) || actionUtils.isSendToPreloaded(action)) {
+
+    if (
+      actionUtils.isBroadcastToContent(action) ||
+      actionUtils.isSendToOneContent(action) ||
+      actionUtils.isSendToPreloaded(action)
+    ) {
       // Note that actions received before didRehydrate will not be dispatched
       // because this could negatively affect preloading and the the state
       // will be replaced by rehydration anyway.
       return null;
     }
+
     return next(action);
   };
 };
@@ -9644,19 +13178,31 @@ const rehydrationMiddleware = ({
  * @return {object}          A redux store
  */
 function initStore(reducers, initialState) {
-  const store = (0,external_Redux_namespaceObject.createStore)(mergeStateReducer((0,external_Redux_namespaceObject.combineReducers)(reducers)), initialState, __webpack_require__.g.RPMAddMessageListener && (0,external_Redux_namespaceObject.applyMiddleware)(rehydrationMiddleware, messageMiddleware));
-  if (__webpack_require__.g.RPMAddMessageListener) {
-    __webpack_require__.g.RPMAddMessageListener(INCOMING_MESSAGE_NAME, msg => {
+  const store = (0,external_Redux_namespaceObject.createStore)(
+    mergeStateReducer((0,external_Redux_namespaceObject.combineReducers)(reducers)),
+    initialState,
+    globalThis.RPMAddMessageListener &&
+      (0,external_Redux_namespaceObject.applyMiddleware)(rehydrationMiddleware, messageMiddleware)
+  );
+
+  if (globalThis.RPMAddMessageListener) {
+    globalThis.RPMAddMessageListener(INCOMING_MESSAGE_NAME, msg => {
       try {
         store.dispatch(msg.data);
       } catch (ex) {
         console.error("Content msg:", msg, "Dispatch error: ", ex);
-        dump(`Content msg: ${JSON.stringify(msg)}\nDispatch error: ${ex}\n${ex.stack}`);
+        dump(
+          `Content msg: ${JSON.stringify(msg)}\nDispatch error: ${ex}\n${
+            ex.stack
+          }`
+        );
       }
     });
   }
+
   return store;
 }
+
 ;// CONCATENATED MODULE: external "ReactDOM"
 const external_ReactDOM_namespaceObject = ReactDOM;
 var external_ReactDOM_default = /*#__PURE__*/__webpack_require__.n(external_ReactDOM_namespaceObject);

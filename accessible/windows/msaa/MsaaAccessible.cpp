@@ -14,6 +14,7 @@
 #include "mozilla/a11y/AccessibleWrap.h"
 #include "mozilla/a11y/Compatibility.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
+#include "mozilla/StaticPrefs_accessibility.h"
 #include "MsaaAccessible.h"
 #include "MsaaDocAccessible.h"
 #include "MsaaRootAccessible.h"
@@ -26,7 +27,6 @@
 #include "sdnTextAccessible.h"
 #include "HyperTextAccessible-inl.h"
 #include "ServiceProvider.h"
-#include "Statistics.h"
 #include "ARIAMap.h"
 #include "mozilla/PresShell.h"
 
@@ -44,7 +44,7 @@ static const GUID IID_MsaaAccessible = {
     0x4afc,
     {0xa3, 0x2c, 0xd6, 0xb5, 0xc0, 0x10, 0x04, 0x6b}};
 
-MsaaIdGenerator MsaaAccessible::sIDGen;
+MOZ_RUNINIT MsaaIdGenerator MsaaAccessible::sIDGen;
 ITypeInfo* MsaaAccessible::gTypeInfo = nullptr;
 
 /* static */
@@ -215,7 +215,7 @@ void MsaaAccessible::FireWinEvent(Accessible* aTarget, uint32_t aEventType) {
                     nsIAccessibleEvent::EVENT_LAST_ENTRY,
                 "MSAA event map skewed");
 
-  if (aEventType == 0 || aEventType >= ArrayLength(gWinEventMap)) {
+  if (aEventType == 0 || aEventType >= std::size(gWinEventMap)) {
     MOZ_ASSERT_UNREACHABLE("invalid event type");
     return;
   }
@@ -507,6 +507,13 @@ MsaaAccessible::QueryInterface(REFIID iid, void** ppv) {
     return E_NOINTERFACE;
   }
 
+  if (NS_WARN_IF(!NS_IsMainThread())) {
+    // Bug 1896816: JAWS sometimes traverses into Gecko UI from a file dialog
+    // thread. It shouldn't do that, but let's fail gracefully instead of
+    // crashing.
+    return RPC_E_WRONG_THREAD;
+  }
+
   // These interfaces are always available. We can support querying to them
   // even if the Accessible is dead.
   if (IID_IUnknown == iid) {
@@ -522,9 +529,11 @@ MsaaAccessible::QueryInterface(REFIID iid, void** ppv) {
     if (SUCCEEDED(hr)) {
       return hr;
     }
-    hr = uiaRawElmProvider::QueryInterface(iid, ppv);
-    if (SUCCEEDED(hr)) {
-      return hr;
+    if (StaticPrefs::accessibility_uia_enable()) {
+      hr = uiaRawElmProvider::QueryInterface(iid, ppv);
+      if (SUCCEEDED(hr)) {
+        return hr;
+      }
     }
   }
   if (*ppv) {
@@ -554,7 +563,6 @@ MsaaAccessible::QueryInterface(REFIID iid, void** ppv) {
 
     *ppv = static_cast<ISimpleDOMNode*>(new sdnAccessible(WrapNotNull(this)));
   } else if (iid == IID_ISimpleDOMText && localAcc && localAcc->IsTextLeaf()) {
-    statistics::ISimpleDOMUsed();
     *ppv = static_cast<ISimpleDOMText*>(new sdnTextAccessible(this));
     static_cast<IUnknown*>(*ppv)->AddRef();
     return S_OK;
@@ -769,7 +777,8 @@ MsaaAccessible::get_accRole(
   uint32_t msaaRole = 0;
 
 #define ROLE(_geckoRole, stringRole, ariaRole, atkRole, macRole, macSubrole, \
-             _msaaRole, ia2Role, androidClass, iosIsElement, nameRule)       \
+             _msaaRole, ia2Role, androidClass, iosIsElement, uiaControlType, \
+             nameRule)                                                       \
   case roles::_geckoRole:                                                    \
     msaaRole = _msaaRole;                                                    \
     break;

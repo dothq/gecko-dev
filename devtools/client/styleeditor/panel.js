@@ -36,9 +36,8 @@ StyleEditorPanel.prototype = {
    */
   async open(options) {
     // Initialize the CSS properties database.
-    const { cssProperties } = await this._toolbox.target.getFront(
-      "cssProperties"
-    );
+    const { cssProperties } =
+      await this._toolbox.target.getFront("cssProperties");
 
     // Initialize the UI
     this.UI = new StyleEditorUI(
@@ -48,6 +47,7 @@ StyleEditorPanel.prototype = {
       cssProperties
     );
     this.UI.on("error", this._showError);
+    this.UI.on("reloaded", () => this.emit("reloaded"));
     await this.UI.initialize(options);
 
     return this;

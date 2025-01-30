@@ -9,8 +9,9 @@ and an optional payload of a specific type (containing arbitrary data relevant t
 
 .. note::
     This guide explains C++ markers in depth. To learn more about how to add a
-    marker in JavaScript or Rust, please take a look at their documentation
-    in :doc:`instrumenting-javascript` or :doc:`instrumenting-rust` respectively.
+    marker in JavaScript, Rust or JVM, please take a look at their documentation
+    in :doc:`instrumenting-javascript`, :doc:`instrumenting-rust` or
+    :doc:`instrumenting-android` respectively.
 
 Example
 -------
@@ -221,7 +222,7 @@ when the object is constructed, and later recording the marker when the object i
 of its C++ scope.
 This is especially useful if there are multiple scope exit points.
 
-``AUTO_PROFILER_MARKER_TEXT`` is `the only one implemented <https://searchfox.org/mozilla-central/search?q=id%3AAUTO_PROFILER_MARKER_TEXT`_ at this time.
+``AUTO_PROFILER_MARKER_TEXT`` is `the only one implemented <https://searchfox.org/mozilla-central/search?q=id%3AAUTO_PROFILER_MARKER_TEXT>`_ at this time.
 
 .. code-block:: cpp
 

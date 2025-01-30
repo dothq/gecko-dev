@@ -1,26 +1,38 @@
-From: Byron Campen <docfaraday@gmail.com>
-Date: Thu, 20 Jul 2023 14:24:00 +0000
-Subject: Bug 1838080: Remove this duplicate init (that's also on the wrong
- thread). r=pehrsons,webrtc-reviewers
+From: stransky <stransky@redhat.com>
+Date: Tue, 29 Aug 2023 12:43:00 +0000
+Subject: Bug 1821629 [DMABuf] Don't use DMABuf if it's disabled by Firefox gfx
+ config r=ng,webrtc-reviewers
 
-This was causing assertions.
-
-Differential Revision: https://phabricator.services.mozilla.com/D179731
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/6ac6592a04a839a6152d5ad5f0778f63dbbd6b1b
+Differential Revision: https://phabricator.services.mozilla.com/D172224
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/158a888cad8869a2f0026fa7cfaaa13ecbfcf2ed
 ---
- audio/channel_send.cc | 2 --
- 1 file changed, 2 deletions(-)
+ .../linux/wayland/shared_screencast_stream.cc            | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
 
-diff --git a/audio/channel_send.cc b/audio/channel_send.cc
-index 8080f4a3b8..61e68d19df 100644
---- a/audio/channel_send.cc
-+++ b/audio/channel_send.cc
-@@ -474,8 +474,6 @@ ChannelSend::ChannelSend(
+diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+index 9aa50e19ee..09da88cad3 100644
+--- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
++++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+@@ -27,6 +27,13 @@
+ #include "rtc_base/synchronization/mutex.h"
+ #include "rtc_base/time_utils.h"
  
-   int error = audio_coding_->RegisterTransportCallback(this);
-   RTC_DCHECK_EQ(0, error);
--  if (frame_transformer)
--    InitFrameTransformerDelegate(std::move(frame_transformer));
- }
++// Wrapper for gfxVars::UseDMABuf() as we can't include gfxVars here.
++// We don't want to use dmabuf of known broken systems.
++// See FEATURE_DMABUF for details.
++namespace mozilla::gfx {
++bool IsDMABufEnabled();
++}
++
+ namespace webrtc {
  
- ChannelSend::~ChannelSend() {
+ const int kBytesPerPixel = 4;
+@@ -268,7 +275,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
+   that->modifier_ =
+       has_modifier ? that->spa_video_format_.modifier : DRM_FORMAT_MOD_INVALID;
+   std::vector<const spa_pod*> params;
+-  const int buffer_types = has_modifier
++  const int buffer_types = has_modifier && mozilla::gfx::IsDMABufEnabled()
+                                ? (1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd)
+                                : (1 << SPA_DATA_MemFd);
+ 

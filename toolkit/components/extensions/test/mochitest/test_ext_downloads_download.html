@@ -14,7 +14,7 @@
 "use strict";
 
 async function background() {
-  const url = "http://mochi.test:8888/tests/mobile/android/components/extensions/test/mochitest/context_tabs_onUpdated_page.html";
+  const url = "http://mochi.test:8888/tests/mobile/shared/components/extensions/test/mochitest/context_tabs_onUpdated_page.html";
 
   browser.test.assertThrows(
     () => browser.downloads.download(),
@@ -66,6 +66,12 @@ async function background() {
     browser.downloads.download({url, filename: "file."}),
     /filename must not contain illegal characters/,
     "Should fail with a dot in the filename"
+  );
+
+  await browser.test.assertRejects(
+    browser.downloads.download({url, filename: "123. file"}),
+    /filename must not contain illegal characters/,
+    "Should fail with a space after the trailing dot in the filename"
   );
 
   await browser.test.assertRejects(

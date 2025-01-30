@@ -95,6 +95,27 @@ def dependentlibs_mac_objdump(lib):
     return deps
 
 
+def is_skiplisted(dep):
+    # Skip the ICU data DLL because preloading it at startup
+    # leads to startup performance problems because of its excessive
+    # size (around 10MB).
+    if dep.startswith("icu"):
+        return True
+    # dxcompiler.dll is also large and we dynamically load it.
+    if dep.startswith(("dxcompiler", " dxil")):
+        return True
+    # Skip the MSVC Runtimes. See bug #1921713.
+    if substs.get("WIN32_REDIST_DIR"):
+        for runtime in [
+            "MSVC_C_RUNTIME_DLL",
+            "MSVC_C_RUNTIME_1_DLL",
+            "MSVC_CXX_RUNTIME_DLL",
+        ]:
+            dll = substs.get(runtime)
+            if dll and dep == dll:
+                return True
+
+
 def dependentlibs(lib, libpaths, func):
     """For a given library, returns the list of recursive dependencies that can
     be found in the given list of paths, followed by the library itself."""
@@ -108,10 +129,7 @@ def dependentlibs(lib, libpaths, func):
             deppath = os.path.join(dir, dep)
             if os.path.exists(deppath):
                 deps.update(dependentlibs(deppath, libpaths, func))
-                # Black list the ICU data DLL because preloading it at startup
-                # leads to startup performance problems because of its excessive
-                # size (around 10MB).
-                if not dep.startswith(("icu")):
+                if not is_skiplisted(dep):
                     deps[dep] = deppath
                 break
 
@@ -132,6 +150,8 @@ def gen_list(output, lib):
 
     deps = dependentlibs(lib, libpaths, func)
     base_lib = mozpath.basename(lib)
+    if not deps:
+        raise RuntimeError(f"Couldn't find any dependencies of {base_lib}")
     deps[base_lib] = mozpath.join(libpaths[0], base_lib)
     output.write("\n".join(deps.keys()) + "\n")
 

@@ -16,12 +16,6 @@ DIRS += [
     "jni",
 ]
 
-XPIDL_SOURCES += [
-    "nsIAndroidBridge.idl",
-]
-
-XPIDL_MODULE = "widget_android"
-
 EXPORTS += [
     "AndroidBridge.h",
 ]
@@ -69,7 +63,6 @@ classes_with_WrapForJNI = [
     "ImageDecoder",
     "MediaDrmProxy",
     "PanZoomController",
-    "RuntimeTelemetry",
     "Sample",
     "SampleBuffer",
     "ScreenManagerHelper",
@@ -83,6 +76,7 @@ classes_with_WrapForJNI = [
     "SurfaceTextureListener",
     "TelemetryUtils",
     "WebAuthnTokenManager",
+    "WebAuthnUtils",
     "WebMessage",
     "WebNotification",
     "WebNotificationDelegate",
@@ -193,7 +187,6 @@ LOCAL_INCLUDES += [
     "/layout/forms",
     "/layout/painting",
     "/netwerk/base",
-    "/toolkit/components/telemetry",
     "/widget",
     "/widget/headless",
     "/xpcom/threads",

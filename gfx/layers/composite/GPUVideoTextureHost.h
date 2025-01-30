@@ -24,7 +24,8 @@ class GPUVideoTextureHost : public TextureHost {
 
   gfx::SurfaceFormat GetFormat() const override;
 
-  already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override {
+  already_AddRefed<gfx::DataSourceSurface> GetAsSurface(
+      gfx::DataSourceSurface* aSurface) override {
     return nullptr;  // XXX - implement this (for MOZ_DUMP_PAINTING)
   }
 
@@ -65,6 +66,8 @@ class GPUVideoTextureHost : public TextureHost {
   void NotifyNotUsed() override;
 
   BufferTextureHost* AsBufferTextureHost() override;
+
+  DXGITextureHostD3D11* AsDXGITextureHostD3D11() override;
 
   bool IsWrappingSurfaceTextureHost() override;
 

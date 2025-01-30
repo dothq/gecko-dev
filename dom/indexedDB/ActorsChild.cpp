@@ -909,8 +909,6 @@ void BackgroundFactoryRequestChild::HandleResponse(
 
       database = databaseActor->GetDOMObject();
       MOZ_ASSERT(database);
-
-      MOZ_ASSERT(!database->IsClosed());
     }
 
     return database;
@@ -1030,7 +1028,8 @@ BackgroundDatabaseChild::BackgroundDatabaseChild(
     const DatabaseSpec& aSpec, BackgroundFactoryRequestChild* aOpenRequestActor)
     : mSpec(MakeUnique<DatabaseSpec>(aSpec)),
       mOpenRequestActor(aOpenRequestActor),
-      mDatabase(nullptr) {
+      mDatabase(nullptr),
+      mPendingInvalidate(false) {
   // Can't assert owning thread here because IPDL has not yet set our manager!
   MOZ_ASSERT(aOpenRequestActor);
 
@@ -1101,6 +1100,11 @@ bool BackgroundDatabaseChild::EnsureDOMObject() {
   mTemporaryStrongDatabase->AssertIsOnOwningThread();
 
   mDatabase = mTemporaryStrongDatabase;
+
+  if (mPendingInvalidate) {
+    mDatabase->Invalidate();
+    mPendingInvalidate = false;
+  }
 
   mOpenRequestActor->SetDatabaseActor(this);
 
@@ -1242,7 +1246,7 @@ mozilla::ipc::IPCResult BackgroundDatabaseChild::RecvVersionChange(
   RefPtr<IDBDatabase> kungFuDeathGrip = mDatabase;
 
   // Handle bfcache'd windows.
-  if (nsPIDOMWindowInner* owner = kungFuDeathGrip->GetOwner()) {
+  if (nsPIDOMWindowInner* owner = kungFuDeathGrip->GetOwnerWindow()) {
     // The database must be closed if the window is already frozen.
     bool shouldAbortAndClose = owner->IsFrozen();
 
@@ -1299,6 +1303,8 @@ mozilla::ipc::IPCResult BackgroundDatabaseChild::RecvInvalidate() {
 
   if (mDatabase) {
     mDatabase->Invalidate();
+  } else {
+    mPendingInvalidate = true;
   }
 
   return IPC_OK();
@@ -1429,7 +1435,7 @@ mozilla::ipc::IPCResult BackgroundTransactionChild::RecvComplete(
 
 PBackgroundIDBRequestChild*
 BackgroundTransactionChild::AllocPBackgroundIDBRequestChild(
-    const RequestParams& aParams) {
+    const int64_t& aRequestId, const RequestParams& aParams) {
   MOZ_CRASH(
       "PBackgroundIDBRequestChild actors should be manually "
       "constructed!");
@@ -1445,7 +1451,7 @@ bool BackgroundTransactionChild::DeallocPBackgroundIDBRequestChild(
 
 PBackgroundIDBCursorChild*
 BackgroundTransactionChild::AllocPBackgroundIDBCursorChild(
-    const OpenCursorParams& aParams) {
+    const int64_t& aRequestId, const OpenCursorParams& aParams) {
   AssertIsOnOwningThread();
 
   MOZ_CRASH("PBackgroundIDBCursorChild actors should be manually constructed!");
@@ -1547,7 +1553,7 @@ mozilla::ipc::IPCResult BackgroundVersionChangeTransactionChild::RecvComplete(
 
 PBackgroundIDBRequestChild*
 BackgroundVersionChangeTransactionChild::AllocPBackgroundIDBRequestChild(
-    const RequestParams& aParams) {
+    const int64_t& aRequestId, const RequestParams& aParams) {
   MOZ_CRASH(
       "PBackgroundIDBRequestChild actors should be manually "
       "constructed!");
@@ -1563,7 +1569,7 @@ bool BackgroundVersionChangeTransactionChild::DeallocPBackgroundIDBRequestChild(
 
 PBackgroundIDBCursorChild*
 BackgroundVersionChangeTransactionChild::AllocPBackgroundIDBCursorChild(
-    const OpenCursorParams& aParams) {
+    const int64_t& aRequestId, const OpenCursorParams& aParams) {
   AssertIsOnOwningThread();
 
   MOZ_CRASH("PBackgroundIDBCursorChild actors should be manually constructed!");
@@ -2211,7 +2217,7 @@ BackgroundCursorChild<CursorType>::SafeRefPtrFromThis() {
 
 template <IDBCursorType CursorType>
 void BackgroundCursorChild<CursorType>::SendContinueInternal(
-    const CursorRequestParams& aParams,
+    const int64_t aRequestId, const CursorRequestParams& aParams,
     const CursorData<CursorType>& aCurrentData) {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mRequest);
@@ -2394,7 +2400,7 @@ void BackgroundCursorChild<CursorType>::SendContinueInternal(
     // handling model disallow this?
   } else {
     MOZ_ALWAYS_TRUE(PBackgroundIDBCursorChild::SendContinue(
-        params, currentKey, currentObjectStoreKey));
+        aRequestId, params, currentKey, currentObjectStoreKey));
   }
 }
 

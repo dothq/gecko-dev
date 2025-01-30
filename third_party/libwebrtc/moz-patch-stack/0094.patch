@@ -1,28 +1,36 @@
-From: Andreas Pehrson <apehrson@mozilla.com>
-Date: Wed, 18 Oct 2023 17:25:00 +0000
-Subject: Bug 1857862 - (fix-32a8169a65) Don't call non-constexpr
- RTC_CHECK_NOTREACHED from constexpr VideoFrameTypeToString under gcc-8.
- r=webrtc-reviewers,mjf
+From: Michael Froman <mfroman@mozilla.com>
+Date: Mon, 4 Dec 2023 12:57:00 -0600
+Subject: Bug 1867099 - (fix-66b7275561) disable wgc capture yellow-line
+ removal. r?ng!
 
-Differential Revision: https://phabricator.services.mozilla.com/D191308
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/8a4449ba24fa3192b44863ed8ba96f6f94a6e88d
+This code won't build until we support building with
+Win 10 SDK v10.0.20348.0 or newer.
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/0aac94794aad2ddb637f5076bc08706a11866737
 ---
- api/video/video_frame_type.h | 4 ++++
- 1 file changed, 4 insertions(+)
+ modules/desktop_capture/win/wgc_capture_session.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
 
-diff --git a/api/video/video_frame_type.h b/api/video/video_frame_type.h
-index 9079829ff8..3665a80cd8 100644
---- a/api/video/video_frame_type.h
-+++ b/api/video/video_frame_type.h
-@@ -34,7 +34,11 @@ inline constexpr absl::string_view VideoFrameTypeToString(
-     case VideoFrameType::kVideoFrameDelta:
-       return "delta";
+diff --git a/modules/desktop_capture/win/wgc_capture_session.cc b/modules/desktop_capture/win/wgc_capture_session.cc
+index 1c86f8ed1b..f9429134dc 100644
+--- a/modules/desktop_capture/win/wgc_capture_session.cc
++++ b/modules/desktop_capture/win/wgc_capture_session.cc
+@@ -188,6 +188,11 @@ HRESULT WgcCaptureSession::StartCapture(const DesktopCaptureOptions& options) {
+     }
    }
-+// Mozilla:
-+//   gcc-8 complains about a constexpr function calling a non-constexpr ditto.
-+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 9)
-   RTC_CHECK_NOTREACHED();
+ 
++// Until Mozilla builds with Win 10 SDK v10.0.20348.0 or newer, this
++// code will not build.  Once we support the newer SDK, Bug 1868198
++// exists to decide if we ever want to use this code since it is
++// removing an indicator that capture is happening.
++#if !defined(WEBRTC_MOZILLA_BUILD)
+   // By default, the WGC capture API adds a yellow border around the captured
+   // window or display to indicate that a capture is in progress. The section
+   // below is an attempt to remove this yellow border to make the capture
+@@ -199,6 +204,7 @@ HRESULT WgcCaptureSession::StartCapture(const DesktopCaptureOptions& options) {
+           &session3))) {
+     session3->put_IsBorderRequired(false);
+   }
 +#endif
-   return "";
- }
+ 
+   allow_zero_hertz_ = options.allow_wgc_zero_hertz();
  

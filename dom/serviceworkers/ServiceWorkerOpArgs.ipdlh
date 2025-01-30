@@ -54,7 +54,6 @@ struct ServiceWorkerNotificationEventOpArgs {
   nsString tag;
   nsString icon;
   nsString data;
-  nsString behavior;
   nsString scope;
   uint32_t disableOpenClickDelay;
 };
@@ -69,7 +68,7 @@ struct ServiceWorkerExtensionAPIEventOpArgs {
 };
 
 struct ServiceWorkerMessageEventOpArgs {
-  ClientInfoAndState clientInfoAndState;
+  PostMessageSource source;
   ClonedOrErrorMessageData clonedData;
 };
 

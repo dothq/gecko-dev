@@ -52,7 +52,6 @@ SessionHistoryInfo::SessionHistoryInfo(nsDocShellLoadState* aLoadState,
                       : Some(aLoadState->SrcdocData())),
       mBaseURI(aLoadState->BaseURI()),
       mLoadReplace(aLoadState->LoadReplace()),
-      mHasUserInteraction(false),
       mHasUserActivation(aLoadState->HasValidUserGestureActivation()),
       mSharedState(SharedState::Create(
           aLoadState->TriggeringPrincipal(), aLoadState->PrincipalToInherit(),
@@ -79,6 +78,7 @@ SessionHistoryInfo::SessionHistoryInfo(
     const SessionHistoryInfo& aSharedStateFrom, nsIURI* aURI)
     : mURI(aURI), mSharedState(aSharedStateFrom.mSharedState) {
   MaybeUpdateTitleFromURI();
+  mHasUserInteraction = aSharedStateFrom.mHasUserInteraction;
 }
 
 SessionHistoryInfo::SessionHistoryInfo(
@@ -1493,11 +1493,9 @@ void SessionHistoryEntry::SetFrameLoader(nsFrameLoader* aFrameLoader) {
   SharedInfo()->SetFrameLoader(aFrameLoader);
   if (aFrameLoader) {
     if (BrowsingContext* bc = aFrameLoader->GetMaybePendingBrowsingContext()) {
-      bc->PreOrderWalk([&](BrowsingContext* aContext) {
-        if (BrowserParent* bp = aContext->Canonical()->GetBrowserParent()) {
-          bp->Deactivated();
-        }
-      });
+      if (BrowserParent* bp = bc->Canonical()->GetBrowserParent()) {
+        bp->VisitAll([&](BrowserParent* aBp) { aBp->Deactivated(); });
+      }
     }
 
     // When a new frameloader is stored, try to evict some older

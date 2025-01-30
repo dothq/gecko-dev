@@ -49,30 +49,8 @@ const snippet = `
   </script>
   `;
 
-add_setup(async function () {
-  await SpecialPowers.pushPrefEnv({
-    set: [["layout.css.content-visibility.enabled", true]],
-  });
-});
-
 async function setContentVisibility(browser, value) {
-  let mutationPromise = (() => {
-    switch (value) {
-      case "hidden":
-        return waitForEvent(EVENT_REORDER, "target");
-      case "auto":
-        return waitForEvents({
-          expected: [
-            [EVENT_REORDER, "child"],
-            [EVENT_REORDER, "content-child"],
-            [EVENT_REORDER, "shadowDiv"],
-            [EVENT_REORDER, "target"],
-          ],
-        });
-      default:
-        throw new Error(`unexpected content-visibility: ${value}`);
-    }
-  })();
+  let mutationPromise = waitForEvent(EVENT_REORDER, "target");
 
   // Change the value of `content-visibility` property for the target
   info(`Setting content-visibility: ${value}`);

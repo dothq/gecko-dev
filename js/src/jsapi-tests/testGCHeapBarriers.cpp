@@ -20,6 +20,7 @@
 #include "vm/Runtime.h"
 #include "vm/TypedArrayObject.h"
 
+#include "gc/Heap-inl.h"
 #include "vm/JSContext-inl.h"
 
 using namespace js;
@@ -169,6 +170,7 @@ static void MakeGray(const JS::ArrayBufferOrView& view) {
 //  - WeakHeapPtr
 BEGIN_TEST(testGCHeapPostBarriers) {
   AutoLeaveZeal nozeal(cx);
+  AutoGCParameter disableSemispace(cx, JSGC_SEMISPACE_NURSERY_ENABLED, 0);
 
   /* Sanity check - objects start in the nursery and then become tenured. */
   JS_GC(cx);
@@ -187,7 +189,7 @@ BEGIN_TEST(testGCHeapPostBarriers) {
   return true;
 }
 
-bool CanAccessObject(JSObject* obj) {
+[[nodiscard]] bool TestCanAccessObject(JSObject* obj) {
   JS::RootedObject rootedObj(cx, obj);
   JS::RootedValue value(cx);
   CHECK(JS_GetProperty(cx, rootedObj, "x", &value));
@@ -195,12 +197,12 @@ bool CanAccessObject(JSObject* obj) {
   CHECK(value.toInt32() == 42);
   return true;
 }
-bool CanAccessObject(const JS::ArrayBufferOrView& view) {
-  return CanAccessObject(view.asObject());
+[[nodiscard]] bool TestCanAccessObject(const JS::ArrayBufferOrView& view) {
+  return TestCanAccessObject(view.asObject());
 }
 
 template <typename T>
-bool TestHeapPostBarriersForType() {
+[[nodiscard]] bool TestHeapPostBarriersForType() {
   CHECK((TestHeapPostBarriersForWrapper<js::GCPtr, T>()));
   CHECK((TestHeapPostBarriersForMovableWrapper<JS::Heap, T>()));
   CHECK((TestHeapPostBarriersForMovableWrapper<js::HeapPtr, T>()));
@@ -209,7 +211,7 @@ bool TestHeapPostBarriersForType() {
 }
 
 template <template <typename> class W, typename T>
-bool TestHeapPostBarriersForMovableWrapper() {
+[[nodiscard]] bool TestHeapPostBarriersForMovableWrapper() {
   CHECK((TestHeapPostBarriersForWrapper<W, T>()));
   CHECK((TestHeapPostBarrierMoveConstruction<W<T>, T>()));
   CHECK((TestHeapPostBarrierMoveAssignment<W<T>, T>()));
@@ -217,7 +219,7 @@ bool TestHeapPostBarriersForMovableWrapper() {
 }
 
 template <template <typename> class W, typename T>
-bool TestHeapPostBarriersForWrapper() {
+[[nodiscard]] bool TestHeapPostBarriersForWrapper() {
   CHECK((TestHeapPostBarrierConstruction<W<T>, T>()));
   CHECK((TestHeapPostBarrierConstruction<const W<T>, T>()));
   CHECK((TestHeapPostBarrierUpdate<W<T>, T>()));
@@ -233,7 +235,7 @@ bool TestHeapPostBarriersForWrapper() {
 }
 
 template <typename W, typename T>
-bool TestHeapPostBarrierConstruction() {
+[[nodiscard]] bool TestHeapPostBarrierConstruction() {
   T initialObj = CreateNurseryGCThing<T>(cx);
   CHECK(initialObj);
   CHECK(IsInsideNursery(initialObj));
@@ -255,7 +257,7 @@ bool TestHeapPostBarrierConstruction() {
 
     CHECK(UnbarrieredCastToInt(wrapper.get()) != initialObjAsInt);
     CHECK(!IsInsideNursery(wrapper.get()));
-    CHECK(CanAccessObject(wrapper.get()));
+    CHECK(TestCanAccessObject(wrapper.get()));
 
     // Disable the check that GCPtrs are only destroyed by the GC. What happens
     // on destruction isn't relevant to the test.
@@ -270,7 +272,7 @@ bool TestHeapPostBarrierConstruction() {
 }
 
 template <typename W, typename T>
-bool TestHeapPostBarrierUpdate() {
+[[nodiscard]] bool TestHeapPostBarrierUpdate() {
   // Normal case - allocate a heap object, write a nursery pointer into it and
   // check that it gets updated on minor GC.
 
@@ -298,7 +300,7 @@ bool TestHeapPostBarrierUpdate() {
 
     CHECK(UnbarrieredCastToInt(wrapper.get()) != initialObjAsInt);
     CHECK(!IsInsideNursery(wrapper.get()));
-    CHECK(CanAccessObject(wrapper.get()));
+    CHECK(TestCanAccessObject(wrapper.get()));
 
     // Disable the check that GCPtrs are only destroyed by the GC. What happens
     // on destruction isn't relevant to the test.
@@ -313,7 +315,7 @@ bool TestHeapPostBarrierUpdate() {
 }
 
 template <typename W, typename T>
-bool TestHeapPostBarrierInitFailure() {
+[[nodiscard]] bool TestHeapPostBarrierInitFailure() {
   // Failure case - allocate a heap object, write a nursery pointer into it
   // and fail to complete initialization.
 
@@ -342,7 +344,7 @@ bool TestHeapPostBarrierInitFailure() {
 }
 
 template <typename W, typename T>
-bool TestHeapPostBarrierMoveConstruction() {
+[[nodiscard]] bool TestHeapPostBarrierMoveConstruction() {
   T initialObj = CreateNurseryGCThing<T>(cx);
   CHECK(initialObj);
   CHECK(IsInsideNursery(initialObj));
@@ -365,7 +367,7 @@ bool TestHeapPostBarrierMoveConstruction() {
     CHECK(UnbarrieredCastToInt(wrapper1.get()) != initialObjAsInt);
     CHECK(UnbarrieredCastToInt(wrapper2.get()) != initialObjAsInt);
     CHECK(!IsInsideNursery(wrapper2.get()));
-    CHECK(CanAccessObject(wrapper2.get()));
+    CHECK(TestCanAccessObject(wrapper2.get()));
   }
 
   cx->minorGC(JS::GCReason::API);
@@ -374,7 +376,7 @@ bool TestHeapPostBarrierMoveConstruction() {
 }
 
 template <typename W, typename T>
-bool TestHeapPostBarrierMoveAssignment() {
+[[nodiscard]] bool TestHeapPostBarrierMoveAssignment() {
   T initialObj = CreateNurseryGCThing<T>(cx);
   CHECK(initialObj);
   CHECK(IsInsideNursery(initialObj));
@@ -398,7 +400,7 @@ bool TestHeapPostBarrierMoveAssignment() {
     CHECK(UnbarrieredCastToInt(wrapper1.get()) != initialObjAsInt);
     CHECK(UnbarrieredCastToInt(wrapper2.get()) != initialObjAsInt);
     CHECK(!IsInsideNursery(wrapper2.get()));
-    CHECK(CanAccessObject(wrapper2.get()));
+    CHECK(TestCanAccessObject(wrapper2.get()));
   }
 
   cx->minorGC(JS::GCReason::API);
@@ -425,16 +427,11 @@ BEGIN_TEST(testGCHeapReadBarriers) {
   CHECK((TestWrapperType<JS::Heap<JS::ArrayBuffer>, JS::ArrayBuffer>()));
   CHECK((TestWrapperType<JS::Heap<JS::Uint8Array>, JS::Uint8Array>()));
 
-  // JS::Heap has an additional barrier on its move and copy constructors.
-  CHECK((TestConstructorBarrier<JS::Heap<JSObject*>, JSObject*>()));
-  CHECK((TestConstructorBarrier<JS::Heap<JS::ArrayBuffer>, JS::ArrayBuffer>()));
-  CHECK((TestConstructorBarrier<JS::Heap<JS::Uint8Array>, JS::Uint8Array>()));
-
   return true;
 }
 
 template <typename WrapperT, typename ObjectT>
-bool TestWrapperType() {
+[[nodiscard]] bool TestWrapperType() {
   // Check that the read barrier normally marks gray things black.
   CHECK((TestReadBarrierUnmarksGray<WrapperT, ObjectT>()));
 
@@ -472,7 +469,7 @@ void Access(const WrapperT& wrapper) {
 }
 
 template <typename WrapperT, typename ObjectT>
-bool TestReadBarrierUnmarksGray() {
+[[nodiscard]] bool TestReadBarrierUnmarksGray() {
   Rooted<ObjectT> obj(cx, CreateTenuredGCThing<ObjectT>(cx));
   WrapperT wrapper(obj);
 
@@ -493,7 +490,7 @@ bool TestReadBarrierUnmarksGray() {
 // Execute thunk |f| between two slices of an incremental GC controlled by zeal
 // mode |mode|.
 template <typename F>
-bool CallDuringIncrementalGC(uint32_t mode, F&& f) {
+[[nodiscard]] bool CallDuringIncrementalGC(uint32_t mode, F&& f) {
 #ifndef JS_GC_ZEAL
   fprintf(stderr, "This test requires building with --enable-gczeal\n");
 #else
@@ -501,9 +498,9 @@ bool CallDuringIncrementalGC(uint32_t mode, F&& f) {
 
   const int64_t BudgetMS = 10000;  // 10S should be long enough for anyone.
 
-  JS_SetGCZeal(cx, mode, 0);
+  JS::SetGCZeal(cx, mode, 0);
   JS::PrepareZoneForGC(cx, js::GetContextZone(cx));
-  js::SliceBudget budget{TimeBudget(BudgetMS)};
+  JS::SliceBudget budget{JS::TimeBudget(BudgetMS)};
   JS::StartIncrementalGC(cx, JS::GCOptions(), JS::GCReason::DEBUG_GC, budget);
   CHECK(JS::IsIncrementalGCInProgress(cx));
 
@@ -516,14 +513,14 @@ bool CallDuringIncrementalGC(uint32_t mode, F&& f) {
 }
 
 template <typename WrapperT, typename ObjectT>
-bool TestReadBarrierMarksBlack(bool fromWhite) {
+[[nodiscard]] bool TestReadBarrierMarksBlack(bool fromWhite) {
   AutoLeaveZeal noZeal(cx);
 
   // Create an object and hide it from the hazard analysis.
   void* ptr = CreateHiddenTenuredGCThing<ObjectT>(cx);
   CHECK(ptr);
 
-  CallDuringIncrementalGC(9 /* YieldBeforeSweeping */, [&]() -> bool {
+  CHECK(CallDuringIncrementalGC(9 /* YieldBeforeSweeping */, [&]() -> bool {
     CHECK(JS::IsIncrementalBarrierNeeded(cx));
 
     auto obj = RecoverHiddenGCThing<ObjectT>(ptr);
@@ -540,54 +537,15 @@ bool TestReadBarrierMarksBlack(bool fromWhite) {
     CHECK(GetColor(obj) == gc::CellColor::Black);
 
     return true;
-  });
+  }));
 
   return true;
 }
 
 template <typename WrapperT, typename ObjectT>
-bool TestConstructorBarrier() {
-  AutoLeaveZeal noZeal(cx);
-
-  // Create an object and hide it from the hazard analysis.
-  void* ptr = CreateHiddenTenuredGCThing<ObjectT>(cx);
-  CHECK(ptr);
-
-  CallDuringIncrementalGC(9 /* YieldBeforeSweeping */, [&]() -> bool {
-    CHECK(JS::IsIncrementalBarrierNeeded(cx));
-
-    auto obj = RecoverHiddenGCThing<ObjectT>(ptr);
-    WrapperT wrapper(obj);
-    CHECK(GetColor(obj) == gc::CellColor::White);
-
-    WrapperT copiedWrapper(wrapper);
-    CHECK(GetColor(obj) == gc::CellColor::Black);
-
-    return true;
-  });
-
-  ptr = CreateHiddenTenuredGCThing<ObjectT>(cx);
-  CHECK(ptr);
-
-  CallDuringIncrementalGC(9 /* YieldBeforeSweeping */, [&]() -> bool {
-    CHECK(JS::IsIncrementalBarrierNeeded(cx));
-
-    auto obj = RecoverHiddenGCThing<ObjectT>(ptr);
-    WrapperT wrapper(obj);
-    CHECK(GetColor(obj) == gc::CellColor::White);
-
-    WrapperT movedWrapper(std::move(wrapper));
-    CHECK(GetColor(obj) == gc::CellColor::Black);
-
-    return true;
-  });
-
-  return true;
-}
-
-template <typename WrapperT, typename ObjectT>
-bool TestUnbarrieredOperations(ObjectT obj, ObjectT obj2, WrapperT& wrapper,
-                               WrapperT& wrapper2) {
+[[nodiscard]] bool TestUnbarrieredOperations(ObjectT obj, ObjectT obj2,
+                                             WrapperT& wrapper,
+                                             WrapperT& wrapper2) {
   (void)bool(wrapper);
   (void)bool(wrapper2);
   CHECK(GetColor(obj) == gc::CellColor::Gray);
@@ -658,7 +616,7 @@ BEGIN_TEST(testGCHeapPreBarriers) {
   // Start an incremental GC so we can detect if we cause barriers to fire, as
   // these will mark objects black.
   JS::PrepareForFullGC(cx);
-  SliceBudget budget(WorkBudget(1));
+  JS::SliceBudget budget(JS::WorkBudget(1));
   gc::GCRuntime* gc = &cx->runtime()->gc;
   gc->startDebugGC(JS::GCOptions::Normal, budget);
   while (gc->state() != gc::State::Mark) {
@@ -666,14 +624,14 @@ BEGIN_TEST(testGCHeapPreBarriers) {
   }
   MOZ_ASSERT(cx->zone()->needsIncrementalBarrier());
 
-  TestWrapper<HeapPtr<JSObject*>>(testObjects);
-  TestWrapper<PreBarriered<JSObject*>>(testObjects);
+  CHECK(TestWrapper<HeapPtr<JSObject*>>(testObjects));
+  CHECK(TestWrapper<PreBarriered<JSObject*>>(testObjects));
 
   // GCPtr is different because 1) it doesn't support move operations as it's
   // supposed to be part of a GC thing and 2) it doesn't perform a pre-barrier
   // in its destructor because these are only destroyed as part of a GC where
   // the barrier is unnecessary.
-  TestGCPtr(testObjects);
+  CHECK(TestGCPtr(testObjects));
 
   gc::FinishGC(cx, JS::GCReason::API);
 
@@ -681,7 +639,7 @@ BEGIN_TEST(testGCHeapPreBarriers) {
 }
 
 template <typename Wrapper>
-bool TestWrapper(ObjectVector& testObjects) {
+[[nodiscard]] bool TestWrapper(ObjectVector& testObjects) {
   CHECK(TestCopyConstruction<Wrapper>(testObjects.popCopy()));
   CHECK(TestMoveConstruction<Wrapper>(testObjects.popCopy()));
   CHECK(TestAssignment<Wrapper>(testObjects.popCopy(), testObjects.popCopy()));
@@ -691,7 +649,7 @@ bool TestWrapper(ObjectVector& testObjects) {
 }
 
 template <typename Wrapper>
-bool TestCopyConstruction(JSObject* obj) {
+[[nodiscard]] bool TestCopyConstruction(JSObject* obj) {
   CHECK(GetColor(obj) == gc::CellColor::White);
 
   {
@@ -709,7 +667,7 @@ bool TestCopyConstruction(JSObject* obj) {
 }
 
 template <typename Wrapper>
-bool TestMoveConstruction(JSObject* obj) {
+[[nodiscard]] bool TestMoveConstruction(JSObject* obj) {
   CHECK(GetColor(obj) == gc::CellColor::White);
 
   {
@@ -728,7 +686,7 @@ bool TestMoveConstruction(JSObject* obj) {
 }
 
 template <typename Wrapper>
-bool TestAssignment(JSObject* obj1, JSObject* obj2) {
+[[nodiscard]] bool TestAssignment(JSObject* obj1, JSObject* obj2) {
   CHECK(GetColor(obj1) == gc::CellColor::White);
   CHECK(GetColor(obj2) == gc::CellColor::White);
 
@@ -751,7 +709,7 @@ bool TestAssignment(JSObject* obj1, JSObject* obj2) {
 }
 
 template <typename Wrapper>
-bool TestMoveAssignment(JSObject* obj1, JSObject* obj2) {
+[[nodiscard]] bool TestMoveAssignment(JSObject* obj1, JSObject* obj2) {
   CHECK(GetColor(obj1) == gc::CellColor::White);
   CHECK(GetColor(obj2) == gc::CellColor::White);
 
@@ -774,13 +732,13 @@ bool TestMoveAssignment(JSObject* obj1, JSObject* obj2) {
   return true;
 }
 
-bool TestGCPtr(ObjectVector& testObjects) {
+[[nodiscard]] bool TestGCPtr(ObjectVector& testObjects) {
   CHECK(TestGCPtrCopyConstruction(testObjects.popCopy()));
   CHECK(TestGCPtrAssignment(testObjects.popCopy(), testObjects.popCopy()));
   return true;
 }
 
-bool TestGCPtrCopyConstruction(JSObject* obj) {
+[[nodiscard]] bool TestGCPtrCopyConstruction(JSObject* obj) {
   CHECK(GetColor(obj) == gc::CellColor::White);
 
   {
@@ -800,7 +758,7 @@ bool TestGCPtrCopyConstruction(JSObject* obj) {
   return true;
 }
 
-bool TestGCPtrAssignment(JSObject* obj1, JSObject* obj2) {
+[[nodiscard]] bool TestGCPtrAssignment(JSObject* obj1, JSObject* obj2) {
   CHECK(GetColor(obj1) == gc::CellColor::White);
   CHECK(GetColor(obj2) == gc::CellColor::White);
 

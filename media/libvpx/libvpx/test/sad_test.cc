@@ -8,10 +8,11 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <stdio.h>
 #include <string.h>
 #include <limits.h>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vpx_config.h"
 #include "./vpx_dsp_rtcd.h"
@@ -23,7 +24,6 @@
 #include "vpx/vpx_codec.h"
 #include "vpx_mem/vpx_mem.h"
 #include "vpx_ports/mem.h"
-#include "vpx_ports/msvc.h"
 #include "vpx_ports/vpx_timer.h"
 
 // const[expr] should be sufficient for DECLARE_ALIGNED but early
@@ -1893,6 +1893,13 @@ const SadMxNx4Param x4d_avx512_tests[] = {
 };
 INSTANTIATE_TEST_SUITE_P(AVX512, SADx4Test,
                          ::testing::ValuesIn(x4d_avx512_tests));
+
+const SadSkipMxNx4Param skip_x4d_avx512_tests[] = {
+  SadSkipMxNx4Param(64, 64, &vpx_sad_skip_64x64x4d_avx512),
+  SadSkipMxNx4Param(64, 32, &vpx_sad_skip_64x32x4d_avx512),
+};
+INSTANTIATE_TEST_SUITE_P(AVX512, SADSkipx4Test,
+                         ::testing::ValuesIn(skip_x4d_avx512_tests));
 #endif  // HAVE_AVX512
 
 //------------------------------------------------------------------------------

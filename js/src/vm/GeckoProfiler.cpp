@@ -6,6 +6,7 @@
 
 #include "vm/GeckoProfiler-inl.h"
 
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Sprintf.h"
 
 #include "gc/GC.h"
@@ -57,9 +58,15 @@ static jit::JitFrameLayout* GetTopProfilingJitFrame(jit::JitActivation* act) {
     return nullptr;
   }
 
+  // Skip if the activation has no JS frames. This can happen if there's only a
+  // TrampolineNative frame because these are skipped by the profiling frame
+  // iterator.
   jit::JSJitProfilingFrameIterator jitIter(
       (jit::CommonFrameLayout*)iter.frame().fp());
-  MOZ_ASSERT(!jitIter.done());
+  if (jitIter.done()) {
+    return nullptr;
+  }
+
   return jitIter.framePtr();
 }
 
@@ -254,21 +261,16 @@ void GeckoProfilerThread::exit(JSContext* cx, JSScript* script) {
 UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
                                                      BaseScript* script) {
   // Note: this profiler string is regexp-matched by
-  // devtools/client/profiler/cleopatra/js/parserWorker.js.
+  // profiler code. Most recently at
+  // https://github.com/firefox-devtools/profiler/blob/245b1a400c5c368ccc13641d0335398bafa0e870/src/profile-logic/process-profile.js#L520-L525
 
   // If the script has a function, try calculating its name.
-  bool hasName = false;
+  JSAtom* name = nullptr;
   size_t nameLength = 0;
-  UniqueChars nameStr;
   JSFunction* func = script->function();
   if (func && func->fullDisplayAtom()) {
-    nameStr = StringToNewUTF8CharsZ(cx, *func->fullDisplayAtom());
-    if (!nameStr) {
-      return nullptr;
-    }
-
-    nameLength = strlen(nameStr.get());
-    hasName = true;
+    name = func->fullDisplayAtom();
+    nameLength = JS::GetDeflatedUTF8StringLength(name);
   }
 
   // Calculate filename length. We cap this to a reasonable limit to avoid
@@ -281,7 +283,7 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
   bool hasLineAndColumn = false;
   size_t lineAndColumnLength = 0;
   char lineAndColumnStr[30];
-  if (hasName || script->isFunction() || script->isForEval()) {
+  if (name || script->isFunction() || script->isForEval()) {
     lineAndColumnLength =
         SprintfLiteral(lineAndColumnStr, "%u:%u", script->lineno(),
                        script->column().oneOriginValue());
@@ -297,7 +299,7 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
 
   // Calculate full string length.
   size_t fullLength = 0;
-  if (hasName) {
+  if (name) {
     MOZ_ASSERT(hasLineAndColumn);
     fullLength = nameLength + 2 + filenameLength + 1 + lineAndColumnLength + 1;
   } else if (hasLineAndColumn) {
@@ -315,8 +317,10 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
   size_t cur = 0;
 
   // Fill string with function name if needed.
-  if (hasName) {
-    memcpy(str.get() + cur, nameStr.get(), nameLength);
+  if (name) {
+    mozilla::DebugOnly<size_t> written = JS::DeflateStringToUTF8Buffer(
+        name, mozilla::Span(str.get() + cur, nameLength));
+    MOZ_ASSERT(written == nameLength);
     cur += nameLength;
     str[cur++] = ' ';
     str[cur++] = '(';
@@ -334,7 +338,7 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
   }
 
   // Terminal ')' if necessary.
-  if (hasName) {
+  if (name) {
     str[cur++] = ')';
   }
 
@@ -365,12 +369,11 @@ void GeckoProfilerRuntime::fixupStringsMapAfterMovingGC() {
 
 #ifdef JSGC_HASH_TABLE_CHECKS
 void GeckoProfilerRuntime::checkStringsMapAfterMovingGC() {
-  for (auto r = strings().all(); !r.empty(); r.popFront()) {
-    BaseScript* script = r.front().key();
+  CheckTableAfterMovingGC(strings(), [](const auto& entry) {
+    BaseScript* script = entry.key();
     CheckGCThingAfterMovingGC(script);
-    auto ptr = strings().lookup(script);
-    MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &r.front());
-  }
+    return script;
+  });
 }
 #endif
 
@@ -544,7 +547,7 @@ const ProfilingCategoryPairInfo sProfilingCategoryPairInfo[] = {
 JS_PUBLIC_API const ProfilingCategoryPairInfo& GetProfilingCategoryPairInfo(
     ProfilingCategoryPair aCategoryPair) {
   static_assert(
-      MOZ_ARRAY_LENGTH(sProfilingCategoryPairInfo) ==
+      std::size(sProfilingCategoryPairInfo) ==
           uint32_t(ProfilingCategoryPair::COUNT),
       "sProfilingCategoryPairInfo and ProfilingCategory need to have the "
       "same order and the same length");

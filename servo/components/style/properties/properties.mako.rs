@@ -37,7 +37,7 @@ use crate::str::CssStringWriter;
 use crate::values::{
     computed,
     resolved,
-    specified::{font::SystemFont, length::LineHeightBase},
+    specified::{font::SystemFont, length::LineHeightBase, color::ColorSchemeFlags},
 };
 use std::cell::Cell;
 use super::{
@@ -87,9 +87,19 @@ macro_rules! expanded {
 #[allow(missing_docs)]
 pub mod longhands {
     % for style_struct in data.style_structs:
-    include!("${repr(os.path.join(OUT_DIR, 'longhands/{}.rs'.format(style_struct.name_lower)))[1:-1]}");
+    <% data.current_style_struct = style_struct %>
+    <%include file="/longhands/${style_struct.name_lower}.mako.rs" />
     % endfor
 }
+
+
+% if engine == "gecko":
+#[allow(unsafe_code, missing_docs)]
+pub mod gecko {
+    <%include file="/gecko.mako.rs" />
+}
+% endif
+
 
 macro_rules! unwrap_or_initial {
     ($prop: ident) => (unwrap_or_initial!($prop, $prop));
@@ -107,7 +117,7 @@ pub mod shorthands {
     use crate::values::specified;
 
     % for style_struct in data.style_structs:
-    include!("${repr(os.path.join(OUT_DIR, 'shorthands/{}.rs'.format(style_struct.name_lower)))[1:-1]}");
+    <%include file="/shorthands/${style_struct.name_lower}.mako.rs" />
     % endfor
 
     // We didn't define the 'all' shorthand using the regular helpers:shorthand
@@ -142,7 +152,7 @@ pub mod shorthands {
         data.declare_shorthand(
             "all",
             logical_longhands + other_longhands,
-            engines="gecko servo-2013 servo-2020",
+            engines="gecko servo",
             spec="https://drafts.csswg.org/css-cascade-3/#all-shorthand"
         )
         ALL_SHORTHAND_LEN = len(logical_longhands) + len(other_longhands);
@@ -505,8 +515,7 @@ impl NonCustomPropertyId {
                 }] = [
                     % for property in data.longhands + data.shorthands + data.all_aliases():
                         <%
-                            attrs = {"servo-2013": "servo_2013_pref", "servo-2020": "servo_2020_pref"}
-                            pref = getattr(property, attrs[engine])
+                            pref = getattr(property, "servo_pref")
                         %>
                         % if pref:
                             Some("${pref}"),
@@ -541,7 +550,8 @@ impl NonCustomPropertyId {
         debug_assert!(
             rule_types.contains(CssRuleType::Keyframe) ||
             rule_types.contains(CssRuleType::Page) ||
-            rule_types.contains(CssRuleType::Style),
+            rule_types.contains(CssRuleType::Style) ||
+            rule_types.contains(CssRuleType::PositionTry),
             "Declarations are only expected inside a keyframe, page, or style rule."
         );
 
@@ -811,7 +821,7 @@ impl LonghandIdSet {
 
     #[inline]
     pub(super) fn discrete_animatable() -> &'static Self {
-        ${static_longhand_id_set("DISCRETE_ANIMATABLE", lambda p: p.animation_value_type == "discrete")}
+        ${static_longhand_id_set("DISCRETE_ANIMATABLE", lambda p: p.animation_type == "discrete")}
         &DISCRETE_ANIMATABLE
     }
 
@@ -1368,6 +1378,7 @@ pub mod style_structs {
     use crate::logical_geometry::WritingMode;
     use crate::media_queries::Device;
     use crate::values::computed::NonNegativeLength;
+    use crate::values::specified::color::ColorSchemeFlags;
 
     % for style_struct in data.active_style_structs():
         % if style_struct.name == "Font":
@@ -1524,6 +1535,12 @@ pub mod style_structs {
                 pub fn apply_unconstrained_font_size(&mut self, _: NonNegativeLength) {
                 }
 
+            % elif style_struct.name == "InheritedUI":
+                /// Returns the ColorSchemeFlags corresponding to the value of `color-scheme`.
+                #[inline]
+                pub fn color_scheme_bits(&self) -> ColorSchemeFlags {
+                    self.color_scheme.bits
+                }
             % elif style_struct.name == "Outline":
                 /// Whether the outline-width property is non-zero.
                 #[inline]
@@ -1605,14 +1622,23 @@ pub mod style_structs {
                 })
             }
 
+            /// Returns whether animation-timeline is initial value. We need this information to
+            /// resolve animation-duration.
+            #[cfg(feature = "servo")]
+            pub fn has_initial_animation_timeline(&self) -> bool {
+                self.animation_timeline_count() == 1 && self.animation_timeline_at(0).is_auto()
+            }
+
             /// Returns whether there is any named progress timeline specified with
             /// scroll-timeline-name other than `none`.
+            #[cfg(feature = "gecko")]
             pub fn specifies_scroll_timelines(&self) -> bool {
                 self.scroll_timeline_name_iter().any(|name| !name.is_none())
             }
 
             /// Returns whether there is any named progress timeline specified with
             /// view-timeline-name other than `none`.
+            #[cfg(feature = "gecko")]
             pub fn specifies_view_timelines(&self) -> bool {
                 self.view_timeline_name_iter().any(|name| !name.is_none())
             }
@@ -2338,6 +2364,10 @@ pub struct StyleBuilder<'a> {
     /// TODO(emilio): Make private.
     pub writing_mode: WritingMode,
 
+    /// The color-scheme bits. Needed because they may otherwise be different between visited and
+    /// unvisited colors.
+    pub color_scheme: ColorSchemeFlags,
+
     /// The effective zoom.
     pub effective_zoom: computed::Zoom,
 
@@ -2367,7 +2397,7 @@ impl<'a> StyleBuilder<'a> {
         let inherited_style = parent_style.unwrap_or(reset_style);
 
         let flags = inherited_style.flags.inherited();
-        StyleBuilder {
+        Self {
             device,
             stylist,
             inherited_style,
@@ -2380,6 +2410,7 @@ impl<'a> StyleBuilder<'a> {
             invalid_non_custom_properties: LonghandIdSet::default(),
             writing_mode: inherited_style.writing_mode,
             effective_zoom: inherited_style.effective_zoom,
+            color_scheme: inherited_style.get_inherited_ui().color_scheme_bits(),
             flags: Cell::new(flags),
             visited_style: None,
             % for style_struct in data.active_style_structs():
@@ -2406,7 +2437,7 @@ impl<'a> StyleBuilder<'a> {
     ) -> Self {
         let reset_style = device.default_computed_values();
         let inherited_style = parent_style.unwrap_or(reset_style);
-        StyleBuilder {
+        Self {
             device,
             stylist,
             inherited_style,
@@ -2419,6 +2450,7 @@ impl<'a> StyleBuilder<'a> {
             invalid_non_custom_properties: LonghandIdSet::default(),
             writing_mode: style_to_derive_from.writing_mode,
             effective_zoom: style_to_derive_from.effective_zoom,
+            color_scheme: style_to_derive_from.get_inherited_ui().color_scheme_bits(),
             flags: Cell::new(style_to_derive_from.flags),
             visited_style: None,
             % for style_struct in data.active_style_structs():
@@ -2482,7 +2514,7 @@ impl<'a> StyleBuilder<'a> {
     }
     % endif
 
-    % if not property.is_vector or property.simple_vector_bindings or engine in ["servo-2013", "servo-2020"]:
+    % if not property.is_vector or property.simple_vector_bindings or engine == "servo":
     /// Set the `${property.ident}` to the computed value `value`.
     #[allow(non_snake_case)]
     pub fn set_${property.ident}(
@@ -2622,7 +2654,7 @@ impl<'a> StyleBuilder<'a> {
     #[cfg(feature = "gecko")]
     pub fn in_top_layer(&self) -> bool {
         matches!(self.get_box().clone__moz_top_layer(),
-                 longhands::_moz_top_layer::computed_value::T::Top)
+                 longhands::_moz_top_layer::computed_value::T::Auto)
     }
 
     /// Clears the "have any reset structs been modified" flag.
@@ -2703,6 +2735,19 @@ impl<'a> StyleBuilder<'a> {
         self.get_box().clone_zoom()
     }
 
+    /// The zoom we need to apply for this element, without including ancestor effective zooms.
+    pub fn resolved_specified_zoom(&self) -> computed::Zoom {
+        let zoom = self.specified_zoom();
+        if zoom.is_document() {
+            // If our inherited effective zoom has derived to zero, there's not much we can do.
+            // This value is not exposed to content anyways (it's used for scrollbars and to avoid
+            // zoom affecting canvas).
+            self.inherited_effective_zoom().inverted().unwrap_or(computed::Zoom::ONE)
+        } else {
+            zoom
+        }
+    }
+
     /// Inherited zoom.
     pub fn inherited_effective_zoom(&self) -> computed::Zoom {
         self.inherited_style.effective_zoom
@@ -2736,7 +2781,13 @@ impl<'a> StyleBuilder<'a> {
         if matches!(line_height, computed::LineHeight::Normal) {
             self.add_flags(flag);
         }
-        device.calc_line_height(&font, writing_mode, None)
+        let lh = device.calc_line_height(&font, writing_mode, None);
+        if line_height_base == LineHeightBase::InheritedStyle {
+            // Apply our own zoom if our style source is the parent style.
+            computed::NonNegativeLength::new(self.resolved_specified_zoom().zoom(lh.px()))
+        } else {
+            lh
+        }
     }
 
     /// And access to inherited style structs.
@@ -2932,7 +2983,7 @@ const_assert!(std::mem::size_of::<longhands::${longhand.ident}::SpecifiedValue>(
 % endif
 % endfor
 
-% if engine in ["servo-2013", "servo-2020"]:
+% if engine == "servo":
 % for effect_name in ["repaint", "reflow_out_of_flow", "reflow", "rebuild_and_reflow_inline", "rebuild_and_reflow"]:
     macro_rules! restyle_damage_${effect_name} {
         ($old: ident, $new: ident, $damage: ident, [ $($effect:expr),* ]) => ({

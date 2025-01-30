@@ -92,7 +92,7 @@
 //! [segment.rs]: ../segment/index.html
 //!
 
-use api::{BorderRadius, ClipMode, ComplexClipRegion, ImageMask, ClipId, ClipChainId};
+use api::{BorderRadius, ClipMode, ImageMask, ClipId, ClipChainId};
 use api::{BoxShadowClipMode, FillRule, ImageKey, ImageRendering};
 use api::units::*;
 use crate::image_tiling::{self, Repetition};
@@ -185,6 +185,20 @@ impl ClipTree {
                 ClipNodeId::NONE,
             ],
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.nodes.clear();
+        self.nodes.push(ClipTreeNode {
+            handle: ClipDataHandle::INVALID,
+            children: Vec::new(),
+            parent: ClipNodeId::NONE,
+        });
+
+        self.leaves.clear();
+
+        self.clip_root_stack.clear();
+        self.clip_root_stack.push(ClipNodeId::NONE);
     }
 
     /// Add a set of clips to the provided tree node id, reusing existing
@@ -428,6 +442,24 @@ impl ClipTreeBuilder {
             tree: ClipTree::new(),
             clip_handles_buffer: Vec::new(),
         }
+    }
+
+    pub fn begin(&mut self) {
+        self.clip_map.clear();
+        self.clip_chain_map.clear();
+        self.clip_chains.clear();
+        self.clip_stack.clear();
+        self.clip_stack.push(ClipStackEntry {
+            clip_node_id: ClipNodeId::NONE,
+            last_clip_chain_cache: None,
+            seen_clips: FastHashSet::default(),
+        });
+        self.tree.reset();
+        self.clip_handles_buffer.clear();
+    }
+
+    pub fn recycle_tree(&mut self, tree: ClipTree) {
+        self.tree = tree;
     }
 
     /// Define a new rect clip
@@ -685,8 +717,15 @@ impl ClipTreeBuilder {
     }
 
     /// Finalize building and return the clip-tree
-    pub fn finalize(self) -> ClipTree {
-        self.tree
+    pub fn finalize(&mut self) -> ClipTree {
+        // Note: After this, the builder's clip tree does not hold allocations and
+        // is not in valid state. `ClipTreeBuilder::begin()` must be called before
+        // building can happen again.
+        std::mem::replace(&mut self.tree, ClipTree {
+            nodes: Vec::new(),
+            leaves: Vec::new(),
+            clip_root_stack: Vec::new(),
+        })
     }
 
     /// Get a clip node by id
@@ -966,7 +1005,7 @@ impl ClipNodeRange {
 //TODO: merge with `CoordinateSpaceMapping`?
 #[derive(Debug, MallocSizeOf)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
-enum ClipSpaceConversion {
+pub enum ClipSpaceConversion {
     Local,
     ScaleOffset(ScaleOffset),
     Transform(LayoutToWorldTransform),
@@ -974,7 +1013,7 @@ enum ClipSpaceConversion {
 
 impl ClipSpaceConversion {
     /// Construct a new clip space converter between two spatial nodes.
-    fn new(
+    pub fn new(
         prim_spatial_node_index: SpatialNodeIndex,
         clip_spatial_node_index: SpatialNodeIndex,
         spatial_tree: &SpatialTree,
@@ -988,9 +1027,8 @@ impl ClipSpaceConversion {
         if prim_spatial_node_index == clip_spatial_node_index {
             ClipSpaceConversion::Local
         } else if prim_spatial_node.coordinate_system_id == clip_spatial_node.coordinate_system_id {
-            let scale_offset = prim_spatial_node.content_transform
-                .inverse()
-                .accumulate(&clip_spatial_node.content_transform);
+            let scale_offset = clip_spatial_node.content_transform
+                .then(&prim_spatial_node.content_transform.inverse());
             ClipSpaceConversion::ScaleOffset(scale_offset)
         } else {
             ClipSpaceConversion::Transform(
@@ -1252,6 +1290,14 @@ impl ClipStore {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.clip_node_instances.clear();
+        self.mask_tiles.clear();
+        self.active_clip_node_info.clear();
+        self.active_local_clip_rect = None;
+        self.active_pic_coverage_rect = PictureRect::max_rect();
+    }
+
     pub fn get_instance_from_range(
         &self,
         node_range: &ClipNodeRange,
@@ -1392,6 +1438,29 @@ impl ClipStore {
         }
 
         Some(inner_rect)
+    }
+
+    // Directly construct a clip node range, ready for rendering, from an interned clip handle.
+    // Typically useful for drawing specific clips on custom pattern / child render tasks that
+    // aren't primitives.
+    // TODO(gw): For now, we assume they are local clips only - in future we might want to support
+    //           non-local clips.
+    pub fn push_clip_instance(
+        &mut self,
+        handle: ClipDataHandle,
+    ) -> ClipNodeRange {
+        let first = self.clip_node_instances.len() as u32;
+
+        self.clip_node_instances.push(ClipNodeInstance {
+            handle,
+            flags: ClipNodeFlags::SAME_COORD_SYSTEM | ClipNodeFlags::SAME_SPATIAL_NODE,
+            visible_tiles: None,
+        });
+
+        ClipNodeRange {
+            first,
+            count: 1,
+        }
     }
 
     /// The main interface external code uses. Given a local primitive, positioning
@@ -1551,20 +1620,9 @@ impl ClipStore {
     }
 }
 
-pub struct ComplexTranslateIter<I> {
-    source: I,
-    offset: LayoutVector2D,
-}
-
-impl<I: Iterator<Item = ComplexClipRegion>> Iterator for ComplexTranslateIter<I> {
-    type Item = ComplexClipRegion;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.source
-            .next()
-            .map(|mut complex| {
-                complex.rect = complex.rect.translate(self.offset);
-                complex
-            })
+impl Default for ClipStore {
+    fn default() -> Self {
+        ClipStore::new()
     }
 }
 
@@ -1870,10 +1928,8 @@ impl ClipItemKind {
             ClipItemKind::BoxShadow { .. } => {
                 false
             }
-            ClipItemKind::RoundedRectangle { ref radius, .. } => {
-                // The rounded clip rect fast path shader can only work
-                // if the radii are uniform.
-                radius.is_uniform().is_some()
+            ClipItemKind::RoundedRectangle { ref rect, ref radius, .. } => {
+                radius.can_use_fast_path_in(rect)
             }
         }
     }

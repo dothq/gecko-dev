@@ -1,5 +1,6 @@
 import {
   _CardGrid as CardGrid,
+  // eslint-disable-next-line no-shadow
   IntersectionObserver,
   RecentSavesContainer,
   OnboardingExperience,
@@ -13,10 +14,7 @@ import {
   PlaceholderDSCard,
 } from "content-src/components/DiscoveryStreamComponents/DSCard/DSCard";
 import { TopicsWidget } from "content-src/components/DiscoveryStreamComponents/TopicsWidget/TopicsWidget";
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import React from "react";
 import { shallow, mount } from "enzyme";
 
@@ -127,6 +125,80 @@ describe("<CardGrid>", () => {
     });
 
     assert.ok(wrapper.find(TopicsWidget).exists());
+  });
+
+  it("should create a list feed", () => {
+    const commonProps = {
+      essentialReadsHeader: true,
+      editorsPicksHeader: true,
+      items: 12,
+      data: {
+        recommendations: [
+          { feedName: "foo" },
+          { feedName: "foo" },
+          { feedName: "foo" },
+          { feedName: "foo" },
+          { feedName: "foo" },
+          { feedName: "foo" },
+        ],
+      },
+      Prefs: {
+        ...INITIAL_STATE.Prefs,
+        values: {
+          ...INITIAL_STATE.Prefs.values,
+          "discoverystream.contextualContent.enabled": true,
+          "discoverystream.contextualContent.selectedFeed": "foo",
+        },
+      },
+      DiscoveryStream: INITIAL_STATE.DiscoveryStream,
+    };
+
+    wrapper = mount(
+      <WrapWithProvider>
+        <CardGrid {...commonProps} />
+      </WrapWithProvider>
+    );
+
+    assert.ok(wrapper.find(".list-feed").exists());
+  });
+
+  it("should render AdBanner if enabled", () => {
+    const commonProps = {
+      ...INITIAL_STATE,
+      items: 2,
+      data: { recommendations: [{}, {}] },
+      Prefs: {
+        ...INITIAL_STATE.Prefs,
+        values: {
+          ...INITIAL_STATE.Prefs.values,
+          "newtabAdSize.leaderboard": true,
+          "newtabAdSize.billboard": true,
+        },
+      },
+      DiscoveryStream: {
+        ...INITIAL_STATE.DiscoveryStream,
+        spocs: {
+          ...INITIAL_STATE.DiscoveryStream.spocs,
+          data: {
+            newtab_spocs: {
+              items: [
+                {
+                  format: "leaderboard",
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    wrapper = mount(
+      <WrapWithProvider>
+        <CardGrid {...commonProps} />
+      </WrapWithProvider>
+    );
+
+    assert.ok(wrapper.find(".ad-banner-wrapper").exists());
   });
 });
 

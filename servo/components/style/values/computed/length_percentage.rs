@@ -25,11 +25,13 @@
 //! our expectations.
 
 use super::{Context, Length, Percentage, ToComputedValue};
+#[cfg(feature = "gecko")]
 use crate::gecko_bindings::structs::GeckoFontMetrics;
-use crate::values::animated::{Animate, Procedure, ToAnimatedValue, ToAnimatedZero};
+use crate::values::animated::{Animate, Context as AnimatedContext, Procedure, ToAnimatedValue, ToAnimatedZero};
 use crate::values::distance::{ComputeSquaredDistance, SquaredDistance};
 use crate::values::generics::calc::{CalcUnits, PositivePercentageBasis};
 use crate::values::generics::{calc, NonNegative};
+use crate::values::resolved::{Context as ResolvedContext, ToResolvedValue};
 use crate::values::specified::length::{FontBaseSize, LineHeightBase};
 use crate::values::{specified, CSSFloat};
 use crate::{Zero, ZeroNoPercent};
@@ -65,7 +67,9 @@ pub struct PercentageVariant {
 #[cfg(target_pointer_width = "32")]
 pub struct CalcVariant {
     tag: u8,
-    ptr: *mut CalcLengthPercentage,
+    // Ideally CalcLengthPercentage, but that would cause circular references
+    // for leaves referencing LengthPercentage.
+    ptr: *mut (),
 }
 
 #[doc(hidden)]
@@ -164,6 +168,38 @@ impl MallocSizeOf for LengthPercentage {
     }
 }
 
+impl ToAnimatedValue for LengthPercentage {
+    type AnimatedValue = Self;
+
+    fn to_animated_value(self, context: &AnimatedContext) -> Self::AnimatedValue {
+        if context.style.effective_zoom.is_one() {
+            return self;
+        }
+        self.map_lengths(|l| l.to_animated_value(context))
+    }
+
+    #[inline]
+    fn from_animated_value(value: Self::AnimatedValue) -> Self {
+        value
+    }
+}
+
+impl ToResolvedValue for LengthPercentage {
+    type ResolvedValue = Self;
+
+    fn to_resolved_value(self, context: &ResolvedContext) -> Self::ResolvedValue {
+        if context.style.effective_zoom.is_one() {
+            return self;
+        }
+        self.map_lengths(|l| l.to_resolved_value(context))
+    }
+
+    #[inline]
+    fn from_resolved_value(value: Self::ResolvedValue) -> Self {
+        value
+    }
+}
+
 /// An unpacked `<length-percentage>` that borrows the `calc()` variant.
 #[derive(Clone, Debug, PartialEq, ToCss)]
 enum Unpacked<'a> {
@@ -208,6 +244,20 @@ impl LengthPercentage {
                 Cow::Owned(CalcNode::Leaf(CalcLengthPercentageLeaf::Percentage(p)))
             },
             Unpacked::Calc(p) => Cow::Borrowed(&p.node),
+        }
+    }
+
+    fn map_lengths(&self, mut map_fn: impl FnMut(Length) -> Length) -> Self {
+        match self.unpack() {
+            Unpacked::Length(l) => Self::new_length(map_fn(l)),
+            Unpacked::Percentage(p) => Self::new_percent(p),
+            Unpacked::Calc(lp) => Self::new_calc_unchecked(Box::new(CalcLengthPercentage {
+                clamping_mode: lp.clamping_mode,
+                node: lp.node.map_leaves(|leaf| match *leaf {
+                    CalcLengthPercentageLeaf::Length(ref l) => CalcLengthPercentageLeaf::Length(map_fn(*l)),
+                    ref l => l.clone(),
+                }),
+            })),
         }
     }
 
@@ -310,7 +360,7 @@ impl LengthPercentage {
         #[cfg(target_pointer_width = "32")]
         let calc = CalcVariant {
             tag: LengthPercentageUnion::TAG_CALC,
-            ptr,
+            ptr: ptr as *mut (),
         };
 
         #[cfg(target_pointer_width = "64")]
@@ -470,8 +520,8 @@ impl LengthPercentage {
 
     /// Convert the computed value into used value.
     #[inline]
-    pub fn maybe_to_used_value(&self, container_len: Option<Length>) -> Option<Au> {
-        self.maybe_percentage_relative_to(container_len)
+    pub fn maybe_to_used_value(&self, container_len: Option<Au>) -> Option<Au> {
+        self.maybe_percentage_relative_to(container_len.map(Length::from))
             .map(Au::from)
     }
 
@@ -660,12 +710,12 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
         }
     }
 
-    fn unitless_value(&self) -> f32 {
-        match *self {
+    fn unitless_value(&self) -> Option<f32> {
+        Some(match *self {
             Self::Length(ref l) => l.px(),
             Self::Percentage(ref p) => p.0,
             Self::Number(n) => n,
-        }
+        })
     }
 
     fn new_number(value: f32) -> Self {
@@ -689,9 +739,18 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
             return None;
         }
 
-        let self_negative = self.is_negative();
-        if self_negative != other.is_negative() {
-            return Some(if self_negative { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
+        let Ok(self_negative) = self.is_negative() else {
+            return None;
+        };
+        let Ok(other_negative) = other.is_negative() else {
+            return None;
+        };
+        if self_negative != other_negative {
+            return Some(if self_negative {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            });
         }
 
         match (self, other) {
@@ -754,15 +813,17 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
             } else {
                 // The right side is not a number, so the result should be in the units of the right
                 // side.
-                other.map(|v| v * *left);
-                std::mem::swap(self, other);
-                true
+                if other.map(|v| v * *left).is_ok() {
+                    std::mem::swap(self, other);
+                    true
+                } else {
+                    false
+                }
             }
         } else if let Self::Number(ref right) = *other {
             // The left side is not a number, but the right side is, so the result is the left
             // side unit.
-            self.map(|v| v * *right);
-            true
+            self.map(|v| v * *right).is_ok()
         } else {
             // Neither side is a number, so a product is not possible.
             false
@@ -794,8 +855,8 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
         })
     }
 
-    fn map(&mut self, mut op: impl FnMut(f32) -> f32) {
-        match self {
+    fn map(&mut self, mut op: impl FnMut(f32) -> f32) -> Result<(), ()> {
+        Ok(match self {
             Self::Length(value) => {
                 *value = Length::new(op(value.px()));
             },
@@ -805,7 +866,7 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
             Self::Number(value) => {
                 *value = op(*value);
             },
-        }
+        })
     }
 
     fn simplify(&mut self) {}
@@ -847,6 +908,22 @@ impl CalcLengthPercentage {
                 } else {
                     leaf.clone()
                 })
+            }, |node| {
+                match node {
+                    CalcNode::Anchor(f) => {
+                        if let Some(fallback) = f.fallback.as_ref() {
+                            return Ok((**fallback).clone());
+                        }
+                        Ok(CalcNode::Leaf(CalcLengthPercentageLeaf::Length(Length::zero())))
+                    },
+                    CalcNode::AnchorSize(f) => {
+                        if let Some(fallback) = f.fallback.as_ref() {
+                            return Ok((**fallback).clone());
+                        }
+                        Ok(CalcNode::Leaf(CalcLengthPercentageLeaf::Length(Length::zero())))
+                    }
+                    _ => Err(()),
+                }
             })
             .unwrap()
         {
@@ -901,7 +978,7 @@ impl specified::CalcLengthPercentage {
                 }
             }),
             Leaf::Number(n) => CalcLengthPercentageLeaf::Number(n),
-            Leaf::Angle(..) | Leaf::Time(..) | Leaf::Resolution(..) => {
+            Leaf::Angle(..) | Leaf::Time(..) | Leaf::Resolution(..) | Leaf::ColorComponent(..) => {
                 unreachable!("Shouldn't have parsed")
             },
         });
@@ -940,6 +1017,7 @@ impl specified::CalcLengthPercentage {
 
     /// Compute the value into pixel length as CSSFloat, using the get_font_metrics function
     /// if provided to resolve font-relative dimensions.
+    #[cfg(feature = "gecko")]
     pub fn to_computed_pixel_length_with_font_metrics(
         &self,
         get_font_metrics: Option<impl Fn() -> GeckoFontMetrics>,
@@ -1033,8 +1111,8 @@ impl ToAnimatedValue for NonNegativeLengthPercentage {
     type AnimatedValue = LengthPercentage;
 
     #[inline]
-    fn to_animated_value(self) -> Self::AnimatedValue {
-        self.0
+    fn to_animated_value(self, context: &AnimatedContext) -> Self::AnimatedValue {
+        self.0.to_animated_value(context)
     }
 
     #[inline]
@@ -1060,9 +1138,7 @@ impl NonNegativeLengthPercentage {
     /// Convert the computed value into used value.
     #[inline]
     pub fn maybe_to_used_value(&self, containing_length: Option<Au>) -> Option<Au> {
-        let resolved = self
-            .0
-            .maybe_to_used_value(containing_length.map(|v| v.into()))?;
+        let resolved = self.0.maybe_to_used_value(containing_length)?;
         Some(std::cmp::max(resolved, Au(0)))
     }
 }

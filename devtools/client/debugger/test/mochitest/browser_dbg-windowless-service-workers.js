@@ -7,9 +7,7 @@
 
 "use strict";
 
-// Use an URL with a specific port to check that Bug 1876533 is fixed
-// We're using URL without port in other tests, like browser_dbg-windowless-service-workers-reload.js
-const SW_URL = EXAMPLE_URL_WITH_PORT + "service-worker.sjs";
+let SW_URL;
 
 add_task(async function () {
   info("Subtest #1");
@@ -17,24 +15,34 @@ add_task(async function () {
   await pushPref("devtools.debugger.threads-visible", true);
   await pushPref("dom.serviceWorkers.testing.enabled", true);
 
+  // Use an URL with a specific port to check that Bug 1876533 is fixed
+  // We're using URL without port in other tests, like browser_dbg-windowless-service-workers-reload.js
   const dbg = await initDebuggerWithAbsoluteURL(
     EXAMPLE_URL_WITH_PORT + "doc-service-workers.html"
   );
 
-  invokeInTab("registerWorker");
-  await waitForSource(dbg, "service-worker.sjs");
-  const workerSource = findSource(dbg, "service-worker.sjs");
+  await SpecialPowers.spawn(gBrowser.selectedBrowser, [], async function () {
+    await content.wrappedJSObject.registerWorker();
+  });
+  const workerSource = await waitForSource(dbg, "service-worker.sjs");
+
+  // Retrieve the live URL of the Service Worker as it should be "http://" URL.
+  // (based on EXAMPLE_URL_WITH_PORT URL http: + custom port)
+  // But when running with --use-http3-server, the worker has an https URL.
+  SW_URL = workerSource.url;
 
   await addBreakpoint(dbg, "service-worker.sjs", 13);
 
-  invokeInTab("fetchFromWorker");
+  const onFetched = invokeInTab("fetchFromWorker");
 
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, workerSource.id, 13);
+  await assertPausedAtSourceAndLine(dbg, workerSource.id, 13);
   // Leave the breakpoint and worker in place for the next subtest.
   await resume(dbg);
+  info("Waiting for the fetch request done from the page to complete");
+  await onFetched;
   await waitForRequestsToSettle(dbg);
-  await removeTab(gBrowser.selectedTab);
+  await closeTabAndToolbox();
 });
 
 // Test that breakpoints can be immediately hit in service workers when reloading.
@@ -52,11 +60,10 @@ add_task(async function () {
   // The test page will immediately fetch from the service worker if registered.
   const onReloaded = reload(dbg);
 
-  await waitForSource(dbg, "service-worker.sjs");
-  const workerSource = findSource(dbg, "service-worker.sjs");
+  const workerSource = await waitForSource(dbg, "service-worker.sjs");
 
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, workerSource.id, 13);
+  await assertPausedAtSourceAndLine(dbg, workerSource.id, 13);
   await checkAdditionalThreadCount(dbg, 1);
 
   await resume(dbg);
@@ -69,7 +76,8 @@ add_task(async function () {
 
   await checkAdditionalThreadCount(dbg, 0);
   await waitForRequestsToSettle(dbg);
-  await removeTab(gBrowser.selectedTab);
+
+  await closeTabAndToolbox();
 });
 
 // Test having a waiting and active service worker for the same registration.
@@ -82,7 +90,9 @@ add_task(async function () {
   );
   const dbg = createDebuggerContext(toolbox);
 
-  invokeInTab("registerWorker");
+  await SpecialPowers.spawn(gBrowser.selectedBrowser, [], async function () {
+    await content.wrappedJSObject.registerWorker();
+  });
   await checkAdditionalThreadCount(dbg, 1);
   await checkWorkerStatus(dbg, "activated");
 
@@ -137,27 +147,28 @@ add_task(async function () {
   );
   const dbg = createDebuggerContext(toolbox);
 
-  invokeInTab("registerWorker");
+  await SpecialPowers.spawn(gBrowser.selectedBrowser, [], async function () {
+    await content.wrappedJSObject.registerWorker();
+  });
   await checkAdditionalThreadCount(dbg, 1);
 
-  await waitForSource(dbg, "service-worker.sjs");
-  const workerSource = findSource(dbg, "service-worker.sjs");
+  const workerSource = await waitForSource(dbg, "service-worker.sjs");
 
   await waitForBreakpointCount(dbg, 1);
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, workerSource.id, 2);
+  await assertPausedAtSourceAndLine(dbg, workerSource.id, 2);
   await checkWorkerStatus(dbg, "parsed");
 
   await addBreakpoint(dbg, "service-worker.sjs", 19);
   await resume(dbg);
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, workerSource.id, 19);
+  await assertPausedAtSourceAndLine(dbg, workerSource.id, 19);
   await checkWorkerStatus(dbg, "installing");
 
   await addBreakpoint(dbg, "service-worker.sjs", 5);
   await resume(dbg);
   await waitForPaused(dbg);
-  assertPausedAtSourceAndLine(dbg, workerSource.id, 5);
+  await assertPausedAtSourceAndLine(dbg, workerSource.id, 5);
   await checkWorkerStatus(dbg, "activating");
 
   await resume(dbg);
@@ -165,7 +176,8 @@ add_task(async function () {
 
   await checkAdditionalThreadCount(dbg, 0);
   await waitForRequestsToSettle(dbg);
-  await removeTab(gBrowser.selectedTab);
+
+  await closeTabAndToolbox();
 });
 
 async function checkWorkerStatus(_dbg, _status) {

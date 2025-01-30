@@ -34,6 +34,7 @@
 #include "mozilla/Hal.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/intl/OSPreferences.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/java/GeckoAppShellNatives.h"
@@ -42,6 +43,7 @@
 #include "mozilla/java/GeckoThreadNatives.h"
 #include "mozilla/java/XPCOMEventTargetNatives.h"
 #include "mozilla/widget/ScreenManager.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "prenv.h"
 #include "prtime.h"
 
@@ -52,7 +54,7 @@
 #include <pthread.h>
 #include <wchar.h>
 
-#ifdef MOZ_ANDROID_HISTORY
+#ifdef MOZ_GECKOVIEW_HISTORY
 #  include "nsNetUtil.h"
 #  include "nsIURI.h"
 #  include "IHistory.h"
@@ -69,7 +71,6 @@
 #include "GeckoNetworkManager.h"
 #include "GeckoProcessManager.h"
 #include "GeckoSystemStateListener.h"
-#include "GeckoTelemetryDelegate.h"
 #include "GeckoVRManager.h"
 #include "ImageDecoderSupport.h"
 #include "JavaBuiltins.h"
@@ -110,7 +111,7 @@ class WakeLockListener final : public nsIDOMMozWakeLockListener {
 };
 
 NS_IMPL_ISUPPORTS(WakeLockListener, nsIDOMMozWakeLockListener)
-nsCOMPtr<nsIPowerManagerService> sPowerManagerService = nullptr;
+MOZ_RUNINIT nsCOMPtr<nsIPowerManagerService> sPowerManagerService = nullptr;
 StaticRefPtr<WakeLockListener> sWakeLockListener;
 
 class GeckoThreadSupport final
@@ -333,17 +334,32 @@ class GeckoAppShellSupport final
 
   static bool IsParentProcess() { return XRE_IsParentProcess(); }
 
-  static jni::Object::LocalRef IsGpuProcessEnabled() {
-    java::GeckoResult::GlobalRef result = java::GeckoResult::New();
+  static bool IsGpuProcessEnabled() {
+    return gfx::gfxVars::GPUProcessEnabled();
+  }
 
-    NS_DispatchToMainThread(NS_NewRunnableFunction(
-        "GeckoAppShellSupport::IsGpuProcessEnabled", [result]() {
-          result->Complete(gfx::gfxConfig::IsEnabled(gfx::Feature::GPU_PROCESS)
-                               ? java::sdk::Boolean::TRUE()
-                               : java::sdk::Boolean::FALSE());
-        }));
+  static bool IsInteractiveWidgetDefaultResizesVisual() {
+    return StaticPrefs::dom_interactive_widget_default_resizes_visual();
+  }
 
-    return jni::Object::Ref::From(result);
+  static void OnSystemLocaleChanged() {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    if (PastShutdownPhase(ShutdownPhase::XPCOMShutdown)) {
+      return;
+    }
+
+    intl::OSPreferences::GetInstance()->Refresh();
+  }
+
+  static void OnTimezoneChanged() {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    if (PastShutdownPhase(ShutdownPhase::XPCOMShutdown)) {
+      return;
+    }
+
+    nsBaseAppShell::OnSystemTimezoneChange();
   }
 };
 
@@ -412,7 +428,6 @@ nsAppShell::nsAppShell()
       GeckoAppShellSupport::Init();
       XPCOMEventTargetWrapper::Init();
       mozilla::widget::Telemetry::Init();
-      mozilla::widget::GeckoTelemetryDelegate::Init();
 
       if (XRE_IsGPUProcess()) {
         mozilla::gl::AndroidSurfaceTexture::Init();
@@ -443,7 +458,6 @@ nsAppShell::nsAppShell()
     mozilla::widget::Base64UtilsSupport::Init();
     nsWindow::InitNatives();
     mozilla::gl::AndroidSurfaceTexture::Init();
-    mozilla::widget::GeckoTelemetryDelegate::Init();
 
     java::GeckoThread::SetState(java::GeckoThread::State::JNI_READY());
 

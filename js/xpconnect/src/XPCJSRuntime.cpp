@@ -137,6 +137,11 @@ const char* const XPCJSRuntime::mStrings[] = {
     "crypto",           // IDX_CRYPTO
     "indexedDB",        // IDX_INDEXEDDB
     "structuredClone",  // IDX_STRUCTUREDCLONE
+    "locks",            // IDX_LOCKS
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    "suppressed",  // IDX_SUPPRESSED
+    "error",       // IDX_ERROR
+#endif
 };
 
 /***************************************************************************/
@@ -154,7 +159,7 @@ class AsyncFreeSnowWhite : public Runnable {
 
     TimeStamp start = TimeStamp::Now();
     // 2 ms budget, given that kICCSliceBudget is only 3 ms
-    js::SliceBudget budget = js::SliceBudget(js::TimeBudget(2));
+    SliceBudget budget = SliceBudget(TimeBudget(2));
     bool hadSnowWhiteObjects =
         nsCycleCollector_doDeferredDeletionWithBudget(budget);
     Telemetry::Accumulate(
@@ -1419,6 +1424,12 @@ static void ReportZoneStats(const JS::ZoneStats& zStats,
       "Extra data attached to each compartment by XPConnect, including "
       "its wrapped-js.");
 
+  ZRREPORT_GC_BYTES(pathPrefix + "bigints/gc-heap"_ns, zStats.bigIntsGCHeap,
+                    "BigInt values.");
+
+  ZRREPORT_BYTES(pathPrefix + "bigints/malloc-heap"_ns,
+                 zStats.bigIntsMallocHeap, "BigInt values.");
+
   ZRREPORT_GC_BYTES(pathPrefix + "jit-codes-gc-heap"_ns, zStats.jitCodesGCHeap,
                     "References to executable code pools used by the JITs.");
 
@@ -1702,12 +1713,6 @@ static void ReportClassStats(const ClassInfo& classInfo, const nsACString& path,
     REPORT_BYTES(path + "objects/malloc-heap/global-data"_ns, KIND_HEAP,
                  classInfo.objectsMallocHeapGlobalData,
                  "Data for global objects.");
-  }
-
-  if (classInfo.objectsMallocHeapGlobalVarNamesSet > 0) {
-    REPORT_BYTES(path + "objects/malloc-heap/global-varnames-set"_ns, KIND_HEAP,
-                 classInfo.objectsMallocHeapGlobalVarNamesSet,
-                 "Set of global names.");
   }
 
   if (classInfo.objectsMallocHeapMisc > 0) {
@@ -2366,67 +2371,55 @@ void JSReporter::CollectReports(WindowPaths* windowPaths,
                rtStats.gcHeapUnusedArenas,
                "The same as 'explicit/js-non-window/gc-heap/unused-arenas'.");
 
-  REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/objects"),
-      KIND_OTHER, rtStats.zTotals.unusedGCThings.object,
-      "Unused object cells within non-empty arenas.");
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/objects"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.object,
+               "Unused object cells within non-empty arenas.");
 
-  REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/strings"),
-      KIND_OTHER, rtStats.zTotals.unusedGCThings.string,
-      "Unused string cells within non-empty arenas.");
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/strings"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.string,
+               "Unused string cells within non-empty arenas.");
 
-  REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/symbols"),
-      KIND_OTHER, rtStats.zTotals.unusedGCThings.symbol,
-      "Unused symbol cells within non-empty arenas.");
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/symbols"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.symbol,
+               "Unused symbol cells within non-empty arenas.");
 
-  REPORT_BYTES(nsLiteralCString(
-                   "js-main-runtime-gc-heap-committed/unused/gc-things/shapes"),
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/shapes"_ns,
                KIND_OTHER, rtStats.zTotals.unusedGCThings.shape,
                "Unused shape cells within non-empty arenas.");
 
   REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/base-shapes"),
+      "js-main-runtime-gc-heap-committed/unused/gc-things/base-shapes"_ns,
       KIND_OTHER, rtStats.zTotals.unusedGCThings.baseShape,
       "Unused base shape cells within non-empty arenas.");
 
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/bigints"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.bigInt,
+               "Unused BigInt cells within non-empty arenas.");
+
   REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/getter-setters"),
+      "js-main-runtime-gc-heap-committed/unused/gc-things/getter-setters"_ns,
       KIND_OTHER, rtStats.zTotals.unusedGCThings.getterSetter,
       "Unused getter-setter cells within non-empty arenas.");
 
   REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/property-maps"),
+      "js-main-runtime-gc-heap-committed/unused/gc-things/property-maps"_ns,
       KIND_OTHER, rtStats.zTotals.unusedGCThings.propMap,
       "Unused property map cells within non-empty arenas.");
 
-  REPORT_BYTES(nsLiteralCString(
-                   "js-main-runtime-gc-heap-committed/unused/gc-things/scopes"),
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/scopes"_ns,
                KIND_OTHER, rtStats.zTotals.unusedGCThings.scope,
                "Unused scope cells within non-empty arenas.");
 
-  REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/scripts"),
-      KIND_OTHER, rtStats.zTotals.unusedGCThings.script,
-      "Unused script cells within non-empty arenas.");
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/scripts"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.script,
+               "Unused script cells within non-empty arenas.");
+
+  REPORT_BYTES("js-main-runtime-gc-heap-committed/unused/gc-things/jitcode"_ns,
+               KIND_OTHER, rtStats.zTotals.unusedGCThings.jitcode,
+               "Unused jitcode cells within non-empty arenas.");
 
   REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/jitcode"),
-      KIND_OTHER, rtStats.zTotals.unusedGCThings.jitcode,
-      "Unused jitcode cells within non-empty arenas.");
-
-  REPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/unused/gc-things/regexp-shareds"),
+      "js-main-runtime-gc-heap-committed/unused/gc-things/regexp-shareds"_ns,
       KIND_OTHER, rtStats.zTotals.unusedGCThings.regExpShared,
       "Unused regexpshared cells within non-empty arenas.");
 
@@ -2440,66 +2433,59 @@ void JSReporter::CollectReports(WindowPaths* windowPaths,
 
   size_t gcThingTotal = 0;
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/objects"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/objects"_ns,
                 KIND_OTHER, rtStats.realmTotals.classInfo.objectsGCHeap,
                 "Used object cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/strings"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/strings"_ns,
                 KIND_OTHER, rtStats.zTotals.stringInfo.sizeOfLiveGCThings(),
                 "Used string cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/symbols"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/symbols"_ns,
                 KIND_OTHER, rtStats.zTotals.symbolsGCHeap,
                 "Used symbol cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/shapes"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/shapes"_ns,
                 KIND_OTHER,
                 rtStats.zTotals.shapeInfo.shapesGCHeapShared +
                     rtStats.zTotals.shapeInfo.shapesGCHeapDict,
                 "Used shape cells.");
 
   MREPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/used/gc-things/base-shapes"),
+      "js-main-runtime-gc-heap-committed/used/gc-things/base-shapes"_ns,
       KIND_OTHER, rtStats.zTotals.shapeInfo.shapesGCHeapBase,
       "Used base shape cells.");
 
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/bigints"_ns,
+                KIND_OTHER, rtStats.zTotals.bigIntsGCHeap,
+                "Used BigInt cells.");
+
   MREPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/used/gc-things/getter-setters"),
+      "js-main-runtime-gc-heap-committed/used/gc-things/getter-setters"_ns,
       KIND_OTHER, rtStats.zTotals.getterSettersGCHeap,
       "Used getter/setter cells.");
 
   MREPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/used/gc-things/property-maps"),
+      "js-main-runtime-gc-heap-committed/used/gc-things/property-maps"_ns,
       KIND_OTHER,
       rtStats.zTotals.dictPropMapsGCHeap +
           rtStats.zTotals.compactPropMapsGCHeap +
           rtStats.zTotals.normalPropMapsGCHeap,
       "Used property map cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/scopes"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/scopes"_ns,
                 KIND_OTHER, rtStats.zTotals.scopesGCHeap, "Used scope cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/scripts"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/scripts"_ns,
                 KIND_OTHER, rtStats.realmTotals.scriptsGCHeap,
                 "Used script cells.");
 
-  MREPORT_BYTES(nsLiteralCString(
-                    "js-main-runtime-gc-heap-committed/used/gc-things/jitcode"),
+  MREPORT_BYTES("js-main-runtime-gc-heap-committed/used/gc-things/jitcode"_ns,
                 KIND_OTHER, rtStats.zTotals.jitCodesGCHeap,
                 "Used jitcode cells.");
 
   MREPORT_BYTES(
-      nsLiteralCString(
-          "js-main-runtime-gc-heap-committed/used/gc-things/regexp-shareds"),
+      "js-main-runtime-gc-heap-committed/used/gc-things/regexp-shareds"_ns,
       KIND_OTHER, rtStats.zTotals.regExpSharedsGCHeap,
       "Used regexpshared cells.");
 
@@ -2576,25 +2562,29 @@ static void AccumulateTelemetryCallback(JSMetric id, uint32_t sample) {
       Telemetry::Accumulate(Telemetry::NAME, sample); \
       break;
 
-    FOR_EACH_JS_METRIC(CASE_ACCUMULATE)
+    FOR_EACH_JS_LEGACY_METRIC(CASE_ACCUMULATE)
 #undef CASE_ACCUMULATE
 
     default:
-      MOZ_CRASH("Bad metric id");
+      break;
   }
   // clang-format on
 
   switch (id) {
+// Disable clone.deserialize metrics on Android for perf (bug 1898515).
+#ifndef MOZ_WIDGET_ANDROID
     case JSMetric::DESERIALIZE_BYTES:
       glean::performance_clone_deserialize::size.Accumulate(sample);
       break;
     case JSMetric::DESERIALIZE_ITEMS:
-      glean::performance_clone_deserialize::items.AccumulateSamples({sample});
+      glean::performance_clone_deserialize::items.AccumulateSingleSample(
+          sample);
       break;
     case JSMetric::DESERIALIZE_US:
       glean::performance_clone_deserialize::time.AccumulateRawDuration(
           TimeDuration::FromMicroseconds(sample));
       break;
+#endif  // MOZ_WIDGET_ANDROID
     case JSMetric::GC_MS:
       glean::javascript_gc::total_time.AccumulateRawDuration(
           TimeDuration::FromMilliseconds(sample));
@@ -2627,6 +2617,46 @@ static void AccumulateTelemetryCallback(JSMetric id, uint32_t sample) {
       glean::javascript_gc::slice_time.AccumulateRawDuration(
           TimeDuration::FromMilliseconds(sample));
       break;
+    case JSMetric::ION_COMPILE_TIME:
+      glean::javascript_ion::compile_time.AccumulateRawDuration(
+          TimeDuration::FromMicroseconds(sample));
+      break;
+    case JSMetric::GC_BUDGET_MS_2:
+      glean::javascript_gc::budget.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_BUDGET_OVERRUN:
+      glean::javascript_gc::budget_overrun.AccumulateRawDuration(
+          TimeDuration::FromMicroseconds(sample));
+      break;
+    case JSMetric::GC_ANIMATION_MS:
+      glean::javascript_gc::animation.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_MAX_PAUSE_MS_2:
+      glean::javascript_gc::max_pause.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_MARK_GRAY_MS_2:
+      glean::javascript_gc::mark_gray.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_MARK_WEAK_MS:
+      glean::javascript_gc::mark_weak.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_TIME_BETWEEN_S:
+      glean::javascript_gc::time_between.AccumulateRawDuration(
+          TimeDuration::FromSeconds(sample));
+      break;
+    case JSMetric::GC_TIME_BETWEEN_SLICES_MS:
+      glean::javascript_gc::time_between_slices.AccumulateRawDuration(
+          TimeDuration::FromMilliseconds(sample));
+      break;
+    case JSMetric::GC_TASK_START_DELAY_US:
+      glean::javascript_gc::task_start_delay.AccumulateRawDuration(
+          TimeDuration::FromMicroseconds(sample));
+      break;
     default:
       // The rest aren't relayed to Glean.
       break;
@@ -2637,16 +2667,23 @@ static void SetUseCounterCallback(JSObject* obj, JSUseCounter counter) {
   switch (counter) {
     case JSUseCounter::ASMJS:
       SetUseCounter(obj, eUseCounter_custom_JS_asmjs);
-      break;
+      return;
     case JSUseCounter::WASM:
       SetUseCounter(obj, eUseCounter_custom_JS_wasm);
-      break;
+      return;
     case JSUseCounter::WASM_LEGACY_EXCEPTIONS:
       SetUseCounter(obj, eUseCounter_custom_JS_wasm_legacy_exceptions);
+      return;
+    case JSUseCounter::ISHTMLDDA_FUSE:
+      SetUseCounter(obj, eUseCounter_custom_JS_isHTMLDDA_fuse);
+      return;
+    case JSUseCounter::OPTIMIZE_GET_ITERATOR_FUSE:
+      SetUseCounter(obj, eUseCounter_custom_JS_optimizeGetIterator_fuse);
+      return;
+    case JSUseCounter::COUNT:
       break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unexpected JSUseCounter id");
   }
+  MOZ_ASSERT_UNREACHABLE("Unexpected JSUseCounter id");
 }
 
 static void GetRealmNameCallback(JSContext* cx, Realm* realm, char* buf,

@@ -33,21 +33,26 @@ static JSObject* FindNamedConstructorForXray(
     JSContext* aCx, JS::Handle<jsid> aId, const WebIDLNameTableEntry* aEntry) {
   JSObject* interfaceObject =
       GetPerInterfaceObjectHandle(aCx, aEntry->mConstructorId, aEntry->mCreate,
-                                  /* aDefineOnGlobal = */ false);
+                                  DefineInterfaceProperty::No);
   if (!interfaceObject) {
     return nullptr;
   }
 
-  // This is a call over Xrays, so we will actually use the return value
-  // (instead of just having it defined on the global now).  Check for named
-  // constructors with this id, in case that's what the caller is asking for.
-  for (unsigned slot = DOM_INTERFACE_SLOTS_BASE;
-       slot < JSCLASS_RESERVED_SLOTS(JS::GetClass(interfaceObject)); ++slot) {
-    JSObject* constructor =
-        &JS::GetReservedSlot(interfaceObject, slot).toObject();
-    if (JS_GetMaybePartialFunctionId(JS_GetObjectFunction(constructor)) ==
-        aId.toString()) {
-      return constructor;
+  if (IsInterfaceObject(interfaceObject)) {
+    // This is a call over Xrays, so we will actually use the return value
+    // (instead of just having it defined on the global now).  Check for named
+    // constructors with this id, in case that's what the caller is asking for.
+    for (unsigned slot = INTERFACE_OBJECT_FIRST_LEGACY_FACTORY_FUNCTION;
+         slot < INTERFACE_OBJECT_MAX_SLOTS; ++slot) {
+      const JS::Value& v = js::GetFunctionNativeReserved(interfaceObject, slot);
+      if (!v.isObject()) {
+        break;
+      }
+      JSObject* constructor = &v.toObject();
+      if (JS_GetMaybePartialFunctionId(JS_GetObjectFunction(constructor)) ==
+          aId.toString()) {
+        return constructor;
+      }
     }
   }
 
@@ -156,10 +161,13 @@ bool WebIDLGlobalNameHash::DefineIfEnabled(
     return true;
   }
 
+  // We've already checked whether the interface is enabled (see
+  // checkEnabledForScope above), so it's fine to pass
+  // DefineInterfaceProperty::Always here.
   JS::Rooted<JSObject*> interfaceObject(
       aCx,
       GetPerInterfaceObjectHandle(aCx, entry->mConstructorId, entry->mCreate,
-                                  /* aDefineOnGlobal = */ true));
+                                  DefineInterfaceProperty::Always));
   if (NS_WARN_IF(!interfaceObject)) {
     return Throw(aCx, NS_ERROR_FAILURE);
   }
@@ -230,9 +238,12 @@ bool WebIDLGlobalNameHash::ResolveForSystemGlobal(JSContext* aCx,
   // Look up the corresponding entry in the name table, and resolve if enabled.
   const WebIDLNameTableEntry* entry = GetEntry(aId.toLinearString());
   if (entry && (!entry->mEnabled || entry->mEnabled(aCx, aObj))) {
+    // We've already checked whether the interface is enabled (see
+    // entry->mEnabled above), so it's fine to pass
+    // DefineInterfaceProperty::Always here.
     if (NS_WARN_IF(!GetPerInterfaceObjectHandle(
             aCx, entry->mConstructorId, entry->mCreate,
-            /* aDefineOnGlobal = */ true))) {
+            DefineInterfaceProperty::Always))) {
       return Throw(aCx, NS_ERROR_FAILURE);
     }
 

@@ -12,20 +12,41 @@ const { XPCOMUtils } = ChromeUtils.importESModule(
 const { sinon } = ChromeUtils.importESModule(
   "resource://testing-common/Sinon.sys.mjs"
 );
-const { SCOPE_OLD_SYNC } = ChromeUtils.importESModule(
+const { SCOPE_APP_SYNC, SCOPE_OLD_SYNC } = ChromeUtils.importESModule(
   "resource://gre/modules/FxAccountsCommon.sys.mjs"
 );
 
 // Some mock key data, in both scoped-key and legacy field formats.
 const MOCK_ACCOUNT_KEYS = {
   scopedKeys: {
-    [SCOPE_OLD_SYNC]: {
+    [SCOPE_APP_SYNC]: {
       kid: "1234567890123-u7u7u7u7u7u7u7u7u7u7uw",
       k: "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqg",
       kty: "oct",
     },
   },
 };
+
+function ensureOauthConfigured() {
+  Services.prefs.setBoolPref("identity.fxaccounts.oauth.enabled", true);
+  Services.prefs.setStringPref(
+    "identity.fxaccounts.contextParam",
+    "oauth_webchannel_v1"
+  );
+}
+
+function ensureOauthNotConfigured() {
+  Services.prefs.setBoolPref("identity.fxaccounts.oauth.enabled", false);
+  Services.prefs.setStringPref(
+    "identity.fxaccounts.contextParam",
+    "fx_desktop_v3"
+  );
+}
+
+function resetOauthConfig() {
+  Services.prefs.clearUserPref("identity.fxaccounts.oauth.enabled");
+  Services.prefs.clearUserPref("identity.fxaccounts.contextParam");
+}
 
 (function initFxAccountsTestingInfrastructure() {
   do_get_profile();

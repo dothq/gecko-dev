@@ -18,11 +18,8 @@
 
 namespace mozilla::webgpu {
 
-bool AdapterInfo::WrapObject(JSContext* const cx,
-                             JS::Handle<JSObject*> givenProto,
-                             JS::MutableHandle<JSObject*> reflector) {
-  return dom::GPUAdapterInfo_Binding::Wrap(cx, this, givenProto, reflector);
-}
+GPU_IMPL_CYCLE_COLLECTION(AdapterInfo, mParent)
+GPU_IMPL_JS_WRAP(AdapterInfo)
 
 void AdapterInfo::GetWgpuName(nsString& s) const {
   s = mAboutSupportInfo->name;
@@ -90,66 +87,96 @@ void AdapterInfo::GetWgpuBackend(nsString& s) const {
 
 // -
 
-GPU_IMPL_CYCLE_COLLECTION(Adapter, mParent, mBridge, mFeatures, mLimits)
+GPU_IMPL_CYCLE_COLLECTION(Adapter, mParent, mBridge, mFeatures, mLimits, mInfo)
 GPU_IMPL_JS_WRAP(Adapter)
 
-static Maybe<ffi::WGPUFeatures> ToWGPUFeatures(
-    const dom::GPUFeatureName aFeature) {
-  switch (aFeature) {
-    case dom::GPUFeatureName::Depth_clip_control:
-      return Some(WGPUFeatures_DEPTH_CLIP_CONTROL);
+enum class FeatureImplementationStatusTag {
+  Implemented,
+  NotImplemented,
+};
 
-    case dom::GPUFeatureName::Depth32float_stencil8:
-      return Some(WGPUFeatures_DEPTH32FLOAT_STENCIL8);
+struct FeatureImplementationStatus {
+  FeatureImplementationStatusTag tag =
+      FeatureImplementationStatusTag::NotImplemented;
+  union {
+    struct {
+      ffi::WGPUFeatures wgpuBit;
+    } implemented;
+    struct {
+      const char* bugzillaUrlAscii;
+    } unimplemented;
+  } value = {
+      .unimplemented = {
+          .bugzillaUrlAscii =
+              "https://bugzilla.mozilla.org/"
+              "enter_bug.cgi?product=Core&component=Graphics%3A+WebGPU"}};
 
-    case dom::GPUFeatureName::Texture_compression_bc:
-      return Some(WGPUFeatures_TEXTURE_COMPRESSION_BC);
+  static FeatureImplementationStatus fromDomFeature(
+      const dom::GPUFeatureName aFeature) {
+    auto implemented = [](const ffi::WGPUFeatures aBit) {
+      FeatureImplementationStatus feat;
+      feat.tag = FeatureImplementationStatusTag::Implemented;
+      feat.value.implemented.wgpuBit = aBit;
+      return feat;
+    };
+    auto unimplemented = [](const char* aBugzillaUrl) {
+      FeatureImplementationStatus feat;
+      feat.tag = FeatureImplementationStatusTag::NotImplemented;
+      feat.value.unimplemented.bugzillaUrlAscii = aBugzillaUrl;
+      return feat;
+    };
+    switch (aFeature) {
+      case dom::GPUFeatureName::Depth_clip_control:
+        return implemented(WGPUFeatures_DEPTH_CLIP_CONTROL);
 
-    case dom::GPUFeatureName::Texture_compression_etc2:
-      return Some(WGPUFeatures_TEXTURE_COMPRESSION_ETC2);
+      case dom::GPUFeatureName::Depth32float_stencil8:
+        return implemented(WGPUFeatures_DEPTH32FLOAT_STENCIL8);
 
-    case dom::GPUFeatureName::Texture_compression_astc:
-      return Some(WGPUFeatures_TEXTURE_COMPRESSION_ASTC);
+      case dom::GPUFeatureName::Texture_compression_bc:
+        return implemented(WGPUFeatures_TEXTURE_COMPRESSION_BC);
 
-    case dom::GPUFeatureName::Timestamp_query:
-      return Some(WGPUFeatures_TIMESTAMP_QUERY);
+      case dom::GPUFeatureName::Texture_compression_etc2:
+        return implemented(WGPUFeatures_TEXTURE_COMPRESSION_ETC2);
 
-    case dom::GPUFeatureName::Indirect_first_instance:
-      return Some(WGPUFeatures_INDIRECT_FIRST_INSTANCE);
+      case dom::GPUFeatureName::Texture_compression_astc:
+        return implemented(WGPUFeatures_TEXTURE_COMPRESSION_ASTC);
 
-    case dom::GPUFeatureName::Shader_f16:
-      return Some(WGPUFeatures_SHADER_F16);
+      case dom::GPUFeatureName::Timestamp_query:
+        return implemented(WGPUFeatures_TIMESTAMP_QUERY);
 
-    case dom::GPUFeatureName::Rg11b10ufloat_renderable:
-      return Some(WGPUFeatures_RG11B10UFLOAT_RENDERABLE);
+      case dom::GPUFeatureName::Indirect_first_instance:
+        return implemented(WGPUFeatures_INDIRECT_FIRST_INSTANCE);
 
-    case dom::GPUFeatureName::Bgra8unorm_storage:
-      return Some(WGPUFeatures_BGRA8UNORM_STORAGE);
+      case dom::GPUFeatureName::Shader_f16:
+        // return implemented(WGPUFeatures_SHADER_F16);
+        return unimplemented(
+            "https://bugzilla.mozilla.org/show_bug.cgi?id=1891593");
 
-    case dom::GPUFeatureName::Float32_filterable:
-      return Some(WGPUFeatures_FLOAT32_FILTERABLE);
-  }
-  MOZ_CRASH("Bad GPUFeatureName.");
-}
+      case dom::GPUFeatureName::Rg11b10ufloat_renderable:
+        return implemented(WGPUFeatures_RG11B10UFLOAT_RENDERABLE);
 
-static Maybe<ffi::WGPUFeatures> MakeFeatureBits(
-    const dom::Sequence<dom::GPUFeatureName>& aFeatures) {
-  ffi::WGPUFeatures bits = 0;
-  for (const auto& feature : aFeatures) {
-    const auto bit = ToWGPUFeatures(feature);
-    if (!bit) {
-      const auto featureStr = dom::GetEnumString(feature);
-      (void)featureStr;
-      NS_WARNING(
-          nsPrintfCString("Requested feature bit for '%s' is not implemented.",
-                          featureStr.get())
-              .get());
-      return Nothing();
+      case dom::GPUFeatureName::Bgra8unorm_storage:
+        return implemented(WGPUFeatures_BGRA8UNORM_STORAGE);
+
+      case dom::GPUFeatureName::Float32_filterable:
+        return implemented(WGPUFeatures_FLOAT32_FILTERABLE);
+
+      case dom::GPUFeatureName::Float32_blendable:
+        return unimplemented(
+            "https://bugzilla.mozilla.org/show_bug.cgi?id=1931630");
+
+      case dom::GPUFeatureName::Clip_distances:
+        return unimplemented(
+            "https://bugzilla.mozilla.org/show_bug.cgi?id=1931629");
+
+      case dom::GPUFeatureName::Dual_source_blending:
+        // return implemented(WGPUFeatures_DUAL_SOURCE_BLENDING);
+        return unimplemented(
+            "https://bugzilla.mozilla.org/show_bug.cgi?id=1924328");
     }
-    bits |= *bit;
+    MOZ_CRASH("Bad GPUFeatureName.");
   }
-  return Some(bits);
-}
+};
 
 Adapter::Adapter(Instance* const aParent, WebGPUChild* const aBridge,
                  const std::shared_ptr<ffi::WGPUAdapterInformation>& aInfo)
@@ -158,7 +185,8 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aBridge,
       mId(aInfo->id),
       mFeatures(new SupportedFeatures(this)),
       mLimits(new SupportedLimits(this, aInfo->limits)),
-      mInfo(aInfo) {
+      mInfo(new AdapterInfo(this, aInfo)),
+      mInfoInner(aInfo) {
   ErrorResult ignoredRv;  // It's onerous to plumb this in from outside in this
                           // case, and we don't really need to.
 
@@ -167,12 +195,14 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aBridge,
 
     for (const auto feature :
          dom::MakeWebIDLEnumeratedRange<dom::GPUFeatureName>()) {
-      const auto bitForFeature = ToWGPUFeatures(feature);
-      if (!bitForFeature) {
-        // There are some features that don't have bits.
-        continue;
+      const auto status = FeatureImplementationStatus::fromDomFeature(feature);
+      switch (status.tag) {
+        case FeatureImplementationStatusTag::Implemented:
+          ret[status.value.implemented.wgpuBit] = feature;
+          break;
+        case FeatureImplementationStatusTag::NotImplemented:
+          break;
       }
-      ret[*bitForFeature] = feature;
     }
 
     return ret;
@@ -196,7 +226,12 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aBridge,
     if (featureForBit != FEATURE_BY_BIT.end()) {
       mFeatures->Add(featureForBit->second, ignoredRv);
     } else {
-      // We don't recognize that bit, but maybe it's a wpgu-native-only feature.
+      // One of two cases:
+      //
+      // 1. WGPU claims to implement this, but we've explicitly marked this as
+      // not implemented.
+      // 2. We don't recognize that bit, but maybe it's a wpgu-native-only
+      // feature.
     }
   }
 }
@@ -212,8 +247,14 @@ void Adapter::Cleanup() {
 
 const RefPtr<SupportedFeatures>& Adapter::Features() const { return mFeatures; }
 const RefPtr<SupportedLimits>& Adapter::Limits() const { return mLimits; }
+const RefPtr<AdapterInfo>& Adapter::Info() const { return mInfo; }
+
 bool Adapter::IsFallbackAdapter() const {
-  return mInfo->device_type == ffi::WGPUDeviceType::WGPUDeviceType_Cpu;
+  return mInfoInner->device_type == ffi::WGPUDeviceType::WGPUDeviceType_Cpu;
+}
+
+bool Adapter::SupportExternalTextureInSwapChain() const {
+  return mInfoInner->support_use_external_texture_in_swap_chain;
 }
 
 static std::string_view ToJsKey(const Limit limit) {
@@ -262,8 +303,6 @@ static std::string_view ToJsKey(const Limit limit) {
       return "maxVertexAttributes";
     case Limit::MaxVertexBufferArrayStride:
       return "maxVertexBufferArrayStride";
-    case Limit::MaxInterStageShaderComponents:
-      return "maxInterStageShaderComponents";
     case Limit::MaxInterStageShaderVariables:
       return "maxInterStageShaderVariables";
     case Limit::MaxColorAttachments:
@@ -328,7 +367,6 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
       case Limit::MaxBufferSize: return 268435456;
       case Limit::MaxVertexAttributes: return 16;
       case Limit::MaxVertexBufferArrayStride: return 2048;
-      case Limit::MaxInterStageShaderComponents: return 60;
       case Limit::MaxInterStageShaderVariables: return 16;
       case Limit::MaxColorAttachments: return 8;
       case Limit::MaxColorAttachmentBytesPerSample: return 32;
@@ -357,14 +395,33 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
     // -
     // Validate Features
 
+    ffi::WGPUFeatures featureBits = 0;
     for (const auto requested : aDesc.mRequiredFeatures) {
-      const bool supported = mFeatures->Features().count(requested);
-      if (!supported) {
+      auto status = FeatureImplementationStatus::fromDomFeature(requested);
+      switch (status.tag) {
+        case FeatureImplementationStatusTag::Implemented:
+          featureBits |= status.value.implemented.wgpuBit;
+          break;
+        case FeatureImplementationStatusTag::NotImplemented: {
+          const auto featureStr = dom::GetEnumString(requested);
+          (void)featureStr;
+          nsPrintfCString msg(
+              "`GPUAdapter.requestDevice`: '%s' was requested in "
+              "`requiredFeatures`, but it is not supported by Firefox."
+              "Follow <%s> for updates.",
+              featureStr.get(), status.value.unimplemented.bugzillaUrlAscii);
+          promise->MaybeRejectWithTypeError(msg);
+          return;
+        }
+      }
+
+      const bool supportedByAdapter = mFeatures->Features().count(requested);
+      if (!supportedByAdapter) {
         const auto fstr = dom::GetEnumString(requested);
         const auto astr = this->LabelOrId();
         nsPrintfCString msg(
-            "requestDevice: Feature '%s' requested must be supported by "
-            "adapter %s",
+            "`GPUAdapter.requestDevice`: '%s' was requested in "
+            "`requiredFeatures`, but it is not supported by adapter %s.",
             fstr.get(), astr.get());
         promise->MaybeRejectWithTypeError(msg);
         return;
@@ -444,8 +501,8 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
 
     // -
 
-    ffi::WGPUDeviceDescriptor ffiDesc = {};
-    ffiDesc.required_features = *MakeFeatureBits(aDesc.mRequiredFeatures);
+    ffi::WGPUFfiDeviceDescriptor ffiDesc = {};
+    ffiDesc.required_features = featureBits;
     ffiDesc.required_limits = deviceLimits;
     auto request = mBridge->AdapterRequestDevice(mId, ffiDesc);
     if (!request) {
@@ -453,8 +510,8 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
           "Unable to instantiate a Device");
       return;
     }
-    RefPtr<Device> device =
-        new Device(this, request->mId, ffiDesc.required_limits);
+    RefPtr<Device> device = new Device(
+        this, request->mDeviceId, request->mQueueId, ffiDesc.required_limits);
     for (const auto& feature : aDesc.mRequiredFeatures) {
       device->mFeatures->Add(feature, aRv);
     }
@@ -465,9 +522,7 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
           if (aSuccess) {
             promise->MaybeResolve(device);
           } else {
-            // In this path, request->mId has an error entry in the wgpu
-            // registry, so let Device::~Device clean things up on both the
-            // child and parent side.
+            device->CleanupUnregisteredInParent();
             promise->MaybeRejectWithInvalidStateError(
                 "Unable to fulfill requested features and limits");
           }
@@ -482,18 +537,6 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
         });
   }();
 
-  return promise.forget();
-}
-
-// -
-
-already_AddRefed<dom::Promise> Adapter::RequestAdapterInfo(
-    const dom::Sequence<nsString>& /*aUnmaskHints*/, ErrorResult& aRv) const {
-  RefPtr<dom::Promise> promise = dom::Promise::Create(GetParentObject(), aRv);
-  if (!promise) return nullptr;
-
-  auto rai = UniquePtr<AdapterInfo>{new AdapterInfo(mInfo)};
-  promise->MaybeResolve(std::move(rai));
   return promise.forget();
 }
 

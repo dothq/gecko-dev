@@ -19,7 +19,6 @@
 #include "mozilla/dom/Document.h"
 #include "nsISelectionController.h"
 #include "nsIFrame.h"
-#include "nsITextControlFrame.h"
 #include "nsReadableUtils.h"
 #include "nsIContent.h"
 #include "nsIObserverService.h"
@@ -32,7 +31,6 @@
 #include "mozilla/Services.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Selection.h"
-#include "nsISimpleEnumerator.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsGenericHTMLElement.h"
@@ -326,14 +324,16 @@ void nsWebBrowserFind::SetSelectionAndScroll(nsPIDOMWindowOuter* aWindow,
 
   // since the match could be an anonymous textnode inside a
   // <textarea> or text <input>, we need to get the outer frame
-  nsITextControlFrame* tcFrame = nullptr;
+  nsIFrame* tcFrame = nullptr;
   for (; content; content = content->GetParent()) {
     if (!content->IsInNativeAnonymousSubtree()) {
       nsIFrame* f = content->GetPrimaryFrame();
       if (!f) {
         return;
       }
-      tcFrame = do_QueryFrame(f);
+      if (f->IsTextInputFrame()) {
+        tcFrame = f;
+      }
       break;
     }
   }
@@ -341,33 +341,34 @@ void nsWebBrowserFind::SetSelectionAndScroll(nsPIDOMWindowOuter* aWindow,
   selCon->SetDisplaySelection(nsISelectionController::SELECTION_ON);
   RefPtr<Selection> selection =
       selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
-  if (selection) {
-    selection->RemoveAllRanges(IgnoreErrors());
-    selection->AddRangeAndSelectFramesAndNotifyListeners(*aRange,
-                                                         IgnoreErrors());
-
-    if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
-      if (tcFrame) {
-        RefPtr<Element> newFocusedElement = Element::FromNode(content);
-        fm->SetFocus(newFocusedElement, nsIFocusManager::FLAG_NOSCROLL);
-      } else {
-        RefPtr<Element> result;
-        fm->MoveFocus(aWindow, nullptr, nsIFocusManager::MOVEFOCUS_CARET,
-                      nsIFocusManager::FLAG_NOSCROLL, getter_AddRefs(result));
-      }
-    }
-
-    // Scroll if necessary to make the selection visible:
-    // Must be the last thing to do - bug 242056
-
-    // After ScrollSelectionIntoView(), the pending notifications might be
-    // flushed and PresShell/PresContext/Frames may be dead. See bug 418470.
-    selCon->ScrollSelectionIntoView(
-        nsISelectionController::SELECTION_NORMAL,
-        nsISelectionController::SELECTION_WHOLE_SELECTION,
-        nsISelectionController::SCROLL_CENTER_VERTICALLY |
-            nsISelectionController::SCROLL_SYNCHRONOUS);
+  if (!selection) {
+    return;
   }
+  selection->RemoveAllRanges(IgnoreErrors());
+  selection->AddRangeAndSelectFramesAndNotifyListeners(*aRange, IgnoreErrors());
+
+  if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+    if (tcFrame) {
+      RefPtr<Element> newFocusedElement = Element::FromNode(content);
+      fm->SetFocus(newFocusedElement, nsIFocusManager::FLAG_NOSCROLL);
+    } else {
+      RefPtr<Element> result;
+      fm->MoveFocus(aWindow, nullptr, nsIFocusManager::MOVEFOCUS_CARET,
+                    nsIFocusManager::FLAG_NOSCROLL, getter_AddRefs(result));
+    }
+  }
+
+  // Scroll if necessary to make the selection visible:
+  // Must be the last thing to do - bug 242056
+
+  // After ScrollSelectionIntoView(), the pending notifications might be
+  // flushed and PresShell/PresContext/Frames may be dead. See bug 418470.
+  // FIXME(emilio): Any reason this couldn't do selection->ScrollIntoView()
+  // directly, rather than re-requesting the selection?
+  selCon->ScrollSelectionIntoView(
+      SelectionType::eNormal, nsISelectionController::SELECTION_WHOLE_SELECTION,
+      ScrollAxis(WhereToScroll::Center), ScrollAxis(), ScrollFlags::None,
+      SelectionScrollMode::SyncFlush);
 }
 
 // Adapted from TextServicesDocument::GetDocumentContentRootNode

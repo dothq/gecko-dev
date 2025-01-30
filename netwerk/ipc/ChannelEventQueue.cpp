@@ -31,36 +31,26 @@ ChannelEvent* ChannelEventQueue::TakeEvent() {
 }
 
 void ChannelEventQueue::FlushQueue() {
+  mMutex.AssertCurrentThreadOwns();
   // Events flushed could include destruction of channel (and our own
   // destructor) unless we make sure its refcount doesn't drop to 0 while this
   // method is running.
   nsCOMPtr<nsISupports> kungFuDeathGrip;
-  {
-    MutexAutoLock lock(mMutex);
-    kungFuDeathGrip = mOwner;
-  }
+  kungFuDeathGrip = mOwner;
   mozilla::Unused << kungFuDeathGrip;  // Not used in this function
 
-#ifdef DEBUG
-  {
-    MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(mFlushing);
-  }
-#endif  // DEBUG
+  MOZ_ASSERT(mFlushing);
 
   bool needResumeOnOtherThread = false;
 
   while (true) {
     UniquePtr<ChannelEvent> event;
-    {
-      MutexAutoLock lock(mMutex);
-      event.reset(TakeEvent());
-      if (!event) {
-        MOZ_ASSERT(mFlushing);
-        mFlushing = false;
-        MOZ_ASSERT(mEventQueue.IsEmpty() || (mSuspended || !!mForcedCount));
-        break;
-      }
+    event.reset(TakeEvent());
+    if (!event) {
+      MOZ_ASSERT(mFlushing);
+      mFlushing = false;
+      MOZ_ASSERT(mEventQueue.IsEmpty() || (mSuspended || !!mForcedCount));
+      break;
     }
 
     nsCOMPtr<nsIEventTarget> target = event->GetEventTarget();
@@ -71,27 +61,26 @@ void ChannelEventQueue::FlushQueue() {
     if (NS_WARN_IF(NS_FAILED(rv))) {
       // Simply run this event on current thread if we are not sure about it
       // in release channel, or assert in Aurora/Nightly channel.
-      MOZ_DIAGNOSTIC_ASSERT(false);
+      MOZ_DIAGNOSTIC_CRASH("IsOnCurrentThread failed");
       isCurrentThread = true;
     }
 
     if (!isCurrentThread) {
       // Next event needs to run on another thread. Put it back to
       // the front of the queue can try resume on that thread.
-      Suspend();
-      PrependEvent(std::move(event));
+      SuspendInternal();
+      PrependEventInternal(std::move(event));
 
       needResumeOnOtherThread = true;
-      {
-        MutexAutoLock lock(mMutex);
-        MOZ_ASSERT(mFlushing);
-        mFlushing = false;
-        MOZ_ASSERT(!mEventQueue.IsEmpty());
-      }
+      MOZ_ASSERT(mFlushing);
+      mFlushing = false;
+      MOZ_ASSERT(!mEventQueue.IsEmpty());
       break;
     }
-
-    event->Run();
+    {
+      MutexAutoUnlock unlock(mMutex);
+      event->Run();
+    }
   }  // end of while(true)
 
   // The flush procedure is aborted because next event cannot be run on current
@@ -100,7 +89,7 @@ void ChannelEventQueue::FlushQueue() {
   // Note: we cannot call Resume() while "mFlushing == true" because
   // CompleteResume will not trigger FlushQueue while there is an ongoing flush.
   if (needResumeOnOtherThread) {
-    Resume();
+    ResumeInternal();
   }
 }
 
@@ -185,7 +174,7 @@ bool ChannelEventQueue::MaybeSuspendIfEventsAreSuppressed() {
 
   // Only suppress events for queues associated with XHRs, as these can cause
   // content scripts to run.
-  if (mHasCheckedForXMLHttpRequest && !mForXMLHttpRequest) {
+  if (mHasCheckedForAsyncXMLHttpRequest && !mForAsyncXMLHttpRequest) {
     return false;
   }
 
@@ -196,25 +185,24 @@ bool ChannelEventQueue::MaybeSuspendIfEventsAreSuppressed() {
   }
 
   nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
-  // Figure out if this is for an XHR, if we haven't done so already.
-  if (!mHasCheckedForXMLHttpRequest) {
+  // Figure out if this is for an Async XHR, if we haven't done so already.
+  // We don't want to suspend Sync XHRs, as they'll always suspend event
+  // handling on the document, but we still need to process events for them.
+  if (!mHasCheckedForAsyncXMLHttpRequest) {
     nsContentPolicyType contentType = loadInfo->InternalContentPolicyType();
-    mForXMLHttpRequest =
-        (contentType == nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST);
-    mHasCheckedForXMLHttpRequest = true;
+    mForAsyncXMLHttpRequest =
+        contentType == nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC;
+    mHasCheckedForAsyncXMLHttpRequest = true;
 
-    if (!mForXMLHttpRequest) {
+    if (!mForAsyncXMLHttpRequest) {
       return false;
     }
   }
 
-  // Suspend the queue if the associated document has suppressed event handling,
-  // *and* it is not in the middle of a synchronous operation that might require
-  // XHR events to be processed (such as a synchronous XHR).
+  // Suspend the queue if the associated document has suppressed event handling.
   RefPtr<dom::Document> document;
   loadInfo->GetLoadingDocument(getter_AddRefs(document));
-  if (document && document->EventHandlingSuppressed() &&
-      !document->IsInSyncOperation()) {
+  if (document && document->EventHandlingSuppressed()) {
     document->AddSuspendedChannelEventQueue(this);
     SuspendInternal();
     return true;

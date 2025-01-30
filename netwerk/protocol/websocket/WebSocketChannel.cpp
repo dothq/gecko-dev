@@ -14,6 +14,7 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Base64.h"
+#include "mozilla/Components.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/ScopeExit.h"
@@ -23,7 +24,6 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Utf8.h"
 #include "mozilla/net/WebSocketEventService.h"
-#include "nsAlgorithm.h"
 #include "nsCRT.h"
 #include "nsCharSeparatedTokenizer.h"
 #include "nsComponentManagerUtils.h"
@@ -176,8 +176,8 @@ class FailDelayManager {
 
     mDelaysDisabled = false;
 
-    nsCOMPtr<nsIPrefBranch> prefService =
-        do_GetService(NS_PREFSERVICE_CONTRACTID);
+    nsCOMPtr<nsIPrefBranch> prefService;
+    prefService = mozilla::components::Preferences::Service();
     if (!prefService) {
       return;
     }
@@ -1184,7 +1184,6 @@ WebSocketChannel::WebSocketChannel()
       mInnerWindowID(0),
       mGotUpgradeOK(0),
       mRecvdHttpUpgradeTransport(0),
-      mAllowPMCE(1),
       mPingOutstanding(0),
       mReleaseOnTransmit(0),
       mDataStarted(false),
@@ -1224,8 +1223,7 @@ WebSocketChannel::WebSocketChannel()
   mFramePtr = mBuffer = static_cast<uint8_t*>(moz_xmalloc(mBufferSize));
 
   nsresult rv;
-  mConnectionLogService =
-      do_GetService("@mozilla.org/network/dashboard;1", &rv);
+  mConnectionLogService = mozilla::components::Dashboard::Service(&rv);
   if (NS_FAILED(rv)) LOG(("Failed to initiate dashboard service."));
 
   mService = WebSocketEventService::GetOrCreate();
@@ -2700,14 +2698,6 @@ nsresult WebSocketChannel::HandleExtensions() {
     return rv;
   }
 
-  if (!mAllowPMCE) {
-    LOG(
-        ("WebSocketChannel::HandleExtensions: "
-         "Recvd permessage-deflate which wasn't offered\n"));
-    AbortSession(NS_ERROR_ILLEGAL_VALUE);
-    return NS_ERROR_ILLEGAL_VALUE;
-  }
-
   if (clientMaxWindowBits == -1) {
     clientMaxWindowBits = 15;
   }
@@ -2742,17 +2732,6 @@ nsresult WebSocketChannel::HandleExtensions() {
 void ProcessServerWebSocketExtensions(const nsACString& aExtensions,
                                       nsACString& aNegotiatedExtensions) {
   aNegotiatedExtensions.Truncate();
-
-  nsCOMPtr<nsIPrefBranch> prefService =
-      do_GetService(NS_PREFSERVICE_CONTRACTID);
-  if (prefService) {
-    bool boolpref;
-    nsresult rv = prefService->GetBoolPref(
-        "network.websocket.extensions.permessage-deflate", &boolpref);
-    if (NS_SUCCEEDED(rv) && !boolpref) {
-      return;
-    }
-  }
 
   for (const auto& ext :
        nsCCharSeparatedTokenizer(aExtensions, ',').ToRange()) {
@@ -2847,11 +2826,9 @@ nsresult WebSocketChannel::SetupRequest() {
     MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
-  if (mAllowPMCE) {
-    rv = mHttpChannel->SetRequestHeader("Sec-WebSocket-Extensions"_ns,
-                                        "permessage-deflate"_ns, false);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-  }
+  rv = mHttpChannel->SetRequestHeader("Sec-WebSocket-Extensions"_ns,
+                                      "permessage-deflate"_ns, false);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   uint8_t* secKey;
   nsAutoCString secKeyString;
@@ -2895,7 +2872,8 @@ nsresult WebSocketChannel::DoAdmissionDNS() {
   rv = mURI->GetPort(&mPort);
   NS_ENSURE_SUCCESS(rv, rv);
   if (mPort == -1) mPort = (mEncrypted ? kDefaultWSSPort : kDefaultWSPort);
-  nsCOMPtr<nsIDNSService> dns = do_GetService(NS_DNSSERVICE_CONTRACTID, &rv);
+  nsCOMPtr<nsIDNSService> dns;
+  dns = mozilla::components::DNS::Service(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIEventTarget> main = GetMainThreadSerialEventTarget();
   nsCOMPtr<nsICancelable> cancelable;
@@ -2920,8 +2898,8 @@ nsresult WebSocketChannel::ApplyForAdmission() {
   // CONNECTING state per server IP address (not hostname)
 
   // Check to see if a proxy is being used before making DNS call
-  nsCOMPtr<nsIProtocolProxyService> pps =
-      do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+  nsCOMPtr<nsIProtocolProxyService> pps;
+  pps = mozilla::components::ProtocolProxy::Service();
 
   if (!pps) {
     // go straight to DNS
@@ -3450,49 +3428,43 @@ WebSocketChannel::AsyncOpenNative(nsIURI* aURI, const nsACString& aOrigin,
     }
   }
 
-  mIOThread = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
+  mIOThread = mozilla::components::SocketTransport::Service(&rv);
   if (NS_FAILED(rv)) {
     NS_WARNING("unable to continue without socket transport service");
     return rv;
   }
 
   nsCOMPtr<nsIPrefBranch> prefService;
-  prefService = do_GetService(NS_PREFSERVICE_CONTRACTID);
+  prefService = mozilla::components::Preferences::Service();
 
   if (prefService) {
     int32_t intpref;
-    bool boolpref;
     rv =
         prefService->GetIntPref("network.websocket.max-message-size", &intpref);
     if (NS_SUCCEEDED(rv)) {
-      mMaxMessageSize = clamped(intpref, 1024, INT32_MAX);
+      mMaxMessageSize = std::clamp(intpref, 1024, INT32_MAX);
     }
     rv = prefService->GetIntPref("network.websocket.timeout.close", &intpref);
     if (NS_SUCCEEDED(rv)) {
-      mCloseTimeout = clamped(intpref, 1, 1800) * 1000;
+      mCloseTimeout = std::clamp(intpref, 1, 1800) * 1000;
     }
     rv = prefService->GetIntPref("network.websocket.timeout.open", &intpref);
     if (NS_SUCCEEDED(rv)) {
-      mOpenTimeout = clamped(intpref, 1, 1800) * 1000;
+      mOpenTimeout = std::clamp(intpref, 1, 1800) * 1000;
     }
     rv = prefService->GetIntPref("network.websocket.timeout.ping.request",
                                  &intpref);
     if (NS_SUCCEEDED(rv) && !mClientSetPingInterval) {
-      mPingInterval = clamped(intpref, 0, 86400) * 1000;
+      mPingInterval = std::clamp(intpref, 0, 86400) * 1000;
     }
     rv = prefService->GetIntPref("network.websocket.timeout.ping.response",
                                  &intpref);
     if (NS_SUCCEEDED(rv) && !mClientSetPingTimeout) {
-      mPingResponseTimeout = clamped(intpref, 1, 3600) * 1000;
-    }
-    rv = prefService->GetBoolPref(
-        "network.websocket.extensions.permessage-deflate", &boolpref);
-    if (NS_SUCCEEDED(rv)) {
-      mAllowPMCE = boolpref ? 1 : 0;
+      mPingResponseTimeout = std::clamp(intpref, 1, 3600) * 1000;
     }
     rv = prefService->GetIntPref("network.websocket.max-connections", &intpref);
     if (NS_SUCCEEDED(rv)) {
-      mMaxConcurrentConnections = clamped(intpref, 1, 0xffff);
+      mMaxConcurrentConnections = std::clamp(intpref, 1, 0xffff);
     }
   }
 
@@ -3530,8 +3502,7 @@ WebSocketChannel::AsyncOpenNative(nsIURI* aURI, const nsACString& aOrigin,
 
   mURI->GetHostPort(mHost);
 
-  mRandomGenerator =
-      do_GetService("@mozilla.org/security/random-generator;1", &rv);
+  mRandomGenerator = mozilla::components::RandomGenerator::Service(&rv);
   if (NS_FAILED(rv)) {
     NS_WARNING("unable to continue without random number generator");
     return rv;
@@ -3546,7 +3517,7 @@ WebSocketChannel::AsyncOpenNative(nsIURI* aURI, const nsACString& aOrigin,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIIOService> ioService;
-  ioService = do_GetService(NS_IOSERVICE_CONTRACTID, &rv);
+  ioService = mozilla::components::IO::Service(&rv);
   if (NS_FAILED(rv)) {
     NS_WARNING("unable to continue without io service");
     return rv;
@@ -3926,8 +3897,8 @@ WebSocketChannel::OnStartRequest(nsIRequest* aRequest) {
     // NS_ERROR_WEBSOCKET_CONNECTION_REFUSED.
     if (NS_SUCCEEDED(mHttpChannel->GetStatus(&httpStatus))) {
       uint32_t errorClass;
-      nsCOMPtr<nsINSSErrorsService> errSvc =
-          do_GetService("@mozilla.org/nss_errors_service;1");
+      nsCOMPtr<nsINSSErrorsService> errSvc;
+      errSvc = mozilla::components::NSSErrors::Service();
       // If GetErrorClass succeeds httpStatus is TLS related failure.
       if (errSvc &&
           NS_SUCCEEDED(errSvc->GetErrorClass(httpStatus, &errorClass))) {

@@ -53,7 +53,7 @@ class BitArray {
   WordT map[numSlots];
 
  public:
-  constexpr BitArray() : map(){};
+  constexpr BitArray() : map() {};
 
   void clear(bool value) {
     memset(map, value ? 0xFF : 0, sizeof(map));
@@ -97,6 +97,12 @@ class BitArray {
   WordT getWord(size_t elementIndex) const {
     MOZ_ASSERT(elementIndex < nbits);
     return map[elementIndex];
+  }
+
+  // Update a word at a time.
+  void setWord(size_t elementIndex, WordT value) {
+    MOZ_ASSERT(elementIndex < nbits);
+    map[elementIndex] = value;
   }
 
   static void getIndexAndMask(size_t offset, size_t* indexp, WordT* maskp) {

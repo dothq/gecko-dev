@@ -54,9 +54,11 @@ namespace js {
 class ArgumentsObject;
 class GlobalScope;
 class GlobalLexicalEnvironmentObject;
+class MapObject;
 class PlainObject;
 class PropertyIteratorObject;
 class RegExpStatics;
+class SetObject;
 
 namespace gc {
 class FinalizationRegistryGlobalData;
@@ -109,15 +111,6 @@ class GlobalObjectData {
 
   ~GlobalObjectData();
 
-  // The global environment record's [[VarNames]] list that contains all
-  // names declared using FunctionDeclaration, GeneratorDeclaration, and
-  // VariableDeclaration declarations in global code in this global's realm.
-  // Names are only removed from this list by a |delete IdentifierReference|
-  // that successfully removes that global property.
-  using VarNamesSet =
-      GCHashSet<HeapPtr<JSAtom*>, DefaultHasher<JSAtom*>, CellAllocPolicy>;
-  VarNamesSet varNames;
-
   // The original values for built-in constructors (with their prototype
   // objects) based on JSProtoKey.
   //
@@ -126,8 +119,8 @@ class GlobalObjectData {
   // referring to the original Array constructor. The actual (writable and even
   // deletable) Object, Array, &c. properties are not stored here.
   struct ConstructorWithProto {
-    HeapPtr<JSObject*> constructor;
-    HeapPtr<JSObject*> prototype;
+    GCPtr<JSObject*> constructor;
+    GCPtr<JSObject*> prototype;
   };
   using CtorArray = mozilla::EnumeratedArray<JSProtoKey, ConstructorWithProto,
                                              size_t(JSProto_LIMIT)>;
@@ -136,7 +129,6 @@ class GlobalObjectData {
   // Built-in prototypes for this global. Note that this is different from the
   // set of built-in constructors/prototypes based on JSProtoKey.
   enum class ProtoKind {
-    IteratorProto,
     ArrayIteratorProto,
     StringIteratorProto,
     RegExpStringIteratorProto,
@@ -154,72 +146,76 @@ class GlobalObjectData {
 
     Limit
   };
-  using ProtoArray = mozilla::EnumeratedArray<ProtoKind, HeapPtr<JSObject*>,
+  using ProtoArray = mozilla::EnumeratedArray<ProtoKind, GCPtr<JSObject*>,
                                               size_t(ProtoKind::Limit)>;
   ProtoArray builtinProtos;
 
-  HeapPtr<GlobalScope*> emptyGlobalScope;
+  GCPtr<GlobalScope*> emptyGlobalScope;
 
   // The lexical environment for global let/const/class bindings.
-  HeapPtr<GlobalLexicalEnvironmentObject*> lexicalEnvironment;
+  GCPtr<GlobalLexicalEnvironmentObject*> lexicalEnvironment;
 
   // The WindowProxy associated with this global.
-  HeapPtr<JSObject*> windowProxy;
+  GCPtr<JSObject*> windowProxy;
 
   // Functions and other top-level values for self-hosted code. The "computed"
   // holder is used as the target of `SetIntrinsic` calls, but the same property
   // may also be cached on the normal intrinsics holder for `GetIntrinsic`.
-  HeapPtr<NativeObject*> intrinsicsHolder;
-  HeapPtr<NativeObject*> computedIntrinsicsHolder;
+  GCPtr<NativeObject*> intrinsicsHolder;
+  GCPtr<NativeObject*> computedIntrinsicsHolder;
 
   // Cache used to optimize certain for-of operations.
-  HeapPtr<NativeObject*> forOfPICChain;
+  GCPtr<NativeObject*> forOfPICChain;
 
   // List of source URLs for this realm. This is used by the debugger.
-  HeapPtr<ArrayObject*> sourceURLsHolder;
+  GCPtr<ArrayObject*> sourceURLsHolder;
 
   // Realm-specific object that can be used as key in WeakMaps.
-  HeapPtr<PlainObject*> realmKeyObject;
+  GCPtr<PlainObject*> realmKeyObject;
 
   // The unique %ThrowTypeError% function for this global.
-  HeapPtr<JSFunction*> throwTypeError;
+  GCPtr<JSFunction*> throwTypeError;
 
   // The unique %eval% function (for indirect eval) for this global.
-  HeapPtr<JSFunction*> eval;
+  GCPtr<JSFunction*> eval;
 
   // Empty iterator object used for for-in with null/undefined.
-  HeapPtr<PropertyIteratorObject*> emptyIterator;
+  GCPtr<PropertyIteratorObject*> emptyIterator;
 
   // Cached shape for new arrays with Array.prototype as prototype.
-  HeapPtr<SharedShape*> arrayShapeWithDefaultProto;
+  GCPtr<SharedShape*> arrayShapeWithDefaultProto;
 
   // Shape for PlainObject with %Object.prototype% as proto, for each object
   // AllocKind.
   using PlainObjectShapeArray =
-      mozilla::EnumeratedArray<PlainObjectSlotsKind, HeapPtr<SharedShape*>,
+      mozilla::EnumeratedArray<PlainObjectSlotsKind, GCPtr<SharedShape*>,
                                size_t(PlainObjectSlotsKind::Limit)>;
   PlainObjectShapeArray plainObjectShapesWithDefaultProto;
 
   // Shape for JSFunction with %Function.prototype% as proto, for both
   // non-extended and extended functions.
-  HeapPtr<SharedShape*> functionShapeWithDefaultProto;
-  HeapPtr<SharedShape*> extendedFunctionShapeWithDefaultProto;
+  GCPtr<SharedShape*> functionShapeWithDefaultProto;
+  GCPtr<SharedShape*> extendedFunctionShapeWithDefaultProto;
 
   // Shape for BoundFunctionObject with %Function.prototype% as proto.
-  HeapPtr<SharedShape*> boundFunctionShapeWithDefaultProto;
+  GCPtr<SharedShape*> boundFunctionShapeWithDefaultProto;
 
   // Global state for regular expressions.
   RegExpRealm regExpRealm;
 
-  HeapPtr<ArgumentsObject*> mappedArgumentsTemplate;
-  HeapPtr<ArgumentsObject*> unmappedArgumentsTemplate;
+  GCPtr<ArgumentsObject*> mappedArgumentsTemplate;
+  GCPtr<ArgumentsObject*> unmappedArgumentsTemplate;
 
-  HeapPtr<PlainObject*> iterResultTemplate;
-  HeapPtr<PlainObject*> iterResultWithoutPrototypeTemplate;
+  // Template objects to speed up allocation of Map/Set objects.
+  GCPtr<MapObject*> mapObjectTemplate;
+  GCPtr<SetObject*> setObjectTemplate;
+
+  GCPtr<PlainObject*> iterResultTemplate;
+  GCPtr<PlainObject*> iterResultWithoutPrototypeTemplate;
 
   // Lazily initialized script source object to use for scripts cloned from the
   // self-hosting stencil.
-  HeapPtr<ScriptSourceObject*> selfHostingScriptSource;
+  GCPtr<ScriptSourceObject*> selfHostingScriptSource;
 
   UniquePtr<gc::FinalizationRegistryGlobalData> finalizationRegistryData;
 
@@ -283,8 +279,17 @@ class GlobalObject : public NativeObject {
 
   void initBuiltinProto(ProtoKind kind, JSObject* proto) {
     MOZ_ASSERT(proto);
+    // Catch double-initialization; however if this is too much of a burden due
+    // to OOM handling it could be removed.
+    MOZ_ASSERT(!hasBuiltinProto(kind));
     data().builtinProtos[kind].init(proto);
   }
+
+  void setBuiltinProto(ProtoKind kind, JSObject* proto) {
+    MOZ_ASSERT(proto);
+    data().builtinProtos[kind].set(proto);
+  }
+
   bool hasBuiltinProto(ProtoKind kind) const {
     return bool(data().builtinProtos[kind]);
   }
@@ -511,6 +516,10 @@ class GlobalObject : public NativeObject {
     MOZ_ASSERT(functionObjectClassesInitialized());
     return getPrototype(JSProto_Function);
   }
+  Handle<JSObject*> getFunctionPrototypeHandle() {
+    MOZ_ASSERT(functionObjectClassesInitialized());
+    return getPrototypeHandle(JSProto_Function);
+  }
   JSFunction& getEvalFunction() {
     MOZ_ASSERT(data().eval);
     return *data().eval;
@@ -605,6 +614,14 @@ class GlobalObject : public NativeObject {
     return &global->getPrototype(JSProto_RegExp);
   }
 
+  static JSObject* getOrCreateRegExpConstructor(JSContext* cx,
+                                                Handle<GlobalObject*> global) {
+    if (!ensureConstructor(cx, global, JSProto_RegExp)) {
+      return nullptr;
+    }
+    return &global->getConstructor(JSProto_RegExp);
+  }
+
   JSObject* maybeGetRegExpPrototype() {
     if (classIsInitialized(JSProto_RegExp)) {
       return &getPrototype(JSProto_RegExp);
@@ -644,6 +661,14 @@ class GlobalObject : public NativeObject {
     return &global->getPrototype(JSProto_SharedArrayBuffer);
   }
 
+  static JSObject* getOrCreateSharedArrayBufferConstructor(
+      JSContext* cx, Handle<GlobalObject*> global) {
+    if (!ensureConstructor(cx, global, JSProto_SharedArrayBuffer)) {
+      return nullptr;
+    }
+    return &global->getConstructor(JSProto_SharedArrayBuffer);
+  }
+
   static JSObject* getOrCreateCustomErrorPrototype(JSContext* cx,
                                                    Handle<GlobalObject*> global,
                                                    JSExnType exnType) {
@@ -665,22 +690,6 @@ class GlobalObject : public NativeObject {
   static JSObject* getOrCreateErrorPrototype(JSContext* cx,
                                              Handle<GlobalObject*> global) {
     return getOrCreateCustomErrorPrototype(cx, global, JSEXN_ERR);
-  }
-
-  static NativeObject* getOrCreateSetPrototype(JSContext* cx,
-                                               Handle<GlobalObject*> global) {
-    if (!ensureConstructor(cx, global, JSProto_Set)) {
-      return nullptr;
-    }
-    return &global->getPrototype(JSProto_Set).as<NativeObject>();
-  }
-
-  static NativeObject* getOrCreateWeakSetPrototype(
-      JSContext* cx, Handle<GlobalObject*> global) {
-    if (!ensureConstructor(cx, global, JSProto_WeakSet)) {
-      return nullptr;
-    }
-    return &global->getPrototype(JSProto_WeakSet).as<NativeObject>();
   }
 
   static JSFunction* getOrCreateTypedArrayConstructor(
@@ -738,18 +747,18 @@ class GlobalObject : public NativeObject {
 
  public:
   NativeObject* maybeGetIteratorPrototype() {
-    if (JSObject* obj = maybeBuiltinProto(ProtoKind::IteratorProto)) {
-      return &obj->as<NativeObject>();
+    if (!hasPrototype(JSProto_Iterator)) {
+      return nullptr;
     }
-    return nullptr;
+    return &(getPrototype(JSProto_Iterator).as<NativeObject>());
   }
 
   static JSObject* getOrCreateIteratorPrototype(JSContext* cx,
                                                 Handle<GlobalObject*> global) {
-    if (JSObject* proto = global->maybeBuiltinProto(ProtoKind::IteratorProto)) {
-      return proto;
+    if (!ensureConstructor(cx, global, JSProto_Iterator)) {
+      return nullptr;
     }
-    return createIteratorPrototype(cx, global);
+    return &global->getPrototype(JSProto_Iterator);
   }
 
   static NativeObject* getOrCreateArrayIteratorPrototype(
@@ -769,7 +778,7 @@ class GlobalObject : public NativeObject {
       JSContext* cx, Handle<GlobalObject*> global);
 
   void setGeneratorObjectPrototype(JSObject* obj) {
-    initBuiltinProto(ProtoKind::GeneratorObjectProto, obj);
+    setBuiltinProto(ProtoKind::GeneratorObjectProto, obj);
   }
 
   static JSObject* getOrCreateGeneratorObjectPrototype(
@@ -979,17 +988,12 @@ class GlobalObject : public NativeObject {
   // global.
   bool valueIsEval(const Value& val);
 
-  void removeFromVarNames(JSAtom* name) { data().varNames.remove(name); }
-
-  // Whether the given name is in [[VarNames]].
-  bool isInVarNames(JSAtom* name) { return data().varNames.has(name); }
-
-  // Add a name to [[VarNames]].  Reports OOM on failure.
-  [[nodiscard]] bool addToVarNames(JSContext* cx, JS::Handle<JSAtom*> name);
-
   static ArgumentsObject* getOrCreateArgumentsTemplateObject(JSContext* cx,
                                                              bool mapped);
   ArgumentsObject* maybeArgumentsTemplateObject(bool mapped) const;
+
+  static MapObject* getOrCreateMapTemplateObject(JSContext* cx);
+  static SetObject* getOrCreateSetTemplateObject(JSContext* cx);
 
   static const size_t IterResultObjectValueSlot = 0;
   static const size_t IterResultObjectDoneSlot = 1;
@@ -1007,7 +1011,6 @@ class GlobalObject : public NativeObject {
       JSContext* cx, Handle<GlobalObject*> global);
 
   // Implemented in vm/Iteration.cpp.
-  static bool initIteratorProto(JSContext* cx, Handle<GlobalObject*> global);
   template <ProtoKind Kind, const JSClass* ProtoClass,
             const JSFunctionSpec* Methods, const bool needsFuseProperty = false>
   static bool initObjectIteratorProto(JSContext* cx,
@@ -1056,10 +1059,7 @@ class GlobalObject : public NativeObject {
   void setSourceURLsHolder(ArrayObject* holder) {
     data().sourceURLsHolder = holder;
   }
-  void clearSourceURLSHolder() {
-    // This is called at the start of shrinking GCs, so avoids barriers.
-    data().sourceURLsHolder.unbarrieredSet(nullptr);
-  }
+  void clearSourceURLSHolder() { setSourceURLsHolder(nullptr); }
 
   SharedShape* maybeArrayShapeWithDefaultProto() const {
     return data().arrayShapeWithDefaultProto;

@@ -262,6 +262,11 @@ add_task(async function testAuthRequestWithWrongCredentialsListener() {
 });
 
 add_task(async function testAuthRequestWithCredentialsListener() {
+  // Force use_redirect_for_retries on all channels for this specific test.
+  await SpecialPowers.pushPrefEnv({
+    set: [["network.auth.use_redirect_for_retries", true]],
+  });
+
   cleanupAuthManager();
   const tab = await addTab(TEST_URL);
 

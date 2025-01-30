@@ -2,22 +2,27 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import asyncio
 import json
 import math
 import os
 import pprint
 import re
 import sys
+from collections import namedtuple
+from urllib.parse import urljoin
 
+import aiohttp
+import hglib
+from hglib.util import cmdbuilder
 from looseversion import LooseVersion
 from mozilla_version.gecko import GeckoVersion
 from mozilla_version.version import VersionType
-from six.moves.urllib.parse import urljoin
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(sys.path[0])))
 
 from mozharness.base.log import DEBUG, FATAL, INFO, WARNING
-from mozharness.base.script import BaseScript
+from mozharness.base.script import BaseScript, PostScriptRun, PreScriptRun
 
 
 # ensure all versions are 3 part (i.e. 99.1.0)
@@ -40,23 +45,26 @@ class CompareVersion(LooseVersion):
         LooseVersion(versionMap)
 
 
-def is_triangualar(x):
+BuildInfo = namedtuple("BuildInfo", ["product", "version", "buildID"])
+
+
+def is_triangular(x):
     """Check if a number is triangular (0, 1, 3, 6, 10, 15, ...)
     see: https://en.wikipedia.org/wiki/Triangular_number#Triangular_roots_and_tests_for_triangular_numbers # noqa
 
-    >>> is_triangualar(0)
+    >>> is_triangular(0)
     True
-    >>> is_triangualar(1)
+    >>> is_triangular(1)
     True
-    >>> is_triangualar(2)
+    >>> is_triangular(2)
     False
-    >>> is_triangualar(3)
+    >>> is_triangular(3)
     True
-    >>> is_triangualar(4)
+    >>> is_triangular(4)
     False
-    >>> all(is_triangualar(x) for x in [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78, 91, 105])
+    >>> all(is_triangular(x) for x in [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78, 91, 105])
     True
-    >>> all(not is_triangualar(x) for x in [4, 5, 8, 9, 11, 17, 25, 29, 39, 44, 59, 61, 72, 98, 112])
+    >>> all(not is_triangular(x) for x in [4, 5, 8, 9, 11, 17, 25, 29, 39, 44, 59, 61, 72, 98, 112])
     True
     """
     # pylint --py3k W1619
@@ -261,6 +269,13 @@ class UpdateVerifyConfigCreator(BaseScript):
             },
         ],
         [
+            ["--last-linux-bz2-version"],
+            {
+                "dest": "last_linux_bz2_version",
+                "help": "Last linux build version with bz2 compression.",
+            },
+        ],
+        [
             ["--hg-server"],
             {
                 "dest": "hg_server",
@@ -275,6 +290,13 @@ class UpdateVerifyConfigCreator(BaseScript):
                 "default": ["de", "en-US", "ru"],
                 "action": "append",
                 "help": "A list of locales to generate full update verify checks for",
+            },
+        ],
+        [
+            ["--local-repo"],
+            {
+                "dest": "local_repo",
+                "help": "Path to local clone of the repository",
             },
         ],
     ]
@@ -295,6 +317,26 @@ class UpdateVerifyConfigCreator(BaseScript):
                 "write-config",
             ],
         )
+        self.hgclient = None
+
+    @PreScriptRun
+    def _setup_hgclient(self):
+        if not self.config.get("local_repo"):
+            return
+        # Setup hgclient
+        self.hgclient = hglib.open(self.config["local_repo"])
+        try:
+            self.hg_tags = set(t[0].decode("utf-8") for t in self.hgclient.tags())
+            self.log(f"Loaded tags from local hg repo. {len(self.hg_tags)} tags found.")
+        except Exception as e:
+            self.log(f"Error loading tags from local hg repo: {e}")
+            self.hg_tags = set()
+
+    @PostScriptRun
+    def _close_hg_client(self):
+        if hasattr(self, "hgclient"):
+            self.hgclient.close()
+            self.log("Closed HG client.")
 
     def _pre_config_lock(self, rw_config):
         super(UpdateVerifyConfigCreator, self)._pre_config_lock(rw_config)
@@ -320,16 +362,81 @@ class UpdateVerifyConfigCreator(BaseScript):
         elif version.version_type == VersionType.ESR:
             branch = "releases/{}-esr{}".format(branch_prefix, version.major_number)
         elif version.version_type == VersionType.RELEASE:
-            if branch_prefix == "comm":
-                # Thunderbird does not have ESR releases, regular releases
-                # go in an ESR branch
-                branch = "releases/{}-esr{}".format(branch_prefix, version.major_number)
-            else:
-                branch = "releases/{}-release".format(branch_prefix)
+            branch = "releases/{}-release".format(branch_prefix)
         if not branch:
             raise Exception("Cannot determine branch, cannot continue!")
 
         return branch
+
+    async def _download_build_info(
+        self, semaphore, session, product, version, info_file_url
+    ):
+        """Async download and parse build info file for given url
+
+        Args:
+            semaphore: Semaphore object to control max async parallel channels
+            session: Http session handler
+            product: Product string
+            version: Version string
+            info_file_url: URL to desired buildid file
+
+        Returns:
+            BuildInfo Tuple (product, version, buildID)
+        """
+
+        async def _get():
+            async with session.get(info_file_url) as response:
+                if response.status < 400:
+                    return response.status, await response.text()
+                return response.status, response.reason
+
+        RETRIES = 3
+        # Retry delay increase per attempt (5, 10, 15... seconds)
+        RETRY_DELAY_STEP = 5
+        async with semaphore:
+            attempt = 1
+            while attempt <= RETRIES:
+                self.log(
+                    f"Retrieving buildid from info file: {info_file_url} - attempt: #{attempt}",
+                    level=INFO,
+                )
+                status, text = await _get()
+                if status < 400:
+                    return BuildInfo(product, version, text.split("=")[1].strip())
+                self.log(
+                    f"Error retrieving buildid {info_file_url} - Status: {status} - Reason: {text}"
+                )
+                if status == 404:
+                    raise Exception(f"File not found on remote server: {info_file_url}")
+                attempt += 1
+                await asyncio.sleep(RETRY_DELAY_STEP * attempt)
+            raise Exception(f"Max number of retries reached for {info_file_url}")
+
+    def _async_download_build_ids(self, filelist):
+        """Download all build_info asynchronously, then process once everything is downloaded
+
+        Args:
+            filelist: List of tuples (product, version, info_file_url)
+        Returns:
+            List of BuildInfo tuples (product, version, buildID)
+        """
+        CONCURRENCY = 15
+        # TODO: We need to rewrite mozharness.BaseScript to be async before we can properly handle async coroutines.
+        loop = asyncio.get_event_loop()
+
+        async def _run_semaphore():
+            async with aiohttp.ClientSession() as session:
+                self.log(
+                    f"Starting async download. Semaphore with {CONCURRENCY} concurrencies."
+                )
+                semaphore = asyncio.Semaphore(CONCURRENCY)
+                tasks = [
+                    self._download_build_info(semaphore, session, *info)
+                    for info in filelist
+                ]
+                return await asyncio.gather(*tasks)
+
+        return loop.run_until_complete(_run_semaphore())
 
     def _get_update_paths(self):
         from mozrelease.l10n import getPlatformLocales
@@ -347,13 +454,14 @@ class UpdateVerifyConfigCreator(BaseScript):
             "WARNING",
         )
         releases = json.load(ret)["releases"]
+        info_file_urls = []
+        # Generate list of info_file_urls to be downloaded
         for release_name, release_info in reversed(
             sorted(releases.items(), key=lambda x: MozillaVersion(x[1]["version"]))
         ):
             # we need to use releases_name instead of release_info since esr
             # string is included in the name. later we rely on this.
             product, version = release_name.split("-", 1)
-            tag = "{}_{}_RELEASE".format(product.upper(), version.replace(".", "_"))
 
             # Exclude any releases that don't match one of our include version
             # regexes. This is generally to avoid including versions from other
@@ -399,12 +507,9 @@ class UpdateVerifyConfigCreator(BaseScript):
                 )
                 continue
 
-            if version in self.update_paths:
-                raise Exception("Found duplicate release for version: %s", version)
-
             # This is a crappy place to get buildids from, but we don't have a better one.
             # This will start to fail if old info files are deleted.
-            info_file_url = "{}{}/{}_info.txt".format(
+            info_file_source = "{}{}/{}_info.txt".format(
                 self.config["previous_archive_prefix"],
                 getCandidatesDir(
                     self.config["stage_product"],
@@ -413,51 +518,97 @@ class UpdateVerifyConfigCreator(BaseScript):
                 ),
                 ftp2infoFile(self.config["platform"]),
             )
-            self.log(
-                "Retrieving buildid from info file: %s" % info_file_url, level=DEBUG
-            )
-            ret = self._retry_download(info_file_url, "WARNING")
-            buildID = ret.read().split(b"=")[1].strip().decode("utf-8")
+            info_file_urls.append((product, version, info_file_source))
 
-            branch = self._get_branch_url(self.config["branch_prefix"], version)
+        build_info_list = self._async_download_build_ids(info_file_urls)
 
-            shipped_locales_url = urljoin(
-                self.config["hg_server"],
-                "{}/raw-file/{}/{}/locales/shipped-locales".format(
-                    branch,
-                    tag,
-                    self.config["app_name"],
-                ),
-            )
-            ret = self._retry_download(shipped_locales_url, "WARNING")
-            shipped_locales = ret.read().strip().decode("utf-8")
+        for build in build_info_list:
+            if build.version in self.update_paths:
+                raise Exception(
+                    "Found duplicate release for version: %s", build.version
+                )
 
-            app_version_url = urljoin(
-                self.config["hg_server"],
-                "{}/raw-file/{}/{}/config/version.txt".format(
-                    branch,
-                    tag,
-                    self.config["app_name"],
-                ),
+            shipped_locales, app_version = self._get_files_from_repo_tag(
+                build.product,
+                build.version,
+                f"{self.config['app_name']}/locales/shipped-locales",
+                f"{self.config['app_name']}/config/version.txt",
             )
-            app_version = (
-                self._retry_download(app_version_url, "WARNING")
-                .read()
-                .strip()
-                .decode("utf-8")
-            )
-
-            self.log("Adding {} to update paths".format(version), level=INFO)
-            self.update_paths[version] = {
+            self.log("Adding {} to update paths".format(build.version), level=INFO)
+            self.update_paths[build.version] = {
                 "appVersion": app_version,
                 "locales": getPlatformLocales(shipped_locales, self.config["platform"]),
-                "buildID": buildID,
+                "buildID": build.buildID,
             }
             for pattern, mar_channel_ids in self.config[
                 "mar_channel_id_overrides"
             ].items():
-                if re.match(pattern, version):
-                    self.update_paths[version]["marChannelIds"] = mar_channel_ids
+                if re.match(pattern, build.version):
+                    self.update_paths[build.version]["marChannelIds"] = mar_channel_ids
+
+    def _get_file_from_repo(self, rev, branch, path):
+        if self.config.get("local_repo"):
+            try:
+                return self._get_files_from_local_repo(rev, path)[0]
+            except Exception:
+                self.log(
+                    "Unable to get file from local repo, trying from remote instead."
+                )
+        return self._get_files_from_remote_repo(rev, branch, path)[0]
+
+    def _get_files_from_repo_tag(self, product, version, *paths):
+        tag = "{}_{}_RELEASE".format(product.upper(), version.replace(".", "_"))
+        if self.config.get("local_repo") and tag in self.hg_tags:
+            return self._get_files_from_local_repo(tag, *paths)
+        branch = self._get_branch_url(self.config["branch_prefix"], version)
+        return self._get_files_from_remote_repo(tag, branch, *paths)
+
+    def _get_files_from_local_repo(self, rev, *paths):
+        """Retrieve multiple files from the local repo at a given revision"""
+        # Given how slow hg is to retrieve files at specific revisions,
+        #   the only performance improvement we can get is to cat multiple
+        #   files and use a \\0 block separator. It's ugly, but it works.
+        args = cmdbuilder(
+            b"cat",
+            b"--cwd",
+            bytes(self.config["local_repo"], "utf-8"),
+            *[bytes(p, "utf-8") for p in paths],
+            r=bytes(rev, "utf-8"),
+            T=b"{path}\\0{data}\\0",
+        )
+        try:
+            raw = self.hgclient.rawcommand(args).strip().decode("utf-8")
+        except Exception as e:
+            self.log("Error retrieving file from local repository.")
+            raise e
+
+        # The separator is added after every file data - so we need to remove the last one
+        # Note that \\0 becomes \x00 (null) on the output side
+        chunks = raw.split("\x00")[:-1]
+        # The first line is the file path, so we map the path to contents
+        path_contents = {}
+        while chunks:
+            filename = chunks.pop(0)
+            data = chunks.pop(0).strip()
+            path_contents[filename] = data
+
+        # Result should be the same order as requested
+        result = []
+        for path in paths:
+            if path not in path_contents:
+                raise Exception(
+                    f"_get_files_from_local_repo: Could not find {path} in revision {rev}"
+                )
+            result.append(path_contents[path])
+        return result
+
+    def _get_files_from_remote_repo(self, rev, branch, *paths):
+        files = []
+        for path in paths:
+            url = urljoin(self.config["hg_server"], f"{branch}/raw-file/{rev}/{path}")
+            ret = self._retry_download(url, "WARNING")
+            files.append(ret.read().strip().decode("utf-8"))
+        return files
 
     def gather_info(self):
         from mozilla_version.gecko import GeckoVersion
@@ -502,6 +653,7 @@ class UpdateVerifyConfigCreator(BaseScript):
             self.config["to_version"],
             self.config["platform"],
             locale="%locale%",
+            last_linux_bz2_version=self.config.get("last_linux_bz2_version"),
         )
         to_path = "{}/{}".format(candidates_dir, to_)
 
@@ -520,19 +672,10 @@ class UpdateVerifyConfigCreator(BaseScript):
             override_certs=self.config.get("override_certs"),
         )
 
-        to_shipped_locales_url = urljoin(
-            self.config["hg_server"],
-            "{}/raw-file/{}/{}/locales/shipped-locales".format(
-                self.config["repo_path"],
-                self.config["to_revision"],
-                self.config["app_name"],
-            ),
-        )
-        to_shipped_locales = (
-            self._retry_download(to_shipped_locales_url, "WARNING")
-            .read()
-            .strip()
-            .decode("utf-8")
+        to_shipped_locales = self._get_file_from_repo(
+            self.config["to_revision"],
+            self.config["repo_path"],
+            "{}/locales/shipped-locales".format(self.config["app_name"]),
         )
         to_locales = set(
             getPlatformLocales(to_shipped_locales, self.config["platform"])
@@ -602,7 +745,7 @@ class UpdateVerifyConfigCreator(BaseScript):
                     updater_package=updater_package,
                 )
             else:
-                if this_full_check_locales and is_triangualar(completes_only_index):
+                if this_full_check_locales and is_triangular(completes_only_index):
                     self.info("Generating full check configs for %s" % fromVersion)
                     self.update_verify_config.addRelease(
                         release=appVersion,
@@ -618,7 +761,7 @@ class UpdateVerifyConfigCreator(BaseScript):
                 # Quick test for other locales, no download
                 if len(quick_check_locales) > 0:
                     self.info("Generating quick check configs for %s" % fromVersion)
-                    if not is_triangualar(completes_only_index):
+                    if not is_triangular(completes_only_index):
                         # Assuming we skipped full check locales, using all locales
                         _locales = locales
                     else:

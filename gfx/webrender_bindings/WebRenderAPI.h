@@ -103,11 +103,16 @@ struct WrHitResult {
 
 class TransactionBuilder final {
  public:
-  explicit TransactionBuilder(WebRenderAPI* aApi,
-                              bool aUseSceneBuilderThread = true);
+  explicit TransactionBuilder(
+      WebRenderAPI* aApi, bool aUseSceneBuilderThread = true,
+      layers::RemoteTextureTxnScheduler* aRemoteTextureTxnScheduler = nullptr,
+      layers::RemoteTextureTxnId aRemoteTextureTxnId = 0);
 
-  TransactionBuilder(WebRenderAPI* aApi, Transaction* aTxn,
-                     bool aUseSceneBuilderThread, bool aOwnsData);
+  TransactionBuilder(
+      WebRenderAPI* aApi, Transaction* aTxn, bool aUseSceneBuilderThread,
+      bool aOwnsData,
+      layers::RemoteTextureTxnScheduler* aRemoteTextureTxnScheduler,
+      layers::RemoteTextureTxnId aRemoteTextureTxnId);
 
   ~TransactionBuilder();
 
@@ -152,7 +157,7 @@ class TransactionBuilder final {
   void AddExternalImage(ImageKey key, const ImageDescriptor& aDescriptor,
                         ExternalImageId aExtID,
                         wr::ExternalImageType aImageType,
-                        uint8_t aChannelIndex = 0);
+                        uint8_t aChannelIndex = 0, bool aNormalizedUvs = false);
 
   void UpdateImageBuffer(wr::ImageKey aKey, const ImageDescriptor& aDescriptor,
                          wr::Vec<uint8_t>& aBytes);
@@ -166,14 +171,13 @@ class TransactionBuilder final {
   void UpdateExternalImage(ImageKey aKey, const ImageDescriptor& aDescriptor,
                            ExternalImageId aExtID,
                            wr::ExternalImageType aImageType,
-                           uint8_t aChannelIndex = 0);
+                           uint8_t aChannelIndex = 0,
+                           bool aNormalizedUvs = false);
 
-  void UpdateExternalImageWithDirtyRect(ImageKey aKey,
-                                        const ImageDescriptor& aDescriptor,
-                                        ExternalImageId aExtID,
-                                        wr::ExternalImageType aImageType,
-                                        const wr::DeviceIntRect& aDirtyRect,
-                                        uint8_t aChannelIndex = 0);
+  void UpdateExternalImageWithDirtyRect(
+      ImageKey aKey, const ImageDescriptor& aDescriptor, ExternalImageId aExtID,
+      wr::ExternalImageType aImageType, const wr::DeviceIntRect& aDirtyRect,
+      uint8_t aChannelIndex = 0, bool aNormalizedUvs = false);
 
   void SetBlobImageVisibleArea(BlobImageKey aKey,
                                const wr::DeviceIntRect& aArea);
@@ -181,6 +185,10 @@ class TransactionBuilder final {
   void DeleteImage(wr::ImageKey aKey);
 
   void DeleteBlobImage(wr::BlobImageKey aKey);
+
+  void AddSnapshotImage(wr::SnapshotImageKey aKey);
+
+  void DeleteSnapshotImage(wr::SnapshotImageKey aKey);
 
   void AddRawFont(wr::FontKey aKey, wr::Vec<uint8_t>& aBytes, uint32_t aIndex);
 
@@ -207,7 +215,10 @@ class TransactionBuilder final {
 
   bool UseSceneBuilderThread() const { return mUseSceneBuilderThread; }
   layers::WebRenderBackend GetBackendType() { return mApiBackend; }
-  Transaction* Raw() { return mTxn; }
+  Transaction* Raw() const { return mTxn; }
+
+  const RefPtr<layers::RemoteTextureTxnScheduler> mRemoteTextureTxnScheduler;
+  const layers::RemoteTextureTxnId mRemoteTextureTxnId;
 
  protected:
   Transaction* mTxn;
@@ -273,6 +284,7 @@ class WebRenderAPI final {
   void SetBatchingLookback(uint32_t aCount);
   void SetBool(wr::BoolParameter, bool value);
   void SetInt(wr::IntParameter, int32_t value);
+  void SetFloat(wr::FloatParameter, float value);
 
   void SetClearColor(const gfx::DeviceColor& aColor);
   void SetProfilerUI(const nsACString& aUIString);
@@ -391,10 +403,10 @@ class WebRenderAPI final {
 
    public:
     static WrTransactionEvent Transaction(WebRenderAPI* aApi,
-                                          wr::Transaction* aTxn,
-                                          bool aUseSceneBuilderThread) {
+                                          TransactionBuilder& aTxn) {
       auto transaction = MakeUnique<TransactionBuilder>(
-          aApi, aTxn, aUseSceneBuilderThread, /* aOwnsData */ true);
+          aApi, aTxn.Take(), aTxn.UseSceneBuilderThread(), /* aOwnsData */ true,
+          aTxn.mRemoteTextureTxnScheduler, aTxn.mRemoteTextureTxnId);
       return WrTransactionEvent(Tag::Transaction, std::move(transaction));
     }
 
@@ -407,10 +419,10 @@ class WebRenderAPI final {
     static WrTransactionEvent PendingAsyncImagePipelineOps(
         UniquePtr<layers::AsyncImagePipelineOps>&&
             aPendingAsyncImagePipelineOps,
-        WebRenderAPI* aApi, wr::Transaction* aTxn,
-        bool aUseSceneBuilderThread) {
+        WebRenderAPI* aApi, const TransactionBuilder& aTxn) {
       auto transaction = MakeUnique<TransactionBuilder>(
-          aApi, aTxn, aUseSceneBuilderThread, /* aOwnsData */ false);
+          aApi, aTxn.Raw(), aTxn.UseSceneBuilderThread(), /* aOwnsData */ false,
+          aTxn.mRemoteTextureTxnScheduler, aTxn.mRemoteTextureTxnId);
       return WrTransactionEvent(Tag::PendingAsyncImagePipelineOps,
                                 std::move(aPendingAsyncImagePipelineOps),
                                 std::move(transaction));
@@ -425,7 +437,8 @@ class WebRenderAPI final {
     }
 
     TransactionBuilder* GetTransactionBuilder() {
-      if (mTag == Tag::PendingAsyncImagePipelineOps) {
+      if (mTag == Tag::Transaction ||
+          mTag == Tag::PendingAsyncImagePipelineOps) {
         return mTransaction.get();
       }
       MOZ_CRASH("Should not be called");
@@ -581,7 +594,7 @@ class DisplayListBuilder final {
 
   Maybe<wr::WrSpatialId> PushStackingContext(
       const StackingContextParams& aParams, const wr::LayoutRect& aBounds,
-      const wr::RasterSpace& aRasterSpace);
+      const wr::RasterSpace& aRasterSpace, const wr::SnapshotInfo* aSnapshot);
   void PopStackingContext(bool aIsReferenceFrame);
 
   wr::WrClipChainId DefineClipChain(const nsTArray<wr::WrClipId>& aClips,
@@ -600,7 +613,8 @@ class DisplayListBuilder final {
       const float* aRightMargin, const float* aBottomMargin,
       const float* aLeftMargin, const StickyOffsetBounds& aVerticalBounds,
       const StickyOffsetBounds& aHorizontalBounds,
-      const wr::LayoutVector2D& aAppliedOffset, wr::SpatialTreeItemKey aKey);
+      const wr::LayoutVector2D& aAppliedOffset, wr::SpatialTreeItemKey aKey,
+      const WrAnimationProperty* aAnimation);
 
   Maybe<wr::WrSpatialId> GetScrollIdForDefinedScrollLayer(
       layers::ScrollableLayerGuid::ViewID aViewId) const;
@@ -694,6 +708,14 @@ class DisplayListBuilder final {
                      bool aSupportsExternalCompositing = false);
 
   void PushP010Image(const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
+                     bool aIsBackfaceVisible, wr::ImageKey aImageChannel0,
+                     wr::ImageKey aImageChannel1, wr::WrColorDepth aColorDepth,
+                     wr::WrYuvColorSpace aColorSpace,
+                     wr::WrColorRange aColorRange, wr::ImageRendering aFilter,
+                     bool aPreferCompositorSurface = false,
+                     bool aSupportsExternalCompositing = false);
+
+  void PushNV16Image(const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
                      bool aIsBackfaceVisible, wr::ImageKey aImageChannel0,
                      wr::ImageKey aImageChannel1, wr::WrColorDepth aColorDepth,
                      wr::WrYuvColorSpace aColorSpace,

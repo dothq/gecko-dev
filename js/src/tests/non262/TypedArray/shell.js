@@ -1,8 +1,12 @@
+/*---
+defines: [typedArrayConstructors, sharedTypedArrayConstructors, anyTypedArrayConstructors, isSharedConstructor, isFloatConstructor, isUnsignedConstructor]
+allow_unused: True
+---*/
 (function(global) {
     "use strict";
 
     const {
-        Float32Array, Float64Array, Object, Reflect, SharedArrayBuffer, WeakMap,
+        Float16Array, Float32Array, Float64Array, Object, Reflect, SharedArrayBuffer, WeakMap,
         assertEq
     } = global;
     const {
@@ -69,7 +73,7 @@
         Uint32Array,
         Float32Array,
         Float64Array,
-    ]);
+    ].concat(Float16Array ?? []));
 
     /**
      * All TypedArray constructors for shared memory.
@@ -97,13 +101,27 @@
 
     /**
      * Returns `true` if `constructor` is a TypedArray constructor for shared
-     * or unshared memory, with an underlying element type of either Float32 or
-     * Float64.
+     * or unshared memory, with an underlying element type of one of Float16, Float32
+     * or Float64.
      */
     function isFloatConstructor(constructor) {
         if (isSharedConstructor(constructor))
             constructor = Reflect_apply(WeakMap_prototype_get, sharedConstructors, [constructor]);
-        return constructor == Float32Array || constructor == Float64Array;
+        return constructor == Float32Array || constructor == Float64Array || (Float16Array && constructor == Float16Array);
+    }
+
+    /**
+     * Returns `true` if `constructor` is a TypedArray constructor for shared
+     * or unshared memory, with an underlying element type of one of Uint8,
+     * Uint8Clamped, Uint16, or Uint32.
+     */
+    function isUnsignedConstructor(constructor) {
+        if (isSharedConstructor(constructor))
+            constructor = Reflect_apply(WeakMap_prototype_get, sharedConstructors, [constructor]);
+        return constructor == Uint8Array ||
+               constructor == Uint8ClampedArray ||
+               constructor == Uint16Array ||
+               constructor == Uint32Array;
     }
 
     global.typedArrayConstructors = typedArrayConstructors;
@@ -111,4 +129,5 @@
     global.anyTypedArrayConstructors = anyTypedArrayConstructors;
     global.isSharedConstructor = isSharedConstructor;
     global.isFloatConstructor = isFloatConstructor;
+    global.isUnsignedConstructor = isUnsignedConstructor;
 })(this);

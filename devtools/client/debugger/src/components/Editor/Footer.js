@@ -46,14 +46,14 @@ class SourceFooter extends PureComponent {
   static get propTypes() {
     return {
       canPrettyPrint: PropTypes.bool.isRequired,
-      prettyPrintMessage: PropTypes.string.isRequired,
+      prettyPrintMessage: PropTypes.string,
       endPanelCollapsed: PropTypes.bool.isRequired,
       horizontal: PropTypes.bool.isRequired,
       jumpToMappedLocation: PropTypes.func.isRequired,
       mappedSource: PropTypes.object,
       selectedSource: PropTypes.object,
       selectedLocation: PropTypes.object,
-      isSelectedSourceBlackBoxed: PropTypes.bool.isRequired,
+      isSelectedSourceBlackBoxed: PropTypes.bool,
       sourceLoaded: PropTypes.bool.isRequired,
       toggleBlackBox: PropTypes.func.isRequired,
       togglePaneCollapse: PropTypes.func.isRequired,
@@ -277,6 +277,7 @@ class SourceFooter extends PureComponent {
       MenuButton,
       {
         menuId: "debugger-source-map-button",
+        key: "debugger-source-map-button",
         toolboxDoc,
         className: classnames("devtools-button", "debugger-source-map-button", {
           error: !!this.props.sourceMapError,
@@ -319,8 +320,8 @@ class SourceFooter extends PureComponent {
         React.createElement(MenuItem, {
           className: "menu-item debugger-jump-mapped-source",
           label: this.props.mappedSource.isOriginal
-            ? L10N.getStr("sourceFooter.sourceMapButton.jumpToGeneratedSource")
-            : L10N.getStr("sourceFooter.sourceMapButton.jumpToOriginalSource"),
+            ? L10N.getStr("sourceFooter.sourceMapButton.jumpToOriginalSource")
+            : L10N.getStr("sourceFooter.sourceMapButton.jumpToGeneratedSource"),
           tooltip: this.props.mappedSource.url,
           onClick: () =>
             this.props.jumpToMappedLocation(this.props.selectedLocation),
@@ -412,10 +413,9 @@ const mapStateToProps = state => {
   const sourceTextContent = getSelectedSourceTextContent(state);
 
   const areSourceMapsEnabledProp = areSourceMapsEnabled(state);
-  const isSourceActorWithSourceMapProp = isSourceActorWithSourceMap(
-    state,
-    selectedLocation?.sourceActor.id
-  );
+  const isSourceActorWithSourceMapProp = selectedLocation?.sourceActor
+    ? isSourceActorWithSourceMap(state, selectedLocation?.sourceActor.id)
+    : false;
   const sourceMapError = selectedLocation?.sourceActor
     ? getSourceMapErrorForSourceActor(state, selectedLocation.sourceActor.id)
     : null;
@@ -458,8 +458,6 @@ const mapStateToProps = state => {
       ? getSourceMapResolvedURL(state, selectedLocation.sourceActor.id)
       : null,
     isSourceActorWithSourceMap: isSourceActorWithSourceMapProp,
-
-    sourceMapURL: selectedLocation?.sourceActor.sourceMapURL,
 
     areSourceMapsEnabled: areSourceMapsEnabledProp,
     shouldSelectOriginalLocation: getShouldSelectOriginalLocation(state),

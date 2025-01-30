@@ -79,7 +79,7 @@ class HTMLTextAreaElement final : public TextControlElement,
   bool IsSingleLineTextControl() const override;
   bool IsTextArea() const override;
   bool IsPasswordTextControl() const override;
-  int32_t GetCols() override;
+  Maybe<int32_t> GetCols() override;
   int32_t GetWrapCols() override;
   int32_t GetRows() override;
   void GetDefaultValueFromContent(nsAString& aValue, bool aForDisplay) override;
@@ -95,6 +95,12 @@ class HTMLTextAreaElement final : public TextControlElement,
   MOZ_CAN_RUN_SCRIPT nsresult CreateEditor() override;
   void SetPreviewValue(const nsAString& aValue) override;
   void GetPreviewValue(nsAString& aValue) override;
+  void SetAutofillState(const nsAString& aState) override {
+    SetFormAutofillState(aState);
+  }
+  void GetAutofillState(nsAString& aState) override {
+    GetFormAutofillState(aState);
+  }
   void EnablePreview() override;
   bool IsPreviewEnabled() override;
   void InitializeKeyboardEventListeners() override;
@@ -122,7 +128,7 @@ class HTMLTextAreaElement final : public TextControlElement,
   nsresult PreHandleEvent(EventChainVisitor& aVisitor) override;
   nsresult PostHandleEvent(EventChainPostVisitor& aVisitor) override;
 
-  bool IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
+  bool IsHTMLFocusable(IsFocusableFlags, bool* aIsFocusable,
                        int32_t* aTabIndex) override;
 
   void DoneAddingChildren(bool aHaveNotified) override;
@@ -165,7 +171,7 @@ class HTMLTextAreaElement final : public TextControlElement,
   void SetAutocomplete(const nsAString& aValue, ErrorResult& aRv) {
     SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
   }
-  uint32_t Cols() { return GetUnsignedIntAttr(nsGkAtoms::cols, DEFAULT_COLS); }
+  uint32_t Cols() { return GetColsOrDefault(); }
   void SetCols(uint32_t aCols, ErrorResult& aError) {
     uint32_t cols = aCols ? aCols : DEFAULT_COLS;
     SetUnsignedIntAttr(nsGkAtoms::cols, cols, DEFAULT_COLS, aError);
@@ -286,6 +292,11 @@ class HTMLTextAreaElement final : public TextControlElement,
   using nsGenericHTMLFormControlElementWithState::IsSingleLineTextControl;
 
   JSObject* WrapNode(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
+  void ResetIfUnchanged() {
+    if (!mValueChanged) {
+      Reset();
+    }
+  }
 
   nsCOMPtr<nsIControllers> mControllers;
   /** https://html.spec.whatwg.org/#user-interacted */
@@ -315,7 +326,7 @@ class HTMLTextAreaElement final : public TextControlElement,
   /** The state of the text editor (selection controller and the editor) **/
   TextControlState* mState;
 
-  NS_IMETHOD SelectAll(nsPresContext* aPresContext);
+  MOZ_CAN_RUN_SCRIPT void SelectAll();
   /**
    * Get the value, whether it is from the content or the frame.
    * @param aValue the value [out]
@@ -344,9 +355,6 @@ class HTMLTextAreaElement final : public TextControlElement,
   void AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                     const nsAttrValue* aValue, const nsAttrValue* aOldValue,
                     nsIPrincipal* aSubjectPrincipal, bool aNotify) override;
-
-  void SetDirectionFromValue(bool aNotify,
-                             const nsAString* aKnownValue = nullptr);
 
   /**
    * Get the mutable state of the element.

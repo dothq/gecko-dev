@@ -19,6 +19,7 @@
 #include "nsString.h"
 #include "nsCRT.h"
 #include "nsGenericHTMLElement.h"
+#include "nsGlobalWindowInner.h"
 
 #include "nsIFrame.h"
 #include "mozilla/dom/Document.h"
@@ -29,7 +30,6 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIObserverService.h"
-#include "nsISound.h"
 #include "nsFocusManager.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLInputElement.h"
@@ -56,9 +56,8 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsTypeAheadFind)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsTypeAheadFind)
 
 NS_IMPL_CYCLE_COLLECTION_WEAK(nsTypeAheadFind, mFoundLink, mFoundEditable,
-                              mCurrentWindow, mStartFindRange, mSearchRange,
-                              mStartPointRange, mEndPointRange, mFind,
-                              mFoundRange)
+                              mStartFindRange, mSearchRange, mStartPointRange,
+                              mEndPointRange, mFind, mFoundRange)
 
 #define NS_FIND_CONTRACTID "@mozilla.org/embedcomp/rangefind;1"
 
@@ -66,7 +65,6 @@ nsTypeAheadFind::nsTypeAheadFind()
     : mStartLinksOnlyPref(false),
       mCaretBrowsingOn(false),
       mDidAddObservers(false),
-      mLastFindLength(0),
       mCaseSensitive(false),
       mEntireWord(false),
       mMatchDiacritics(false) {}
@@ -102,11 +100,6 @@ nsresult nsTypeAheadFind::Init(nsIDocShell* aDocShell) {
 
     // ----------- Get initial preferences ----------
     PrefsReset();
-
-    nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-    if (os) {
-      os->AddObserver(this, DOM_WINDOW_DESTROYED_TOPIC, true);
-    }
   }
 
   return NS_OK;
@@ -118,15 +111,6 @@ nsresult nsTypeAheadFind::PrefsReset() {
 
   prefBranch->GetBoolPref("accessibility.typeaheadfind.startlinksonly",
                           &mStartLinksOnlyPref);
-
-  bool isSoundEnabled = true;
-  prefBranch->GetBoolPref("accessibility.typeaheadfind.enablesound",
-                          &isSoundEnabled);
-  nsAutoCString soundStr;
-  if (isSoundEnabled)
-    prefBranch->GetCharPref("accessibility.typeaheadfind.soundURL", soundStr);
-
-  mNotFoundSoundURL = soundStr;
 
   prefBranch->GetBoolPref("accessibility.browsewithcaret", &mCaretBrowsingOn);
 
@@ -206,14 +190,22 @@ void nsTypeAheadFind::ReleaseStrongMemberVariables() {
   mSearchRange = nullptr;
   mEndPointRange = nullptr;
 
-  mFoundLink = nullptr;
-  mFoundEditable = nullptr;
-  mFoundRange = nullptr;
-  mCurrentWindow = nullptr;
+  ReleaseFoundResultsAndDisconnect();
 
   mSelectionController = nullptr;
 
   mFind = nullptr;
+}
+
+void nsTypeAheadFind::ReleaseFoundResultsAndDisconnect() {
+  mFoundLink = nullptr;
+  mFoundEditable = nullptr;
+  mFoundRange = nullptr;
+  GlobalTeardownObserver::DisconnectFromOwner();
+}
+
+void nsTypeAheadFind::SetCurrentWindow(nsPIDOMWindowInner* aWindow) {
+  BindToOwner(aWindow->AsGlobal());
 }
 
 NS_IMETHODIMP
@@ -253,43 +245,17 @@ nsTypeAheadFind::Observe(nsISupports* aSubject, const char* aTopic,
   if (!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     return PrefsReset();
   }
-  if (!nsCRT::strcmp(aTopic, DOM_WINDOW_DESTROYED_TOPIC) &&
-      SameCOMIdentity(aSubject, mCurrentWindow)) {
-    ReleaseStrongMemberVariables();
-  }
 
   return NS_OK;
 }
 
-void nsTypeAheadFind::SaveFind() {
-  if (mWebBrowserFind) mWebBrowserFind->SetSearchString(mTypeAheadBuffer);
-
-  // save the length of this find for "not found" sound
-  mLastFindLength = mTypeAheadBuffer.Length();
+void nsTypeAheadFind::DisconnectFromOwner() {
+  // (This ultimately calls GlobalTeardownObserver::DisconnectFromOwner)
+  ReleaseStrongMemberVariables();
 }
 
-void nsTypeAheadFind::PlayNotFoundSound() {
-  if (mNotFoundSoundURL.IsEmpty())  // no sound
-    return;
-
-  nsCOMPtr<nsISound> soundInterface = do_GetService("@mozilla.org/sound;1");
-
-  if (soundInterface) {
-    if (mNotFoundSoundURL.EqualsLiteral("beep")) {
-      soundInterface->Beep();
-      return;
-    }
-
-    nsCOMPtr<nsIURI> soundURI;
-    if (mNotFoundSoundURL.EqualsLiteral("default"))
-      NS_NewURI(getter_AddRefs(soundURI),
-                nsLiteralCString(TYPEAHEADFIND_NOTFOUND_WAV_URL));
-    else
-      NS_NewURI(getter_AddRefs(soundURI), mNotFoundSoundURL);
-
-    nsCOMPtr<nsIURL> soundURL(do_QueryInterface(soundURI));
-    if (soundURL) soundInterface->Play(soundURL);
-  }
+void nsTypeAheadFind::SaveFind() {
+  if (mWebBrowserFind) mWebBrowserFind->SetSearchString(mTypeAheadBuffer);
 }
 
 nsresult nsTypeAheadFind::FindItNow(uint32_t aMode, bool aIsLinksOnly,
@@ -297,10 +263,7 @@ nsresult nsTypeAheadFind::FindItNow(uint32_t aMode, bool aIsLinksOnly,
                                     bool aDontIterateFrames,
                                     uint16_t* aResult) {
   *aResult = FIND_NOTFOUND;
-  mFoundLink = nullptr;
-  mFoundEditable = nullptr;
-  mFoundRange = nullptr;
-  mCurrentWindow = nullptr;
+  ReleaseFoundResultsAndDisconnect();
   RefPtr<Document> startingDocument = GetDocument();
   NS_ENSURE_TRUE(startingDocument, NS_ERROR_FAILURE);
 
@@ -563,13 +526,13 @@ nsresult nsTypeAheadFind::FindItNow(uint32_t aMode, bool aIsLinksOnly,
         // ScrollSelectionIntoView.
         SetSelectionModeAndRepaint(nsISelectionController::SELECTION_ATTENTION);
         selectionController->ScrollSelectionIntoView(
-            nsISelectionController::SELECTION_NORMAL,
+            SelectionType::eNormal,
             nsISelectionController::SELECTION_WHOLE_SELECTION,
-            nsISelectionController::SCROLL_CENTER_VERTICALLY |
-                nsISelectionController::SCROLL_SYNCHRONOUS);
+            ScrollAxis(WhereToScroll::Center), ScrollAxis(), ScrollFlags::None,
+            SelectionScrollMode::SyncFlush);
       }
 
-      mCurrentWindow = window;
+      SetCurrentWindow(window);
       *aResult = hasWrapped ? FIND_WRAPPED : FIND_FOUND;
       return NS_OK;
     }
@@ -669,7 +632,7 @@ nsTypeAheadFind::GetFoundEditable(Element** aFoundEditable) {
 NS_IMETHODIMP
 nsTypeAheadFind::GetCurrentWindow(mozIDOMWindow** aCurrentWindow) {
   NS_ENSURE_ARG_POINTER(aCurrentWindow);
-  *aCurrentWindow = mCurrentWindow;
+  *aCurrentWindow = GetOwnerWindow();
   NS_IF_ADDREF(*aCurrentWindow);
   return NS_OK;
 }
@@ -1008,10 +971,6 @@ nsresult nsTypeAheadFind::FindInternal(uint32_t aMode,
         }
       }
     }
-  } else if (isInitial) {
-    // Error sound, except when whole word matching is ON.
-    if (!mEntireWord && mTypeAheadBuffer.Length() > mLastFindLength)
-      PlayNotFoundSound();
   }
 
   SaveFind();

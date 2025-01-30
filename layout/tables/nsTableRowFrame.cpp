@@ -305,7 +305,7 @@ static nscoord GetBSizeOfRowsSpannedBelowFirst(
 /**
  * Post-reflow hook. This is where the table row does its post-processing
  */
-void nsTableRowFrame::DidResize() {
+void nsTableRowFrame::DidResize(ForceAlignTopForTableCell aForceAlignTop) {
   // Resize and re-align the cell frames based on our row bsize
   nsTableFrame* tableFrame = GetTableFrame();
 
@@ -369,7 +369,7 @@ void nsTableRowFrame::DidResize() {
 
     // realign cell content based on the new bsize.  We might be able to
     // skip this if the bsize didn't change... maybe.  Hard to tell.
-    cellFrame->BlockDirAlignChild(wm, mMaxCellAscent);
+    cellFrame->BlockDirAlignChild(wm, mMaxCellAscent, aForceAlignTop);
 
     // Always store the overflow, even if the height didn't change, since
     // we'll lose part of our overflow area otherwise.
@@ -432,43 +432,33 @@ void nsTableRowFrame::ResetBSize() {
   mMaxCellDescent = 0;
 }
 
-void nsTableRowFrame::UpdateBSize(nscoord aBSize, nscoord aAscent,
-                                  nscoord aDescent, nsTableFrame* aTableFrame,
+void nsTableRowFrame::UpdateBSize(nscoord aBSize, nsTableFrame* aTableFrame,
                                   nsTableCellFrame* aCellFrame) {
   if (!aTableFrame || !aCellFrame) {
-    NS_ASSERTION(false, "invalid call");
+    MOZ_ASSERT_UNREACHABLE("Invalid call");
     return;
   }
 
   if (aBSize == NS_UNCONSTRAINEDSIZE) {
     return;
   }
-  if (!aCellFrame->HasVerticalAlignBaseline()) {
-    // only the cell's height matters
-    if (GetInitialBSize() < aBSize) {
-      int32_t rowSpan = aTableFrame->GetEffectiveRowSpan(*aCellFrame);
-      if (rowSpan == 1) {
-        SetContentBSize(aBSize);
+
+  if (GetInitialBSize() < aBSize &&
+      aTableFrame->GetEffectiveRowSpan(*aCellFrame) == 1) {
+    SetContentBSize(aBSize);
+  }
+
+  if (aCellFrame->HasVerticalAlignBaseline()) {
+    if (auto ascent = aCellFrame->GetCellBaseline()) {
+      // see if this is a long ascender
+      if (mMaxCellAscent < *ascent) {
+        mMaxCellAscent = *ascent;
       }
-    }
-  } else {  // the alignment on the baseline can change the bsize
-    NS_ASSERTION(
-        aAscent != NS_UNCONSTRAINEDSIZE && aDescent != NS_UNCONSTRAINEDSIZE,
-        "invalid call");
-    // see if this is a long ascender
-    if (mMaxCellAscent < aAscent) {
-      mMaxCellAscent = aAscent;
-    }
-    // see if this is a long descender and without rowspan
-    if (mMaxCellDescent < aDescent) {
-      int32_t rowSpan = aTableFrame->GetEffectiveRowSpan(*aCellFrame);
-      if (rowSpan == 1) {
-        mMaxCellDescent = aDescent;
+      nscoord descent = aBSize - *ascent;
+      if (mMaxCellDescent < descent &&
+          aTableFrame->GetEffectiveRowSpan(*aCellFrame) == 1) {
+        mMaxCellDescent = descent;
       }
-    }
-    // keep the tallest bsize in sync
-    if (GetInitialBSize() < mMaxCellAscent + mMaxCellDescent) {
-      SetContentBSize(mMaxCellAscent + mMaxCellDescent);
     }
   }
 }
@@ -499,18 +489,7 @@ nscoord nsTableRowFrame::CalcBSize(const ReflowInput& aReflowInput) {
         !GetPrevInFlow()) {
       desSize.BSize(wm) = CalcCellActualBSize(kidFrame, desSize.BSize(wm), wm);
     }
-    // bsize may have changed, adjust descent to absorb any excess difference
-    nscoord ascent;
-    if (!kidFrame->PrincipalChildList()
-             .FirstChild()
-             ->PrincipalChildList()
-             .FirstChild()) {
-      ascent = desSize.BSize(wm);
-    } else {
-      ascent = kidFrame->GetCellBaseline();
-    }
-    nscoord descent = desSize.BSize(wm) - ascent;
-    UpdateBSize(desSize.BSize(wm), ascent, descent, tableFrame, kidFrame);
+    UpdateBSize(desSize.BSize(wm), tableFrame, kidFrame);
   }
   return GetInitialBSize();
 }
@@ -561,10 +540,10 @@ LogicalSides nsTableRowFrame::GetLogicalSkipSides() const {
   }
 
   if (GetPrevInFlow()) {
-    skip |= eLogicalSideBitsBStart;
+    skip += LogicalSide::BStart;
   }
   if (GetNextInFlow()) {
-    skip |= eLogicalSideBitsBEnd;
+    skip += LogicalSide::BEnd;
   }
   return skip;
 }
@@ -581,11 +560,8 @@ nscoord nsTableRowFrame::CalcCellActualBSize(nsTableCellFrame* aCellFrame,
 
   const auto& bsizeStyleCoord = position->BSize(aWM);
   if (bsizeStyleCoord.ConvertsToLength()) {
-    // In quirks mode, table cell isize should be content-box, but bsize
-    // should be border-box.
-    // Because of this historic anomaly, we do not use quirk.css
-    // (since we can't specify one value of box-sizing for isize and another
-    // for bsize)
+    // In quirks mode, table cell bsize should always be border-box.
+    // https://quirks.spec.whatwg.org/#the-table-cell-height-box-sizing-quirk
     specifiedBSize = bsizeStyleCoord.ToLength();
     if (PresContext()->CompatibilityMode() != eCompatibility_NavQuirks &&
         position->mBoxSizing == StyleBoxSizing::Content) {
@@ -646,8 +622,9 @@ static nscoord GetSpaceBetween(int32_t aPrevColIndex, int32_t aColIndex,
       const nsStyleVisibility* groupVis = cgFrame->StyleVisibility();
       bool collapseGroup = StyleVisibility::Collapse == groupVis->mVisible;
       isCollapsed = collapseCol || collapseGroup;
-      if (!isCollapsed)
+      if (!isCollapsed) {
         space += fifTable->GetColumnISizeFromFirstInFlow(colIdx);
+      }
     }
     if (!isCollapsed && aTableFrame.ColumnHasCellSpacingBefore(colIdx)) {
       space += aTableFrame.GetColSpacing(colIdx - 1);
@@ -758,14 +735,14 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
       NS_ASSERTION(kidFrame->GetWritingMode() == wm,
                    "expected consistent writing-mode within table");
       LogicalSize cellDesiredSize = kidFrame->GetDesiredSize();
-      if ((availCellISize != kidFrame->GetPriorAvailISize()) ||
-          (cellDesiredSize.ISize(wm) > kidFrame->GetPriorAvailISize()) ||
+      if (availCellISize != kidFrame->GetPriorAvailISize() ||
+          cellDesiredSize.ISize(wm) > kidFrame->GetPriorAvailISize() ||
           HasAnyStateBits(NS_FRAME_IS_DIRTY) || isPaginated ||
           kidFrame->IsSubtreeDirty() ||
           // See if it needs a special reflow, or if it had one that we need to
           // undo.
           kidFrame->HasAnyStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE) ||
-          HasPctBSize()) {
+          kidFrame->BCBordersChanged() || HasPctBSize()) {
         // Reflow the cell to fit the available isize, bsize
         // XXX The old IR_ChildIsDirty code used availCellISize here.
         LogicalSize kidAvailSize(wm, availCellISize,
@@ -815,18 +792,7 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
         }
         // bsize may have changed, adjust descent to absorb any excess
         // difference
-        nscoord ascent;
-        if (!kidFrame->PrincipalChildList()
-                 .FirstChild()
-                 ->PrincipalChildList()
-                 .FirstChild()) {
-          ascent = desiredSize.BSize(wm);
-        } else {
-          ascent = kidFrame->GetCellBaseline();
-        }
-        nscoord descent = desiredSize.BSize(wm) - ascent;
-        UpdateBSize(desiredSize.BSize(wm), ascent, descent, &aTableFrame,
-                    kidFrame);
+        UpdateBSize(desiredSize.BSize(wm), &aTableFrame, kidFrame);
       } else {
         cellMaxBSize = std::max(cellMaxBSize, desiredSize.BSize(wm));
         int32_t rowSpan = aTableFrame.GetEffectiveRowSpan(*kidFrame);
@@ -956,7 +922,6 @@ void nsTableRowFrame::Reflow(nsPresContext* aPresContext,
                              nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableRowFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   WritingMode wm = aReflowInput.GetWritingMode();
@@ -999,17 +964,14 @@ void nsTableRowFrame::Reflow(nsPresContext* aPresContext,
   PushDirtyBitToAbsoluteFrames();
 }
 
-/**
- * This function is called by the row group frame's SplitRowGroup() code when
- * pushing a row frame that has cell frames that span into it. The cell frame
- * should be reflowed with the specified height
- */
 nscoord nsTableRowFrame::ReflowCellFrame(nsPresContext* aPresContext,
                                          const ReflowInput& aReflowInput,
                                          bool aIsTopOfPage,
                                          nsTableCellFrame* aCellFrame,
                                          nscoord aAvailableBSize,
                                          nsReflowStatus& aStatus) {
+  MOZ_ASSERT(aPresContext->IsPaginated(),
+             "ReflowCellFrame currently supports only paged media!");
   MOZ_ASSERT(aAvailableBSize != NS_UNCONSTRAINEDSIZE,
              "Why split cell frame if available bsize is unconstrained?");
   WritingMode wm = aReflowInput.GetWritingMode();
@@ -1049,7 +1011,8 @@ nscoord nsTableRowFrame::ReflowCellFrame(nsPresContext* aPresContext,
   // XXX What happens if this cell has 'vertical-align: baseline' ?
   // XXX Why is it assumed that the cell's ascent hasn't changed ?
   if (isCompleteAndNotTruncated) {
-    aCellFrame->BlockDirAlignChild(wm, mMaxCellAscent);
+    aCellFrame->BlockDirAlignChild(wm, mMaxCellAscent,
+                                   ForceAlignTopForTableCell::Yes);
   }
 
   nsTableFrame::InvalidateTableFrame(

@@ -22,7 +22,7 @@
 #include <tuple>
 
 #if defined(MOZ_TELEMETRY_REPORTING)
-#  include "mozilla/Telemetry.h"
+#  include "mozilla/glean/GleanMetrics.h"
 #endif  // defined(MOZ_TELEMETRY_REPORTING)
 
 using namespace mozilla;
@@ -68,11 +68,22 @@ void a11y::ProxyDestroyed(RemoteAccessible* aProxy) {
 }
 
 void a11y::PlatformEvent(Accessible* aTarget, uint32_t aEventType) {
-  MsaaAccessible::FireWinEvent(aTarget, aEventType);
+  Accessible* msaaTarget = aTarget;
+  if (aEventType == nsIAccessibleEvent::EVENT_SCROLLING_START &&
+      aTarget->IsTextLeaf()) {
+    // For MSAA/IA2, this event should not be fired on text leaf Accessibles.
+    msaaTarget = aTarget->Parent();
+  }
+  if (msaaTarget) {
+    MsaaAccessible::FireWinEvent(msaaTarget, aEventType);
+  }
+  uiaRawElmProvider::RaiseUiaEventForGeckoEvent(aTarget, aEventType);
 }
 
-void a11y::PlatformStateChangeEvent(Accessible* aTarget, uint64_t, bool) {
+void a11y::PlatformStateChangeEvent(Accessible* aTarget, uint64_t aState,
+                                    bool aEnabled) {
   MsaaAccessible::FireWinEvent(aTarget, nsIAccessibleEvent::EVENT_STATE_CHANGE);
+  uiaRawElmProvider::RaiseUiaEventForStateChange(aTarget, aState, aEnabled);
 }
 
 void a11y::PlatformFocusEvent(Accessible* aTarget,
@@ -91,6 +102,8 @@ void a11y::PlatformFocusEvent(Accessible* aTarget,
 
   AccessibleWrap::UpdateSystemCaretFor(aTarget, aCaretRect);
   MsaaAccessible::FireWinEvent(aTarget, nsIAccessibleEvent::EVENT_FOCUS);
+  uiaRawElmProvider::RaiseUiaEventForGeckoEvent(
+      aTarget, nsIAccessibleEvent::EVENT_FOCUS);
 }
 
 void a11y::PlatformCaretMoveEvent(Accessible* aTarget, int32_t aOffset,
@@ -101,6 +114,8 @@ void a11y::PlatformCaretMoveEvent(Accessible* aTarget, int32_t aOffset,
   AccessibleWrap::UpdateSystemCaretFor(aTarget, aCaretRect);
   MsaaAccessible::FireWinEvent(aTarget,
                                nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED);
+  uiaRawElmProvider::RaiseUiaEventForGeckoEvent(
+      aTarget, nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED);
 }
 
 void a11y::PlatformTextChangeEvent(Accessible* aText, const nsAString& aStr,
@@ -112,6 +127,7 @@ void a11y::PlatformTextChangeEvent(Accessible* aText, const nsAString& aStr,
   ia2AccessibleText::UpdateTextChangeData(aText->AsHyperTextBase(), aInsert,
                                           aStr, aStart, aLen);
   MsaaAccessible::FireWinEvent(aText, eventType);
+  uiaRawElmProvider::RaiseUiaEventForGeckoEvent(aText, eventType);
 }
 
 void a11y::PlatformShowHideEvent(Accessible* aTarget, Accessible*, bool aInsert,
@@ -124,6 +140,7 @@ void a11y::PlatformShowHideEvent(Accessible* aTarget, Accessible*, bool aInsert,
 void a11y::PlatformSelectionEvent(Accessible* aTarget, Accessible*,
                                   uint32_t aType) {
   MsaaAccessible::FireWinEvent(aTarget, aType);
+  uiaRawElmProvider::RaiseUiaEventForGeckoEvent(aTarget, aType);
 }
 
 static bool GetInstantiatorExecutable(const DWORD aPid,
@@ -153,7 +170,7 @@ static bool GetInstantiatorExecutable(const DWORD aPid,
   }
 
   nsCOMPtr<nsIFile> file;
-  nsresult rv = NS_NewLocalFile(nsDependentString(buf.get(), bufLen), false,
+  nsresult rv = NS_NewLocalFile(nsDependentString(buf.get(), bufLen),
                                 getter_AddRefs(file));
   if (NS_FAILED(rv)) {
     return false;
@@ -195,7 +212,7 @@ static void AccumulateInstantiatorTelemetry(const nsAString& aValue) {
 
   if (!aValue.IsEmpty()) {
 #if defined(MOZ_TELEMETRY_REPORTING)
-    Telemetry::ScalarSet(Telemetry::ScalarID::A11Y_INSTANTIATORS, aValue);
+    glean::a11y::instantiators.Set(NS_ConvertUTF16toUTF8(aValue));
 #endif  // defined(MOZ_TELEMETRY_REPORTING)
     CrashReporter::RecordAnnotationNSString(
         CrashReporter::Annotation::AccessibilityClient, aValue);
@@ -261,4 +278,13 @@ bool a11y::GetInstantiator(nsIFile** aOutInstantiator) {
   }
 
   return NS_SUCCEEDED(gInstantiator->Clone(aOutInstantiator));
+}
+
+uint64_t a11y::GetCacheDomainsForKnownClients(uint64_t aCacheDomains) {
+  // If we're instantiating because of a screen reader, enable all cache
+  // domains. We expect that demanding ATs will need all information we have.
+  if (Compatibility::IsKnownScreenReader()) {
+    return CacheDomain::All;
+  }
+  return aCacheDomains;
 }

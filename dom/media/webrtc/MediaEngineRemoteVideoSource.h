@@ -101,6 +101,10 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   explicit MediaEngineRemoteVideoSource(const MediaDevice* aMediaDevice);
 
   // ExternalRenderer
+  /**
+   * Signals that the capture stream has ended
+   **/
+  void OnCaptureEnded() override;
   int DeliverFrame(uint8_t* aBuffer,
                    const camera::VideoFrameProperties& aProps) override;
 
@@ -130,6 +134,13 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   const TrackingId& GetTrackingId() const override;
 
   static camera::CaptureEngine CaptureEngine(dom::MediaSourceEnum aMediaSource);
+
+  MediaEventSource<void>* CaptureEndedEvent() override {
+    return &mCaptureEndedEvent;
+  }
+
+  void GetCapabilities(
+      dom::MediaTrackCapabilities& aOutCapabilities) const override;
 
  private:
   /**
@@ -202,6 +213,8 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   // since we scale frames to avoid fingerprinting.
   // Members are main thread only.
   const RefPtr<media::Refcountable<dom::MediaTrackSettings>> mSettings;
+  const RefPtr<media::Refcountable<dom::MediaTrackCapabilities>>
+      mTrackCapabilities;
   MozPromiseHolder<GenericNonExclusivePromise> mFirstFramePromiseHolder;
   RefPtr<GenericNonExclusivePromise> mFirstFramePromise;
 
@@ -234,6 +247,7 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   const RefPtr<const MediaDevice> mMediaDevice;
   const nsCString mDeviceUUID;
   Maybe<nsString> mFacingMode;
+  MediaEventProducer<void> mCaptureEndedEvent;
 };
 
 }  // namespace mozilla

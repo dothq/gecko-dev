@@ -28,7 +28,7 @@ use crate::values::specified::{Angle, Number, NumberOrPercentage};
 #[cfg(feature = "servo")]
 use crate::values::Impossible;
 use crate::Zero;
-use cssparser::{self, BasicParseErrorKind, Parser, Token};
+use cssparser::{BasicParseErrorKind, Parser, Token};
 use style_traits::{ParseError, StyleParseErrorKind, ValueParseErrorKind};
 
 /// A specified value for a single shadow of the `box-shadow` property.
@@ -297,13 +297,10 @@ impl Filter {
                     Err(())
                 }
             },
-            Filter::Url(ref url) => {
-                if cfg!(feature = "gecko") {
-                    Ok(ComputedFilter::Url(ComputedUrl(url.clone())))
-                } else {
-                    Err(())
-                }
-            },
+            #[cfg(feature = "gecko")]
+            Filter::Url(ref url) => Ok(ComputedFilter::Url(ComputedUrl(url.clone()))),
+            #[cfg(feature = "servo")]
+            Filter::Url(_) => Err(()),
         }
     }
 }

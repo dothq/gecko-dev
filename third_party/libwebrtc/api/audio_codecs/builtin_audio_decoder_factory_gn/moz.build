@@ -20,15 +20,15 @@ DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 DEFINES["WEBRTC_USE_BUILTIN_ILBC"] = "1"
 DEFINES["WEBRTC_USE_BUILTIN_OPUS"] = "1"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
 ]
 

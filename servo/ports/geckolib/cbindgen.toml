@@ -7,26 +7,23 @@ header = """/* This Source Code Form is subject to the terms of the Mozilla Publ
 #ifdef __clang__
 #  pragma GCC diagnostic ignored "-Wreturn-type-c-linkage"
 #endif
-// Work-around silly windows.h define.
-#pragma push_macro("STRICT")
-#undef STRICT
-#pragma push_macro("TRANSPARENT")
-#undef TRANSPARENT
+
+#ifndef mozilla_ServoStyleConsts_h
+#define mozilla_ServoStyleConsts_h
 """
 trailer = """
 #pragma pop_macro("STRICT")
 #pragma pop_macro("TRANSPARENT")
+
+#endif // mozilla_ServoStyleConsts_h
+
 #pragma GCC diagnostic pop
 #include "mozilla/ServoStyleConstsInlines.h"
 """
-autogen_warning = """/* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen.
- * To generate this file:
- *   1. Get the latest cbindgen using `cargo install --force cbindgen`
- *      a. Alternatively, you can clone `https://github.com/eqrion/cbindgen` and use a tagged release
- *   2. Run `rustup run nightly cbindgen toolkit/library/rust/ --lockfile Cargo.lock --crate style -o layout/style/ServoStyleConsts.h`
+autogen_warning = """/* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen. See RunCbindgen.py
+ * To modify this file, edit servo/ports/geckolib/cbindgen.toml and build Firefox.
  */
 """
-include_guard = "mozilla_ServoStyleConsts_h"
 include_version = true
 braces = "SameLine"
 line_length = 80
@@ -34,6 +31,13 @@ tab_width = 2
 language = "C++"
 namespaces = ["mozilla"]
 includes = ["mozilla/ServoStyleConstsForwards.h", "mozilla/ServoStyleSet.h"]
+after_includes = """
+// Work-around silly windows.h define.
+#pragma push_macro("STRICT")
+#undef STRICT
+#pragma push_macro("TRANSPARENT")
+#undef TRANSPARENT
+"""
 
 [parse]
 parse_deps = true
@@ -51,6 +55,7 @@ derive_neq = true
 "feature = servo" = "CBINDGEN_IS_SERVO"
 "feature = servo-layout-2013" = "CBINDGEN_IS_SERVO"
 "feature = servo-layout-2020" = "CBINDGEN_IS_SERVO"
+"feature = track_alloc_size" = "CBINDGEN_IS_SERVO"
 # These will always be defined.
 "feature = gecko" = "CBINDGEN_IS_GECKO"
 "feature = cbindgen" = "CBINDGEN_IS_GECKO"
@@ -81,22 +86,32 @@ exclude = [
   "AuthorStyles",
 ]
 include = [
+  "AnchorName",
+  "AnchorScope",
+  "AnimationName",
   "AnimationTimeline",
   "AnimationIterationCount",
   "AnimationDirection",
   "AnimationFillMode",
   "AnimationPlayState",
   "AnimationComposition",
+  "AnimationDuration",
   "Appearance",
   "Au",
   "BreakBetween",
   "BreakWithin",
   "BorderStyle",
+  "BorderSpacing",
   "BoolInteger",
   "OutlineStyle",
   "CaptionSide",
+  "ColorGamut",
   "FontSizeAdjust",
   "FontPalette",
+  "FontLanguageOverride",
+  "FontVariantEastAsian",
+  "FontVariantLigatures",
+  "FontVariantNumeric",
   "ComputedFontStretchRange",
   "ComputedFontStyleDescriptor",
   "ComputedFontWeightRange",
@@ -108,6 +123,12 @@ include = [
   "DisplayInside",
   "DisplayMode",
   "Platform",
+  "PositionAnchor",
+  "PositionArea",
+  "PositionAreaKeyword",
+  "PositionTryFallbacks",
+  "PositionTryOrder",
+  "PositionVisibility",
   "GtkThemeFamily",
   "PrefersColorScheme",
   "PrefersContrast",
@@ -130,7 +151,11 @@ include = [
   "OffsetRotate",
   "RayFunction",
   "UnicodeRange",
+  "UserInput",
+  "UserFocus",
   "UserSelect",
+  "PointerEvents",
+  "Inert",
   "Float",
   "Clear",
   "OverscrollBehavior",
@@ -139,7 +164,7 @@ include = [
   "ScrollSnapStop",
   "ScrollSnapStrictness",
   "ScrollSnapType",
-  "ScrollTimelineName",
+  "TimelineName",
   "TransitionBehavior",
   "ViewTimelineInset",
   "OverflowAnchor",
@@ -159,6 +184,7 @@ include = [
   "TextDecorationLength",
   "Time",
   "Rect",
+  "InitialLetter",
   "IntersectionObserverRootMargin",
   "Size",
   "MaxSize",
@@ -168,9 +194,12 @@ include = [
   "BackgroundSize",
   "BaselineSource",
   "BorderImageSlice",
+  "BorderImageRepeat",
+  "BorderImageRepeatKeyword",
   "BorderSpacing",
   "BorderRadius",
   "ColorScheme",
+  "ColumnCount",
   "NonNegativeLengthOrNumberRect",
   "Perspective",
   "ZIndex",
@@ -214,6 +243,7 @@ include = [
   "BasicShape",
   "InsetRect",
   "ShapeRadius",
+  "ShapeCommand",
   "ArcSlice",
   "ForgottenArcSlicePtr",
   "HeaderWithLength",
@@ -257,8 +287,6 @@ include = [
   "ComputedJustifyItems",
   "AlignContent",
   "JustifyContent",
-  "AlignTracks",
-  "JustifyTracks",
   "TransformStyle",
   "Image",
   "ClipPath",
@@ -282,17 +310,31 @@ include = [
   "ImageRendering",
   "PrintColorAdjust",
   "ForcedColorAdjust",
+  "ForcedColors",
   "ScrollbarGutter",
   "ScrollDirection",
   "HyphenateCharacter",
   "ComputedLinearStop",
   "PiecewiseLinearFunction",
   "BeforeFlag",
+  "VectorEffect",
   "XTextScale",
   "Zoom",
   "TransitionProperty",
+  "ViewTransitionName",
+  "Inset",
+  "AnchorFunction",
+  "AnchorSizeFunction",
+  "Margin",
 ]
-item_types = ["enums", "structs", "unions", "typedefs", "functions", "constants"]
+item_types = [
+  "enums",
+  "structs",
+  "unions",
+  "typedefs",
+  "functions",
+  "constants",
+]
 renaming_overrides_prefixing = true
 
 # Prevent some renaming for Gecko types that cbindgen doesn't otherwise understand.
@@ -340,7 +382,6 @@ renaming_overrides_prefixing = true
 "Keyframe" = "Keyframe"
 "nsChangeHint" = "nsChangeHint"
 "ServoElementSnapshotTable" = "ServoElementSnapshotTable"
-"Keyframe" = "Keyframe"
 "ComputedKeyframeValues" = "ComputedKeyframeValues"
 "OriginFlags" = "OriginFlags"
 "ServoTraversalFlags" = "ServoTraversalFlags"
@@ -348,7 +389,7 @@ renaming_overrides_prefixing = true
 "BeforeFlag" = "StyleEasingBeforeFlag"
 "FontPaletteValueSet" = "gfx::FontPaletteValueSet"
 "PaletteValues" = "gfx::FontPaletteValueSet::PaletteValues"
-"ThinVec" = "nsTArray"
+"ThinVec" = "CopyableTArray"
 "RawPthread" = "pthread_t"
 "RawHandle" = "void*"
 
@@ -366,7 +407,8 @@ renaming_overrides_prefixing = true
 
 "CalcLengthPercentage" = """
   inline CSSCoord ResolveToCSSPixels(CSSCoord aBasis) const;
-  inline nscoord Resolve(nscoord aBasis) const;
+  template<typename Rounder>
+  inline nscoord Resolve(nscoord aBasis, Rounder) const;
 """
 
 "GenericCalcNode" = """
@@ -427,10 +469,10 @@ renaming_overrides_prefixing = true
   inline bool IsDefinitelyZero() const;
   inline CSSCoord ResolveToCSSPixels(CSSCoord aPercentageBasisInCSSPixels) const;
   template<typename T> inline CSSCoord ResolveToCSSPixelsWith(T aPercentageGetter) const;
-  template<typename T, typename PercentRounder>
-  inline nscoord Resolve(T aPercentageGetter, PercentRounder) const;
-  template<typename PercentRounder>
-  inline nscoord Resolve(nscoord aPercentageBasis, PercentRounder) const;
+  template<typename T, typename Rounder>
+  inline nscoord Resolve(T aPercentageGetter, Rounder) const;
+  template<typename Rounder>
+  inline nscoord Resolve(nscoord aPercentageBasis, Rounder) const;
   template<typename T> inline nscoord Resolve(T aPercentageGetter) const;
   inline nscoord Resolve(nscoord aPercentageBasis) const;
 """
@@ -457,7 +499,10 @@ renaming_overrides_prefixing = true
   inline float ToPercentage() const;
   inline bool HasPercent() const;
   inline bool HasLengthAndPercentage() const;
+  inline bool BehavesLikeStretchOnInlineAxis() const;
+  inline bool BehavesLikeStretchOnBlockAxis() const;
   inline bool BehavesLikeInitialValueOnBlockAxis() const;
+  inline bool BehavesLikeInitialValue(LogicalAxis) const;
 """
 
 "GenericFlexBasis" = """
@@ -471,7 +516,10 @@ renaming_overrides_prefixing = true
   inline float ToPercentage() const;
   inline bool HasPercent() const;
   inline bool HasLengthAndPercentage() const;
+  inline bool BehavesLikeStretchOnInlineAxis() const;
+  inline bool BehavesLikeStretchOnBlockAxis() const;
   inline bool BehavesLikeInitialValueOnBlockAxis() const;
+  inline bool BehavesLikeInitialValue(LogicalAxis) const;
 """
 
 "GenericPosition" = """
@@ -490,7 +538,7 @@ renaming_overrides_prefixing = true
 
   // Defined in WritingModes.h
   inline const T& Get(mozilla::Side) const;
-  inline const T& Get(WritingMode, LogicalSide) const;
+  inline const T& Get(LogicalSide, WritingMode) const;
   inline const T& GetIStart(WritingMode) const;
   inline const T& GetBStart(WritingMode) const;
   inline const T& Start(LogicalAxis, WritingMode) const;
@@ -499,7 +547,7 @@ renaming_overrides_prefixing = true
   inline const T& End(LogicalAxis, WritingMode) const;
 
   inline T& Get(mozilla::Side);
-  inline T& Get(WritingMode, LogicalSide);
+  inline T& Get(LogicalSide, WritingMode);
   inline T& GetIStart(WritingMode);
   inline T& GetBStart(WritingMode);
   inline T& GetIEnd(WritingMode);
@@ -524,8 +572,7 @@ renaming_overrides_prefixing = true
 """
 
 "TextTransform" = """
-  static inline StyleTextTransform None();
-  inline bool IsNone() const;
+  bool IsNone() const { return *this == NONE; }
 """
 
 "TextUnderlinePosition" = """
@@ -534,6 +581,10 @@ renaming_overrides_prefixing = true
   inline bool IsUnder() const;
   inline bool IsLeft() const;
   inline bool IsRight() const;
+"""
+
+"VectorEffect" = """
+  bool HasNonScalingStroke() const { return bool(*this & StyleVectorEffect::NON_SCALING_STROKE); }
 """
 
 # TODO(emilio): Add hooks to cbindgen to be able to generate [[nodiscard]]
@@ -757,9 +808,11 @@ renaming_overrides_prefixing = true
   }
 """
 
-"CoordPair" = """
-  explicit StyleCoordPair(const gfx::Point& aPoint): x(aPoint.x), y(aPoint.y) {}
-  gfx::Point ConvertsToGfxPoint() const { return gfx::Point(x, y); }
+"CoordinatePair" = """
+  inline gfx::Point ToGfxPoint(const CSSSize* aBasis = nullptr) const;
+  gfx::Point ToGfxPoint(const CSSSize& aBasis) const {
+    return ToGfxPoint(&aBasis);
+  };
 """
 
 "TextOverflow" = """
@@ -804,7 +857,8 @@ renaming_overrides_prefixing = true
 "CssUrl" = """
   inline nsDependentCSubstring SpecifiedSerialization() const;
   inline const URLExtraData& ExtraData() const;
-  inline StyleLoadData& LoadData() const;
+  inline const StyleLoadData& LoadData() const;
+  inline StyleLoadData& MutLoadData() const;
   inline nsIURI* GetURI() const;
 """
 
@@ -813,7 +867,8 @@ renaming_overrides_prefixing = true
   inline nsDependentCSubstring SpecifiedSerialization() const;
   inline const URLExtraData& ExtraData() const;
   inline nsIURI* GetURI() const;
-  inline StyleLoadData& LoadData() const;
+  inline const StyleLoadData& LoadData() const;
+  inline StyleLoadData& MutLoadData() const;
 
   inline bool IsLocalRef() const;
   inline bool HasRef() const;
@@ -946,11 +1001,6 @@ renaming_overrides_prefixing = true
   bool IsNamedFamily(const nsAString&) const;
 """
 
-"TimelineOrKeyframesName" = """
- public:
-  inline nsAtom* AsAtom() const;
-"""
-
 "FontWeight" = """
  SERVO_FIXED_POINT_HELPERS(StyleFontWeight, uint16_t, StyleFONT_WEIGHT_FRACTION_BITS);
  bool IsNormal() const { return *this == NORMAL; }
@@ -992,9 +1042,20 @@ renaming_overrides_prefixing = true
   StyleAnimationName() : _0(nsGkAtoms::_empty) {}
 """
 
+"TimelineName" = """
+ public:
+  StyleTimelineName() : _0(nsGkAtoms::_empty) {}
+  nsAtom* AsAtom() const { return _0.AsAtom(); }
+"""
+
 "GenericViewTimelineInset" = """
  public:
   inline StyleGenericViewTimelineInset();
+"""
+
+"ViewTransitionName" = """
+ public:
+  StyleViewTransitionName() : _0(nsGkAtoms::_empty) {}
 """
 
 "Time" = """
@@ -1035,18 +1096,30 @@ renaming_overrides_prefixing = true
 
   // Return true if the <basic-shape> is path().
   bool IsPath() const {
-    return IsOffsetPath() && AsOffsetPath().path->IsShape() &&
-           AsOffsetPath().path->AsShape().IsPath();
+    if (!IsOffsetPath()) {
+      return false;
+    }
+    const auto& path = AsOffsetPath().path;
+    if (!path->IsShape()) {
+      return false;
+    }
+    const auto& shape = path->AsShape();
+    return shape.IsPathOrShape() && shape.AsPathOrShape().IsPath();
   }
 
   const StyleSVGPathData& AsSVGPathData() const {
-    return AsOffsetPath().path->AsShape().AsPath().path;
+    return AsOffsetPath().path->AsShape().AsPathOrShape().AsPath().path;
   }
 
   // Return true if this is "<basic-shape> || <coord-box>".
   bool IsBasicShapeOrCoordBox() const {
     return IsCoordBox() || (IsOffsetPath() && AsOffsetPath().path->IsShape());
   }
+"""
+
+"GenericShapeCommand" = """
+  bool IsCubicType() const { return IsCubicCurve() || IsSmoothCubic(); }
+  bool IsQuadraticType() const { return IsQuadCurve() || IsSmoothQuad(); }
 """
 
 "GenericContainIntrinsicSize" = """
@@ -1072,4 +1145,23 @@ renaming_overrides_prefixing = true
     return IsNonCustom() &&
            nsCSSPropertyID(AsNonCustom()._0) == eCSSProperty_all;
   }
+"""
+
+"GenericInset" = """
+  inline bool HasPercent() const;
+  inline bool ConvertsToLength() const;
+  inline bool HasLengthAndPercentage() const;
+  inline bool IsAnchorPositioningFunction() const;
+  inline nscoord ToLength() const;
+  inline bool ConvertsToPercentage() const;
+  inline float ToPercentage() const;
+"""
+
+"GenericMargin" = """
+  inline bool HasPercent() const;
+  inline bool ConvertsToLength() const;
+  inline bool HasLengthAndPercentage() const;
+  inline nscoord ToLength() const;
+  inline bool ConvertsToPercentage() const;
+  inline float ToPercentage() const;
 """

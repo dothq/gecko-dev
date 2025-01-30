@@ -64,7 +64,7 @@ export var ZoomUI = {
             value = parseFloat(pref.value);
           }
         },
-        handleCompletion(reason) {
+        handleCompletion() {
           resolve(value);
         },
         handleError(error) {
@@ -75,7 +75,7 @@ export var ZoomUI = {
   },
 };
 
-function fullZoomLocationChangeObserver(aSubject, aTopic) {
+function fullZoomLocationChangeObserver(aSubject) {
   // If the tab was the last one in its window and has been dragged to another
   // window, the original browser's window will be unavailable here. Since that
   // window is closing, we can just ignore this notification.
@@ -169,6 +169,11 @@ async function updateZoomUI(aBrowser, aAnimate = false) {
   let label = win.gNavigatorBundle.getFormattedString("zoom-button.label", [
     zoomFactor,
   ]);
+  let accessibilityLabel = win.gNavigatorBundle.getFormattedString(
+    "zoom-button.aria-label",
+    [zoomFactor]
+  );
+
   if (appMenuZoomReset) {
     appMenuZoomReset.setAttribute("label", label);
   }
@@ -182,6 +187,7 @@ async function updateZoomUI(aBrowser, aAnimate = false) {
       urlbarZoomButton.removeAttribute("animate");
     }
     urlbarZoomButton.setAttribute("label", label);
+    urlbarZoomButton.setAttribute("aria-label", accessibilityLabel);
   }
 
   win.FullZoom.updateCommands();

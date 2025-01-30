@@ -21,6 +21,7 @@ EXTRA_JS_MODULES += [
     "ExtensionDNR.sys.mjs",
     "ExtensionDNRLimits.sys.mjs",
     "ExtensionDNRStore.sys.mjs",
+    "ExtensionMenus.sys.mjs",
     "ExtensionPageChild.sys.mjs",
     "ExtensionParent.sys.mjs",
     "ExtensionPermissionMessages.sys.mjs",
@@ -35,7 +36,10 @@ EXTRA_JS_MODULES += [
     "ExtensionStorageIDB.sys.mjs",
     "ExtensionStorageSync.sys.mjs",
     "ExtensionStorageSyncKinto.sys.mjs",
+    "ExtensionTaskScheduler.sys.mjs",
     "ExtensionTelemetry.sys.mjs",
+    "ExtensionUserScripts.sys.mjs",
+    "ExtensionUserScriptsContent.sys.mjs",
     "ExtensionUtils.sys.mjs",
     "ExtensionWorkerChild.sys.mjs",
     "FindContent.sys.mjs",
@@ -76,6 +80,7 @@ XPIDL_SOURCES += [
     "extIWebNavigation.idl",
     "mozIExtensionAPIRequestHandling.idl",
     "mozIExtensionProcessScript.idl",
+    "nsINativeMessagingPortal.idl",
 ]
 
 XPIDL_MODULE = "webextensions"
@@ -101,6 +106,13 @@ UNIFIED_SOURCES += [
     "MatchPattern.cpp",
     "WebExtensionPolicy.cpp",
 ]
+
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" and CONFIG["MOZ_ENABLE_DBUS"]:
+    EXPORTS.mozilla.extensions += ["NativeMessagingPortal.h"]
+    UNIFIED_SOURCES += ["NativeMessagingPortal.cpp"]
+    CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+    DEFINES["MOZ_APP_NAME"] = '"%s"' % CONFIG["MOZ_APP_NAME"]
 
 XPCOM_MANIFESTS += [
     "components.conf",

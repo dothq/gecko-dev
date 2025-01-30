@@ -138,11 +138,10 @@ export class FileMigratorBase {
    * from the native file picker. This will not be called if the user
    * chooses to cancel the native file picker.
    *
-   * @param {string} filePath
+   * @param {string} _filePath
    *   The path that the user selected from the native file picker.
    */
-  // eslint-disable-next-line no-unused-vars
-  async migrate(filePath) {
+  async migrate(_filePath) {
     throw new Error("FileMigrator.migrate must be overridden.");
   }
 }
@@ -166,10 +165,7 @@ export class PasswordFileMigrator extends FileMigratorBase {
   }
 
   get enabled() {
-    return Services.prefs.getBoolPref(
-      "signon.management.page.fileImport.enabled",
-      false
-    );
+    return true;
   }
 
   get displayedResourceTypes() {

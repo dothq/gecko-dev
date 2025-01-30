@@ -1,9 +1,11 @@
 use crate::capabilities::AndroidOptions;
-use mozdevice::{AndroidStorage, Device, Host, UnixPathBuf};
+use mozdevice::{AndroidStorage, Device, Host, RemoteMetadata, UnixPathBuf};
 use mozprofile::profile::Profile;
 use serde::Serialize;
 use serde_yaml::{Mapping, Value};
+use std::fs::File;
 use std::io;
+use std::path::PathBuf;
 use std::time;
 use thiserror::Error;
 use webdriver::error::{ErrorStatus, WebDriverError};
@@ -108,26 +110,31 @@ impl Drop for AndroidHandler {
             Err(e) => error!("Failed deleting test root folder: {}", e),
         }
 
+        debug!(
+            "Stop forwarding Marionette port ({} -> {})",
+            &self.marionette_host_port, &self.marionette_target_port
+        );
         match self
             .process
             .device
             .kill_forward_port(self.marionette_host_port)
         {
-            Ok(_) => debug!(
-                "Marionette port forward ({} -> {}) stopped",
-                &self.marionette_host_port, &self.marionette_target_port
-            ),
+            Ok(_) => {}
             Err(e) => error!(
-                "Marionette port forward ({} -> {}) failed to stop: {}",
+                "Failed to stop forwarding Marionette port ({} -> {}): {}",
                 &self.marionette_host_port, &self.marionette_target_port, e
             ),
         }
 
         if let Some(port) = self.websocket_port {
+            debug!(
+                "Stop forwarding WebSocket port ({} -> {})",
+                &self.marionette_host_port, &self.marionette_target_port
+            );
             match self.process.device.kill_forward_port(port) {
-                Ok(_) => debug!("WebSocket port forward ({0} -> {0}) stopped", &port),
+                Ok(_) => {}
                 Err(e) => error!(
-                    "WebSocket port forward ({0} -> {0}) failed to stop: {1}",
+                    "Failed to stop forwarding WebSocket port ({0} -> {0}): {1}",
                     &port, e
                 ),
             }
@@ -156,16 +163,16 @@ impl AndroidHandler {
         let mut device = host.device_or_default(options.device_serial.as_ref(), options.storage)?;
 
         // Set up port forwarding for Marionette.
-        device.forward_port(marionette_host_port, MARIONETTE_TARGET_PORT)?;
         debug!(
-            "Marionette port forward ({} -> {}) started",
+            "Start forwarding Marionette port ({} -> {})",
             marionette_host_port, MARIONETTE_TARGET_PORT
         );
+        device.forward_port(marionette_host_port, MARIONETTE_TARGET_PORT)?;
 
         if let Some(port) = websocket_port {
             // Set up port forwarding for WebSocket connections (WebDriver BiDi, and CDP).
+            debug!("Start forwarding WebSocket port ({} -> {})", port, port);
             device.forward_port(port, port)?;
-            debug!("WebSocket port forward ({} -> {}) started", port, port);
         }
 
         let test_root = match device.storage {
@@ -252,6 +259,45 @@ impl AndroidHandler {
             options: options.clone(),
             websocket_port,
         })
+    }
+
+    pub fn copy_minidumps_files(&self, save_path: &str) -> Result<()> {
+        let minidumps_path = self.profile.join("minidumps");
+
+        match self.process.device.list_dir(&minidumps_path) {
+            Ok(entries) => {
+                for entry in entries {
+                    if let RemoteMetadata::RemoteFile(_) = entry.metadata {
+                        let file_path = minidumps_path.join(&entry.name);
+
+                        let extension = file_path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .map(|ext| ext.to_lowercase())
+                            .unwrap_or(String::from(""));
+
+                        if extension == "dmp" || extension == "extra" {
+                            let mut dest_path = PathBuf::from(save_path);
+                            dest_path.push(&entry.name);
+
+                            self.process
+                                .device
+                                .pull(&file_path, &mut File::create(dest_path.as_path())?)?
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                warn!(
+                    "Couldn't read files from minidumps folder '{}'",
+                    minidumps_path.display(),
+                );
+
+                return Ok(());
+            }
+        }
+
+        Ok(())
     }
 
     pub fn generate_config_file<I, K, V>(
@@ -396,6 +442,16 @@ impl AndroidHandler {
             })?;
 
         Ok(())
+    }
+
+    pub fn push_as_file(&self, content: &[u8], path: &str) -> Result<String> {
+        let mut dest = self.test_root.clone();
+        dest.push(path);
+
+        let buffer = &mut io::Cursor::new(content);
+        self.process.device.push(buffer, &dest, 0o777)?;
+
+        Ok(dest.display().to_string())
     }
 
     pub fn force_stop(&self) -> Result<()> {

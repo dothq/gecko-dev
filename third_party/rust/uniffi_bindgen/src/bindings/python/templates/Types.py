@@ -85,7 +85,7 @@
 {%- when Type::Map { key_type, value_type } %}
 {%- include "MapTemplate.py" %}
 
-{%- when Type::CallbackInterface { name: id, module_path } %}
+{%- when Type::CallbackInterface { name, module_path } %}
 {%- include "CallbackInterfaceTemplate.py" %}
 
 {%- when Type::Custom { name, module_path, builtin } %}
@@ -94,9 +94,14 @@
 {%- when Type::External { name, module_path, namespace, kind, tagged } %}
 {%- include "ExternalTemplate.py" %}
 
-{%- when Type::ForeignExecutor %}
-{%- include "ForeignExecutorTemplate.py" %}
-
 {%- else %}
 {%- endmatch %}
+{%- endfor %}
+
+{#-
+Setup type aliases for our custom types, has complications due to
+forward type references, #2067
+-#}
+{%- for (name, ty) in self.get_custom_type_aliases() %}
+{{ name }} = {{ ty|type_name }}
 {%- endfor %}

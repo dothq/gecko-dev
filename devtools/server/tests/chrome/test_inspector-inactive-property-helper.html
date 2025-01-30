@@ -12,22 +12,26 @@ SimpleTest.waitForExplicitFinish();
 (async function() {
   const { require } = ChromeUtils.importESModule("resource://devtools/shared/loader/Loader.sys.mjs");
   const { isPropertyUsed } = require("devtools/server/actors/utils/inactive-property-helper");
+  const { DocumentWalker } = require("devtools/server/actors/inspector/document-walker");
 
   const INACTIVE_CSS_PREF = "devtools.inspector.inactive.css.enabled";
   const CUSTOM_HIGHLIGHT_API = "dom.customHighlightAPI.enabled";
   const TEXT_WRAP_BALANCE = "layout.css.text-wrap-balance.enabled";
   const ALIGN_CONTENT_BLOCKS = "layout.css.align-content.blocks.enabled";
+  const TEXT_FRAGMENTS = "dom.text_fragments.enabled";
 
   Services.prefs.setBoolPref(INACTIVE_CSS_PREF, true);
   Services.prefs.setBoolPref(CUSTOM_HIGHLIGHT_API, true);
   Services.prefs.setBoolPref(TEXT_WRAP_BALANCE, true);
   Services.prefs.setBoolPref(ALIGN_CONTENT_BLOCKS, true);
+  Services.prefs.setBoolPref(TEXT_FRAGMENTS, true);
 
   SimpleTest.registerCleanupFunction(() => {
     Services.prefs.clearUserPref(INACTIVE_CSS_PREF);
     Services.prefs.clearUserPref(CUSTOM_HIGHLIGHT_API);
     Services.prefs.clearUserPref(TEXT_WRAP_BALANCE);
     Services.prefs.clearUserPref(ALIGN_CONTENT_BLOCKS);
+    Services.prefs.clearUserPref(TEXT_FRAGMENTS);
   });
 
   const FOLDER = "./inactive-property-helper";
@@ -52,6 +56,10 @@ SimpleTest.waitForExplicitFinish();
   const testFiles = [
     "align-content.mjs",
     "border-image.mjs",
+    "border-spacing.mjs",
+    "box-sizing.mjs",
+    "column-span.mjs",
+    "content-visibility.mjs",
     "cue-pseudo-element.mjs",
     "first-letter-pseudo-element.mjs",
     "first-line-pseudo-element.mjs",
@@ -67,6 +75,8 @@ SimpleTest.waitForExplicitFinish();
     "place-items-content.mjs",
     "placeholder-pseudo-element.mjs",
     "positioned.mjs",
+    "replaced-element-properties.mjs",
+    "resize.mjs",
     "scroll-padding.mjs",
     "vertical-align.mjs",
     "table.mjs",
@@ -85,6 +95,7 @@ SimpleTest.waitForExplicitFinish();
     property,
     tagName,
     createTestElement,
+    pseudoElement,
     rules,
     ruleIndex,
     isActive,
@@ -109,9 +120,26 @@ SimpleTest.waitForExplicitFinish();
     } else {
       el = document.createElement(tagName);
       main.append(el);
+
+      // When checking a pseudo element, we need to retrieve it, walking the DOM from
+      // its "real" node.
+      if (pseudoElement) {
+        const walker = new DocumentWalker(
+          el,
+          el.ownerGlobal
+        );
+
+        const pseudoNodeName = `_moz_generated_content_${pseudoElement.replaceAll(":", "")}`;
+        for (let next = walker.firstChild(); next; next = walker.nextSibling()) {
+          if (next.nodeName === pseudoNodeName) {
+            el = next;
+            break;
+          }
+        }
+      }
     }
 
-    const { used, msgId } = isPropertyUsed(el, getComputedStyle(el), rule, property);
+    const { used, msgId } = isPropertyUsed(el, getComputedStyle(el, pseudoElement), rule, property);
     ok(used === isActive, summary);
     if (expectedMsgId) {
       is(msgId, expectedMsgId, `${summary} - returned expected msgId`);

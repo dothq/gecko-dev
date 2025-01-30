@@ -11,7 +11,6 @@
 #include "MediaCodecsSupport.h"
 #include "MP4Decoder.h"
 #include "PlatformDecoderModule.h"
-#include "TheoraDecoder.h"
 #include "VPXDecoder.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -195,15 +194,12 @@ CodecDefinition MCSInfo::GetCodecDefinition(const MediaCodec& aCodec) {
 }
 
 MediaCodecsSupport MCSInfo::GetMediaCodecsSupportEnum(
-    const MediaCodec& aCodec, const DecodeSupportSet& aSupport) {
-  if (aSupport.isEmpty()) {
-    return MediaCodecsSupport{};
-  }
+    const MediaCodec& aCodec, const DecodeSupport& aSupport) {
   const CodecDefinition cd = GetCodecDefinition(aCodec);
-  if (aSupport.contains(DecodeSupport::SoftwareDecode)) {
+  if (aSupport == DecodeSupport::SoftwareDecode) {
     return cd.swDecodeSupport;
   }
-  if (aSupport.contains(DecodeSupport::HardwareDecode)) {
+  if (aSupport == DecodeSupport::HardwareDecode) {
     return cd.hwDecodeSupport;
   }
   return MediaCodecsSupport::SENTINEL;
@@ -233,9 +229,6 @@ MediaCodec MCSInfo::GetMediaCodecFromMimeType(const nsACString& aMimeType) {
   }
   if (VPXDecoder::IsVP9(aMimeType)) {
     return MediaCodec::VP9;
-  }
-  if (TheoraDecoder::IsTheora(aMimeType)) {
-    return MediaCodec::Theora;
   }
   if (MP4Decoder::IsHEVC(aMimeType)) {
     return MediaCodec::HEVC;
@@ -300,9 +293,6 @@ std::array<CodecDefinition, 13> MCSInfo::GetAllCodecDefinitions() {
        {MediaCodec::HEVC, "HEVC", "video/hevc",
         MediaCodecsSupport::HEVCSoftwareDecode,
         MediaCodecsSupport::HEVCHardwareDecode, MediaCodecsSupport::SENTINEL},
-       {MediaCodec::Theora, "Theora", "video/theora",
-        MediaCodecsSupport::TheoraSoftwareDecode,
-        MediaCodecsSupport::TheoraHardwareDecode, MediaCodecsSupport::SENTINEL},
        {MediaCodec::AAC, "AAC", "audio/mp4a-latm",
         MediaCodecsSupport::AACSoftwareDecode,
         MediaCodecsSupport::AACHardwareDecode, MediaCodecsSupport::SENTINEL},

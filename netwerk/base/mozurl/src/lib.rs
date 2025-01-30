@@ -14,7 +14,6 @@ extern crate nserror;
 use nserror::*;
 
 extern crate xpcom;
-use xpcom::interfaces::mozIThirdPartyUtil;
 use xpcom::{AtomicRefcnt, RefCounted, RefPtr};
 
 extern crate uuid;
@@ -214,7 +213,10 @@ pub extern "C" fn mozurl_real_port(url: &MozURL) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn mozurl_host_port(url: &MozURL) -> SpecSlice {
-    (&url[Position::BeforeHost..Position::BeforePath]).into()
+    if url.port().is_some() {
+        return (&url[Position::BeforeHost..Position::BeforePath]).into();
+    }
+    url.host_str().unwrap_or("").into()
 }
 
 #[no_mangle]
@@ -316,70 +318,6 @@ pub extern "C" fn mozurl_origin(url: &MozURL, origin: &mut nsACString) {
     origin.take_from(&mut o);
 }
 
-fn get_base_domain(url: &MozURL) -> Result<Option<String>, nsresult> {
-    match url.scheme() {
-        "ftp" | "http" | "https" | "moz-extension" | "resource" => {
-            let third_party_util: RefPtr<mozIThirdPartyUtil> =
-                xpcom::components::ThirdPartyUtil::service()
-                    .map_err(|_| NS_ERROR_ILLEGAL_DURING_SHUTDOWN)?;
-
-            let scheme = nsCString::from(url.scheme());
-
-            let mut host_str = url.host_str().unwrap_or("");
-
-            if host_str.starts_with('[') && host_str.ends_with(']') {
-                host_str = &host_str[1..host_str.len() - 1];
-            }
-
-            let host = nsCString::from(host_str);
-
-            unsafe {
-                let mut string = nsCString::new();
-                third_party_util
-                    .GetBaseDomainFromSchemeHost(&*scheme, &*host, &mut *string)
-                    .to_result()?;
-
-                // We know that GetBaseDomainFromSchemeHost returns AUTF8String, so just
-                // use unwrap().
-                Ok(Some(String::from_utf8(string.to_vec()).unwrap()))
-            }
-        }
-        "ws" | "wss" => Ok(Some(url.as_ref().to_owned())),
-        "file" => {
-            if unsafe { Gecko_StrictFileOriginPolicy() } {
-                Ok(Some(url.path().to_owned()))
-            } else {
-                Ok(Some("UNIVERSAL_FILE_URI_ORIGIN".to_owned()))
-            }
-        }
-        "about" | "moz-safe-about" | "indexeddb" => Ok(Some(url.as_ref().to_owned())),
-        _ => Ok(None),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn mozurl_base_domain(url: &MozURL, base_domain: &mut nsACString) -> nsresult {
-    let base_domain_str = if !url.as_ref().starts_with("about:blank") {
-        match get_base_domain(url) {
-            Ok(domain) => domain,
-            Err(rv) => return rv,
-        }
-    } else {
-        None
-    };
-
-    let base_domain_str = base_domain_str.unwrap_or_else(|| {
-        // See the comment in mozurl_origin about why we return a new uuid for
-        // "moz-nullprincipals".
-        format!("{{{}}}", Uuid::new_v4())
-    });
-
-    let mut bd = nsCString::from(base_domain_str);
-    base_domain.take_from(&mut bd);
-
-    NS_OK
-}
-
 // Helper macro for debug asserting that we're the only reference to MozURL.
 macro_rules! debug_assert_mut {
     ($e:expr) => {
@@ -436,6 +374,11 @@ pub extern "C" fn mozurl_set_hostname(url: &mut MozURL, host: &nsACString) -> ns
 #[no_mangle]
 pub extern "C" fn mozurl_set_port_no(url: &mut MozURL, new_port: i32) -> nsresult {
     debug_assert_mut!(url);
+
+    if new_port > u16::MAX as i32 {
+        return NS_ERROR_UNEXPECTED;
+    }
+
     if url.cannot_be_a_base() {
         return NS_ERROR_MALFORMED_URI;
     }

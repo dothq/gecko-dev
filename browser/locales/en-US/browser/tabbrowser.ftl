@@ -16,10 +16,13 @@ tabbrowser-menuitem-close =
 #   $containerName (String): the name of the current container.
 tabbrowser-container-tab-title = { $title } — { $containerName }
 
+# This text serves as an on-screen tooltip as well as an accessible name for
+# the "X" button that is shown on the active tab or, when multiple tabs are
+# selected, to all their "X" buttons.
 # Variables:
 #   $tabCount (Number): The number of tabs that will be closed.
-tabbrowser-close-tabs-tooltip =
-    .label =
+tabbrowser-close-tabs-button =
+    .tooltiptext =
         { $tabCount ->
             [one] Close tab
            *[other] Close { $tabCount } tabs
@@ -75,7 +78,7 @@ tabbrowser-confirm-close-tabs-title =
        *[other] Close { $tabCount } tabs?
     }
 tabbrowser-confirm-close-tabs-button = Close tabs
-tabbrowser-confirm-close-tabs-checkbox = Confirm before closing multiple tabs
+tabbrowser-ask-close-tabs-checkbox = Ask before closing multiple tabs
 
 ## Confirmation dialog when quitting using the menu and multiple windows are open.
 
@@ -100,7 +103,18 @@ tabbrowser-confirm-close-tabs-with-key-title = Close window and quit { -brand-sh
 tabbrowser-confirm-close-tabs-with-key-button = Quit { -brand-short-name }
 # Variables:
 #   $quitKey (String): the text of the keyboard shortcut for quitting.
-tabbrowser-confirm-close-tabs-with-key-checkbox = Confirm before quitting with { $quitKey }
+tabbrowser-ask-close-tabs-with-key-checkbox = Ask before quitting with { $quitKey }
+
+## Confirmation dialog when quitting using the keyboard shortcut (Ctrl/Cmd+Q)
+## and browser.warnOnQuitShortcut is true.
+
+tabbrowser-confirm-close-warn-shortcut-title = Quit { -brand-short-name } or close current tab?
+tabbrowser-confirm-close-windows-warn-shortcut-button =
+    { PLATFORM() ->
+        [windows] Exit { -brand-short-name }
+       *[other] Quit { -brand-short-name }
+    }
+tabbrowser-confirm-close-tab-only-button = Close current tab
 
 ## Confirmation dialog when opening multiple tabs simultaneously
 
@@ -119,6 +133,13 @@ tabbrowser-confirm-open-multiple-tabs-checkbox = Warn me when opening multiple t
 tabbrowser-confirm-caretbrowsing-title = Caret Browsing
 tabbrowser-confirm-caretbrowsing-message = Pressing F7 turns Caret Browsing on or off. This feature places a moveable cursor in web pages, allowing you to select text with the keyboard. Do you want to turn Caret Browsing on?
 tabbrowser-confirm-caretbrowsing-checkbox = Do not show me this dialog box again.
+
+## Confirmation dialog for closing all duplicate tabs
+
+tabbrowser-confirm-close-all-duplicate-tabs-title = Close duplicate tabs?
+tabbrowser-confirm-close-all-duplicate-tabs-text = We’ll close duplicate tabs in this window. The last active
+ tab will stay open.
+tabbrowser-confirm-close-all-duplicate-tabs-button-closetabs = Close tabs
 
 ##
 
@@ -167,3 +188,65 @@ tabbrowser-manager-unmute-tab =
   .tooltiptext = Unmute tab
 tabbrowser-manager-close-tab =
   .tooltiptext = Close tab
+
+## Tab Groups
+
+tab-group-name-default = Unnamed Group
+tab-group-editor-title-create = Create tab group
+tab-group-editor-title-edit = Manage tab group
+tab-group-editor-name-label = Name
+tab-group-editor-name-field =
+  .placeholder = Example: Shopping
+tab-group-editor-cancel =
+  .label = Cancel
+  .accesskey = C
+
+tab-group-menu-header = Tab groups
+
+tab-context-unnamed-group =
+    .label = Unnamed group
+
+## Variables:
+##  $tabCount (Number): the number of tabs that are affected by the action.
+
+tab-context-move-tab-to-new-group =
+    .label =
+        { $tabCount ->
+            [1] Add Tab to New Group
+           *[other] Add Tabs to New Group
+        }
+    .accesskey = G
+tab-context-move-tab-to-group =
+    .label =
+        { $tabCount ->
+            [1] Add Tab to Group
+           *[other] Add Tabs to Group
+        }
+    .accesskey = G
+
+tab-group-editor-action-new-tab =
+    .label = New tab in group
+tab-group-editor-action-new-window =
+    .label = Move group to new window
+tab-group-editor-action-save =
+    .label = Save and close group
+tab-group-editor-action-ungroup =
+    .label = Ungroup tabs
+tab-group-editor-action-delete =
+    .label = Delete group
+tab-group-editor-done =
+    .label = Done
+    .accessKey = D
+
+tab-context-reopen-tab-group =
+    .label = Reopen tab group
+
+# Variables:
+#  $groupCount (Number): the number of tab groups that are affected by the action.
+tab-context-ungroup-tab =
+    .label =
+        { $groupCount ->
+            [1] Remove from Group
+           *[other] Remove from Groups
+        }
+    .accesskey = R

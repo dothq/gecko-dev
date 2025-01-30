@@ -185,6 +185,46 @@ class Accessible {
    */
   bool IsBefore(const Accessible* aAcc) const;
 
+  /**
+   * A utility enum for controlling FindAncestorIf.
+   *   Continue: this is not the desired ancestor node, keep searching
+   *   Found:    this is the desired ancestor node
+   *   NotFound: this is not the desired ancestor node, stop searching
+   */
+  enum class AncestorSearchOption { Continue, Found, NotFound };
+  /**
+   * Return a non-generic ancestor for which the given predicate returns
+   * AncestorSearchOption::Found, if any exist. If none exist, return nullptr.
+   * The predicate may choose to return options from AncestorSearchOption to
+   * control the flow of the ancestor search.
+   */
+  template <typename Callable>
+  Accessible* FindAncestorIf(Callable&& aPredicate) const {
+    static_assert(
+        std::is_same_v<std::invoke_result_t<Callable, const Accessible&>,
+                       AncestorSearchOption>,
+        "Given callable must return AncestorSearchOption.");
+    static_assert(std::is_invocable_v<Callable, const Accessible&>,
+                  "Given callable must accept const Accessible&.");
+    Accessible* search = GetNonGenericParent();
+    while (search) {
+      const AncestorSearchOption option = aPredicate(*search);
+      switch (option) {
+        case AncestorSearchOption::Continue:
+          search = search->GetNonGenericParent();
+          continue;
+        case AncestorSearchOption::Found:
+          return search;
+        case AncestorSearchOption::NotFound:
+          return nullptr;
+        default:
+          MOZ_ASSERT(false, "Unhandled AncestorSearchOption");
+          break;
+      }
+    }
+    return nullptr;
+  }
+
   bool IsAncestorOf(const Accessible* aAcc) const {
     for (const Accessible* parent = aAcc->Parent(); parent;
          parent = parent->Parent()) {
@@ -193,6 +233,21 @@ class Accessible {
       }
     }
     return false;
+  }
+
+  /**
+   * Return the closest common ancestor of `this` and `aAcc`, potentially
+   * including `this`. That is, if `aAcc` is `this` or a descendant, this method
+   * will return `this`.
+   */
+  const Accessible* GetClosestCommonInclusiveAncestor(
+      const Accessible* aAcc) const;
+
+  Accessible* GetClosestCommonInclusiveAncestor(Accessible* aAcc) {
+    const Accessible* common =
+        const_cast<const Accessible*>(this)->GetClosestCommonInclusiveAncestor(
+            aAcc);
+    return const_cast<Accessible*>(common);
   }
 
   /**
@@ -398,9 +453,14 @@ class Accessible {
   nsStaticAtom* LandmarkRole() const;
 
   /**
-   * Return the id of the dom node this accessible represents.
+   * Return the id of the DOM node this Accessible represents.
    */
   virtual void DOMNodeID(nsString& aID) const = 0;
+
+  /**
+   * Return the class of the DOM node this Accessible represents.
+   */
+  virtual void DOMNodeClass(nsString& aClass) const = 0;
 
   //////////////////////////////////////////////////////////////////////////////
   // ActionAccessible
@@ -540,6 +600,8 @@ class Accessible {
 
   bool IsHTMLRadioButton() const { return mType == eHTMLRadioButtonType; }
 
+  bool IsHTMLSpinner() const { return mType == eHTMLSpinnerType; }
+
   bool IsHTMLTable() const { return mType == eHTMLTableType; }
   bool IsHTMLTableCell() const { return mType == eHTMLTableCellType; }
   bool IsHTMLTableRow() const { return mType == eHTMLTableRowType; }
@@ -667,7 +729,16 @@ class Accessible {
   /**
    * Return the localized string for the given key.
    */
-  static void TranslateString(const nsString& aKey, nsAString& aStringOut);
+  static void TranslateString(const nsString& aKey, nsAString& aStringOut,
+                              const nsTArray<nsString>& aParams = {});
+
+  /*
+   * Return calculated group level based on accessible hierarchy.
+   *
+   * @param aFast  [in] Don't climb up tree. Calculate level from aria and
+   *                    roles.
+   */
+  virtual int32_t GetLevel(bool aFast) const;
 
  protected:
   // Some abstracted group utility methods.
@@ -687,14 +758,6 @@ class Accessible {
    * Return group info or create and update.
    */
   virtual AccGroupInfo* GetOrCreateGroupInfo() = 0;
-
-  /*
-   * Return calculated group level based on accessible hierarchy.
-   *
-   * @param aFast  [in] Don't climb up tree. Calculate level from aria and
-   *                    roles.
-   */
-  virtual int32_t GetLevel(bool aFast) const;
 
   /**
    * Calculate position in group and group size ('posinset' and 'setsize') based

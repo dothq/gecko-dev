@@ -739,7 +739,7 @@ function runTest() {
 
       assert_equals_records(observer.takeRecords(),
         [], "no records after applying the same order");
-    }, "animtion_order_change");
+    }, "animation_order_change");
 
     test(t => {
       var div = addDiv(t);
@@ -1571,17 +1571,6 @@ function runTest() {
 }
 
 W3CTest.runner.expectAssertions(0, 12); // bug 1189015
-setup({explicit_done: true});
-SpecialPowers.pushPrefEnv(
-  {
-    set: [
-      ["dom.animations-api.timelines.enabled", true],
-    ],
-  },
-  function() {
-    runTest();
-    done();
-  }
-);
+runTest();
 
 </script>

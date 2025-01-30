@@ -12,6 +12,7 @@
 #include "nsCSPParser.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIConsoleService.h"
+#include "nsIContentSecurityPolicy.h"
 #include "nsIChannel.h"
 #include "nsICryptoHash.h"
 #include "nsIScriptError.h"
@@ -23,6 +24,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsWhitespaceTokenizer.h"
 
+#include "mozilla/Assertions.h"
 #include "mozilla/Components.h"
 #include "mozilla/dom/CSPDictionariesBinding.h"
 #include "mozilla/dom/Document.h"
@@ -176,7 +178,12 @@ void CSP_GetLocalizedStr(const char* aName, const nsTArray<nsString>& aParams,
   if (!keyStringBundle) {
     return;
   }
-  keyStringBundle->FormatStringFromName(aName, aParams, outResult);
+
+  if (aParams.IsEmpty()) {
+    keyStringBundle->GetStringFromName(aName, outResult);
+  } else {
+    keyStringBundle->FormatStringFromName(aName, aParams, outResult);
+  }
 }
 
 void CSP_LogStrMessage(const nsAString& aMsg) {
@@ -190,7 +197,7 @@ void CSP_LogStrMessage(const nsAString& aMsg) {
   console->LogStringMessage(msg.get());
 }
 
-void CSP_LogMessage(const nsAString& aMessage, const nsAString& aSourceName,
+void CSP_LogMessage(const nsAString& aMessage, const nsACString& aSourceName,
                     const nsAString& aSourceLine, uint32_t aLineNumber,
                     uint32_t aColumnNumber, uint32_t aFlags,
                     const nsACString& aCategory, uint64_t aInnerWindowID,
@@ -229,12 +236,12 @@ void CSP_LogMessage(const nsAString& aMessage, const nsAString& aSourceName,
 
   nsresult rv;
   if (aInnerWindowID > 0) {
-    rv = error->InitWithWindowID(cspMsg, aSourceName, aSourceLine, aLineNumber,
-                                 aColumnNumber, aFlags, category,
-                                 aInnerWindowID);
+    rv =
+        error->InitWithWindowID(cspMsg, aSourceName, aLineNumber, aColumnNumber,
+                                aFlags, category, aInnerWindowID);
   } else {
-    rv = error->Init(cspMsg, aSourceName, aSourceLine, aLineNumber,
-                     aColumnNumber, aFlags, category, aFromPrivateWindow,
+    rv = error->Init(cspMsg, aSourceName, aLineNumber, aColumnNumber, aFlags,
+                     category, aFromPrivateWindow,
                      true /* from chrome context */);
   }
   if (NS_FAILED(rv)) {
@@ -243,11 +250,25 @@ void CSP_LogMessage(const nsAString& aMessage, const nsAString& aSourceName,
   console->LogMessage(error);
 }
 
+CSPDirective CSP_StringToCSPDirective(const nsAString& aDir) {
+  nsString lowerDir = PromiseFlatString(aDir);
+  ToLowerCase(lowerDir);
+
+  uint32_t numDirs = (sizeof(CSPStrDirectives) / sizeof(CSPStrDirectives[0]));
+
+  for (uint32_t i = 1; i < numDirs; i++) {
+    if (lowerDir.EqualsASCII(CSPStrDirectives[i])) {
+      return static_cast<CSPDirective>(i);
+    }
+  }
+  return nsIContentSecurityPolicy::NO_DIRECTIVE;
+}
+
 /**
  * Combines CSP_LogMessage and CSP_GetLocalizedStr into one call.
  */
 void CSP_LogLocalizedStr(const char* aName, const nsTArray<nsString>& aParams,
-                         const nsAString& aSourceName,
+                         const nsACString& aSourceName,
                          const nsAString& aSourceLine, uint32_t aLineNumber,
                          uint32_t aColumnNumber, uint32_t aFlags,
                          const nsACString& aCategory, uint64_t aInnerWindowID,
@@ -270,6 +291,7 @@ CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE:
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD:
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON:
+    case nsIContentPolicy::TYPE_INTERNAL_EXTERNAL_RESOURCE:
       return nsIContentSecurityPolicy::IMG_SRC_DIRECTIVE;
 
     // BLock XSLT as script, see bug 910139
@@ -324,11 +346,14 @@ CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_BEACON:
     case nsIContentPolicy::TYPE_PING:
     case nsIContentPolicy::TYPE_FETCH:
-    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST:
+    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_ASYNC:
+    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST_SYNC:
     case nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE:
     case nsIContentPolicy::TYPE_INTERNAL_FETCH_PRELOAD:
     case nsIContentPolicy::TYPE_WEB_IDENTITY:
     case nsIContentPolicy::TYPE_WEB_TRANSPORT:
+    case nsIContentPolicy::TYPE_JSON:
+    case nsIContentPolicy::TYPE_INTERNAL_JSON_PRELOAD:
       return nsIContentSecurityPolicy::CONNECT_SRC_DIRECTIVE;
 
     case nsIContentPolicy::TYPE_OBJECT:
@@ -983,6 +1008,16 @@ void nsCSPReportURI::toString(nsAString& outStr) const {
   outStr.AppendASCII(spec.get());
 }
 
+/* ===== nsCSPReportGroup ===================== */
+
+nsCSPGroup::nsCSPGroup(const nsAString& aGroup) : mGroup(aGroup) {}
+
+nsCSPGroup::~nsCSPGroup() = default;
+
+bool nsCSPGroup::visit(nsCSPSrcVisitor* aVisitor) const { return false; }
+
+void nsCSPGroup::toString(nsAString& aOutStr) const { aOutStr.Append(mGroup); }
+
 /* ===== nsCSPSandboxFlags ===================== */
 
 nsCSPSandboxFlags::nsCSPSandboxFlags(const nsAString& aFlags) : mFlags(aFlags) {
@@ -995,6 +1030,46 @@ bool nsCSPSandboxFlags::visit(nsCSPSrcVisitor* aVisitor) const { return false; }
 
 void nsCSPSandboxFlags::toString(nsAString& outStr) const {
   outStr.Append(mFlags);
+}
+
+/* ===== nsCSPRequireTrustedTypesForDirectiveValue ===================== */
+
+nsCSPRequireTrustedTypesForDirectiveValue::
+    nsCSPRequireTrustedTypesForDirectiveValue(const nsAString& aValue)
+    : mValue{aValue} {}
+
+bool nsCSPRequireTrustedTypesForDirectiveValue::visit(
+    nsCSPSrcVisitor* aVisitor) const {
+  MOZ_ASSERT_UNREACHABLE(
+      "This method should only be called for other overloads of this method.");
+  return false;
+}
+
+void nsCSPRequireTrustedTypesForDirectiveValue::toString(
+    nsAString& aOutStr) const {
+  aOutStr.Append(mValue);
+}
+
+bool nsCSPRequireTrustedTypesForDirectiveValue::
+    isRequiresTrustedTypesForSinkGroup(const nsAString& aSinkGroup) const {
+  return mValue == aSinkGroup;
+}
+
+/* =============== nsCSPTrustedTypesDirectivePolicyName =============== */
+
+nsCSPTrustedTypesDirectivePolicyName::nsCSPTrustedTypesDirectivePolicyName(
+    const nsAString& aName)
+    : mName{aName} {}
+
+bool nsCSPTrustedTypesDirectivePolicyName::visit(
+    nsCSPSrcVisitor* aVisitor) const {
+  MOZ_ASSERT_UNREACHABLE(
+      "Should only be called for other overloads of this method.");
+  return false;
+}
+
+void nsCSPTrustedTypesDirectivePolicyName::toString(nsAString& aOutStr) const {
+  aOutStr.Append(mName);
 }
 
 /* ===== nsCSPDirective ====================== */
@@ -1276,9 +1351,57 @@ bool nsCSPDirective::allowsAllInlineBehavior(CSPDirective aDir) const {
   return allowAll;
 }
 
+static constexpr auto kWildcard = u"*"_ns;
+
+bool nsCSPDirective::ShouldCreateViolationForNewTrustedTypesPolicy(
+    const nsAString& aPolicyName,
+    const nsTArray<nsString>& aCreatedPolicyNames) const {
+  MOZ_ASSERT(mDirective == nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE);
+
+  if (mDirective == nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE) {
+    if (allows(CSP_NONE, EmptyString())) {
+      // Step 2.4: if directive’s value only contains a tt-keyword which is a
+      // match for a value 'none', set createViolation to true.
+      // `nsCSPParser` ignores the 'none' keyword if other keywords or policy
+      // names are present. Hence no additional checks required here.
+      return true;
+    }
+
+    if (aCreatedPolicyNames.Contains(aPolicyName) &&
+        !allows(CSP_ALLOW_DUPLICATES, EmptyString())) {
+      // Step 2.5: if createdPolicyNames contains policyName and directive’s
+      // value does not contain a tt-keyword which is a match for a value
+      // 'allow-duplicates', set createViolation to true.
+      return true;
+    }
+
+    if (!ContainsTrustedTypesDirectivePolicyName(aPolicyName) &&
+        !ContainsTrustedTypesDirectivePolicyName(kWildcard)) {
+      // Step 2.6: if directive’s value does not contain a tt-policy-name, which
+      // value is policyName, and directive’s value does not contain a
+      // tt-wildcard, set createViolation to true.
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool nsCSPDirective::AreTrustedTypesForSinkGroupRequired(
+    const nsAString& aSinkGroup) const {
+  MOZ_ASSERT(mDirective ==
+             nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE);
+
+  return mSrcs.Length() == 1 &&
+         mSrcs[0]->isRequiresTrustedTypesForSinkGroup(aSinkGroup);
+}
+
 void nsCSPDirective::toString(nsAString& outStr) const {
   // Append directive name
   outStr.AppendASCII(CSP_CSPDirectiveToString(mDirective));
+
+  MOZ_ASSERT(!mSrcs.IsEmpty());
+
   outStr.AppendLiteral(" ");
 
   // Append srcs
@@ -1414,9 +1537,33 @@ void nsCSPDirective::toDomCSPStruct(mozilla::dom::CSP& outCSP) const {
       outCSP.mScript_src_attr.Value() = std::move(srcs);
       return;
 
+    case nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE:
+      outCSP.mRequire_trusted_types_for.Construct();
+
+      // Here, the srcs represent the sink group
+      // (https://w3c.github.io/trusted-types/dist/spec/#integration-with-content-security-policy).
+      outCSP.mRequire_trusted_types_for.Value() = std::move(srcs);
+      return;
+
+    case nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE:
+      outCSP.mTrusted_types.Construct();
+      // Here, "srcs" represents tt-expressions
+      // (https://w3c.github.io/trusted-types/dist/spec/#trusted-types-csp-directive).
+      outCSP.mTrusted_types.Value() = std::move(srcs);
+      return;
+
+    case nsIContentSecurityPolicy::REPORT_TO_DIRECTIVE:
+      outCSP.mReport_to.Construct();
+      outCSP.mReport_to.Value() = std::move(srcs);
+      return;
+
     default:
       NS_ASSERTION(false, "cannot find directive to convert CSP to JSON");
   }
+}
+
+bool nsCSPDirective::isDefaultDirective() const {
+  return mDirective == nsIContentSecurityPolicy::DEFAULT_SRC_DIRECTIVE;
 }
 
 void nsCSPDirective::getReportURIs(nsTArray<nsString>& outReportURIs) const {
@@ -1430,6 +1577,14 @@ void nsCSPDirective::getReportURIs(nsTArray<nsString>& outReportURIs) const {
     mSrcs[i]->toString(tmpReportURI);
     outReportURIs.AppendElement(tmpReportURI);
   }
+}
+
+void nsCSPDirective::getReportGroup(nsAString& outReportGroup) const {
+  NS_ASSERTION((mDirective == nsIContentSecurityPolicy::REPORT_TO_DIRECTIVE),
+               "not a report-to directive");
+
+  MOZ_ASSERT(mSrcs.Length() <= 1);
+  mSrcs[0]->toString(outReportGroup);
 }
 
 bool nsCSPDirective::visitSrcs(nsCSPSrcVisitor* aVisitor) const {
@@ -1453,6 +1608,26 @@ bool nsCSPDirective::hasReportSampleKeyword() const {
   for (nsCSPBaseSrc* src : mSrcs) {
     if (src->isReportSample()) {
       return true;
+    }
+  }
+
+  return false;
+}
+
+bool nsCSPDirective::ContainsTrustedTypesDirectivePolicyName(
+    const nsAString& aPolicyName) const {
+  MOZ_ASSERT(mDirective == nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE);
+
+  if (mDirective == nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE) {
+    for (const auto* src : mSrcs) {
+      if (src->isTrustedTypesDirectivePolicyName()) {
+        const auto& name =
+            static_cast<const nsCSPTrustedTypesDirectivePolicyName*>(src)
+                ->GetName();
+        if (name.Equals(aPolicyName)) {
+          return true;
+        }
+      }
     }
   }
 
@@ -1671,6 +1846,9 @@ void nsCSPPolicy::toDomCSPStruct(mozilla::dom::CSP& outCSP) const {
 }
 
 bool nsCSPPolicy::hasDirective(CSPDirective aDir) const {
+  if (aDir == nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE) {
+    return mHasRequireTrustedTypesForDirective;
+  }
   for (uint32_t i = 0; i < mDirectives.Length(); i++) {
     if (mDirectives[i]->equals(aDir)) {
       return true;
@@ -1690,27 +1868,56 @@ bool nsCSPPolicy::allowsAllInlineBehavior(CSPDirective aDir) const {
   return directive->allowsAllInlineBehavior(aDir);
 }
 
+bool nsCSPPolicy::ShouldCreateViolationForNewTrustedTypesPolicy(
+    const nsAString& aPolicyName,
+    const nsTArray<nsString>& aCreatedPolicyNames) const {
+  for (const auto* directive : mDirectives) {
+    if (directive->equals(nsIContentSecurityPolicy::TRUSTED_TYPES_DIRECTIVE)) {
+      return directive->ShouldCreateViolationForNewTrustedTypesPolicy(
+          aPolicyName, aCreatedPolicyNames);
+    }
+  }
+
+  return false;
+}
+
+bool nsCSPPolicy::AreTrustedTypesForSinkGroupRequired(
+    const nsAString& aSinkGroup) const {
+  if (!hasDirective(
+          nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE)) {
+    return false;
+  }
+  for (const auto* directive : mDirectives) {
+    if (directive->equals(
+            nsIContentSecurityPolicy::REQUIRE_TRUSTED_TYPES_FOR_DIRECTIVE)) {
+      return directive->AreTrustedTypesForSinkGroupRequired(aSinkGroup);
+    }
+  }
+
+  return false;
+}
+
 /*
- * Use this function only after ::allows() returned 'false'. Most and
- * foremost it's used to get the violated directive before sending reports.
- * The parameter outDirective is the equivalent of 'outViolatedDirective'
- * for the ::permits() function family.
+ * Use this function only after ::allows() returned 'false' or if ensured by
+ * other means that the directive is violated. First and foremost it's used to
+ * get the violated directive before sending reports. The parameter
+ * aDirectiveName is the equivalent of 'outViolatedDirective' for the
+ * ::permits() function family.
  */
-void nsCSPPolicy::getViolatedDirectiveInformation(CSPDirective aDirective,
-                                                  nsAString& outDirective,
-                                                  nsAString& outDirectiveString,
-                                                  bool* aReportSample) const {
+void nsCSPPolicy::getViolatedDirectiveInformation(
+    CSPDirective aDirective, nsAString& aDirectiveName,
+    nsAString& aDirectiveNameAndValue, bool* aReportSample) const {
   *aReportSample = false;
   nsCSPDirective* directive = matchingOrDefaultDirective(aDirective);
   if (!directive) {
     MOZ_ASSERT_UNREACHABLE("Can not query violated directive");
-    outDirective.AppendLiteral("couldNotQueryViolatedDirective");
-    outDirective.Truncate();
+    aDirectiveName.Truncate();
+    aDirectiveNameAndValue.Truncate();
     return;
   }
 
-  directive->getDirName(outDirective);
-  directive->toString(outDirectiveString);
+  directive->getDirName(aDirectiveName);
+  directive->toString(aDirectiveNameAndValue);
   *aReportSample = directive->hasReportSampleKeyword();
 }
 
@@ -1744,6 +1951,15 @@ void nsCSPPolicy::getReportURIs(nsTArray<nsString>& outReportURIs) const {
     if (mDirectives[i]->equals(
             nsIContentSecurityPolicy::REPORT_URI_DIRECTIVE)) {
       mDirectives[i]->getReportURIs(outReportURIs);
+      return;
+    }
+  }
+}
+
+void nsCSPPolicy::getReportGroup(nsAString& outReportGroup) const {
+  for (uint32_t i = 0; i < mDirectives.Length(); i++) {
+    if (mDirectives[i]->equals(nsIContentSecurityPolicy::REPORT_TO_DIRECTIVE)) {
+      mDirectives[i]->getReportGroup(outReportGroup);
       return;
     }
   }

@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<meta name="author" title="Keith Cirkel" href="mailto:keithamus@github.com" />
+<meta name="author" title="Keith Cirkel" href="mailto:wpt@keithcirkel.co.uk" />
 <link rel="help" href="https://open-ui.org/components/invokers.explainer/" />
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
@@ -20,44 +20,44 @@
     const slot = shadow.appendChild(document.createElement("slot"));
     let childEvent = null;
     let childEventTarget = null;
-    let childEventInvoker = null;
+    let childEventSource = null;
     let hostEvent = null;
     let hostEventTarget = null;
-    let hostEventInvoker = null;
+    let hostEventSource = null;
     slot.addEventListener(
-      "invoke",
+      "command",
       (e) => {
         childEvent = e;
         childEventTarget = e.target;
-        childEventInvoker = e.invoker;
+        childEventSource = e.source;
       },
       { once: true },
     );
     host.addEventListener(
-      "invoke",
+      "command",
       (e) => {
         hostEvent = e;
         hostEventTarget = e.target;
-        hostEventInvoker = e.invoker;
+        hostEventSource = e.source;
       },
       { once: true },
     );
-    const event = new InvokeEvent("invoke", {
+    const event = new CommandEvent("command", {
       bubbles: true,
-      invoker: slot,
+      source: slot,
       composed: true,
     });
     slot.dispatchEvent(event);
-    assert_true(childEvent instanceof InvokeEvent, "slot saw invoke event");
+    assert_true(childEvent instanceof CommandEvent, "slot saw invoke event");
     assert_equals(
       childEventTarget,
       slot,
       "target is child inside shadow boundary",
     );
     assert_equals(
-      childEventInvoker,
+      childEventSource,
       slot,
-      "invoker is child inside shadow boundary",
+      "source is child inside shadow boundary",
     );
     assert_equals(
       hostEvent,
@@ -70,11 +70,11 @@
       "target is retargeted to shadowroot host",
     );
     assert_equals(
-      hostEventInvoker,
+      hostEventSource,
       host,
-      "invoker is retargeted to shadowroot host",
+      "source is retargeted to shadowroot host",
     );
-  }, "InvokeEvent propagates across shadow boundaries retargeting invoker");
+  }, "CommandEvent propagates across shadow boundaries retargeting source");
 
   test(function (t) {
     const host = document.createElement("div");
@@ -83,22 +83,23 @@
     const shadow = host.attachShadow({ mode: "open" });
     const button = shadow.appendChild(document.createElement("button"));
     const invokee = host.appendChild(document.createElement("div"));
-    button.invokeTargetElement = invokee;
+    button.commandForElement = invokee;
+    button.command = '--test-command';
     let event = null;
     let eventTarget = null;
-    let eventInvoker = null;
+    let eventSource = null;
     invokee.addEventListener(
-      "invoke",
+      "command",
       (e) => {
         event = e;
         eventTarget = e.target;
-        eventInvoker = e.invoker;
+        eventSource = e.source;
       },
       { once: true },
     );
     button.click();
-    assert_true(event instanceof InvokeEvent);
+    assert_true(event instanceof CommandEvent);
     assert_equals(eventTarget, invokee, "target is invokee");
-    assert_equals(eventInvoker, host, "invoker is host");
-  }, "cross shadow InvokeEvent retargets invoker to host element");
+    assert_equals(eventSource, host, "source is host");
+  }, "cross shadow CommandEvent retargets source to host element");
 </script>

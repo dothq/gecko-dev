@@ -10,7 +10,6 @@
 
 #include "builtin/MapObject.h"
 #include "builtin/String.h"
-#include "ds/OrderedHashTable.h"
 #include "gc/Cell.h"
 #include "gc/GC.h"
 #include "jit/arm/Simulator-arm.h"
@@ -32,16 +31,21 @@
 #include "util/Unicode.h"
 #include "vm/ArrayObject.h"
 #include "vm/Compartment.h"
+#include "vm/DateObject.h"
+#include "vm/Float16.h"
 #include "vm/Interpreter.h"
 #include "vm/JSAtomUtils.h"  // AtomizeString
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/SelfHosting.h"
 #include "vm/StaticStrings.h"
 #include "vm/TypedArrayObject.h"
+#include "vm/TypeofEqOperand.h"  // TypeofEqOperand
 #include "vm/Watchtower.h"
+#include "vm/WrapperObject.h"
 #include "wasm/WasmGcObject.h"
 
 #include "debugger/DebugAPI-inl.h"
+#include "gc/StoreBuffer-inl.h"
 #include "jit/BaselineFrame-inl.h"
 #include "jit/VMFunctionList-inl.h"
 #include "vm/Interpreter-inl.h"
@@ -815,7 +819,7 @@ int32_t StringTrimEndIndex(const JSString* str, int32_t start) {
 }
 
 JSString* CharCodeToLowerCase(JSContext* cx, int32_t code) {
-  RootedString str(cx, StringFromCharCode(cx, code));
+  JSString* str = StringFromCharCode(cx, code);
   if (!str) {
     return nullptr;
   }
@@ -823,7 +827,7 @@ JSString* CharCodeToLowerCase(JSContext* cx, int32_t code) {
 }
 
 JSString* CharCodeToUpperCase(JSContext* cx, int32_t code) {
-  RootedString str(cx, StringFromCharCode(cx, code));
+  JSString* str = StringFromCharCode(cx, code);
   if (!str) {
     return nullptr;
   }
@@ -955,21 +959,18 @@ void PostWriteElementBarrier(JSRuntime* rt, JSObject* obj, int32_t index) {
   MOZ_ASSERT(index >= 0);
   MOZ_ASSERT(uint32_t(index) < nobj->getDenseInitializedLength());
 
-  if (nobj->isInWholeCellBuffer()) {
+  if (gc::StoreBuffer::isInWholeCellBuffer(nobj)) {
     return;
   }
 
-  if (nobj->getDenseInitializedLength() > MAX_WHOLE_CELL_BUFFER_SIZE
-#ifdef JS_GC_ZEAL
-      || rt->hasZealMode(gc::ZealMode::ElementsBarrier)
-#endif
-  ) {
-    rt->gc.storeBuffer().putSlot(nobj, HeapSlot::Element,
-                                 nobj->unshiftedIndex(index), 1);
+  gc::StoreBuffer* sb = &rt->gc.storeBuffer();
+  if (nobj->getDenseInitializedLength() > MAX_WHOLE_CELL_BUFFER_SIZE ||
+      rt->hasZealMode(gc::ZealMode::ElementsBarrier)) {
+    sb->putSlot(nobj, HeapSlot::Element, nobj->unshiftedIndex(index), 1);
     return;
   }
 
-  rt->gc.storeBuffer().putWholeCell(obj);
+  sb->putWholeCell(obj);
 }
 
 void PostGlobalWriteBarrier(JSRuntime* rt, GlobalObject* obj) {
@@ -1111,7 +1112,7 @@ bool NormalSuspend(JSContext* cx, HandleObject obj, BaselineFrame* frame,
 
 bool FinalSuspend(JSContext* cx, HandleObject obj, const jsbytecode* pc) {
   MOZ_ASSERT(JSOp(*pc) == JSOp::FinalYieldRval);
-  AbstractGeneratorObject::finalSuspend(obj);
+  AbstractGeneratorObject::finalSuspend(cx, obj);
   return true;
 }
 
@@ -1655,19 +1656,21 @@ static void VerifyCacheEntry(JSContext* cx, NativeObject* obj, PropertyKey key,
     MOZ_ASSERT(!obj->containsPure(key));
     return;
   }
-  MOZ_ASSERT(entry.isDataProperty());
+  MOZ_ASSERT(entry.isDataProperty() || entry.isAccessorProperty());
   for (size_t i = 0, numHops = entry.numHops(); i < numHops; i++) {
     MOZ_ASSERT(!obj->containsPure(key));
     obj = &obj->staticPrototype()->as<NativeObject>();
   }
   mozilla::Maybe<PropertyInfo> prop = obj->lookupPure(key);
   MOZ_ASSERT(prop.isSome());
-  MOZ_ASSERT(prop->isDataProperty());
+  MOZ_ASSERT_IF(entry.isDataProperty(), prop->isDataProperty());
+  MOZ_ASSERT_IF(!entry.isDataProperty(), prop->isAccessorProperty());
   MOZ_ASSERT(obj->getTaggedSlotOffset(prop->slot()) == entry.slotOffset());
 #endif
 }
 
-static MOZ_ALWAYS_INLINE bool GetNativeDataPropertyPureImpl(
+template <AllowGC allowGC>
+static MOZ_ALWAYS_INLINE bool MaybeGetNativePropertyAndWriteToCache(
     JSContext* cx, JSObject* obj, jsid id, MegamorphicCacheEntry* entry,
     Value* vp) {
   MOZ_ASSERT(obj->is<NativeObject>());
@@ -1684,13 +1687,41 @@ static MOZ_ALWAYS_INLINE bool GetNativeDataPropertyPureImpl(
     uint32_t index;
     if (PropMap* map = nobj->shape()->lookup(cx, id, &index)) {
       PropertyInfo prop = map->getPropertyInfo(index);
-      if (!prop.isDataProperty()) {
+      if (prop.isDataProperty()) {
+        TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
+        cache.initEntryForDataProperty(entry, receiverShape, id, numHops,
+                                       offset);
+        *vp = nobj->getSlot(prop.slot());
+        return true;
+      }
+      if constexpr (allowGC) {
+        // There's nothing fundamentally blocking us from supporting these,
+        // it's just not a priority
+        if (prop.isCustomDataProperty()) {
+          return false;
+        }
+
+        TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
+        MOZ_ASSERT(prop.isAccessorProperty());
+        cache.initEntryForAccessorProperty(entry, receiverShape, id, numHops,
+                                           offset);
+        vp->setUndefined();
+
+        if (!nobj->hasGetter(prop)) {
+          return true;
+        }
+
+        RootedValue getter(cx, nobj->getGetterValue(prop));
+        RootedValue receiver(cx, ObjectValue(*obj));
+        RootedValue rootedValue(cx);
+        if (js::CallGetter(cx, receiver, getter, &rootedValue)) {
+          *vp = rootedValue;
+          return true;
+        }
+        return false;
+      } else {
         return false;
       }
-      TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
-      cache.initEntryForDataProperty(entry, receiverShape, id, numHops, offset);
-      *vp = nobj->getSlot(prop.slot());
-      return true;
     }
 
     // Property not found. Watch out for Class hooks and TypedArrays.
@@ -1754,10 +1785,13 @@ bool GetNativeDataPropertyPureWithCacheLookup(JSContext* cx, JSObject* obj,
       vp->setUndefined();
       return true;
     }
+    if (entry->isAccessorProperty()) {
+      return false;
+    }
     MOZ_ASSERT(entry->isMissingOwnProperty());
   }
 
-  return GetNativeDataPropertyPureImpl(cx, obj, id, entry, vp);
+  return MaybeGetNativePropertyAndWriteToCache<NoGC>(cx, obj, id, entry, vp);
 }
 
 bool CheckProxyGetByValueResult(JSContext* cx, HandleObject obj,
@@ -1783,23 +1817,17 @@ bool CheckProxyGetByValueResult(JSContext* cx, HandleObject obj,
 bool GetNativeDataPropertyPure(JSContext* cx, JSObject* obj, PropertyKey id,
                                MegamorphicCacheEntry* entry, Value* vp) {
   AutoUnsafeCallWithABI unsafe;
-  return GetNativeDataPropertyPureImpl(cx, obj, id, entry, vp);
+  return MaybeGetNativePropertyAndWriteToCache<NoGC>(cx, obj, id, entry, vp);
 }
 
 static MOZ_ALWAYS_INLINE bool ValueToAtomOrSymbolPure(JSContext* cx,
                                                       const Value& idVal,
                                                       jsid* id) {
   if (MOZ_LIKELY(idVal.isString())) {
-    JSString* s = idVal.toString();
-    JSAtom* atom;
-    if (s->isAtom()) {
-      atom = &s->asAtom();
-    } else {
-      atom = AtomizeString(cx, s);
-      if (!atom) {
-        cx->recoverFromOutOfMemory();
-        return false;
-      }
+    JSAtom* atom = AtomizeString(cx, idVal.toString());
+    if (!atom) {
+      cx->recoverFromOutOfMemory();
+      return false;
     }
 
     // Watch out for integer ids because they may be stored in dense elements.
@@ -1821,12 +1849,12 @@ static MOZ_ALWAYS_INLINE bool ValueToAtomOrSymbolPure(JSContext* cx,
   }
 
   if (idVal.isNull()) {
-    *id = PropertyKey::NonIntAtom(cx->names().null);
+    *id = NameToId(cx->names().null);
     return true;
   }
 
   if (idVal.isUndefined()) {
-    *id = PropertyKey::NonIntAtom(cx->names().undefined);
+    *id = NameToId(cx->names().undefined);
     return true;
   }
 
@@ -1851,7 +1879,119 @@ bool GetNativeDataPropertyByValuePure(JSContext* cx, JSObject* obj,
   }
 
   Value* res = vp + 1;
-  return GetNativeDataPropertyPureImpl(cx, obj, id, entry, res);
+  return MaybeGetNativePropertyAndWriteToCache<NoGC>(cx, obj, id, entry, res);
+}
+
+bool GetPropertyCached(JSContext* cx, HandleObject obj, HandleId id,
+                       MegamorphicCacheEntry* entry,
+                       MutableHandleValue result) {
+  if (entry->isMissingProperty()) {
+    result.setUndefined();
+    return true;
+  }
+
+  MOZ_ASSERT(entry->isDataProperty() || entry->isAccessorProperty());
+
+  NativeObject* nobj = &obj->as<NativeObject>();
+  for (size_t i = 0, numHops = entry->numHops(); i < numHops; i++) {
+    nobj = &nobj->staticPrototype()->as<NativeObject>();
+  }
+
+  uint32_t offset = entry->slotOffset().offset();
+  if (entry->slotOffset().isFixedSlot()) {
+    size_t index = NativeObject::getFixedSlotIndexFromOffset(offset);
+    result.set(nobj->getFixedSlot(index));
+  } else {
+    size_t index = NativeObject::getDynamicSlotIndexFromOffset(offset);
+    result.set(nobj->getDynamicSlot(index));
+  }
+
+  // If it's a data property, we're done - otherwise we need to try to call the
+  // getter
+  if (entry->isDataProperty()) {
+    return true;
+  }
+
+  JSObject* getter = result.toGCThing()->as<GetterSetter>()->getter();
+  if (getter) {
+    RootedValue getterValue(cx, ObjectValue(*getter));
+    RootedValue receiver(cx, ObjectValue(*obj));
+    return js::CallGetter(cx, receiver, getterValue, result);
+  }
+  result.setUndefined();
+  return true;
+}
+
+bool GetPropMaybeCached(JSContext* cx, HandleObject obj, HandleId id,
+                        MegamorphicCacheEntry* entry,
+                        MutableHandleValue result) {
+  if (obj->is<NativeObject>()) {
+    // Look up the entry in the cache if we don't have it
+    Shape* receiverShape = obj->shape();
+    MegamorphicCache& cache = cx->caches().megamorphicCache;
+    if (!entry) {
+      cache.lookup(receiverShape, id, &entry);
+    }
+
+    // If we hit it, load it from the cache. We can't though if it was a
+    // MissingOwnProperty entry (added by the HasOwn handler), because we
+    // need to look it up again to know if it's somewhere on the prototype
+    // chain
+    if (cache.isValidForLookup(*entry, receiverShape, id) &&
+        !entry->isMissingOwnProperty()) {
+      return GetPropertyCached(cx, obj, id, entry, result);
+    }
+
+    if (MaybeGetNativePropertyAndWriteToCache<CanGC>(cx, obj.get(), id.get(),
+                                                     entry, &result.get())) {
+      return true;
+    }
+
+    // The getter call in MaybeGetNativePropertyAndWriteToCache can throw, so
+    // we need to check for that specifically
+    // XXX: I know this is unusual, but I'm not sure on the best approach here -
+    // is this alright?
+    if (JS_IsExceptionPending(cx)) {
+      return false;
+    }
+  }
+
+  return GetProperty(cx, obj, obj, id, result);
+}
+
+bool GetElemMaybeCached(JSContext* cx, HandleObject obj, HandleValue idVal,
+                        MegamorphicCacheEntry* entry,
+                        MutableHandleValue result) {
+  jsid id;
+  if (obj->is<NativeObject>() &&
+      ValueToAtomOrSymbolPure(cx, idVal.get(), &id)) {
+    Shape* receiverShape = obj->shape();
+    MegamorphicCache& cache = cx->caches().megamorphicCache;
+    if (!entry) {
+      cache.lookup(receiverShape, id, &entry);
+    }
+
+    if (cache.isValidForLookup(*entry, receiverShape, id) &&
+        !entry->isMissingOwnProperty()) {
+      RootedId rid(cx, id);
+      return GetPropertyCached(cx, obj, rid, entry, result);
+    }
+
+    if (MaybeGetNativePropertyAndWriteToCache<CanGC>(cx, obj.get(), id, entry,
+                                                     &result.get())) {
+      return true;
+    }
+
+    // The getter call in MaybeGetNativePropertyAndWriteToCache can throw, so
+    // we need to check for that specifically
+    if (JS_IsExceptionPending(cx)) {
+      return false;
+    }
+  }
+
+  RootedValue objVal(cx, ObjectValue(*obj));
+  return GetObjectElementOperation(cx, JSOp::GetElem, obj, objVal, idVal,
+                                   result);
 }
 
 bool ObjectHasGetterSetterPure(JSContext* cx, JSObject* objArg, jsid id,
@@ -2247,6 +2387,15 @@ JSString* TypeOfNameObject(JSObject* obj, JSRuntime* rt) {
   return TypeName(type, *rt->commonNames);
 }
 
+bool TypeOfEqObject(JSObject* obj, TypeofEqOperand operand) {
+  AutoUnsafeCallWithABI unsafe;
+  bool result = js::TypeOfObject(obj) == operand.type();
+  if (operand.compareOp() == JSOp::Ne) {
+    result = !result;
+  }
+  return result;
+}
+
 bool GetPrototypeOf(JSContext* cx, HandleObject target,
                     MutableHandleValue rval) {
   MOZ_ASSERT(target->hasDynamicPrototype());
@@ -2310,6 +2459,8 @@ bool DoConcatStringObject(JSContext* cx, HandleValue lhs, HandleValue rhs,
 }
 
 bool IsPossiblyWrappedTypedArray(JSContext* cx, JSObject* obj, bool* result) {
+  MOZ_ASSERT(obj->is<WrapperObject>(), "non-wrappers are handled in JIT code");
+
   JSObject* unwrapped = CheckedUnwrapDynamic(obj, cx);
   if (!unwrapped) {
     ReportAccessDenied(cx);
@@ -2379,6 +2530,10 @@ void TraceCreateObject(JSObject* obj) {
   js::gc::gcprobes::CreateObject(obj);
 }
 #endif
+
+BigInt* CreateBigIntFromInt32(JSContext* cx, int32_t i32) {
+  return js::BigInt::createFromInt64(cx, int64_t(i32));
+}
 
 #if JS_BITS_PER_WORD == 32
 BigInt* CreateBigIntFromInt64(JSContext* cx, uint32_t low, uint32_t high) {
@@ -2909,6 +3064,36 @@ BigInt* AtomicsXor64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
       value);
 }
 
+float RoundFloat16ToFloat32(int32_t d) {
+  AutoUnsafeCallWithABI unsafe;
+  return static_cast<float>(js::float16{d});
+}
+
+float RoundFloat16ToFloat32(float d) {
+  AutoUnsafeCallWithABI unsafe;
+  return static_cast<float>(js::float16{d});
+}
+
+float RoundFloat16ToFloat32(double d) {
+  AutoUnsafeCallWithABI unsafe;
+  return static_cast<float>(js::float16{d});
+}
+
+float Float16ToFloat32(int32_t value) {
+  AutoUnsafeCallWithABI unsafe;
+  return static_cast<float>(js::float16::fromRawBits(value));
+}
+
+int32_t Float32ToFloat16(float value) {
+  AutoUnsafeCallWithABI unsafe;
+  return static_cast<int32_t>(js::float16{value}.toRawBits());
+}
+
+void DateFillLocalTimeSlots(DateObject* dateObj) {
+  AutoUnsafeCallWithABI unsafe;
+  dateObj->fillLocalTimeSlots();
+}
+
 JSAtom* AtomizeStringNoGC(JSContext* cx, JSString* str) {
   // IC code calls this directly so we shouldn't GC.
   AutoUnsafeCallWithABI unsafe;
@@ -2922,30 +3107,69 @@ JSAtom* AtomizeStringNoGC(JSContext* cx, JSString* str) {
   return atom;
 }
 
-bool SetObjectHas(JSContext* cx, HandleObject obj, HandleValue key,
+bool SetObjectHas(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
                   bool* rval) {
-  return SetObject::has(cx, obj, key, rval);
+  return obj->has(cx, key, rval);
 }
 
-bool MapObjectHas(JSContext* cx, HandleObject obj, HandleValue key,
-                  bool* rval) {
-  return MapObject::has(cx, obj, key, rval);
+bool SetObjectDelete(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
+                     bool* rval) {
+  return obj->delete_(cx, key, rval);
 }
 
-bool MapObjectGet(JSContext* cx, HandleObject obj, HandleValue key,
+bool SetObjectAdd(JSContext* cx, Handle<SetObject*> obj, HandleValue key) {
+  return obj->add(cx, key);
+}
+
+bool SetObjectAddFromIC(JSContext* cx, Handle<SetObject*> obj, HandleValue key,
+                        MutableHandleValue rval) {
+  if (!SetObjectAdd(cx, obj, key)) {
+    return false;
+  }
+  rval.setObject(*obj);
+  return true;
+}
+
+bool MapObjectHas(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                  bool* rval) {
+  return obj->has(cx, key, rval);
+}
+
+bool MapObjectGet(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
                   MutableHandleValue rval) {
-  return MapObject::get(cx, obj, key, rval);
+  return obj->get(cx, key, rval);
+}
+
+bool MapObjectDelete(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                     bool* rval) {
+  return obj->delete_(cx, key, rval);
+}
+
+bool MapObjectSet(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                  HandleValue val) {
+  return obj->set(cx, key, val);
+}
+
+bool MapObjectSetFromIC(JSContext* cx, Handle<MapObject*> obj, HandleValue key,
+                        HandleValue val, MutableHandleValue rval) {
+  if (!MapObjectSet(cx, obj, key, val)) {
+    return false;
+  }
+  rval.setObject(*obj);
+  return true;
 }
 
 #ifdef DEBUG
-template <class OrderedHashTable>
-static mozilla::HashNumber HashValue(JSContext* cx, OrderedHashTable* hashTable,
+template <class T>
+static mozilla::HashNumber HashValue(JSContext* cx, T* obj,
                                      const Value* value) {
-  RootedValue rootedValue(cx, *value);
-  HashableValue hashable;
-  MOZ_ALWAYS_TRUE(hashable.setValue(cx, rootedValue));
+  MOZ_ASSERT(obj->size() > 0);
 
-  return hashTable->hash(hashable);
+  HashableValue hashable;
+  MOZ_ALWAYS_TRUE(hashable.setValue(cx, *value));
+
+  using Table = typename T::Table;
+  return *Table(obj).hash(hashable);
 }
 #endif
 
@@ -2953,14 +3177,14 @@ void AssertSetObjectHash(JSContext* cx, SetObject* obj, const Value* value,
                          mozilla::HashNumber actualHash) {
   AutoUnsafeCallWithABI unsafe;
 
-  MOZ_ASSERT(actualHash == HashValue(cx, obj->getData(), value));
+  MOZ_ASSERT(actualHash == HashValue(cx, obj, value));
 }
 
 void AssertMapObjectHash(JSContext* cx, MapObject* obj, const Value* value,
                          mozilla::HashNumber actualHash) {
   AutoUnsafeCallWithABI unsafe;
 
-  MOZ_ASSERT(actualHash == HashValue(cx, obj->getData(), value));
+  MOZ_ASSERT(actualHash == HashValue(cx, obj, value));
 }
 
 void AssertPropertyLookup(NativeObject* obj, PropertyKey id, uint32_t slot) {

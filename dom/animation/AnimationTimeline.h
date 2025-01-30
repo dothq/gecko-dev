@@ -23,8 +23,7 @@ class ScrollTimeline;
 
 class AnimationTimeline : public nsISupports, public nsWrapperCache {
  public:
-  explicit AnimationTimeline(nsIGlobalObject* aWindow,
-                             RTPCallerType aRTPCallerType);
+  AnimationTimeline(nsIGlobalObject* aWindow, RTPCallerType);
 
   struct TickState {
     TickState() = default;
@@ -100,7 +99,7 @@ class AnimationTimeline : public nsISupports, public nsWrapperCache {
    */
   bool HasAnimations() const { return !mAnimations.IsEmpty(); }
 
-  virtual void RemoveAnimation(Animation* aAnimation);
+  void RemoveAnimation(Animation* aAnimation);
   virtual void NotifyAnimationContentVisibilityChanged(Animation* aAnimation,
                                                        bool aIsVisible);
   void UpdateHiddenByContentVisibility();

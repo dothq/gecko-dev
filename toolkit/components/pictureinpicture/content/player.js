@@ -56,8 +56,8 @@ const BOTTOM_RIGHT_QUADRANT = 4;
  *    A reference to the video element that a Picture-in-Picture window
  *    is being created for
  */
-function setupPlayer(id, wgp, videoRef) {
-  Player.init(id, wgp, videoRef);
+function setupPlayer(id, wgp, videoRef, autoFocus) {
+  Player.init(id, wgp, videoRef, autoFocus);
 }
 
 /**
@@ -119,6 +119,10 @@ function setTimestamp(timeString) {
 
 function setVolume(volume) {
   Player.setVolume(volume);
+}
+
+function closeFromForeground() {
+  Player.closeFromForeground();
 }
 
 /**
@@ -185,10 +189,12 @@ let Player = {
    * @param {WindowGlobalParent} wgp
    *   The WindowGlobalParent that is hosting the originating video.
    * @param {ContentDOMReference} videoRef
-   *    A reference to the video element that a Picture-in-Picture window
-   *    is being created for
+   *   A reference to the video element that a Picture-in-Picture window
+   *   is being created for
+   * @param {boolean} autoFocus
+   *   Autofocus the PiP window
    */
-  init(id, wgp, videoRef) {
+  init(id, wgp, videoRef, autoFocus) {
     this.id = id;
 
     // State for whether or not we are adjusting the time via the scrubber
@@ -312,8 +318,8 @@ let Player = {
     this.resizeDebouncer = new DeferredTask(() => {
       this.alignEndControlsButtonTooltips();
       this.recordEvent("resize", {
-        width: window.outerWidth.toString(),
-        height: window.outerHeight.toString(),
+        width: window.outerWidth,
+        height: window.outerHeight,
       });
     }, RESIZE_DEBOUNCE_RATE_MS);
 
@@ -322,9 +328,11 @@ let Player = {
     // alwaysontop windows are not focused by default, so we have to do it
     // ourselves. We use requestAnimationFrame since we have to wait until the
     // window is visible before it can focus.
-    window.requestAnimationFrame(() => {
-      window.focus();
-    });
+    if (autoFocus) {
+      window.requestAnimationFrame(() => {
+        window.focus();
+      });
+    }
 
     let fontSize = Services.prefs.getCharPref(
       TEXT_TRACK_FONT_SIZE_PREF,
@@ -488,7 +496,7 @@ let Player = {
       }
 
       case "oop-browser-crashed": {
-        this.closePipWindow({ reason: "browser-crash" });
+        this.closePipWindow({ reason: "BrowserCrash" });
         break;
       }
 
@@ -695,7 +703,7 @@ let Player = {
       case "fullscreen": {
         this.fullscreenModeToggle();
         this.recordEvent("fullscreen", {
-          enter: (!this.isFullscreen).toString(),
+          enter: !this.isFullscreen,
         });
         break;
       }
@@ -761,7 +769,14 @@ let Player = {
     this.actor.sendAsyncMessage("PictureInPicture:Pause", {
       reason: "pip-closed",
     });
-    this.closePipWindow({ reason: "closeButton" });
+    this.closePipWindow({ reason: "CloseButton" });
+  },
+
+  closeFromForeground() {
+    PictureInPicture.closeSinglePipWindow({
+      reason: "Foregrounded",
+      actorRef: this.actor,
+    });
   },
 
   fullscreenModeToggle() {
@@ -771,8 +786,8 @@ let Player = {
       this.deferredResize = {
         left: window.screenX,
         top: window.screenY,
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: window.outerWidth,
+        height: window.outerHeight,
       };
       document.body.requestFullscreen();
     }
@@ -900,8 +915,8 @@ let Player = {
    */
   determineCurrentQuadrant() {
     // Determine center coordinates of window.
-    let windowCenterX = window.screenX + window.innerWidth / 2;
-    let windowCenterY = window.screenY + window.innerHeight / 2;
+    let windowCenterX = window.screenX + window.outerWidth / 2;
+    let windowCenterY = window.screenY + window.outerHeight / 2;
     let quadrant = null;
     let halfWidth = window.screen.availLeft + window.screen.availWidth / 2;
     let halfHeight = window.screen.availTop + window.screen.availHeight / 2;
@@ -1153,7 +1168,7 @@ let Player = {
    *  Event context data object
    */
   onCommand() {
-    this.closePipWindow({ reason: "shortcut" });
+    this.closePipWindow({ reason: "Shortcut" });
   },
 
   get controls() {
@@ -1284,13 +1299,8 @@ let Player = {
    *   The data to pass to telemetry when the event is recorded.
    */
   recordEvent(type, args) {
-    Services.telemetry.recordEvent(
-      "pictureinpicture",
-      type,
-      "player",
-      this.id,
-      args
-    );
+    args.value = this.id;
+    Glean.pictureinpicture[type + "Player"].record(args);
   },
 
   /**

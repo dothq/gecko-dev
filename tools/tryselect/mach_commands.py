@@ -208,7 +208,12 @@ def try_default(command_context, argv=None, **kwargs):
 
     sub = subcommand or command_context._mach_context.settings["try"]["default"]
     return command_context._mach_context.commands.dispatch(
-        "try", command_context._mach_context, subcommand=sub, argv=argv, **kwargs
+        "try",
+        command_context._mach_context,
+        command_site_manager=command_context.virtualenv_manager,
+        subcommand=sub,
+        argv=argv,
+        **kwargs,
     )
 
 
@@ -312,8 +317,17 @@ def try_fuzzy(command_context, **kwargs):
         if not kwargs["query"]:
             return
 
+    if kwargs.get("tag") and kwargs.get("paths"):
+        command_context._mach_context.handler.parser.error(
+            "ERROR: only --tag or <path> can be used, not both."
+        )
+        return
+
     if kwargs.get("paths"):
         kwargs["test_paths"] = kwargs["paths"]
+
+    if kwargs.get("tag"):
+        kwargs["test_tag"] = kwargs["tag"]
 
     return run(command_context, **kwargs)
 
@@ -432,7 +446,9 @@ def try_syntax(command_context, **kwargs):
     """
     init(command_context)
     try:
-        if command_context.substs.get("MOZ_ARTIFACT_BUILDS"):
+        if "PYTEST_CURRENT_TEST" not in os.environ and command_context.substs.get(
+            "MOZ_ARTIFACT_BUILDS"
+        ):
             kwargs["local_artifact_build"] = True
     except BuildEnvironmentNotFoundException:
         # If we don't have a build locally, we can't tell whether

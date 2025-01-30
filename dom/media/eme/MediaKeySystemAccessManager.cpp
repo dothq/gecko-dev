@@ -68,6 +68,33 @@ void MediaKeySystemAccessManager::PendingRequest::RejectPromiseWithTypeError(
   }
 }
 
+void MediaKeySystemAccessManager::PendingRequest::ResolvePromise(
+    MediaKeySystemAccess* aAccess) {
+  if (mPromise) {
+    mPromise->MaybeResolve(aAccess);
+  }
+}
+
+void MediaKeySystemAccessManager::PendingRequestWithMozPromise::
+    RejectPromiseWithInvalidAccessError(const nsACString& aReason) {
+  mAccessPromise.RejectIfExists(NS_ERROR_FAILURE, __func__);
+}
+
+void MediaKeySystemAccessManager::PendingRequestWithMozPromise::
+    RejectPromiseWithNotSupportedError(const nsACString& aReason) {
+  mAccessPromise.RejectIfExists(NS_ERROR_FAILURE, __func__);
+}
+
+void MediaKeySystemAccessManager::PendingRequestWithMozPromise::
+    RejectPromiseWithTypeError(const nsACString& aReason) {
+  mAccessPromise.RejectIfExists(NS_ERROR_FAILURE, __func__);
+}
+
+void MediaKeySystemAccessManager::PendingRequestWithMozPromise::ResolvePromise(
+    MediaKeySystemAccess* aAccess) {
+  mAccessPromise.ResolveIfExists(aAccess, __func__);
+}
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaKeySystemAccessManager)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
@@ -130,6 +157,18 @@ void MediaKeySystemAccessManager::Request(
       MakeUnique<PendingRequest>(aPromise, aKeySystem, aConfigs));
 }
 
+RefPtr<MediaKeySystemAccessManager::MediaKeySystemAccessPromise>
+MediaKeySystemAccessManager::Request(
+    const nsAString& aKeySystem,
+    const Sequence<MediaKeySystemConfiguration>& aConfigs) {
+  MOZ_ASSERT(NS_IsMainThread());
+  auto request = MakeUnique<PendingRequestWithMozPromise>(aKeySystem, aConfigs);
+  RefPtr<MediaKeySystemAccessPromise> promise =
+      request->mAccessPromise.Ensure(__func__);
+  CheckDoesWindowSupportProtectedMedia(std::move(request));
+  return promise;
+}
+
 void MediaKeySystemAccessManager::CheckDoesWindowSupportProtectedMedia(
     UniquePtr<PendingRequest> aRequest) {
   MOZ_ASSERT(NS_IsMainThread());
@@ -146,8 +185,8 @@ void MediaKeySystemAccessManager::CheckDoesWindowSupportProtectedMedia(
     if (!XRE_IsParentProcess() || XRE_IsE10sParentProcess()) {
       // In this case, there is no browser because the Navigator object has
       // been disconnected from its window. Thus, reject the promise.
-      aRequest->mPromise->MaybeRejectWithTypeError(
-          "Browsing context is no longer available");
+      aRequest->RejectPromiseWithTypeError(
+          "Browsing context is no longer available"_ns);
     } else {
       // In this case, there is no browser because e10s is off. Proceed with
       // the request with support since this scenario is always supported.
@@ -348,7 +387,7 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
   // 1. If keySystem is the empty string, return a promise rejected with a newly
   // created TypeError.
   if (aRequest->mKeySystem.IsEmpty()) {
-    aRequest->mPromise->MaybeRejectWithTypeError("Key system string is empty");
+    aRequest->RejectPromiseWithTypeError("Key system string is empty"_ns);
     // Don't notify DecoderDoctor, as there's nothing we or the user can
     // do to fix this situation; the site is using the API wrong.
     return;
@@ -356,8 +395,8 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
   // 2. If supportedConfigurations is empty, return a promise rejected with a
   // newly created TypeError.
   if (aRequest->mConfigs.IsEmpty()) {
-    aRequest->mPromise->MaybeRejectWithTypeError(
-        "Candidate MediaKeySystemConfigs is empty");
+    aRequest->RejectPromiseWithTypeError(
+        "Candidate MediaKeySystemConfigs is empty"_ns);
     // Don't notify DecoderDoctor, as there's nothing we or the user can
     // do to fix this situation; the site is using the API wrong.
     return;
@@ -367,8 +406,6 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
   // 4. Let origin be the origin of document.
   // 5. Let promise be a new promise.
   // 6. Run the following steps in parallel:
-
-  DecoderDoctorDiagnostics diagnostics;
 
   //   1. If keySystem is not one of the Key Systems supported by the user
   //   agent, reject promise with a NotSupportedError. String comparison is
@@ -383,7 +420,7 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
     // supported.
     aRequest->RejectPromiseWithNotSupportedError(
         "Key system is unsupported"_ns);
-    diagnostics.StoreMediaKeySystemAccess(
+    aRequest->mDiagnostics.StoreMediaKeySystemAccess(
         mWindow->GetExtantDoc(), aRequest->mKeySystem, false, __func__);
     return;
   }
@@ -399,7 +436,7 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
                                             MediaKeySystemStatus::Api_disabled);
     }
     aRequest->RejectPromiseWithNotSupportedError("EME has been preffed off"_ns);
-    diagnostics.StoreMediaKeySystemAccess(
+    aRequest->mDiagnostics.StoreMediaKeySystemAccess(
         mWindow->GetExtantDoc(), aRequest->mKeySystem, false, __func__);
     return;
   }
@@ -439,7 +476,7 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
       // "I can't play, updating" notification.
       aRequest->RejectPromiseWithNotSupportedError(
           "Timed out while waiting for a CDM update"_ns);
-      diagnostics.StoreMediaKeySystemAccess(
+      aRequest->mDiagnostics.StoreMediaKeySystemAccess(
           mWindow->GetExtantDoc(), aRequest->mKeySystem, false, __func__);
       return;
     }
@@ -453,6 +490,7 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
       keySystem = NS_ConvertUTF8toUTF16(kWidevineExperimentKeySystemName);
     }
 #endif
+    auto& diagnostics = aRequest->mDiagnostics;
     if (AwaitInstall(std::move(aRequest))) {
       // Notify chrome that we're going to wait for the CDM to download/update.
       EME_LOG("Await %s for installation",
@@ -480,28 +518,9 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
     return;
   }
 
-  nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
-  nsTHashMap<nsCharPtrHashKey, bool> warnings;
-  std::function<void(const char*)> deprecationWarningLogFn =
-      [&](const char* aMsgName) {
-        EME_LOG(
-            "MediaKeySystemAccessManager::DeprecationWarningLambda Logging "
-            "deprecation warning '%s' to WebConsole.",
-            aMsgName);
-        warnings.InsertOrUpdate(aMsgName, true);
-        AutoTArray<nsString, 1> params;
-        nsString& uri = *params.AppendElement();
-        if (doc) {
-          Unused << doc->GetDocumentURI(uri);
-        }
-        nsContentUtils::ReportToConsole(nsIScriptError::warningFlag, "Media"_ns,
-                                        doc, nsContentUtils::eDOM_PROPERTIES,
-                                        aMsgName, params);
-      };
-
   bool isPrivateBrowsing =
       mWindow->GetExtantDoc() &&
-      mWindow->GetExtantDoc()->NodePrincipal()->GetPrivateBrowsingId() > 0;
+      mWindow->GetExtantDoc()->NodePrincipal()->GetIsInPrivateBrowsing();
   //   2. Let implementation be the implementation of keySystem.
   //   3. For each value in supportedConfigurations:
   //     1. Let candidate configuration be the value.
@@ -517,23 +536,28 @@ void MediaKeySystemAccessManager::RequestMediaKeySystemAccess(
   //         3. Let the cdm implementation value be implementation.
   //      2. Resolve promise with access and abort the parallel steps of this
   //      algorithm.
-  MediaKeySystemConfiguration config;
-  if (MediaKeySystemAccess::GetSupportedConfig(
-          aRequest->mKeySystem, aRequest->mConfigs, config, &diagnostics,
-          isPrivateBrowsing, deprecationWarningLogFn)) {
-    aRequest->mSupportedConfig = Some(config);
-    // The app gets the final say on if we provide access or not.
-    CheckDoesAppAllowProtectedMedia(std::move(aRequest));
-    return;
-  }
-  // 4. Reject promise with a NotSupportedError.
-
-  // Not to inform user, because nothing to do if the corresponding keySystem
-  // configuration is not supported.
-  aRequest->RejectPromiseWithNotSupportedError(
-      "Key system configuration is not supported"_ns);
-  diagnostics.StoreMediaKeySystemAccess(mWindow->GetExtantDoc(),
-                                        aRequest->mKeySystem, false, __func__);
+  MediaKeySystemAccess::GetSupportedConfig(aRequest.get(), isPrivateBrowsing,
+                                           mWindow->GetExtantDoc())
+      ->Then(GetMainThreadSerialEventTarget(), __func__,
+             [self = RefPtr<MediaKeySystemAccessManager>{this}, this,
+              request = UniquePtr<PendingRequest>{std::move(aRequest)}](
+                 const KeySystemConfig::KeySystemConfigPromise::
+                     ResolveOrRejectValue& aResult) mutable {
+               if (aResult.IsResolve()) {
+                 request->mSupportedConfig = Some(aResult.ResolveValue());
+                 // The app gets the final say on if we provide access or not.
+                 CheckDoesAppAllowProtectedMedia(std::move(request));
+               } else {
+                 // 4. Reject promise with a NotSupportedError.
+                 // Not to inform user, because nothing to do if the
+                 // corresponding keySystem configuration is not supported.
+                 request->RejectPromiseWithNotSupportedError(
+                     "Key system configuration is not supported"_ns);
+                 request->mDiagnostics.StoreMediaKeySystemAccess(
+                     mWindow->GetExtantDoc(), request->mKeySystem, false,
+                     __func__);
+               }
+             });
 }
 
 void MediaKeySystemAccessManager::ProvideAccess(
@@ -549,7 +573,7 @@ void MediaKeySystemAccessManager::ProvideAccess(
 
   RefPtr<MediaKeySystemAccess> access(new MediaKeySystemAccess(
       mWindow, aRequest->mKeySystem, aRequest->mSupportedConfig.ref()));
-  aRequest->mPromise->MaybeResolve(access);
+  aRequest->ResolvePromise(access);
   diagnostics.StoreMediaKeySystemAccess(mWindow->GetExtantDoc(),
                                         aRequest->mKeySystem, true, __func__);
 }

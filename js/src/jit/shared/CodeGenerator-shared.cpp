@@ -18,6 +18,7 @@
 #include "jit/JitFrames.h"
 #include "jit/JitSpewer.h"
 #include "jit/MacroAssembler.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/SafepointIndex.h"
@@ -61,6 +62,7 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
                   (gen->outerInfo().nargs() + 1) * sizeof(Value)),
       returnLabel_(),
       inboundStackArgBytes_(0),
+      safepointIndices_(gen->alloc()),
       nativeToBytecodeMap_(nullptr),
       nativeToBytecodeMapSize_(0),
       nativeToBytecodeTableOffset_(0),
@@ -98,7 +100,6 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
       // argument stack depth separately.
       MOZ_ASSERT(graph->argumentSlotCount() == 0);
 
-#ifdef ENABLE_WASM_TAIL_CALLS
       // An MWasmCall does not align the stack pointer at calls sites but
       // instead relies on the a priori stack adjustment. We need to insert
       // padding so that pushing the callee's frame maintains frame alignment.
@@ -113,15 +114,6 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
 
       // Add the callee frame padding and stack args to frameDepth.
       frameDepth_ += calleeFramePadding + stackArgsWithPadding;
-#else
-      frameDepth_ += gen->wasmMaxStackArgBytes();
-
-      // An MWasmCall does not align the stack pointer at calls sites but
-      // instead relies on the a priori stack adjustment. This must be the
-      // last adjustment of frameDepth_.
-      frameDepth_ += ComputeByteAlignment(sizeof(wasm::Frame) + frameDepth_,
-                                          WasmStackAlignment);
-#endif
     }
 
 #ifdef JS_CODEGEN_ARM64
@@ -203,11 +195,11 @@ bool CodeGeneratorShared::generateOutOfLineCode() {
   // instead of the block corresponding to the OOL path.
   current = nullptr;
 
-  for (size_t i = 0; i < outOfLineCode_.length(); i++) {
-    // Add native => bytecode mapping entries for OOL sites.
+  for (OutOfLineCode* ool : outOfLineCode_) {
+    // Add native => bytecode mapping entries for OOL->sites.
     // Not enabled on wasm yet since it doesn't contain bytecode mappings.
     if (!gen->compilingWasm()) {
-      if (!addNativeToBytecodeEntry(outOfLineCode_[i]->bytecodeSite())) {
+      if (!addNativeToBytecodeEntry(ool->bytecodeSite())) {
         return false;
       }
     }
@@ -218,10 +210,10 @@ bool CodeGeneratorShared::generateOutOfLineCode() {
 
     JitSpew(JitSpew_Codegen, "# Emitting out of line code");
 
-    masm.setFramePushed(outOfLineCode_[i]->framePushed());
-    outOfLineCode_[i]->bind(&masm);
+    masm.setFramePushed(ool->framePushed());
+    ool->bind(&masm);
 
-    outOfLineCode_[i]->generate(this);
+    ool->generate(this);
   }
 
   return !masm.oom();
@@ -238,7 +230,7 @@ void CodeGeneratorShared::addOutOfLineCode(OutOfLineCode* code,
   MOZ_ASSERT_IF(!gen->compilingWasm(), site->script()->containsPC(site->pc()));
   code->setFramePushed(masm.framePushed());
   code->setBytecodeSite(site);
-  masm.propagateOOM(outOfLineCode_.append(code));
+  outOfLineCode_.pushBack(code);
 }
 
 bool CodeGeneratorShared::addNativeToBytecodeEntry(const BytecodeSite* site) {
@@ -476,6 +468,38 @@ void CodeGeneratorShared::encodeAllocation(LSnapshot* snapshot,
       }
       break;
     }
+    case MIRType::IntPtr: {
+      LAllocation* payload = snapshot->payloadOfSlot(*allocIndex);
+      if (payload->isConstant()) {
+        intptr_t constant = mir->toConstant()->toIntPtr();
+#if !defined(JS_64BIT)
+        uint32_t index;
+        masm.propagateOOM(
+            graph.addConstantToPool(Int32Value(constant), &index));
+
+        alloc = RValueAllocation::IntPtrConstant(index);
+#else
+        uint32_t lowIndex;
+        masm.propagateOOM(
+            graph.addConstantToPool(Int32Value(constant), &lowIndex));
+
+        uint32_t highIndex;
+        masm.propagateOOM(
+            graph.addConstantToPool(Int32Value(constant >> 32), &highIndex));
+
+        alloc = RValueAllocation::IntPtrConstant(lowIndex, highIndex);
+#endif
+        break;
+      }
+
+      MOZ_ASSERT(payload->isMemory() || payload->isGeneralReg());
+      if (payload->isGeneralReg()) {
+        alloc = RValueAllocation::IntPtr(ToRegister(payload));
+      } else {
+        alloc = RValueAllocation::IntPtr(ToStackIndex(payload));
+      }
+      break;
+    }
     case MIRType::MagicOptimizedOut:
     case MIRType::MagicUninitializedLexical:
     case MIRType::MagicIsConstructing: {
@@ -498,6 +522,54 @@ void CodeGeneratorShared::encodeAllocation(LSnapshot* snapshot,
       Value v = MagicValue(why);
       masm.propagateOOM(graph.addConstantToPool(v, &index));
       alloc = RValueAllocation::ConstantPool(index);
+      break;
+    }
+    case MIRType::Int64: {
+      LAllocation* payload = snapshot->payloadOfSlot(*allocIndex);
+      if (payload->isConstant()) {
+        int64_t constant = mir->toConstant()->toInt64();
+
+        uint32_t lowIndex;
+        masm.propagateOOM(
+            graph.addConstantToPool(Int32Value(constant), &lowIndex));
+
+        uint32_t highIndex;
+        masm.propagateOOM(
+            graph.addConstantToPool(Int32Value(constant >> 32), &highIndex));
+
+        alloc = RValueAllocation::Int64Constant(lowIndex, highIndex);
+        break;
+      }
+      MOZ_ASSERT(payload->isMemory() || payload->isRegister());
+
+#ifdef JS_NUNBOX32
+      LAllocation* type = snapshot->typeOfSlot(*allocIndex);
+      MOZ_ASSERT(type->isMemory() || type->isRegister());
+
+      if (payload->isRegister()) {
+        if (type->isRegister()) {
+          alloc =
+              RValueAllocation::Int64(ToRegister(type), ToRegister(payload));
+        } else {
+          alloc =
+              RValueAllocation::Int64(ToStackIndex(type), ToRegister(payload));
+        }
+      } else {
+        if (type->isRegister()) {
+          alloc =
+              RValueAllocation::Int64(ToRegister(type), ToStackIndex(payload));
+        } else {
+          alloc = RValueAllocation::Int64(ToStackIndex(type),
+                                          ToStackIndex(payload));
+        }
+      }
+#elif JS_PUNBOX64
+      if (payload->isRegister()) {
+        alloc = RValueAllocation::Int64(ToRegister(payload));
+      } else {
+        alloc = RValueAllocation::Int64(ToStackIndex(payload));
+      }
+#endif
       break;
     }
     default: {
@@ -915,8 +987,8 @@ void CodeGeneratorShared::emitTruncateDouble(FloatRegister src, Register dest,
   MOZ_ASSERT(mir->isTruncateToInt32() || mir->isWasmBuiltinTruncateToInt32());
   wasm::BytecodeOffset bytecodeOffset =
       mir->isTruncateToInt32()
-          ? mir->toTruncateToInt32()->bytecodeOffset()
-          : mir->toWasmBuiltinTruncateToInt32()->bytecodeOffset();
+          ? mir->toTruncateToInt32()->trapSiteDesc().bytecodeOffset
+          : mir->toWasmBuiltinTruncateToInt32()->trapSiteDesc().bytecodeOffset;
   OutOfLineCode* ool = oolTruncateDouble(src, dest, mir, bytecodeOffset);
 
   masm.branchTruncateDoubleMaybeModUint32(src, dest, ool->entry());
@@ -928,8 +1000,8 @@ void CodeGeneratorShared::emitTruncateFloat32(FloatRegister src, Register dest,
   MOZ_ASSERT(mir->isTruncateToInt32() || mir->isWasmBuiltinTruncateToInt32());
   wasm::BytecodeOffset bytecodeOffset =
       mir->isTruncateToInt32()
-          ? mir->toTruncateToInt32()->bytecodeOffset()
-          : mir->toWasmBuiltinTruncateToInt32()->bytecodeOffset();
+          ? mir->toTruncateToInt32()->trapSiteDesc().bytecodeOffset
+          : mir->toWasmBuiltinTruncateToInt32()->trapSiteDesc().bytecodeOffset;
   OutOfLineTruncateSlow* ool = new (alloc())
       OutOfLineTruncateSlow(src, dest, /* float32 */ true, bytecodeOffset);
   addOutOfLineCode(ool, mir);

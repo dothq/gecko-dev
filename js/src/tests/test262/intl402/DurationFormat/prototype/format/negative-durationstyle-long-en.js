@@ -1,4 +1,4 @@
-// |reftest| skip -- Intl.DurationFormat is not supported
+// |reftest| skip-if(!Intl.hasOwnProperty('DurationFormat')) -- Intl.DurationFormat is not enabled unconditionally
 // Copyright (C) 2023 André Bargull. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 esid: sec-Intl.DurationFormat.prototype.format
 description: >
   Test format method with negative duration and "long" style
-locale: [en-US]
+locale: [en]
 includes: [testIntl.js]
 features: [Intl.DurationFormat]
 ---*/
@@ -26,9 +26,10 @@ const duration = {
   nanoseconds: -9,
 };
 
-const expected = formatDurationFormatPattern(duration, style);
-
 const df = new Intl.DurationFormat("en", {style});
+
+const expected = formatDurationFormatPattern(df, duration);
+
 assert.sameValue(
   df.format(duration),
   expected,

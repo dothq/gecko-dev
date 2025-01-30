@@ -51,8 +51,7 @@ class DOMRectReadOnly : public nsISupports, public nsWrapperCache {
     return mParent;
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx,
-                               JS::Handle<JSObject*> aGivenProto) override;
+  JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<DOMRectReadOnly> FromRect(const GlobalObject& aGlobal,
                                                     const DOMRectInit& aInit);
@@ -114,8 +113,7 @@ class DOMRect final : public DOMRectReadOnly {
                                                double aX, double aY,
                                                double aWidth, double aHeight);
 
-  virtual JSObject* WrapObject(JSContext* aCx,
-                               JS::Handle<JSObject*> aGivenProto) override;
+  JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<DOMRect> ReadStructuredClone(
       JSContext* aCx, nsIGlobalObject* aGlobal,
@@ -152,12 +150,13 @@ class DOMRectList final : public nsISupports, public nsWrapperCache {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(DOMRectList)
 
-  virtual JSObject* WrapObject(JSContext* cx,
-                               JS::Handle<JSObject*> aGivenProto) override;
+  JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
   nsISupports* GetParentObject() { return mParent; }
 
-  void Append(DOMRect* aElement) { mArray.AppendElement(aElement); }
+  void Append(RefPtr<DOMRect>&& aElement) {
+    mArray.AppendElement(std::move(aElement));
+  }
 
   uint32_t Length() { return mArray.Length(); }
   DOMRect* Item(uint32_t aIndex) { return mArray.SafeElementAt(aIndex); }

@@ -12,22 +12,19 @@
 #include <jxl/codestream_header.h>
 #include <jxl/encode.h>
 #include <jxl/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <set>
 #include <string>
 #include <vector>
 
 #include "lib/jxl/base/byte_order.h"
-#include "lib/jxl/base/c_callback_support.h"
 #include "lib/jxl/base/common.h"
 #include "lib/jxl/base/status.h"
 
@@ -80,6 +77,15 @@ class PackedImage {
 
   size_t pixel_stride() const { return pixel_stride_; }
 
+  static Status ValidateDataType(JxlDataType data_type) {
+    if ((data_type != JXL_TYPE_UINT8) && (data_type != JXL_TYPE_UINT16) &&
+        (data_type != JXL_TYPE_FLOAT) && (data_type != JXL_TYPE_FLOAT16)) {
+      return JXL_FAILURE("Unhandled data type: %d",
+                         static_cast<int>(data_type));
+    }
+    return true;
+  }
+
   static size_t BitsPerChannel(JxlDataType data_type) {
     switch (data_type) {
       case JXL_TYPE_UINT8:
@@ -91,7 +97,8 @@ class PackedImage {
       case JXL_TYPE_FLOAT16:
         return 16;
       default:
-        JXL_ABORT("Unhandled JxlDataType");
+        JXL_DEBUG_ABORT("Unreachable");
+        return 0;
     }
   }
 
@@ -111,7 +118,8 @@ class PackedImage {
         return swap_endianness_ ? BSwapFloat(val) : val;
       }
       default:
-        JXL_ABORT("Unhandled JxlDataType");
+        JXL_DEBUG_ABORT("Unreachable");
+        return 0.0f;
     }
   }
 
@@ -137,7 +145,7 @@ class PackedImage {
         break;
       }
       default:
-        JXL_ABORT("Unhandled JxlDataType");
+        JXL_DEBUG_ABORT("Unreachable");
     }
   }
 
@@ -240,6 +248,7 @@ class PackedMetadata {
  public:
   std::vector<uint8_t> exif;
   std::vector<uint8_t> iptc;
+  std::vector<uint8_t> jhgm;
   std::vector<uint8_t> jumbf;
   std::vector<uint8_t> xmp;
 };

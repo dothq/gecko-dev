@@ -55,7 +55,7 @@ async function testTransition(options) {
 
 async function run_test() {
   setupTestCommon(null);
-  standardInit();
+  await standardInit();
   // The setup functions we use for update testing typically allow for update.
   // But we are just testing preferences here. We don't want anything to
   // actually attempt to update. Also, because we are messing with the pref
@@ -107,5 +107,5 @@ async function run_test() {
     expectedPostTransitionValue: true,
   });
 
-  doTestFinish();
+  await doTestFinish();
 }

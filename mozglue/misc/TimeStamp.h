@@ -387,6 +387,7 @@ static_assert(sizeof(TimeStampValue) > 8);
  */
 class TimeStamp {
  public:
+  using DurationType = TimeDuration;
   /**
    * Initialize to the "null" moment
    */
@@ -469,7 +470,7 @@ class TimeStamp {
   static MFBT_API void RecordProcessRestart();
 
 #ifdef XP_LINUX
-  uint64_t RawClockMonotonicNanosecondsSinceBoot() {
+  uint64_t RawClockMonotonicNanosecondsSinceBoot() const {
     return static_cast<uint64_t>(mValue);
   }
 #endif

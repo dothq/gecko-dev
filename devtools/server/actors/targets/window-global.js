@@ -12,9 +12,9 @@
  * WindowGlobalTargetActor is an abstract class used by target actors that hold
  * documents, such as frames, chrome windows, etc.
  *
- * This class is extended by ParentProcessTargetActor, itself being extented by WebExtensionTargetActor.
+ * This class is extended by ParentProcessTargetActor.
  *
- * See devtools/docs/backend/actor-hierarchy.md for more details.
+ * See devtools/docs/contributor/backend/actor-hierarchy.md for more details about all the targets.
  *
  * For performance matters, this file should only be loaded in the targeted context's
  * process. For example, it shouldn't be evaluated in the parent process until we try to
@@ -31,17 +31,30 @@ var {
 } = require("resource://devtools/server/actors/utils/sources-manager.js");
 var makeDebugger = require("resource://devtools/server/actors/utils/make-debugger.js");
 const Targets = require("resource://devtools/server/actors/targets/index.js");
-const { TargetActorRegistry } = ChromeUtils.importESModule(
-  "resource://devtools/server/actors/targets/target-actor-registry.sys.mjs",
-  { global: "shared" }
-);
-const { PrivateBrowsingUtils } = ChromeUtils.importESModule(
-  "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
+
+const lazy = {};
+// Modules loaded in the same module loader as this module.
+// (may spawn distinct module instances with other devtools and firefox frontend)
+ChromeUtils.defineESModuleGetters(
+  lazy,
+  {
+    PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
+    WEBEXTENSION_FALLBACK_DOC_URL:
+      "resource://devtools/server/actors/watcher/browsing-context-helpers.sys.mjs",
+  },
   { global: "contextual" }
 );
 
-const EXTENSION_CONTENT_SYS_MJS =
-  "resource://gre/modules/ExtensionContent.sys.mjs";
+// Modules loaded from the shared module loader.
+// Won't be as debuggable from the Browser Toolbox and may trigger breakpoints.
+ChromeUtils.defineESModuleGetters(
+  lazy,
+  {
+    TargetActorRegistry:
+      "resource://devtools/server/actors/targets/target-actor-registry.sys.mjs",
+  },
+  { global: "shared" }
+);
 
 const { Pool } = require("resource://devtools/shared/protocol.js");
 const {
@@ -58,7 +71,7 @@ const {
 
 loader.lazyRequireGetter(
   this,
-  ["ThreadActor", "unwrapDebuggerObjectGlobal"],
+  ["ThreadActor"],
   "resource://devtools/server/actors/thread.js",
   true
 );
@@ -74,17 +87,6 @@ loader.lazyRequireGetter(
   "resource://devtools/server/actors/utils/stylesheets-manager.js",
   true
 );
-const lazy = {};
-loader.lazyGetter(lazy, "ExtensionContent", () => {
-  return ChromeUtils.importESModule(EXTENSION_CONTENT_SYS_MJS, {
-    // ExtensionContent.sys.mjs is a singleton and must be loaded through the
-    // main loader. Note that the user of lazy.ExtensionContent elsewhere in
-    // this file (at webextensionsContentScriptGlobals) looks up the module
-    // via Cu.isESModuleLoaded, which also uses the main loader as desired.
-    global: "shared",
-  }).ExtensionContent;
-});
-
 loader.lazyRequireGetter(
   this,
   "TouchSimulator",
@@ -313,7 +315,7 @@ class WindowGlobalTargetActor extends BaseTargetActor {
             }
           }
         }
-        return result.concat(this.webextensionsContentScriptGlobals);
+        return result;
       },
       shouldAddNewGlobalAsDebuggee: this._shouldAddNewGlobalAsDebuggee,
     });
@@ -338,18 +340,24 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     // (This is probably meant to disappear once EFT is the only supported codepath)
     this._progressListener = new DebuggerProgressListener(this);
 
-    TargetActorRegistry.registerTargetActor(this);
+    lazy.TargetActorRegistry.registerTargetActor(this);
 
     if (docShell) {
       this.setDocShell(docShell);
     }
   }
 
+  // Attribute only set when debugging web extensions, in order to distinguish:
+  // - "fallback-document" created by DevTools for the top level target
+  // - "background" for the background page
+  // - "popup" for any popup document
+  #isFallbackExtensionDocument = false;
+
   /**
    * Define the initial docshell.
    *
    * This is called from the constructor for WindowGlobalTargetActor,
-   * or from sub class constructors: WebExtensionTargetActor and ParentProcessTargetActor.
+   * or from sub class constructor of ParentProcessTargetActor.
    *
    * This is to circumvent the fact that sub classes need to call inner method
    * to compute the initial docshell and we can't call inner methods before calling
@@ -366,7 +374,9 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     this._originalWindow = this.window;
 
     // Update isPrivate as window is based on docShell
-    this.isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(this.window);
+    this.isPrivate = lazy.PrivateBrowsingUtils.isContentWindowPrivate(
+      this.window
+    );
 
     // Instantiate the Thread Actor immediately.
     // This is the only one actor instantiated right away by the target actor.
@@ -381,6 +391,23 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     // (This is also probably meant to disappear once EFT is the only supported codepath)
     this._docShellsObserved = false;
     DevToolsUtils.executeSoon(() => this._watchDocshells());
+
+    // The `watchedByDevTools` enables gecko behavior tied to this flag, such as:
+    //  - reporting the contents of HTML loaded in the docshells,
+    //  - or capturing stacks for the network monitor.
+    //
+    // This flag can only be set on top level BrowsingContexts.
+    if (!this.browsingContext.parent) {
+      this.browsingContext.watchedByDevTools = true;
+    }
+
+    if (this.sessionContext.type == "webextension") {
+      if (
+        this.window.location.href.startsWith(lazy.WEBEXTENSION_FALLBACK_DOC_URL)
+      ) {
+        this.#isFallbackExtensionDocument = true;
+      }
+    }
   }
 
   get docShell() {
@@ -388,10 +415,6 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       "A docShell should be provided as constructor argument of WindowGlobalTargetActor, or redefined by the subclass"
     );
   }
-
-  // Optional console API listener options (e.g. used by the WebExtensionActor to
-  // filter console messages by addonID), set to an empty (no options) object by default.
-  consoleAPIListenerOptions = {};
 
   /*
    * Return a Debugger instance or create one if there is none yet
@@ -465,6 +488,10 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       : null;
   }
 
+  get targetGlobal() {
+    return this.window;
+  }
+
   get outerWindowID() {
     if (this.docShell) {
       return this.docShell.outerWindowID;
@@ -480,6 +507,10 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     return this.browsingContext?.id;
   }
 
+  get innerWindowId() {
+    return this.window?.windowGlobalChild.innerWindowId;
+  }
+
   get browserId() {
     return this.browsingContext?.browserId;
   }
@@ -489,28 +520,19 @@ class WindowGlobalTargetActor extends BaseTargetActor {
   }
 
   /**
-   * Getter for the WebExtensions ContentScript globals related to the
-   * window global's current DOM window.
-   */
-  get webextensionsContentScriptGlobals() {
-    // Only retrieve the content scripts globals if the ExtensionContent JSM module
-    // has been already loaded (which is true if the WebExtensions internals have already
-    // been loaded in the same content process).
-    if (Cu.isESModuleLoaded(EXTENSION_CONTENT_SYS_MJS)) {
-      return lazy.ExtensionContent.getContentScriptGlobals(this.window);
-    }
-
-    return [];
-  }
-
-  /**
    * Getter for the list of all content DOM windows in the window global.
    * @return {Array}
    */
   get windows() {
-    return this.docShells.map(docShell => {
-      return docShell.domWindow;
-    });
+    const windows = [];
+    for (const docShell of this.docShells) {
+      try {
+        windows.push(docShell.domWindow);
+      } catch (e) {
+        // Ignore destroying docshells which may throw when accessing domWindow property.
+      }
+    }
+    return windows;
   }
 
   /**
@@ -632,6 +654,14 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       .devtoolsSpawnedBrowsingContextForWebExtension
       ? this.devtoolsSpawnedBrowsingContextForWebExtension
       : this.originalDocShell.browsingContext;
+
+    // When toggling the toolbox on/off many times in a row,
+    // we may try to destroy the actor while the related document is already destroyed.
+    // In such scenario, return the minimum viable form
+    if (!originalBrowsingContext.currentWindowContext) {
+      return { actor: this.actorID };
+    }
+
     const browsingContextID = originalBrowsingContext.id;
     const innerWindowId =
       originalBrowsingContext.currentWindowContext.innerWindowId;
@@ -658,6 +688,10 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       ignoreSubFrames: this.ignoreSubFrames,
       isPopup,
       isPrivate: this.isPrivate,
+
+      // Specific to Web Extension documents
+      isFallbackExtensionDocument: this.#isFallbackExtensionDocument,
+
       traits: {
         // @backward-compat { version 64 } Exposes a new trait to help identify
         // BrowsingContextActor's inherited actors from the client side.
@@ -685,6 +719,11 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       response.title = this.title;
       response.url = this.url;
       response.outerWindowID = this.outerWindowID;
+    }
+
+    // If the actor is already being destroyed, avoid re-registering the target scoped actors
+    if (this.destroying) {
+      return response;
     }
 
     const actors = this._createExtraActors();
@@ -719,6 +758,12 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     }
     this.destroying = true;
 
+    // Force flushing pending resources if the actor isn't already destroyed.
+    // This helps notify the client about pending resources on navigation.
+    if (!this.isDestroyed()) {
+      this.emitResources();
+    }
+
     // Tell the thread actor that the window global is closed, so that it may terminate
     // instead of resuming the debuggee script.
     // TODO: Bug 997119: Remove this coupling with thread actor
@@ -729,6 +774,17 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     if (this._touchSimulator) {
       this._touchSimulator.stop();
       this._touchSimulator = null;
+    }
+
+    // The watchedByDevTools flag is only set on top level BrowsingContext
+    // (as it then cascades to all its children),
+    // and when destroying the target, we should tell the platform we no longer
+    // observe this BrowsingContext and set this attribute to false.
+    if (
+      this.browsingContext?.watchedByDevTools &&
+      !this.browsingContext.parent
+    ) {
+      this.browsingContext.watchedByDevTools = false;
     }
 
     // Check for `docShell` availability, as it can be already gone during
@@ -789,34 +845,14 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       "console-api-profiler"
     );
 
-    TargetActorRegistry.unregisterTargetActor(this);
+    lazy.TargetActorRegistry.unregisterTargetActor(this);
     Resources.unwatchAllResources(this);
   }
 
   /**
-   * Return true if the given global is associated with this window global and should
-   * be added as a debuggee, false otherwise.
+   * This is only used by WebExtensionTargetActor, which overrides this method.
    */
-  _shouldAddNewGlobalAsDebuggee(wrappedGlobal) {
-    // Otherwise, check if it is a WebExtension content script sandbox
-    const global = unwrapDebuggerObjectGlobal(wrappedGlobal);
-    if (!global) {
-      return false;
-    }
-
-    // Check if the global is a sdk page-mod sandbox.
-    let metadata = {};
-    let id = "";
-    try {
-      id = getInnerId(this.window);
-      metadata = Cu.getSandboxMetadata(global);
-    } catch (e) {
-      // ignore
-    }
-    if (metadata?.["inner-window-id"] && metadata["inner-window-id"] == id) {
-      return true;
-    }
-
+  _shouldAddNewGlobalAsDebuggee() {
     return false;
   }
 
@@ -824,6 +860,13 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     // If for some unexpected reason, the actor is immediately destroyed,
     // avoid registering leaking observer listener.
     if (this.isDestroyed()) {
+      return;
+    }
+
+    // This method is called asynchronously and the document may have been destroyed in the meantime.
+    // In such case, automatically destroy the target actor.
+    if (this.docShell.isBeingDestroyed()) {
+      this.destroy();
       return;
     }
 
@@ -942,7 +985,6 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     const scriptError = scriptErrorClass.createInstance(Ci.nsIScriptError);
     scriptError.initWithWindowID(
       text,
-      null,
       null,
       0,
       0,
@@ -1314,10 +1356,6 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     if (typeof options.touchEventsOverride !== "undefined") {
       const enableTouchSimulator = options.touchEventsOverride === "enabled";
 
-      this.docShell.metaViewportOverride = enableTouchSimulator
-        ? Ci.nsIDocShell.META_VIEWPORT_OVERRIDE_ENABLED
-        : Ci.nsIDocShell.META_VIEWPORT_OVERRIDE_NONE;
-
       // We want to reload the document if it's an "existing" top level target on which
       // the touch simulator will be toggled and the user has turned the
       // "reload on touch simulation" setting on.
@@ -1384,7 +1422,14 @@ class WindowGlobalTargetActor extends BaseTargetActor {
    */
   _restoreTargetConfiguration() {
     if (this._restoreFocus && this.browsingContext?.isActive) {
-      this.window.focus();
+      try {
+        this.window.focus();
+      } catch (e) {
+        // When closing devtools while navigating, focus() may throw NS_ERROR_XPC_SECURITY_MANAGER_VETO
+        if (e.result != Cr.NS_ERROR_XPC_SECURITY_MANAGER_VETO) {
+          throw e;
+        }
+      }
     }
   }
 
@@ -1688,17 +1733,6 @@ class DebuggerProgressListener {
       this._knownWindowIDs.set(getWindowID(win), win);
     }
 
-    // The `watchedByDevTools` enables gecko behavior tied to this flag, such as:
-    //  - reporting the contents of HTML loaded in the docshells,
-    //  - or capturing stacks for the network monitor.
-    //
-    // This flag is also set in frame-helper but in the case of the browser toolbox, we
-    // don't have the watcher enabled by default yet, and as a result we need to set it
-    // here for the parent process window global.
-    // This should be removed as part of Bug 1709529.
-    if (this._targetActor.typeName === "parentProcessTarget") {
-      docShell.browsingContext.watchedByDevTools = true;
-    }
     // Immediately enable CSS error reports on new top level docshells, if this was already enabled.
     // This is specific to MBT and WebExtension targets (so the isRootActor check).
     if (
@@ -1710,6 +1744,12 @@ class DebuggerProgressListener {
   }
 
   unwatch(docShell) {
+    // If the docshell is being destroyed, we won't be able to retrieve its related window object,
+    // which is the key ingredient for all cleanup operations done in this method.
+    if (docShell.isBeingDestroyed()) {
+      return;
+    }
+
     const docShellWindow = docShell.domWindow;
     if (!this._watchedDocShells.has(docShellWindow)) {
       return;
@@ -1740,12 +1780,6 @@ class DebuggerProgressListener {
       : this._getWindowsInDocShell(docShell);
     for (const win of windows) {
       this._knownWindowIDs.delete(getWindowID(win));
-    }
-
-    // We only reset it for parent process target actor as the flag should be set in parent
-    // process, and thus is set elsewhere for other type of BrowsingContextActor.
-    if (this._targetActor.typeName === "parentProcessTarget") {
-      docShell.browsingContext.watchedByDevTools = false;
     }
   }
 
@@ -1928,6 +1962,5 @@ class DebuggerProgressListener {
         this._targetActor._navigate(window);
       }
     }
-  },
-  "DebuggerProgressListener.prototype.onStateChange");
+  }, "DebuggerProgressListener.prototype.onStateChange");
 }

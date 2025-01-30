@@ -11,14 +11,38 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Error, Field, Fields, Ident, Index, Result, Token};
 
-// Check that there are repr attributes satisfying the given predicate
-pub fn has_valid_repr(attrs: &[Attribute], predicate: impl Fn(&Ident) -> bool + Copy) -> bool {
-    attrs.iter().filter(|a| a.path().is_ident("repr")).any(|a| {
-        a.parse_args::<IdentListAttribute>()
-            .ok()
-            .and_then(|s| s.idents.iter().find(|s| predicate(s)).map(|_| ()))
-            .is_some()
-    })
+#[derive(Default)]
+pub struct ReprInfo {
+    pub c: bool,
+    pub transparent: bool,
+    pub u8: bool,
+    pub packed: bool,
+}
+
+impl ReprInfo {
+    pub fn compute(attrs: &[Attribute]) -> Self {
+        let mut info = ReprInfo::default();
+        for attr in attrs.iter().filter(|a| a.path().is_ident("repr")) {
+            if let Ok(pieces) = attr.parse_args::<IdentListAttribute>() {
+                for piece in pieces.idents.iter() {
+                    if piece == "C" || piece == "c" {
+                        info.c = true;
+                    } else if piece == "transparent" {
+                        info.transparent = true;
+                    } else if piece == "packed" {
+                        info.packed = true;
+                    } else if piece == "u8" {
+                        info.u8 = true;
+                    }
+                }
+            }
+        }
+        info
+    }
+
+    pub fn cpacked_or_transparent(self) -> bool {
+        (self.c && self.packed) || self.transparent
+    }
 }
 
 // An attribute that is a list of idents
@@ -60,7 +84,7 @@ pub fn repr_for(f: &Fields) -> TokenStream2 {
     if f.len() == 1 {
         quote!(transparent)
     } else {
-        quote!(packed)
+        quote!(C, packed)
     }
 }
 
@@ -239,7 +263,7 @@ pub fn extract_field_attributes(attrs: &mut Vec<Attribute>) -> Result<Option<Ide
         ));
     }
 
-    Ok(varule.get(0).cloned())
+    Ok(varule.first().cloned())
 }
 
 #[derive(Default, Copy, Clone)]
@@ -265,7 +289,7 @@ pub fn extract_attributes_common(
 
     let name = if is_var { "make_varule" } else { "make_ule" };
 
-    if let Some(attr) = zerovec_attrs.get(0) {
+    if let Some(attr) = zerovec_attrs.first() {
         return Err(Error::new(
             attr.span(),
             format!("Found unknown or duplicate attribute for #[{name}]"),

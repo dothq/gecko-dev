@@ -99,7 +99,19 @@ static const char* const QUIRKY_PUBLIC_IDS_DATA[] = {
     "-//webtechs//dtd mozilla html 2.0//",
     "-//webtechs//dtd mozilla html//"};
 staticJArray<const char*, int32_t> nsHtml5TreeBuilder::QUIRKY_PUBLIC_IDS = {
-    QUIRKY_PUBLIC_IDS_DATA, MOZ_ARRAY_LENGTH(QUIRKY_PUBLIC_IDS_DATA)};
+    QUIRKY_PUBLIC_IDS_DATA, std::size(QUIRKY_PUBLIC_IDS_DATA)};
+void nsHtml5TreeBuilder::setKeepBuffer(bool keepBuffer) {
+  this->keepBuffer = keepBuffer;
+}
+
+bool nsHtml5TreeBuilder::dropBufferIfLongerThan(int32_t length) {
+  if (charBuffer.length > length) {
+    charBuffer = nullptr;
+    return true;
+  }
+  return false;
+}
+
 void nsHtml5TreeBuilder::startTokenization(nsHtml5Tokenizer* self) {
   tokenizer = self;
   stackNodes = jArray<nsHtml5StackNode*, int32_t>::newJArray(64);
@@ -118,7 +130,9 @@ void nsHtml5TreeBuilder::startTokenization(nsHtml5Tokenizer* self) {
   headPointer = nullptr;
   start(fragment);
   charBufferLen = 0;
-  charBuffer = nullptr;
+  if (!keepBuffer) {
+    charBuffer = nullptr;
+  }
   framesetOk = true;
   if (fragment) {
     nsIContentHandle* elt;
@@ -652,7 +666,9 @@ void nsHtml5TreeBuilder::endTokenization() {
     stackNodesIdx = 0;
     stackNodes = nullptr;
   }
-  charBuffer = nullptr;
+  if (!keepBuffer) {
+    charBuffer = nullptr;
+  }
   end();
 }
 
@@ -2106,10 +2122,13 @@ nsIContentHandle* nsHtml5TreeBuilder::getDeclarativeShadowRoot(
   }
   bool shadowRootIsClonable =
       attributes->contains(nsHtml5AttributeName::ATTR_SHADOWROOTCLONABLE);
+  bool shadowRootIsSerializable =
+      attributes->contains(nsHtml5AttributeName::ATTR_SHADOWROOTSERIALIZABLE);
   bool shadowRootDelegatesFocus =
       attributes->contains(nsHtml5AttributeName::ATTR_SHADOWROOTDELEGATESFOCUS);
   return getShadowRootFromHost(currentNode, templateNode, shadowRootMode,
-                               shadowRootIsClonable, shadowRootDelegatesFocus);
+                               shadowRootIsClonable, shadowRootIsSerializable,
+                               shadowRootDelegatesFocus);
 }
 
 nsHtml5String nsHtml5TreeBuilder::extractCharsetFromContent(

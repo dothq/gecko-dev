@@ -89,6 +89,8 @@ class SharedImage {
   }
 
   bool Initialize(int32_t aWidth, int32_t aHeight) {
+    MOZ_ASSERT(aWidth);
+    MOZ_ASSERT(aHeight);
     MOZ_ASSERT(aWidth > 0);
     MOZ_ASSERT(aHeight > 0);
 
@@ -183,9 +185,9 @@ class SharedImage {
     }
   }
 
-  int32_t GetWidth() { return mWidth; }
+  int32_t GetWidth() const { return mWidth; }
 
-  int32_t GetHeight() { return mHeight; }
+  int32_t GetHeight() const { return mHeight; }
 
   SharedImage(const SharedImage&) = delete;
   SharedImage(SharedImage&&) = delete;
@@ -251,15 +253,9 @@ class PresentableSharedImage {
     return true;
   }
 
-  bool PresentToWindow(HWND aWindowHandle, TransparencyMode aTransparencyMode,
+  bool PresentToWindow(HWND aWindowHandle,
                        Span<const IpcSafeRect> aDirtyRects) {
-    if (aTransparencyMode == TransparencyMode::Transparent) {
-      // If our window is a child window or a child-of-a-child, the window
-      // that needs to be updated is the top level ancestor of the tree
-      HWND topLevelWindow = WinUtils::GetTopLevelHWND(aWindowHandle, true);
-      MOZ_ASSERT(::GetWindowLongPtr(topLevelWindow, GWL_EXSTYLE) &
-                 WS_EX_LAYERED);
-
+    if (::GetWindowLongPtrW(aWindowHandle, GWL_EXSTYLE) & WS_EX_LAYERED) {
       BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
       POINT srcPos = {0, 0};
       RECT clientRect = {};
@@ -285,7 +281,7 @@ class PresentableSharedImage {
       }
 
       return !!::UpdateLayeredWindow(
-          topLevelWindow, nullptr /*paletteDC*/, nullptr /*newPos*/, &winSize,
+          aWindowHandle, nullptr /*paletteDC*/, nullptr /*newPos*/, &winSize,
           mDeviceContext, &srcPos, 0 /*colorKey*/, &bf, ULW_ALPHA);
     }
 
@@ -386,8 +382,7 @@ Provider::~Provider() {
   }
 }
 
-bool Provider::Initialize(HWND aWindowHandle, DWORD aTargetProcessId,
-                          TransparencyMode aTransparencyMode) {
+bool Provider::Initialize(HWND aWindowHandle, DWORD aTargetProcessId) {
   MOZ_ASSERT(aWindowHandle);
   MOZ_ASSERT(aTargetProcessId);
 
@@ -439,13 +434,7 @@ bool Provider::Initialize(HWND aWindowHandle, DWORD aTargetProcessId,
       PR_USER_THREAD, [](void* p) { static_cast<Provider*>(p)->ThreadMain(); },
       this, PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD,
       0 /*default stack size*/);
-  if (!mServiceThread) {
-    return false;
-  }
-
-  mTransparencyMode = uint32_t(aTransparencyMode);
-
-  return true;
+  return !!mServiceThread;
 }
 
 Maybe<RemoteBackbufferHandles> Provider::CreateRemoteHandles() {
@@ -453,10 +442,6 @@ Maybe<RemoteBackbufferHandles> Provider::CreateRemoteHandles() {
       RemoteBackbufferHandles(ipc::FileDescriptor(mFileMapping),
                               ipc::FileDescriptor(mRequestReadyEvent),
                               ipc::FileDescriptor(mResponseReadyEvent)));
-}
-
-void Provider::UpdateTransparencyMode(TransparencyMode aTransparencyMode) {
-  mTransparencyMode = uint32_t(aTransparencyMode);
 }
 
 void Provider::ThreadMain() {
@@ -515,7 +500,7 @@ void Provider::HandleBorrowRequest(BorrowResponseData* aResponseData,
 
   aResponseData->result = ResponseResult::Error;
 
-  RECT clientRect = {};
+  RECT clientRect{};
   if (!::GetClientRect(mWindowHandle, &clientRect)) {
     return;
   }
@@ -523,12 +508,12 @@ void Provider::HandleBorrowRequest(BorrowResponseData* aResponseData,
   MOZ_ASSERT(clientRect.left == 0);
   MOZ_ASSERT(clientRect.top == 0);
 
-  int32_t width = clientRect.right ? clientRect.right : 1;
-  int32_t height = clientRect.bottom ? clientRect.bottom : 1;
+  const int32_t width = std::max(int32_t(clientRect.right), 1);
+  const int32_t height = std::max(int32_t(clientRect.bottom), 1);
 
   bool needNewBackbuffer = !aAllowSameBuffer || !mBackbuffer ||
-                           (mBackbuffer->GetWidth() != width) ||
-                           (mBackbuffer->GetHeight() != height);
+                           mBackbuffer->GetWidth() != width ||
+                           mBackbuffer->GetHeight() != height;
 
   if (!needNewBackbuffer) {
     aResponseData->result = ResponseResult::BorrowSameBuffer;
@@ -573,8 +558,7 @@ void Provider::HandlePresentRequest(const PresentRequestData& aRequestData,
   }
 
   if (!mBackbuffer->PresentToWindow(
-          mWindowHandle, GetTransparencyMode(),
-          rectSpan.First(aRequestData.lenDirtyRects))) {
+          mWindowHandle, rectSpan.First(aRequestData.lenDirtyRects))) {
     return;
   }
 

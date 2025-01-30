@@ -35,6 +35,11 @@ pub fn map_built_in(word: &str, span: Span) -> Result<crate::BuiltIn, Error<'_>>
         "local_invocation_index" => crate::BuiltIn::LocalInvocationIndex,
         "workgroup_id" => crate::BuiltIn::WorkGroupId,
         "num_workgroups" => crate::BuiltIn::NumWorkGroups,
+        // subgroup
+        "num_subgroups" => crate::BuiltIn::NumSubgroups,
+        "subgroup_id" => crate::BuiltIn::SubgroupId,
+        "subgroup_size" => crate::BuiltIn::SubgroupSize,
+        "subgroup_invocation_id" => crate::BuiltIn::SubgroupInvocationId,
         _ => return Err(Error::UnknownBuiltin(span)),
     })
 }
@@ -53,6 +58,8 @@ pub fn map_sampling(word: &str, span: Span) -> Result<crate::Sampling, Error<'_>
         "center" => Ok(crate::Sampling::Center),
         "centroid" => Ok(crate::Sampling::Centroid),
         "sample" => Ok(crate::Sampling::Sample),
+        "first" => Ok(crate::Sampling::First),
+        "either" => Ok(crate::Sampling::Either),
         _ => Err(Error::UnknownAttribute(span)),
     }
 }
@@ -87,7 +94,7 @@ pub fn map_storage_format(word: &str, span: Span) -> Result<crate::StorageFormat
         "rgba8sint" => Sf::Rgba8Sint,
         "rgb10a2uint" => Sf::Rgb10a2Uint,
         "rgb10a2unorm" => Sf::Rgb10a2Unorm,
-        "rg11b10float" => Sf::Rg11b10Float,
+        "rg11b10float" => Sf::Rg11b10Ufloat,
         "rg32uint" => Sf::Rg32Uint,
         "rg32sint" => Sf::Rg32Sint,
         "rg32float" => Sf::Rg32Float,
@@ -223,6 +230,7 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         "inverseSqrt" => Mf::InverseSqrt,
         "transpose" => Mf::Transpose,
         "determinant" => Mf::Determinant,
+        "quantizeToF16" => Mf::QuantizeToF16,
         // bits
         "countTrailingZeros" => Mf::CountTrailingZeros,
         "countLeadingZeros" => Mf::CountLeadingZeros,
@@ -230,20 +238,24 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         "reverseBits" => Mf::ReverseBits,
         "extractBits" => Mf::ExtractBits,
         "insertBits" => Mf::InsertBits,
-        "firstTrailingBit" => Mf::FindLsb,
-        "firstLeadingBit" => Mf::FindMsb,
+        "firstTrailingBit" => Mf::FirstTrailingBit,
+        "firstLeadingBit" => Mf::FirstLeadingBit,
         // data packing
         "pack4x8snorm" => Mf::Pack4x8snorm,
         "pack4x8unorm" => Mf::Pack4x8unorm,
         "pack2x16snorm" => Mf::Pack2x16snorm,
         "pack2x16unorm" => Mf::Pack2x16unorm,
         "pack2x16float" => Mf::Pack2x16float,
+        "pack4xI8" => Mf::Pack4xI8,
+        "pack4xU8" => Mf::Pack4xU8,
         // data unpacking
         "unpack4x8snorm" => Mf::Unpack4x8snorm,
         "unpack4x8unorm" => Mf::Unpack4x8unorm,
         "unpack2x16snorm" => Mf::Unpack2x16snorm,
         "unpack2x16unorm" => Mf::Unpack2x16unorm,
         "unpack2x16float" => Mf::Unpack2x16float,
+        "unpack4xI8" => Mf::Unpack4xI8,
+        "unpack4xU8" => Mf::Unpack4xU8,
         _ => return None,
     })
 }
@@ -259,4 +271,27 @@ pub fn map_conservative_depth(
         "unchanged" => Ok(Cd::Unchanged),
         _ => Err(Error::UnknownConservativeDepth(span)),
     }
+}
+
+pub fn map_subgroup_operation(
+    word: &str,
+) -> Option<(crate::SubgroupOperation, crate::CollectiveOperation)> {
+    use crate::CollectiveOperation as co;
+    use crate::SubgroupOperation as sg;
+    Some(match word {
+        "subgroupAll" => (sg::All, co::Reduce),
+        "subgroupAny" => (sg::Any, co::Reduce),
+        "subgroupAdd" => (sg::Add, co::Reduce),
+        "subgroupMul" => (sg::Mul, co::Reduce),
+        "subgroupMin" => (sg::Min, co::Reduce),
+        "subgroupMax" => (sg::Max, co::Reduce),
+        "subgroupAnd" => (sg::And, co::Reduce),
+        "subgroupOr" => (sg::Or, co::Reduce),
+        "subgroupXor" => (sg::Xor, co::Reduce),
+        "subgroupExclusiveAdd" => (sg::Add, co::ExclusiveScan),
+        "subgroupExclusiveMul" => (sg::Mul, co::ExclusiveScan),
+        "subgroupInclusiveAdd" => (sg::Add, co::InclusiveScan),
+        "subgroupInclusiveMul" => (sg::Mul, co::InclusiveScan),
+        _ => return None,
+    })
 }

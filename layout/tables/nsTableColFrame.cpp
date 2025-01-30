@@ -65,8 +65,9 @@ void nsTableColFrame::SetColType(nsTableColType aType) {
 void nsTableColFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle) {
   nsSplittableFrame::DidSetComputedStyle(aOldComputedStyle);
 
-  if (!aOldComputedStyle)  // avoid this on init
+  if (!aOldComputedStyle) {  // avoid this on init
     return;
+  }
 
   nsTableFrame* tableFrame = GetTableFrame();
   if (tableFrame->IsBorderCollapse() &&
@@ -82,7 +83,6 @@ void nsTableColFrame::Reflow(nsPresContext* aPresContext,
                              nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableColFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   aDesiredSize.ClearSize();
   const nsStyleVisibility* colVis = StyleVisibility();

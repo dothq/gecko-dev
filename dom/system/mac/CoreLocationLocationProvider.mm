@@ -14,6 +14,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/GeolocationPositionErrorBinding.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "MLSFallback.h"
 
 #include <CoreLocation/CLError.h>
@@ -28,8 +29,9 @@
 
 using namespace mozilla;
 
-static const CLLocationAccuracy kHIGH_ACCURACY = kCLLocationAccuracyBest;
-static const CLLocationAccuracy kDEFAULT_ACCURACY =
+MOZ_RUNINIT static const CLLocationAccuracy kHIGH_ACCURACY =
+    kCLLocationAccuracyBest;
+MOZ_RUNINIT static const CLLocationAccuracy kDEFAULT_ACCURACY =
     kCLLocationAccuracyNearestTenMeters;
 
 @interface LocationDelegate : NSObject <CLLocationManagerDelegate> {
@@ -105,6 +107,13 @@ static const CLLocationAccuracy kDEFAULT_ACCURACY =
       location.coordinate.latitude, location.coordinate.longitude, altitude,
       location.horizontalAccuracy, altitudeAccuracy, heading, speed,
       PR_Now() / PR_USEC_PER_MSEC);
+
+  if (!mProvider->IsEverUpdated()) {
+    // Saw signal without MLS fallback
+    glean::geolocation::fallback
+        .EnumGet(glean::geolocation::FallbackLabel::eNone)
+        .Add();
+  }
 
   mProvider->Update(geoPosition);
   Telemetry::Accumulate(Telemetry::GEOLOCATION_OSX_SOURCE_IS_MLS, false);
@@ -208,7 +217,8 @@ CoreLocationLocationProvider::Shutdown() {
   mCLObjects = nullptr;
 
   if (mMLSFallbackProvider) {
-    mMLSFallbackProvider->Shutdown();
+    mMLSFallbackProvider->Shutdown(
+        MLSFallback::ShutdownReason::ProviderShutdown);
     mMLSFallbackProvider = nullptr;
   }
 
@@ -229,6 +239,7 @@ void CoreLocationLocationProvider::Update(nsIDOMGeoPosition* aSomewhere) {
   if (aSomewhere && mCallback) {
     mCallback->Update(aSomewhere);
   }
+  mEverUpdated = true;
 }
 void CoreLocationLocationProvider::NotifyError(uint16_t aErrorCode) {
   nsCOMPtr<nsIGeolocationUpdate> callback(mCallback);
@@ -248,6 +259,7 @@ void CoreLocationLocationProvider::CancelMLSFallbackProvider() {
     return;
   }
 
-  mMLSFallbackProvider->Shutdown();
+  mMLSFallbackProvider->Shutdown(
+      MLSFallback::ShutdownReason::ProviderResponded);
   mMLSFallbackProvider = nullptr;
 }

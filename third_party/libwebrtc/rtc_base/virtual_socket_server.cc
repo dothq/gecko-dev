@@ -24,7 +24,9 @@
 #include "rtc_base/event.h"
 #include "rtc_base/fake_clock.h"
 #include "rtc_base/logging.h"
+#if !defined(WEBRTC_BSD)
 #include "rtc_base/physical_socket_server.h"
+#endif
 #include "rtc_base/socket_address_pair.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/time_utils.h"
@@ -160,7 +162,7 @@ void VirtualSocket::SafetyBlock::SetNotAlive() {
     for (const SocketAddress& remote_addr : *listen_queue_) {
       server->Disconnect(remote_addr);
     }
-    listen_queue_ = absl::nullopt;
+    listen_queue_ = std::nullopt;
   }
 
   // Cancel potential connects

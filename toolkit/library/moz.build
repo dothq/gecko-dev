@@ -9,6 +9,7 @@
 def Libxul_defines():
     LIBRARY_DEFINES["MOZILLA_INTERNAL_API"] = True
     LIBRARY_DEFINES["IMPL_LIBXUL"] = True
+    LIBRARY_DEFINES["MOZ_SUPPORT_LEAKCHECKING"] = True
     if not CONFIG["JS_SHARED_LIBRARY"]:
         LIBRARY_DEFINES["STATIC_EXPORTABLE_JS_API"] = True
 
@@ -59,7 +60,7 @@ def Libxul(name, output_category=None):
     ]
 
     if CONFIG["ACCESSIBILITY"]:
-        DELAYLOAD_DLLS += ["oleacc.dll"]
+        DELAYLOAD_DLLS += ["oleacc.dll", "UIAutomationCore.dll"]
 
     if CONFIG["MOZ_WEBRTC"]:
         DELAYLOAD_DLLS += ["msdmo.dll"]
@@ -86,8 +87,7 @@ def Libxul(name, output_category=None):
 
     Libxul_defines()
 
-    if CONFIG["MOZ_NEEDS_LIBATOMIC"]:
-        OS_LIBS += ["atomic"]
+    OS_LIBS += CONFIG["LIBATOMIC_LIBS"]
 
     # TouchBar-related classes are only available in the 10.12.2 SDK and later.
     # We need to weak link these classes until we've upgraded our SDK to at
@@ -100,6 +100,7 @@ def Libxul(name, output_category=None):
         LDFLAGS += ["-Wl,-U,_OBJC_CLASS_$_NSCustomTouchBarItem"]
         LDFLAGS += ["-Wl,-U,_OBJC_CLASS_$_NSPopoverTouchBarItem"]
         LDFLAGS += ["-lresolv"]
+        LDFLAGS += ["-Wl,-rpath,@executable_path/../Frameworks/ChannelPrefs.framework"]
 
     if CONFIG["MOZ_DEBUG_SYMBOLS"] and CONFIG["CC_TYPE"] == "clang-cl":
         LDFLAGS += ["-NATVIS:%s/toolkit/library/gecko.natvis" % TOPSRCDIR]
@@ -139,6 +140,7 @@ if CONFIG["OS_ARCH"] == "WINNT" and CONFIG["CC_TYPE"] not in ("clang", "gcc"):
 
 DIRS += [
     "build",
+    "buildid_reader",
     "gtest",
 ]
 
@@ -155,8 +157,12 @@ USE_LIBS += [
     "nss",
     "psshparser",
     "sqlite",
-    "zlib",
 ]
+
+if not CONFIG["USE_LIBZ_RS"]:
+    USE_LIBS += [
+        "zlib",
+    ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     # The mozgtk library is a workaround that makes Gtk+ use libwayland-client
@@ -179,11 +185,6 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
 if CONFIG["MOZ_WAYLAND"]:
     USE_LIBS += [
         "mozwayland",
-    ]
-
-if CONFIG["MOZ_JPROF"]:
-    USE_LIBS += [
-        "jprof",
     ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" or CONFIG["MOZ_TREE_FREETYPE"]:
@@ -227,10 +228,14 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
         "-framework AVFoundation",
         "-framework CoreMedia",
         "-framework IOKit",
+        "-framework ScreenCaptureKit",
         "-F%s" % CONFIG["MACOS_PRIVATE_FRAMEWORKS_DIR"],
         "-framework CoreUI",
         "-framework CoreSymbolication",
         "cups",
+    ]
+    USE_LIBS += [
+        "ChannelPrefs",
     ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "uikit":
@@ -367,16 +372,13 @@ if CONFIG["OS_ARCH"] == "WINNT":
         # "d3d11", # should be explicitly linked by gfx-backend-d3d11
         #'d3d12', # should be explicitly linked by d3d12-rs
         "d3dcompiler",
+        "runtimeobject",
     ]
-
-    if CONFIG["CC_TYPE"] == "clang-cl":
-        OS_LIBS += [
-            "runtimeobject",
-        ]
 
     if CONFIG["ACCESSIBILITY"]:
         OS_LIBS += [
             "oleacc",
+            "uiautomationcore",
         ]
 
     # Prevent winapi-rs from statically linking
@@ -408,3 +410,7 @@ if CONFIG["COMPILE_ENVIRONMENT"]:
     GeneratedFile(
         "buildid.cpp", script="gen_buildid.py", inputs=["!build/%s.list" % libxul_list]
     )
+
+    EXPORTS += [
+        "buildid_section.h",
+    ]

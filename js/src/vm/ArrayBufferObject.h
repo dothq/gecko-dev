@@ -38,7 +38,7 @@ struct MemoryDesc;
 // of size `initialCommittedSize`.  Both arguments denote bytes and must be
 // multiples of the page size, with `initialCommittedSize` <= `mappedSize`.
 // Returns nullptr on failure.
-void* MapBufferMemory(wasm::IndexType, size_t mappedSize,
+void* MapBufferMemory(wasm::AddressType, size_t mappedSize,
                       size_t initialCommittedSize);
 
 // Commit additional memory in an existing mapping.  `dataEnd` must be the
@@ -57,7 +57,7 @@ bool ExtendBufferMapping(void* dataStart, size_t mappedSize,
 
 // Remove an existing mapping.  `dataStart` must be the pointer to the start of
 // the mapping, and `mappedSize` the size of that mapping.
-void UnmapBufferMemory(wasm::IndexType t, void* dataStart, size_t mappedSize);
+void UnmapBufferMemory(wasm::AddressType t, void* dataStart, size_t mappedSize);
 
 // Return the number of bytes currently reserved for WebAssembly memory
 uint64_t WasmReservedBytes();
@@ -130,7 +130,7 @@ uint64_t WasmReservedBytes();
 
 class ArrayBufferObjectMaybeShared;
 
-wasm::IndexType WasmArrayBufferIndexType(
+wasm::AddressType WasmArrayBufferAddressType(
     const ArrayBufferObjectMaybeShared* buf);
 wasm::Pages WasmArrayBufferPages(const ArrayBufferObjectMaybeShared* buf);
 wasm::Pages WasmArrayBufferClampedMaxPages(
@@ -152,8 +152,8 @@ class ArrayBufferObjectMaybeShared : public NativeObject {
   // Note: the eventual goal is to remove this from ArrayBuffer and have
   // (Shared)ArrayBuffers alias memory owned by some wasm::Memory object.
 
-  wasm::IndexType wasmIndexType() const {
-    return WasmArrayBufferIndexType(this);
+  wasm::AddressType wasmAddressType() const {
+    return WasmArrayBufferAddressType(this);
   }
   wasm::Pages wasmPages() const { return WasmArrayBufferPages(this); }
   wasm::Pages wasmClampedMaxPages() const {
@@ -202,7 +202,10 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
 
   static const uint8_t RESERVED_SLOTS = 4;
 
-  static const size_t ARRAY_BUFFER_ALIGNMENT = 8;
+  // Alignment for ArrayBuffer objects. Must match the largest possible
+  // TypedArray scalar to ensure TypedArray and Atomics accesses are always
+  // aligned.
+  static constexpr size_t ARRAY_BUFFER_ALIGNMENT = 8;
 
   static_assert(FLAGS_SLOT == JS_ARRAYBUFFER_FLAGS_SLOT,
                 "self-hosted code with burned-in constants must get the "
@@ -306,6 +309,7 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
     void* freeUserData_;
 
     friend class ArrayBufferObject;
+    friend class ResizableArrayBufferObject;
 
     BufferContents(uint8_t* data, BufferKind kind,
                    JS::BufferContentsFreeFunc freeFunc = nullptr,
@@ -320,6 +324,43 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
       // It is the caller's responsibility to ensure that the
       // BufferContents does not outlive the data.
     }
+
+#ifdef DEBUG
+    // Checks if the buffer contents are properly aligned.
+    //
+    // `malloc(0)` is implementation defined and may return a pointer which
+    // isn't aligned to `max_align_t`, so we only require proper alignment when
+    // `byteLength` is non-zero.
+    //
+    // jemalloc doesn't implement restriction, but instead uses `sizeof(void*)`
+    // for its smallest allocation class. Larger allocations are guaranteed to
+    // be eight byte aligned.
+    bool isAligned(size_t byteLength) const {
+      // `malloc(0)` has implementation defined behavior.
+      if (byteLength == 0) {
+        return true;
+      }
+
+      // Allow jemalloc tiny allocations to have smaller alignment requirements
+      // than `std::malloc`.
+      if (sizeof(void*) < ArrayBufferObject::ARRAY_BUFFER_ALIGNMENT) {
+        if (byteLength <= sizeof(void*)) {
+          return true;
+        }
+      }
+
+      // `std::malloc` returns memory at least as strictly aligned as for
+      // max_align_t and the alignment of max_align_t is a multiple of the array
+      // buffer alignment.
+      static_assert(alignof(std::max_align_t) %
+                        ArrayBufferObject::ARRAY_BUFFER_ALIGNMENT ==
+                    0);
+
+      // Otherwise the memory must be correctly alignment.
+      auto ptr = reinterpret_cast<uintptr_t>(data());
+      return ptr % ArrayBufferObject::ARRAY_BUFFER_ALIGNMENT == 0;
+    }
+#endif
 
    public:
     static BufferContents createInlineData(void* data) {
@@ -543,16 +584,16 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
 
   size_t wasmMappedSize() const;
 
-  wasm::IndexType wasmIndexType() const;
+  wasm::AddressType wasmAddressType() const;
   wasm::Pages wasmPages() const;
   wasm::Pages wasmClampedMaxPages() const;
   mozilla::Maybe<wasm::Pages> wasmSourceMaxPages() const;
 
   [[nodiscard]] static ArrayBufferObject* wasmGrowToPagesInPlace(
-      wasm::IndexType t, wasm::Pages newPages,
+      wasm::AddressType t, wasm::Pages newPages,
       Handle<ArrayBufferObject*> oldBuf, JSContext* cx);
   [[nodiscard]] static ArrayBufferObject* wasmMovingGrowToPages(
-      wasm::IndexType t, wasm::Pages newPages,
+      wasm::AddressType t, wasm::Pages newPages,
       Handle<ArrayBufferObject*> oldBuf, JSContext* cx);
   static void wasmDiscard(Handle<ArrayBufferObject*> buf, uint64_t byteOffset,
                           uint64_t byteLength);
@@ -590,6 +631,7 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
   }
 
   void initialize(size_t byteLength, BufferContents contents) {
+    MOZ_ASSERT(contents.isAligned(byteLength));
     setByteLength(byteLength);
     setFlags(0);
     setFirstView(nullptr);
@@ -670,6 +712,7 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
 
   void initialize(size_t byteLength, size_t maxByteLength,
                   BufferContents contents) {
+    MOZ_ASSERT(contents.isAligned(byteLength));
     setByteLength(byteLength);
     setMaxByteLength(maxByteLength);
     setFlags(RESIZABLE);
@@ -717,7 +760,7 @@ size_t ArrayBufferObject::maxByteLength() const {
 }
 
 // Create a buffer for a wasm memory, whose type is determined by
-// memory.indexType().
+// memory.addressType().
 ArrayBufferObjectMaybeShared* CreateWasmBuffer(JSContext* cx,
                                                const wasm::MemoryDesc& memory);
 
@@ -760,15 +803,19 @@ class InnerViewTable {
                 StableCellHasher<JSObject*>, ZoneAllocPolicy>;
   ArrayBufferViewMap map;
 
-  // List of keys from innerViews where either the source or at least one
-  // target is in the nursery. The raw pointer to a JSObject is allowed here
-  // because this vector is cleared after every minor collection. Users in
-  // sweepAfterMinorCollection must be careful to use MaybeForwarded before
-  // touching these pointers.
-  Vector<ArrayBufferObject*, 0, SystemAllocPolicy> nurseryKeys;
+  // List of keys from map where either the source or at least one target is in
+  // the nursery. The raw pointer to a JSObject is allowed here because this
+  // vector is cleared after every minor collection. Users in sweepAfterMinorGC
+  // must be careful to use MaybeForwarded before touching these pointers.
+  using NurseryKeysVector =
+      GCVector<UnsafeBarePtr<ArrayBufferObject*>, 0, SystemAllocPolicy>;
+  NurseryKeysVector nurseryKeys;
 
   // Whether nurseryKeys is a complete list.
   bool nurseryKeysValid = true;
+
+  bool sweepMapEntryAfterMinorGC(UnsafeBarePtr<JSObject*>& buffer,
+                                 ViewVector& views);
 
  public:
   explicit InnerViewTable(Zone* zone) : map(zone) {}
@@ -793,6 +840,9 @@ class InnerViewTable {
                ArrayBufferViewObject* view);
   ViewVector* maybeViewsUnbarriered(ArrayBufferObject* buffer);
   void removeViews(ArrayBufferObject* buffer);
+
+  bool sweepViewsAfterMinorGC(JSTracer* trc, ArrayBufferObject* buffer,
+                              Views& views);
 };
 
 template <typename Wrapper>
@@ -807,18 +857,18 @@ class MutableWrappedPtrOperations<InnerViewTable, Wrapper>
 };
 
 class WasmArrayRawBuffer {
-  wasm::IndexType indexType_;
+  wasm::AddressType addressType_;
   wasm::Pages clampedMaxPages_;
   mozilla::Maybe<wasm::Pages> sourceMaxPages_;
   size_t mappedSize_;  // Not including the header page
   size_t length_;
 
  protected:
-  WasmArrayRawBuffer(wasm::IndexType indexType, uint8_t* buffer,
+  WasmArrayRawBuffer(wasm::AddressType addressType, uint8_t* buffer,
                      wasm::Pages clampedMaxPages,
                      const mozilla::Maybe<wasm::Pages>& sourceMaxPages,
                      size_t mappedSize, size_t length)
-      : indexType_(indexType),
+      : addressType_(addressType),
         clampedMaxPages_(clampedMaxPages),
         sourceMaxPages_(sourceMaxPages),
         mappedSize_(mappedSize),
@@ -828,7 +878,7 @@ class WasmArrayRawBuffer {
 
  public:
   static WasmArrayRawBuffer* AllocateWasm(
-      wasm::IndexType indexType, wasm::Pages initialPages,
+      wasm::AddressType addressType, wasm::Pages initialPages,
       wasm::Pages clampedMaxPages,
       const mozilla::Maybe<wasm::Pages>& sourceMaxPages,
       const mozilla::Maybe<size_t>& mappedSize);
@@ -849,7 +899,7 @@ class WasmArrayRawBuffer {
                                                  sizeof(WasmArrayRawBuffer));
   }
 
-  wasm::IndexType indexType() const { return indexType_; }
+  wasm::AddressType addressType() const { return addressType_; }
 
   uint8_t* basePointer() { return dataPointer() - gc::SystemPageSize(); }
 

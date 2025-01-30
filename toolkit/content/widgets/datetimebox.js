@@ -12,17 +12,29 @@
  * according to the value of the "type" property.
  */
 this.DateTimeBoxWidget = class {
-  constructor(shadowRoot) {
+  constructor(shadowRoot, prefs) {
     this.shadowRoot = shadowRoot;
     this.element = shadowRoot.host;
     this.document = this.element.ownerDocument;
     this.window = this.document.defaultView;
+    // When undefined, DOMLocalization will use the app locales.
+    let locales;
+    if (prefs["privacy.resistFingerprinting"]) {
+      locales = [...this.window.getWebExposedLocales()];
+      // Make sure to always include en-US, in case the web exposed languages do
+      // not include a translation for the widget.
+      if (!locales.includes("en-US")) {
+        locales.push("en-US");
+      }
+    }
     // The DOMLocalization instance needs to allow for sync methods so that
     // the placeholder value may be determined and set during the
     // createEditFieldAndAppend() call.
     this.l10n = new this.window.DOMLocalization(
       ["toolkit/global/datetimebox.ftl"],
-      /* aSync = */ true
+      /* aSync = */ true,
+      undefined,
+      locales
     );
   }
 
@@ -262,11 +274,12 @@ this.DateTimeBoxWidget = class {
   }
 
   get FIELD_EVENTS() {
-    return ["focus", "blur", "copy", "cut", "paste"];
+    return ["focus", "copy", "cut", "paste"];
   }
 
   get CONTROL_EVENTS() {
     return [
+      "MozDateTimeWillBlur",
       "MozDateTimeValueChanged",
       "MozNotifyMinMaxStepAttrChanged",
       "MozDateTimeAttributeChanged",
@@ -289,7 +302,7 @@ this.DateTimeBoxWidget = class {
         eventName,
         this,
         { mozSystemGroup: true },
-        false
+        /* wantsUntrusted = */ false
       );
     });
   }
@@ -544,8 +557,9 @@ this.DateTimeBoxWidget = class {
         this.onFocus(aEvent);
         break;
       }
-      case "blur": {
-        this.onBlur(aEvent);
+      case "MozDateTimeWillBlur": {
+        // The event detail is the blur event.
+        this.onWillBlur(aEvent.detail);
         break;
       }
       case "mousedown":
@@ -579,9 +593,9 @@ this.DateTimeBoxWidget = class {
     }
   }
 
-  onBlur(aEvent) {
+  onWillBlur(aEvent) {
     this.log(
-      "onBlur originalTarget: " +
+      "onWillBlur originalTarget: " +
         aEvent.originalTarget +
         " target: " +
         aEvent.target +
@@ -592,7 +606,16 @@ this.DateTimeBoxWidget = class {
     );
 
     let target = aEvent.originalTarget;
+    if (
+      target.getRootNode() !== this.shadowRoot ||
+      !target.matches(".datetime-edit-field")
+    ) {
+      // We only care about the blurring of our inner fields.
+      return;
+    }
+
     target.setAttribute("typeBuffer", "");
+
     this.setInputValueFromFields();
     // No need to set and unset the focus state (or closing the picker) if the
     // focus is staying within our input.
@@ -650,6 +673,10 @@ this.DateTimeBoxWidget = class {
   onKeyDown(aEvent) {
     this.log("onKeyDown key: " + aEvent.key);
 
+    if (aEvent.defaultPrevented) {
+      return;
+    }
+
     switch (aEvent.key) {
       // Toggle the picker on Space/Enter on Calendar button or Space on input,
       // close on Escape anywhere.
@@ -691,21 +718,17 @@ this.DateTimeBoxWidget = class {
           aEvent.preventDefault();
           break;
         }
-        if (this.isEditable()) {
-          // TODO(emilio, bug 1571533): These functions should look at
-          // defaultPrevented.
-          // Ctrl+Backspace/Delete on non-macOS and
-          // Cmd+Backspace/Delete on macOS to clear the field
-          if (aEvent.getModifierState("Accel")) {
-            // Clear the input's value
-            this.clearInputFields(false);
-          } else {
-            let targetField = aEvent.originalTarget;
-            this.clearFieldValue(targetField);
-            this.setInputValueFromFields();
-          }
-          aEvent.preventDefault();
+        // Ctrl+Backspace/Delete on non-macOS and
+        // Cmd+Backspace/Delete on macOS to clear the field
+        if (aEvent.getModifierState("Accel")) {
+          // Clear the input's value
+          this.clearInputFields(false);
+        } else {
+          let targetField = aEvent.originalTarget;
+          this.clearFieldValue(targetField);
+          this.setInputValueFromFields();
         }
+        aEvent.preventDefault();
         break;
       }
       case "ArrowRight":
@@ -1159,9 +1182,6 @@ this.DateTimeBoxWidget = class {
         this.advanceToNextField();
       }
       targetField.setAttribute("typeBuffer", buffer);
-      if (!this.isAnyFieldEmpty()) {
-        this.setInputValueFromFields();
-      }
     }
   }
 

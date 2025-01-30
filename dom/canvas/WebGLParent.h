@@ -17,6 +17,7 @@ class HostWebGLContext;
 class WebGLChild;
 
 namespace layers {
+class SharedSurfacesHolder;
 class SharedSurfaceTextureClient;
 class SurfaceDescriptor;
 }  // namespace layers
@@ -32,7 +33,8 @@ class WebGLParent : public PWebGLParent, public SupportsWeakPtr {
   mozilla::ipc::IPCResult RecvInitialize(const webgl::InitContextDesc&,
                                          webgl::InitContextResult* out);
 
-  explicit WebGLParent(const dom::ContentParentId& aContentId);  // For IPDL
+  WebGLParent(layers::SharedSurfacesHolder* aSharedSurfacesHolder,
+              const dom::ContentParentId& aContentId);  // For IPDL
 
   using IPCResult = mozilla::ipc::IPCResult;
 
@@ -103,12 +105,12 @@ class WebGLParent : public PWebGLParent, public SupportsWeakPtr {
   IPCResult RecvGetUniform(ObjectId id, uint32_t loc,
                            webgl::GetUniformData* ret);
   IPCResult RecvGetVertexAttrib(GLuint index, GLenum pname, Maybe<double>* ret);
-  IPCResult RecvIsEnabled(GLenum cap, bool* ret);
   IPCResult RecvOnMemoryPressure();
   IPCResult RecvValidateProgram(ObjectId id, bool* ret);
 
   // -
 
+  const RefPtr<layers::SharedSurfacesHolder> mSharedSurfacesHolder;
   const dom::ContentParentId mContentId;
 
  private:

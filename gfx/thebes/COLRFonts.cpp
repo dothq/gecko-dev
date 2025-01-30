@@ -1298,8 +1298,7 @@ struct PaintGlyph {
       // Core Text's own color font support may step in and ignore the
       // pattern. So to avoid this, fill the glyph as a path instead.
 #if XP_MACOSX
-      RefPtr<Path> path =
-          aState.mScaledFont->GetPathForGlyphs(buffer, aState.mDrawTarget);
+      RefPtr<Path> path = GetPathForGlyphs(aState, buffer);
       aState.mDrawTarget->Fill(path, *fillPattern, aState.mDrawOptions);
 #else
       aState.mDrawTarget->FillGlyphs(aState.mScaledFont, buffer, *fillPattern,
@@ -1307,8 +1306,7 @@ struct PaintGlyph {
 #endif
       return true;
     }
-    RefPtr<Path> path =
-        aState.mScaledFont->GetPathForGlyphs(buffer, aState.mDrawTarget);
+    RefPtr<Path> path = GetPathForGlyphs(aState, buffer);
     aState.mDrawTarget->PushClip(path);
     bool ok = DispatchPaint(aState, aOffset + paintOffset, aBounds);
     aState.mDrawTarget->PopClip();
@@ -1319,9 +1317,18 @@ struct PaintGlyph {
     MOZ_ASSERT(format == kFormat);
     Glyph g{uint16_t(glyphID), Point()};
     GlyphBuffer buffer{&g, 1};
-    RefPtr<Path> path =
-        aState.mScaledFont->GetPathForGlyphs(buffer, aState.mDrawTarget);
+    RefPtr<Path> path = GetPathForGlyphs(aState, buffer);
     return path->GetFastBounds();
+  }
+
+ private:
+  RefPtr<Path> GetPathForGlyphs(const PaintState& aState,
+                                const GlyphBuffer& buffer) const {
+    if (aState.mDrawTarget->GetBackendType() == BackendType::WEBRENDER_TEXT) {
+      RefPtr dt = gfxPlatform::ThreadLocalScreenReferenceDrawTarget();
+      return aState.mScaledFont->GetPathForGlyphs(buffer, dt);
+    }
+    return aState.mScaledFont->GetPathForGlyphs(buffer, aState.mDrawTarget);
   }
 };
 
@@ -2385,8 +2392,7 @@ bool COLRFonts::ValidateColorGlyphs(hb_blob_t* aCOLR, hb_blob_t* aCPAL) {
   }
 
   if (uint16_t(colr->version) == 1) {
-    return StaticPrefs::gfx_font_rendering_colr_v1_enabled() &&
-           colrLength >= sizeof(COLRv1Header) &&
+    return colrLength >= sizeof(COLRv1Header) &&
            reinterpret_cast<const COLRv1Header*>(colr)->Validate(colrLength);
   }
 

@@ -88,6 +88,8 @@ prefs = [
 
 ["test_frecency_alternative_nimbus.js"]
 
+["test_geolocationUtils.js"]
+
 ["test_heuristic_cancel.js"]
 
 ["test_hideSponsoredHistory.js"]
@@ -141,6 +143,8 @@ prefs = [
 
 ["test_providerTabToSearch_partialHost.js"]
 
+["test_provider_notification.js"]
+
 ["test_providersManager.js"]
 
 ["test_providersManager_filtering.js"]
@@ -192,6 +196,17 @@ skip-if = ["!sync"]
 
 ["test_trimming.js"]
 
+["test_ui_schemas_valid.js"]
+support-files = [
+  "../../schema/urlbar-persisted-search-terms-schema.json",
+  "../../schema/urlbar-persisted-search-terms-ui-schema.json",
+]
+
 ["test_unitConversion.js"]
+
+["test_urlbar_persisted_search_terms_validation.js"]
+support-files = ["../../schema/urlbar-persisted-search-terms-schema.json"]
+
+["test_urlbar_search_terms_persistence.js"]
 
 ["test_word_boundary_search.js"]

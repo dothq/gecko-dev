@@ -17,6 +17,15 @@ function addStylesheet(href) {
   link.href = href;
 }
 
+function disableEscClose() {
+  addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+}
+
 /**
  * Render content based on about:welcome multistage template.
  */
@@ -28,6 +37,7 @@ function renderMultistage(ready) {
   // Expose top level functions expected by the bundle.
   window.AWGetFeatureConfig = () => CONFIG;
   window.AWGetSelectedTheme = receive("GET_SELECTED_THEME");
+  window.AWGetInstalledAddons = receive("GET_INSTALLED_ADDONS");
   window.AWSelectTheme = data => receive("SELECT_THEME")(data?.toUpperCase());
   // Do not send telemetry if message (e.g. spotlight in PBM) config sets metrics as 'block'.
   if (CONFIG?.metrics !== "block") {
@@ -43,6 +53,7 @@ function renderMultistage(ready) {
   };
   window.AWWaitForMigrationClose = receive("WAIT_FOR_MIGRATION_CLOSE");
   window.AWEvaluateScreenTargeting = receive("EVALUATE_SCREEN_TARGETING");
+  window.AWEvaluateAttributeTargeting = receive("EVALUATE_ATTRIBUTE_TARGETING");
 
   // Update styling to be compatible with about:welcome.
   addStylesheet("chrome://browser/content/aboutwelcome/aboutwelcome.css");
@@ -65,6 +76,10 @@ function renderMultistage(ready) {
     dialog?.classList.remove("spotlight");
     box.removeAttribute("sizeto");
   });
+
+  if (CONFIG?.disableEscClose) {
+    disableEscClose();
+  }
 
   // Load the bundle to render the content as configured.
   document.head.appendChild(document.createElement("script")).src =

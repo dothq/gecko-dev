@@ -6,18 +6,18 @@
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![LICENSE](https://img.shields.io/badge/license-apache-blue.svg?logo=apache)](LICENSE-APACHE)
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4%20adopted-ff69b4.svg)](../main/CODE_OF_CONDUCT.md)
-[![MSRV](https://img.shields.io/badge/rustc-1.65.0+-ab6000.svg)](https://blog.rust-lang.org/2022/11/03/Rust-1.65.0.html)
+[![MSRV](https://img.shields.io/badge/rustc-1.70.0+-ab6000.svg)](https://blog.rust-lang.org/2023/06/01/Rust-1.70.0.html)
 
 [![Banner](banner.png)](https://traverseresearch.nl)
 
 ```toml
 [dependencies]
-gpu-allocator = "0.25.0"
+gpu-allocator = "0.27.0"
 ```
 
 ![Visualizer](visualizer.png)
 
-This crate provides a fully written in Rust memory allocator for Vulkan and DirectX 12.
+This crate provides a fully written in Rust memory allocator for Vulkan, DirectX 12 and Metal.
 
 ## [Windows-rs] and [winapi]
 
@@ -48,7 +48,7 @@ use gpu_allocator::vulkan::*;
 use gpu_allocator::MemoryLocation;
 
 // Setup vulkan info
-let vk_info = vk::BufferCreateInfo::builder()
+let vk_info = vk::BufferCreateInfo::default()
     .size(512)
     .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
 
@@ -130,9 +130,40 @@ drop(resource);
 allocator.free(allocation).unwrap();
 ```
 
+## Setting up the Metal memory allocator
+
+```rust
+use gpu_allocator::metal::*;
+
+let mut allocator = Allocator::new(&AllocatorCreateDesc {
+    device: device.clone(),
+    debug_settings: Default::default(),
+    allocation_sizes: Default::default(),
+});
+```
+
+## Simple Metal allocation example
+```rust
+use gpu_allocator::metal::*;
+use gpu_allocator::MemoryLocation;
+
+let allocation_desc = AllocationCreateDesc::buffer(
+    &device,
+    "Example allocation",
+    512, // size in bytes
+    gpu_allocator::MemoryLocation::GpuOnly,
+);
+let allocation = allocator.allocate(&allocation_desc).unwrap();
+let resource = allocation.make_buffer().unwrap();
+
+// Cleanup
+drop(resource);
+allocator.free(&allocation).unwrap();
+```
+
 ## Minimum Supported Rust Version
 
-The MSRV for this crate and the `vulkan` and `d3d12` features is Rust 1.65.  Any other features such as the `visualizer` (with all the `egui` dependencies) may have a higher requirement and are not tested in our CI.
+The MSRV for this crate and the `vulkan`, `d3d12` and `metal` features is Rust 1.70.  Any other features such as the `visualizer` (with all the `egui` dependencies) may have a higher requirement and are not tested in our CI.
 
 ## License
 

@@ -350,7 +350,7 @@ class PrefRow {
       className =
         (this.hasUserValue ? "has-user-value " : "") +
         (this.isLocked ? "locked " : "") +
-        (this.exists ? "" : "deleted ") +
+        (this.exists || this.isAddRow ? "" : "deleted ") +
         (this.isAddRow ? "add " : "") +
         (this.odd ? "odd " : "");
     }
@@ -509,7 +509,7 @@ function loadPrefs() {
     });
   });
 
-  showAll.addEventListener("click", event => {
+  showAll.addEventListener("click", () => {
     search.focus();
     search.value = "";
     gFilterPrefsTask.disarm();

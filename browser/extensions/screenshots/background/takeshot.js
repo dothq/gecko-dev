@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* globals browser, communication, getZoomFactor, shot, main, catcher, analytics, blobConverters, thumbnailGenerator */
+/* globals browser, communication, getZoomFactor, shot, main, catcher, blobConverters, thumbnailGenerator */
 
 "use strict";
 
@@ -17,7 +17,7 @@ this.takeshot = (function () {
     }
   );
 
-  communication.register("getZoomFactor", sender => {
+  communication.register("getZoomFactor", () => {
     return getZoomFactor();
   });
 
@@ -54,7 +54,7 @@ this.takeshot = (function () {
       browser.tabs.captureTab(null, options).then(dataUrl => {
         const image = new Image();
         image.src = dataUrl;
-        return new Promise((resolve, reject) => {
+        return new Promise(resolve => {
           image.onload = catcher.watchFunction(() => {
             const xScale = devicePixelRatio;
             const yScale = devicePixelRatio;

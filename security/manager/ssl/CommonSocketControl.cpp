@@ -8,13 +8,13 @@
 
 #include "PublicKeyPinningService.h"
 #include "SharedCertVerifier.h"
-#include "SharedSSLState.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/dom/Promise.h"
 #include "nsICertOverrideService.h"
 #include "nsISocketProvider.h"
 #include "nsITlsHandshakeListener.h"
+#include "nsNSSCertificate.h"
 #include "nsNSSComponent.h"
 #include "nsNSSHelper.h"
 #include "secerr.h"
@@ -123,6 +123,12 @@ CommonSocketControl::ProxyStartSSL(void) { return NS_ERROR_NOT_IMPLEMENTED; }
 
 NS_IMETHODIMP
 CommonSocketControl::StartTLS(void) { return NS_ERROR_NOT_IMPLEMENTED; }
+
+NS_IMETHODIMP
+CommonSocketControl::AsyncStartTLS(JSContext* aCx,
+                                   mozilla::dom::Promise** aPromise) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
 
 NS_IMETHODIMP
 CommonSocketControl::SetNPNList(nsTArray<nsCString>& aNPNList) {

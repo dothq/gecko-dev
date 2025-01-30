@@ -4,7 +4,7 @@
 
 //! A list of CSS rules.
 
-use crate::shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked};
+use crate::shared_lock::{DeepCloneWithLock, Locked};
 use crate::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
 use crate::str::CssStringWriter;
 use crate::stylesheets::loader::StylesheetLoader;
@@ -15,6 +15,8 @@ use crate::stylesheets::{AllowImportRules, CssRule, CssRuleTypes, RulesMutateErr
 use malloc_size_of::{MallocShallowSizeOf, MallocSizeOfOps};
 use servo_arc::Arc;
 use std::fmt::{self, Write};
+
+use super::CssRuleType;
 
 /// A list of CSS rules.
 #[derive(Debug, ToShmem)]
@@ -32,12 +34,11 @@ impl DeepCloneWithLock for CssRules {
         &self,
         lock: &SharedRwLock,
         guard: &SharedRwLockReadGuard,
-        params: &DeepCloneParams,
     ) -> Self {
         CssRules(
             self.0
                 .iter()
-                .map(|x| x.deep_clone_with_lock(lock, guard, params))
+                .map(|x| x.deep_clone_with_lock(lock, guard))
                 .collect(),
         )
     }
@@ -136,6 +137,7 @@ pub trait CssRulesHelpers {
         parent_stylesheet_contents: &StylesheetContents,
         index: usize,
         nested: CssRuleTypes,
+        parse_relative_rule_type: Option<CssRuleType>,
         loader: Option<&dyn StylesheetLoader>,
         allow_import_rules: AllowImportRules,
     ) -> Result<CssRule, RulesMutateError>;
@@ -149,6 +151,7 @@ impl CssRulesHelpers for Locked<CssRules> {
         parent_stylesheet_contents: &StylesheetContents,
         index: usize,
         containing_rule_types: CssRuleTypes,
+        parse_relative_rule_type: Option<CssRuleType>,
         loader: Option<&dyn StylesheetLoader>,
         allow_import_rules: AllowImportRules,
     ) -> Result<CssRule, RulesMutateError> {
@@ -165,6 +168,7 @@ impl CssRulesHelpers for Locked<CssRules> {
                 rule_list: &rules.0,
                 index,
                 containing_rule_types,
+                parse_relative_rule_type,
             };
 
             // Steps 3, 4, 5, 6

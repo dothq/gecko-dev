@@ -53,8 +53,21 @@
 #  define IF_WASM_TYPE(REAL, IMAGINARY) IMAGINARY
 #endif
 
+#ifdef ENABLE_WASM_JSPI
+#  define IF_WASM_JSPI(REAL, IMAGINARY) REAL
+#else
+#  define IF_WASM_JSPI(REAL, IMAGINARY) IMAGINARY
+#endif
+
+#ifdef NIGHTLY_BUILD
+#  define IF_NIGHTLY(REAL, IMAGINARY) REAL
+#else
+#  define IF_NIGHTLY(REAL, IMAGINARY) IMAGINARY
+#endif
+
 #define JS_FOR_PROTOTYPES_(REAL, IMAGINARY, REAL_IF_INTL, REAL_IF_TEMPORAL, \
-                           REAL_IF_WASM_TYPE)                               \
+                           REAL_IF_WASM_TYPE, REAL_IF_WASM_JSPI,            \
+                           REAL_IF_NIGHTLY)                                 \
   IMAGINARY(Null, dummy)                                                    \
   REAL(Object, OCLASP(Plain))                                               \
   REAL(Function, &FunctionClass)                                            \
@@ -73,6 +86,8 @@
   REAL(EvalError, ERROR_CLASP(JSEXN_EVALERR))                               \
   REAL(RangeError, ERROR_CLASP(JSEXN_RANGEERR))                             \
   REAL(ReferenceError, ERROR_CLASP(JSEXN_REFERENCEERR))                     \
+  IF_EXPLICIT_RESOURCE_MANAGEMENT(                                          \
+      REAL(SuppressedError, ERROR_CLASP(JSEXN_SUPPRESSEDERR)))              \
   REAL(SyntaxError, ERROR_CLASP(JSEXN_SYNTAXERR))                           \
   REAL(TypeError, ERROR_CLASP(JSEXN_TYPEERR))                               \
   REAL(URIError, ERROR_CLASP(JSEXN_URIERR))                                 \
@@ -92,6 +107,7 @@
   REAL(Uint8ClampedArray, TYPED_ARRAY_CLASP(Uint8Clamped))                  \
   REAL(BigInt64Array, TYPED_ARRAY_CLASP(BigInt64))                          \
   REAL(BigUint64Array, TYPED_ARRAY_CLASP(BigUint64))                        \
+  REAL(Float16Array, TYPED_ARRAY_CLASP(Float16))                            \
   REAL(BigInt, OCLASP(BigInt))                                              \
   REAL(Proxy, CLASP(Proxy))                                                 \
   REAL(WeakMap, OCLASP(WeakMap))                                            \
@@ -105,6 +121,7 @@
   REAL_IF_INTL(Collator, OCLASP(Collator))                                  \
   REAL_IF_INTL(DateTimeFormat, OCLASP(DateTimeFormat))                      \
   REAL_IF_INTL(DisplayNames, OCLASP(DisplayNames))                          \
+  REAL_IF_INTL(DurationFormat, OCLASP(DurationFormat))                      \
   REAL_IF_INTL(ListFormat, OCLASP(ListFormat))                              \
   REAL_IF_INTL(Locale, OCLASP(Locale))                                      \
   REAL_IF_INTL(NumberFormat, OCLASP(NumberFormat))                          \
@@ -128,13 +145,17 @@
   REAL(WasmGlobal, OCLASP(WasmGlobal))                                      \
   REAL(WasmTag, OCLASP(WasmTag))                                            \
   REAL_IF_WASM_TYPE(WasmFunction, CLASP(WasmFunction))                      \
+  REAL_IF_WASM_JSPI(WasmSuspending, OCLASP(WasmSuspending))                 \
   REAL(WasmException, OCLASP(WasmException))                                \
   REAL(FinalizationRegistry, OCLASP(FinalizationRegistry))                  \
   REAL(WeakRef, OCLASP(WeakRef))                                            \
   REAL(Iterator, OCLASP(Iterator))                                          \
   REAL(AsyncIterator, OCLASP(AsyncIterator))                                \
+  IF_EXPLICIT_RESOURCE_MANAGEMENT(                                          \
+      REAL(DisposableStack, OCLASP(DisposableStack)))                       \
+  IF_EXPLICIT_RESOURCE_MANAGEMENT(                                          \
+      REAL(AsyncDisposableStack, OCLASP(AsyncDisposableStack)))             \
   REAL_IF_TEMPORAL(Temporal, OCLASP(temporal::Temporal))                    \
-  REAL_IF_TEMPORAL(Calendar, OCLASP(temporal::Calendar))                    \
   REAL_IF_TEMPORAL(Duration, OCLASP(temporal::Duration))                    \
   REAL_IF_TEMPORAL(Instant, OCLASP(temporal::Instant))                      \
   REAL_IF_TEMPORAL(PlainDate, OCLASP(temporal::PlainDate))                  \
@@ -143,15 +164,15 @@
   REAL_IF_TEMPORAL(PlainYearMonth, OCLASP(temporal::PlainYearMonth))        \
   REAL_IF_TEMPORAL(PlainTime, OCLASP(temporal::PlainTime))                  \
   REAL_IF_TEMPORAL(TemporalNow, OCLASP(temporal::TemporalNow))              \
-  REAL_IF_TEMPORAL(TimeZone, OCLASP(temporal::TimeZone))                    \
   REAL_IF_TEMPORAL(ZonedDateTime, OCLASP(temporal::ZonedDateTime))          \
   IF_RECORD_TUPLE(REAL(Record, (&RecordType::class_)))                      \
   IF_RECORD_TUPLE(REAL(Tuple, (&TupleType::class_)))
 
-#define JS_FOR_PROTOTYPES(REAL, IMAGINARY)                      \
-  JS_FOR_PROTOTYPES_(REAL, IMAGINARY, IF_INTL(REAL, IMAGINARY), \
-                     IF_TEMPORAL(REAL, IMAGINARY),              \
-                     IF_WASM_TYPE(REAL, IMAGINARY))
+#define JS_FOR_PROTOTYPES(REAL, IMAGINARY)                                     \
+  JS_FOR_PROTOTYPES_(                                                          \
+      REAL, IMAGINARY, IF_INTL(REAL, IMAGINARY), IF_TEMPORAL(REAL, IMAGINARY), \
+      IF_WASM_TYPE(REAL, IMAGINARY), IF_WASM_JSPI(REAL, IMAGINARY),            \
+      IF_NIGHTLY(REAL, IMAGINARY))
 
 #define JS_FOR_EACH_PROTOTYPE(MACRO) JS_FOR_PROTOTYPES(MACRO, MACRO)
 

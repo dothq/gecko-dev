@@ -7,62 +7,34 @@
 #ifndef nsSearchControlFrame_h__
 #define nsSearchControlFrame_h__
 
-#include "mozilla/Attributes.h"
 #include "nsTextControlFrame.h"
-#include "nsIAnonymousContentCreator.h"
-#include "mozilla/RefPtr.h"
 
-class nsITextControlFrame;
 class nsPresContext;
 
 namespace mozilla {
-enum class PseudoStyleType : uint8_t;
 class PresShell;
 namespace dom {
 class Element;
 }  // namespace dom
 }  // namespace mozilla
 
-/**
- * This frame type is used for <input type=search>.
- */
+/** This frame type is used for <input type=search>. */
 class nsSearchControlFrame final : public nsTextControlFrame {
-  friend nsIFrame* NS_NewSearchControlFrame(mozilla::PresShell* aPresShell,
-                                            ComputedStyle* aStyle);
-
-  using PseudoStyleType = mozilla::PseudoStyleType;
-  using Element = mozilla::dom::Element;
-
-  explicit nsSearchControlFrame(ComputedStyle* aStyle,
-                                nsPresContext* aPresContext);
+  friend nsIFrame* NS_NewSearchControlFrame(mozilla::PresShell*,
+                                            ComputedStyle*);
+  nsSearchControlFrame(ComputedStyle*, nsPresContext*);
 
  public:
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsSearchControlFrame)
 
-  void Destroy(DestroyContext&) override;
-
-  // nsIAnonymousContentCreator
   nsresult CreateAnonymousContent(nsTArray<ContentInfo>& aElements) override;
-  void AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
-                                uint32_t aFilter) override;
 
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override {
     return MakeFrameName(u"SearchControl"_ns, aResult);
   }
 #endif
-
-  Element* GetAnonClearButton() const { return mClearButton; }
-
-  /**
-   * Update visbility of the clear button depending on the value
-   */
-  void UpdateClearButtonState();
-
- private:
-  // See nsSearchControlFrame::CreateAnonymousContent of a description of these
-  RefPtr<Element> mClearButton;
 };
 
 #endif  // nsSearchControlFrame_h__

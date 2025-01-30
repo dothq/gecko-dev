@@ -8,6 +8,7 @@
 #include "HttpLog.h"
 
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/Components.h"
 #include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/Tokenizer.h"
 #include "MockHttpAuth.h"
@@ -40,7 +41,6 @@
 #include "nsIURL.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_prompts.h"
-#include "mozilla/Telemetry.h"
 #include "nsIProxiedChannel.h"
 #include "nsIProxyInfo.h"
 
@@ -49,20 +49,6 @@ namespace mozilla::net {
 #define SUBRESOURCE_AUTH_DIALOG_DISALLOW_ALL 0
 #define SUBRESOURCE_AUTH_DIALOG_DISALLOW_CROSS_ORIGIN 1
 #define SUBRESOURCE_AUTH_DIALOG_ALLOW_ALL 2
-
-#define HTTP_AUTH_DIALOG_TOP_LEVEL_DOC 29
-#define HTTP_AUTH_DIALOG_SAME_ORIGIN_SUBRESOURCE 30
-#define HTTP_AUTH_DIALOG_SAME_ORIGIN_XHR 31
-#define HTTP_AUTH_DIALOG_NON_WEB_CONTENT 32
-
-#define HTTP_AUTH_BASIC_INSECURE 0
-#define HTTP_AUTH_BASIC_SECURE 1
-#define HTTP_AUTH_DIGEST_INSECURE 2
-#define HTTP_AUTH_DIGEST_SECURE 3
-#define HTTP_AUTH_NTLM_INSECURE 4
-#define HTTP_AUTH_NTLM_SECURE 5
-#define HTTP_AUTH_NEGOTIATE_INSECURE 6
-#define HTTP_AUTH_NEGOTIATE_SECURE 7
 
 #define MAX_DISPLAYED_USER_LENGTH 64
 #define MAX_DISPLAYED_HOST_LENGTH 64
@@ -619,8 +605,16 @@ nsresult nsHttpChannelAuthProvider::GetCredentials(
     cc.AppendElement(ac);
   }
 
-  cc.StableSort([](const AuthChallenge& lhs, const AuthChallenge& rhs) {
-    if (StaticPrefs::network_auth_choose_most_secure_challenge()) {
+  // Returns true if an authorization is in progress
+  auto authInProgress = [&]() -> bool {
+    return proxyAuth ? mProxyAuthContinuationState : mAuthContinuationState;
+  };
+
+  // We shouldn't sort if authorization is already in progress
+  // otherwise we might end up picking the wrong one. See bug 1805666
+  if (!authInProgress() ||
+      StaticPrefs::network_auth_sort_challenge_in_progress()) {
+    cc.StableSort([](const AuthChallenge& lhs, const AuthChallenge& rhs) {
       // Different auth types
       if (lhs.rank != rhs.rank) {
         return lhs.rank < rhs.rank ? 1 : -1;
@@ -631,19 +625,14 @@ nsresult nsHttpChannelAuthProvider::GetCredentials(
       if (lhs.rank != ChallengeRank::Digest) {
         return 0;
       }
-    } else {
-      // Non-digest challenges should not be reordered when the pref is off.
-      if (lhs.algorithm == 0 || rhs.algorithm == 0) {
+
+      if (lhs.algorithm == rhs.algorithm) {
         return 0;
       }
-    }
 
-    // Same algorithm.
-    if (lhs.algorithm == rhs.algorithm) {
-      return 0;
-    }
-    return lhs.algorithm < rhs.algorithm ? 1 : -1;
-  });
+      return lhs.algorithm < rhs.algorithm ? 1 : -1;
+    });
+  }
 
   nsCOMPtr<nsIHttpAuthenticator> auth;
   nsCString authType;  // force heap allocation to enable string sharing since
@@ -946,31 +935,6 @@ nsresult nsHttpChannelAuthProvider::GetCredentialsForChallenge(
         level = nsIAuthPrompt2::LEVEL_PW_ENCRYPTED;
       }
 
-      // Collect statistics on how frequently the various types of HTTP
-      // authentication are used over SSL and non-SSL connections.
-      if (Telemetry::CanRecordPrereleaseData()) {
-        if ("basic"_ns.Equals(aAuthType, nsCaseInsensitiveCStringComparator)) {
-          Telemetry::Accumulate(
-              Telemetry::HTTP_AUTH_TYPE_STATS,
-              UsingSSL() ? HTTP_AUTH_BASIC_SECURE : HTTP_AUTH_BASIC_INSECURE);
-        } else if ("digest"_ns.Equals(aAuthType,
-                                      nsCaseInsensitiveCStringComparator)) {
-          Telemetry::Accumulate(
-              Telemetry::HTTP_AUTH_TYPE_STATS,
-              UsingSSL() ? HTTP_AUTH_DIGEST_SECURE : HTTP_AUTH_DIGEST_INSECURE);
-        } else if ("ntlm"_ns.Equals(aAuthType,
-                                    nsCaseInsensitiveCStringComparator)) {
-          Telemetry::Accumulate(
-              Telemetry::HTTP_AUTH_TYPE_STATS,
-              UsingSSL() ? HTTP_AUTH_NTLM_SECURE : HTTP_AUTH_NTLM_INSECURE);
-        } else if ("negotiate"_ns.Equals(aAuthType,
-                                         nsCaseInsensitiveCStringComparator)) {
-          Telemetry::Accumulate(Telemetry::HTTP_AUTH_TYPE_STATS,
-                                UsingSSL() ? HTTP_AUTH_NEGOTIATE_SECURE
-                                           : HTTP_AUTH_NEGOTIATE_INSECURE);
-        }
-      }
-
       // Depending on the pref setting, the authentication dialog may be
       // blocked for all sub-resources, blocked for cross-origin
       // sub-resources, or always allowed for sub-resources.
@@ -1085,28 +1049,6 @@ bool nsHttpChannelAuthProvider::BlockPrompt(bool proxyAuth) {
       nsIPrincipal* loadingPrinc = loadInfo->GetLoadingPrincipal();
       MOZ_ASSERT(loadingPrinc);
       mCrossOrigin = !loadingPrinc->IsSameOrigin(mURI);
-    }
-  }
-
-  if (Telemetry::CanRecordPrereleaseData()) {
-    if (topDoc) {
-      Telemetry::Accumulate(Telemetry::HTTP_AUTH_DIALOG_STATS_3,
-                            HTTP_AUTH_DIALOG_TOP_LEVEL_DOC);
-    } else if (nonWebContent) {
-      Telemetry::Accumulate(Telemetry::HTTP_AUTH_DIALOG_STATS_3,
-                            HTTP_AUTH_DIALOG_NON_WEB_CONTENT);
-    } else if (!mCrossOrigin) {
-      if (xhr) {
-        Telemetry::Accumulate(Telemetry::HTTP_AUTH_DIALOG_STATS_3,
-                              HTTP_AUTH_DIALOG_SAME_ORIGIN_XHR);
-      } else {
-        Telemetry::Accumulate(Telemetry::HTTP_AUTH_DIALOG_STATS_3,
-                              HTTP_AUTH_DIALOG_SAME_ORIGIN_SUBRESOURCE);
-      }
-    } else {
-      Telemetry::Accumulate(
-          Telemetry::HTTP_AUTH_DIALOG_STATS_3,
-          static_cast<uint32_t>(loadInfo->GetExternalContentPolicyType()));
     }
   }
 
@@ -1686,8 +1628,8 @@ bool nsHttpChannelAuthProvider::ConfirmAuth(const char* bundleKey,
   // assume the user said ok.  this is done to keep things working in
   // embedded builds, where the string bundle might not be present, etc.
 
-  nsCOMPtr<nsIStringBundleService> bundleService =
-      do_GetService(NS_STRINGBUNDLE_CONTRACTID);
+  nsCOMPtr<nsIStringBundleService> bundleService;
+  bundleService = mozilla::components::StringBundle::Service();
   if (!bundleService) return true;
 
   nsCOMPtr<nsIStringBundle> bundle;

@@ -14,6 +14,7 @@
 #include "libwebrtcglue/RtpRtcpConfig.h"
 #include "nsTArray.h"
 #include "mozilla/dom/RTCRtpCapabilitiesBinding.h"
+#include "mozilla/dom/RTCRtpParametersBinding.h"
 #include "mozilla/dom/RTCStatsReportBinding.h"
 #include "PerformanceRecorder.h"
 #include "RTCStatsReport.h"
@@ -39,6 +40,7 @@ struct RTCRtpContributingSource;
 struct RTCRtpSynchronizationSource;
 class RTCRtpTransceiver;
 class RTCRtpScriptTransform;
+class RTCStatsTimestampMaker;
 
 class RTCRtpReceiver : public nsISupports,
                        public nsWrapperCache,
@@ -63,6 +65,7 @@ class RTCRtpReceiver : public nsISupports,
   RTCDtlsTransport* GetTransport() const;
   static void GetCapabilities(const GlobalObject&, const nsAString& aKind,
                               Nullable<dom::RTCRtpCapabilities>& aResult);
+  void GetParameters(RTCRtpReceiveParameters& aParameters) const;
   already_AddRefed<Promise> GetStats(ErrorResult& aError);
   void GetContributingSources(
       nsTArray<dom::RTCRtpContributingSource>& aSources);
@@ -161,6 +164,8 @@ class RTCRtpReceiver : public nsISupports,
     return mFrameTransformerProxy;
   }
 
+  const RTCStatsTimestampMaker* GetTimestampMaker() const;
+
  private:
   virtual ~RTCRtpReceiver();
 
@@ -195,6 +200,8 @@ class RTCRtpReceiver : public nsISupports,
   bool mReceptive = false;
   // This is the [[JitterBufferTarget]] internal slot.
   Maybe<DOMHighResTimeStamp> mJitterBufferTarget;
+  // Houses [[ReceiveCodecs]]
+  RTCRtpReceiveParameters mParameters;
 
   MediaEventListener mRtcpByeListener;
   MediaEventListener mRtcpTimeoutListener;

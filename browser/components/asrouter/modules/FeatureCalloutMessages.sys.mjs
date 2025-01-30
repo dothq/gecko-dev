@@ -5,7 +5,6 @@
 // Eventually, make this a messaging system
 // provider instead of adding these message
 // into OnboardingMessageProvider.sys.mjs
-const FIREFOX_VIEW_PREF = "browser.firefox-view.feature-tour";
 const PDFJS_PREF = "browser.pdfjs.feature-tour";
 // Empty screens are included as placeholders to ensure step
 // indicator shows the correct number of total steps in the tour
@@ -85,229 +84,356 @@ function add24HourImpressionJEXLTargeting(
 const MESSAGES = () => {
   let messages = [
     {
-      id: "FIREFOX_VIEW_SPOTLIGHT",
-      template: "spotlight",
-      content: {
-        id: "FIREFOX_VIEW_PROMO",
-        template: "multistage",
-        modal: "tab",
-        tour_pref_name: FIREFOX_VIEW_PREF,
-        screens: [
-          {
-            id: "DEFAULT_MODAL_UI",
-            content: {
-              title: {
-                fontSize: "32px",
-                fontWeight: 400,
-                string_id: "firefoxview-spotlight-promo-title",
-              },
-              subtitle: {
-                fontSize: "15px",
-                fontWeight: 400,
-                marginBlock: "10px",
-                marginInline: "40px",
-                string_id: "firefoxview-spotlight-promo-subtitle",
-              },
-              logo: { height: "48px" },
-              primary_button: {
-                label: {
-                  string_id: "firefoxview-spotlight-promo-primarybutton",
-                },
-                action: {
-                  type: "SET_PREF",
-                  data: {
-                    pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "FEATURE_CALLOUT_1",
-                        complete: false,
-                      }),
-                    },
-                  },
-                  navigate: true,
-                },
-              },
-              secondary_button: {
-                label: {
-                  string_id: "firefoxview-spotlight-promo-secondarybutton",
-                },
-                action: {
-                  type: "SET_PREF",
-                  data: {
-                    pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "",
-                        complete: true,
-                      }),
-                    },
-                  },
-                  navigate: true,
-                },
-              },
-            },
-          },
-        ],
-      },
-      priority: 3,
-      trigger: {
-        id: "featureCalloutCheck",
-      },
-      frequency: {
-        // Add the highest possible cap to ensure impressions are recorded while allowing the Spotlight to sync across windows/tabs with Firefox View open
-        lifetime: 100,
-      },
-      targeting: `!inMr2022Holdback && source == "about:firefoxview" &&
-       !'browser.newtabpage.activity-stream.asrouter.providers.cfr'|preferenceIsUserSet &&
-       'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features'|preferenceValue &&
-       ${matchCurrentScreenTargeting(
-         FIREFOX_VIEW_PREF,
-         "FIREFOX_VIEW_SPOTLIGHT"
-       )} && ${matchIncompleteTargeting(FIREFOX_VIEW_PREF)}`,
-    },
-    {
-      id: "FIREFOX_VIEW_FEATURE_TOUR",
+      id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY",
       template: "feature_callout",
       content: {
-        id: "FIREFOX_VIEW_FEATURE_TOUR",
+        id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY",
         template: "multistage",
         backdrop: "transparent",
         transitions: false,
         disableHistoryUpdates: true,
-        tour_pref_name: FIREFOX_VIEW_PREF,
+        tour_pref_name:
+          "messaging-system-action.fakespot-opted-out-survey.progress",
+        tour_pref_default_value:
+          '{"screen":"FAKESPOT_CALLOUT_OPTED_OUT_SURVEY_1","complete":false}',
         screens: [
           {
-            id: "FEATURE_CALLOUT_1",
+            id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY_1",
+            force_hide_steps_indicator: true,
             anchors: [
               {
-                selector: "#tab-pickup-container",
-                arrow_position: "top",
+                selector: "#shopping-sidebar-button",
+                panel_position: {
+                  anchor_attachment: "bottomcenter",
+                  callout_attachment: "topright",
+                },
+                no_open_on_anchor: true,
+                arrow_width: "22.62742",
               },
             ],
             content: {
               position: "callout",
+              layout: "survey",
+              width: "332px",
+              padding: "20",
               title: {
-                string_id: "callout-firefox-view-tab-pickup-title",
+                string_id: "shopping-survey-headline",
               },
-              subtitle: {
-                string_id: "callout-firefox-view-tab-pickup-subtitle",
+              title_logo: {
+                imageURL: "chrome://branding/content/about-logo.png",
               },
-              logo: {
-                imageURL: "chrome://browser/content/callout-tab-pickup.svg",
-                darkModeImageURL:
-                  "chrome://browser/content/callout-tab-pickup-dark.svg",
-                height: "128px",
-              },
-              primary_button: {
+              secondary_button: {
                 label: {
-                  string_id: "callout-primary-advance-button-label",
+                  string_id: "shopping-survey-submit-button-label",
                 },
-                style: "secondary",
+                style: "primary",
                 action: {
-                  type: "SET_PREF",
+                  type: "MULTI_ACTION",
+                  collectSelect: true,
                   data: {
-                    pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "FEATURE_CALLOUT_2",
-                        complete: false,
-                      }),
-                    },
+                    actions: [
+                      {
+                        type: "SET_PREF",
+                        data: {
+                          pref: {
+                            name: "messaging-system-action.fakespot-opted-out-survey.progress",
+                            value:
+                              '{"screen":"FAKESPOT_CALLOUT_OPTED_OUT_SURVEY_2","complete":false}',
+                          },
+                        },
+                      },
+                    ],
                   },
                 },
+                disabled: "hasActiveMultiSelect",
               },
               dismiss_button: {
                 action: {
-                  type: "SET_PREF",
+                  type: "MULTI_ACTION",
+                  collectSelect: true,
                   data: {
-                    pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "",
-                        complete: true,
-                      }),
-                    },
+                    actions: [
+                      {
+                        type: "BLOCK_MESSAGE",
+                        data: {
+                          id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY",
+                        },
+                      },
+                      {
+                        type: "SET_PREF",
+                        data: {
+                          pref: {
+                            name: "messaging-system-action.fakespot-opted-out-survey.progress",
+                          },
+                        },
+                      },
+                    ],
                   },
+                  dismiss: true,
                 },
+                label: {
+                  string_id: "shopping-onboarding-dialog-close-button",
+                },
+                size: "small",
               },
-              page_event_listeners: [
-                {
-                  params: {
-                    type: "toggle",
-                    selectors: "#tab-pickup-container",
-                  },
-                  action: { reposition: true },
+              tiles: {
+                type: "multiselect",
+                style: {
+                  flexDirection: "column",
+                  alignItems: "flex-start",
                 },
-              ],
+                label: {
+                  string_id: "shopping-survey-opted-out-multiselect-label",
+                },
+                data: [
+                  {
+                    id: "fakespot-opted-out-survey-hard-to-understand",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-hard-to-understand",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                    randomize: true,
+                  },
+                  {
+                    id: "fakespot-opted-out-survey-too-slow",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-too-slow",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                    randomize: true,
+                  },
+                  {
+                    id: "fakespot-opted-out-survey-not-accurate",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-not-accurate",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                    randomize: true,
+                  },
+                  {
+                    id: "fakespot-opted-out-survey-not-helpful",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-not-helpful",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                    randomize: true,
+                  },
+                  {
+                    id: "fakespot-opted-out-survey-check-reviews-myself",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-check-myself",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                    randomize: true,
+                  },
+                  {
+                    id: "fakespot-opted-out-survey-other",
+                    type: "checkbox",
+                    defaultValue: false,
+                    label: {
+                      string_id: "shopping-survey-opted-out-other",
+                    },
+                    icon: {
+                      style: {
+                        marginInline: "2px 8px",
+                      },
+                    },
+                    group: "checkboxes",
+                  },
+                ],
+              },
             },
           },
           {
-            id: "FEATURE_CALLOUT_2",
+            id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY_2",
+            force_hide_steps_indicator: true,
             anchors: [
               {
-                selector: "#recently-closed-tabs-container",
-                arrow_position: "bottom",
+                selector: "#shopping-sidebar-button",
+                panel_position: {
+                  anchor_attachment: "bottomcenter",
+                  callout_attachment: "topright",
+                },
+                no_open_on_anchor: true,
+                arrow_width: "22.62742",
               },
             ],
             content: {
+              layout: "inline",
               position: "callout",
               title: {
-                string_id: "callout-firefox-view-recently-closed-title",
+                string_id: "shopping-survey-thanks-title",
               },
-              subtitle: {
-                string_id: "callout-firefox-view-recently-closed-subtitle",
-              },
-              primary_button: {
-                label: {
-                  string_id: "callout-primary-complete-button-label",
-                },
-                style: "secondary",
-                action: {
-                  type: "SET_PREF",
-                  data: {
-                    pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "",
-                        complete: true,
-                      }),
-                    },
-                  },
-                },
+              title_logo: {
+                imageURL:
+                  "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/706c7a85-cf23-442e-8a92-7ebc7f537375.svg",
               },
               dismiss_button: {
                 action: {
                   type: "SET_PREF",
                   data: {
                     pref: {
-                      name: FIREFOX_VIEW_PREF,
-                      value: JSON.stringify({
-                        screen: "",
-                        complete: true,
-                      }),
+                      name: "messaging-system-action.fakespot-opted-out-survey.progress",
                     },
                   },
+                  dismiss: true,
                 },
+                label: {
+                  string_id: "shopping-onboarding-dialog-close-button",
+                },
+                size: "small",
               },
               page_event_listeners: [
                 {
                   params: {
-                    type: "toggle",
-                    selectors: "#recently-closed-tabs-container",
+                    type: "timeout",
+                    options: {
+                      once: true,
+                      interval: 20000,
+                    },
                   },
-                  action: { reposition: true },
+                  action: {
+                    dismiss: true,
+                  },
+                },
+                {
+                  params: {
+                    type: "tourend",
+                    options: {
+                      once: true,
+                    },
+                  },
+                  action: {
+                    type: "BLOCK_MESSAGE",
+                    data: {
+                      id: "FAKESPOT_CALLOUT_OPTED_OUT_SURVEY",
+                    },
+                  },
                 },
               ],
             },
           },
         ],
       },
-      priority: 3,
-      targeting: `!inMr2022Holdback && source == "about:firefoxview" && ${matchCurrentScreenTargeting(
-        FIREFOX_VIEW_PREF,
-        "FEATURE_CALLOUT_[0-9]"
-      )} && ${matchIncompleteTargeting(FIREFOX_VIEW_PREF)}`,
-      trigger: { id: "featureCalloutCheck" },
+      priority: 2,
+      targeting:
+        "'browser.shopping.experience2023.optedIn' | preferenceValue == 2 && !'browser.shopping.experience2023.active' | preferenceValue && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features' | preferenceValue != false",
+      trigger: {
+        id: "preferenceObserver",
+        params: ["browser.shopping.experience2023.optedIn"],
+      },
+      skip_in_tests:
+        "not tested in automation and might pop up unexpectedly during review checker tests",
+    },
+    {
+      id: "ADDONS_STAFF_PICK_PT_2",
+      template: "feature_callout",
+      groups: ["cfr"],
+      content: {
+        id: "ADDONS_STAFF_PICK_PT_2",
+        template: "multistage",
+        backdrop: "transparent",
+        transitions: false,
+        screens: [
+          {
+            id: "ADDONS_STAFF_PICK_PT_2_A",
+            anchors: [
+              {
+                selector: "#unified-extensions-button",
+                panel_position: {
+                  anchor_attachment: "bottomcenter",
+                  callout_attachment: "topright",
+                },
+                arrow_width: "26.9",
+              },
+            ],
+            content: {
+              position: "callout",
+              width: "310px",
+              padding: 16,
+              title_logo: {
+                imageURL:
+                  "chrome://browser/content/asrouter/assets/smiling-fox-icon.svg",
+                width: "24px",
+                height: "24px",
+                marginInline: "4px 14px",
+              },
+              title: {
+                raw: "Give your browsing a boost",
+                marginInline: "0 48px",
+              },
+              subtitle: {
+                raw: "Make browsing faster, safer, or just plain fun with Firefox add-ons. See what our staff recommends!",
+                paddingInline: "34px 0",
+              },
+              primary_button: {
+                label: {
+                  raw: "Explore add-ons",
+                },
+                action: {
+                  dismiss: true,
+                  type: "OPEN_URL",
+                  data: {
+                    args: "https://addons.mozilla.org/en-US/firefox/collections/4757633/36d285535db74c6986abbeeed3e214/?page=1&collection_sort=added",
+                    where: "tabshifted",
+                  },
+                },
+              },
+              dismiss_button: {
+                action: {
+                  dismiss: true,
+                },
+                size: "small",
+                marginInline: "0 14px",
+                marginBlock: "14px 0",
+              },
+            },
+          },
+        ],
+      },
+      targeting:
+        "userPrefs.cfrAddons && userPrefs.cfrFeatures && localeLanguageCode == 'en' && ((currentDate|date - profileAgeCreated|date) / 86400000 < 28) && !screenImpressions.AW_AMO_INTRODUCE && !willShowDefaultPrompt && !activeNotifications && source == 'newtab' && previousSessionEnd",
+      trigger: {
+        id: "defaultBrowserCheck",
+      },
+      frequency: {
+        lifetime: 1,
+      },
     },
     {
       id: "FIREFOX_VIEW_TAB_PICKUP_REMINDER",
@@ -376,7 +502,7 @@ const MESSAGES = () => {
         ],
       },
       priority: 2,
-      targeting: `!inMr2022Holdback && source == "about:firefoxview" && "browser.firefox-view.view-count" | preferenceValue > 2
+      targeting: `source == "about:firefoxview" && "browser.firefox-view.view-count" | preferenceValue > 2
     && (("identity.fxaccounts.enabled" | preferenceValue == false) || !(("services.sync.engine.tabs" | preferenceValue == true) && ("services.sync.username" | preferenceValue))) && (!messageImpressions.FIREFOX_VIEW_SPOTLIGHT[messageImpressions.FIREFOX_VIEW_SPOTLIGHT | length - 1] || messageImpressions.FIREFOX_VIEW_SPOTLIGHT[messageImpressions.FIREFOX_VIEW_SPOTLIGHT | length - 1] < currentDate|date - ${ONE_DAY_IN_MS})`,
       frequency: {
         lifetime: 1,

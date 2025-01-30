@@ -15,7 +15,6 @@
 #include "nsIDocShell.h"
 #include "nsIObserverService.h"
 #include "nsPresContext.h"
-#include "nsIScrollableFrame.h"
 #include "nsISelectionController.h"
 #include "nsISimpleEnumerator.h"
 #include "mozilla/dom/TouchEvent.h"
@@ -24,6 +23,8 @@
 #include "mozilla/EventStateManager.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScrollContainerFrame.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TouchEvents.h"
 #include "nsView.h"
 #include "nsGkAtoms.h"
@@ -115,6 +116,11 @@ void nsCoreUtils::DispatchClickEvent(XULTreeElement* aTree, int32_t aRowIndex,
   int32_t cnvdY = presContext->CSSPixelsToDevPixels(tcY + int32_t(rect.y) + 1) +
                   presContext->AppUnitsToDevPixels(offset.y);
 
+  if (StaticPrefs::dom_popup_experimental()) {
+    // This isn't needed once bug 1924790 is fixed.
+    tcElm->OwnerDoc()->NotifyUserGestureActivation();
+  }
+
   // XUL is just desktop, so there is no real reason for senfing touch events.
   DispatchMouseEvent(eMouseDown, cnvdX, cnvdY, tcElm, tcFrame, presShell,
                      rootWidget);
@@ -127,8 +133,8 @@ void nsCoreUtils::DispatchMouseEvent(EventMessage aMessage, int32_t aX,
                                      int32_t aY, nsIContent* aContent,
                                      nsIFrame* aFrame, PresShell* aPresShell,
                                      nsIWidget* aRootWidget) {
-  WidgetMouseEvent event(true, aMessage, aRootWidget, WidgetMouseEvent::eReal,
-                         WidgetMouseEvent::eNormal);
+  MOZ_ASSERT(!IsPointerEventMessage(aMessage));
+  WidgetMouseEvent event(true, aMessage, aRootWidget, WidgetMouseEvent::eReal);
 
   event.mRefPoint = LayoutDeviceIntPoint(aX, aY);
 
@@ -245,29 +251,32 @@ nsresult nsCoreUtils::ScrollSubstringTo(nsIFrame* aFrame, nsRange* aRange,
   selection->AddRangeAndSelectFramesAndNotifyListeners(*aRange, IgnoreErrors());
 
   selection->ScrollIntoView(nsISelectionController::SELECTION_ANCHOR_REGION,
-                            aVertical, aHorizontal,
-                            Selection::SCROLL_SYNCHRONOUS);
+                            aVertical, aHorizontal, ScrollFlags::None,
+                            SelectionScrollMode::SyncNoFlush);
 
   selection->CollapseToStart(IgnoreErrors());
 
   return NS_OK;
 }
 
-void nsCoreUtils::ScrollFrameToPoint(nsIFrame* aScrollableFrame,
+void nsCoreUtils::ScrollFrameToPoint(nsIFrame* aScrollContainerFrame,
                                      nsIFrame* aFrame,
                                      const LayoutDeviceIntPoint& aPoint) {
-  nsIScrollableFrame* scrollableFrame = do_QueryFrame(aScrollableFrame);
-  if (!scrollableFrame) return;
+  ScrollContainerFrame* scrollContainerFrame =
+      do_QueryFrame(aScrollContainerFrame);
+  if (!scrollContainerFrame) {
+    return;
+  }
 
   nsPoint point = LayoutDeviceIntPoint::ToAppUnits(
       aPoint, aFrame->PresContext()->AppUnitsPerDevPixel());
   nsRect frameRect = aFrame->GetScreenRectInAppUnits();
   nsPoint deltaPoint = point - frameRect.TopLeft();
 
-  nsPoint scrollPoint = scrollableFrame->GetScrollPosition();
+  nsPoint scrollPoint = scrollContainerFrame->GetScrollPosition();
   scrollPoint -= deltaPoint;
 
-  scrollableFrame->ScrollTo(scrollPoint, ScrollMode::Instant);
+  scrollContainerFrame->ScrollTo(scrollPoint, ScrollMode::Instant);
 }
 
 void nsCoreUtils::ConvertScrollTypeToPercents(uint32_t aScrollType,
@@ -545,32 +554,6 @@ bool nsCoreUtils::IsWhitespaceString(const nsAString& aString) {
   while (iterBegin != iterEnd && IsWhitespace(*iterBegin)) ++iterBegin;
 
   return iterBegin == iterEnd;
-}
-
-void nsCoreUtils::TrimNonBreakingSpaces(nsAString& aString) {
-  if (aString.IsEmpty()) {
-    return;
-  }
-
-  // Find the index past the last nbsp prefix character.
-  constexpr char16_t nbsp{0xA0};
-  size_t startIndex = 0;
-  while (aString.CharAt(startIndex) == nbsp) {
-    startIndex++;
-  }
-
-  // Find the index before the first nbsp suffix character.
-  size_t endIndex = aString.Length() - 1;
-  while (endIndex > startIndex && aString.CharAt(endIndex) == nbsp) {
-    endIndex--;
-  }
-  if (startIndex > endIndex) {
-    aString.Truncate();
-    return;
-  }
-
-  // Trim the string down, removing the non-breaking space characters.
-  aString = Substring(aString, startIndex, endIndex - startIndex + 1);
 }
 
 bool nsCoreUtils::AccEventObserversExist() {

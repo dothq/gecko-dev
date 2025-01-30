@@ -28,10 +28,10 @@
 #include "prprf.h"
 #include "nsReadableUtils.h"
 #include "mozilla/net/MozURL_ffi.h"
-#include "mozilla/TextUtils.h"
 #include "mozilla/Utf8.h"
 #include "nsIClassInfoImpl.h"
 #include <string.h>
+#include "IPv4Parser.h"
 
 //
 // setenv MOZ_LOG nsStandardURL:5
@@ -46,6 +46,30 @@ static mozilla::LazyLogModule gStandardURLLog("nsStandardURL");
 
 using namespace mozilla::ipc;
 
+/**
+ * The UTS #46 ToUnicode operation as parametrized by the WHATWG URL Standard,
+ * except potentially misleading labels are treated according to ToASCII
+ * instead. Combined with the ToASCII operation without rerunning the expensive
+ * part.
+ *
+ * NOTE: This function performs percent-decoding on the argument unlike
+ * the other `NS_DomainTo` functions!
+ *
+ * If upon successfull return `aASCII` is empty, it is the caller's
+ * responsibility to treat the value of `aDisplay` also as the value of
+ * `aASCII`. (The weird semantics avoid useless allocation / copying.)
+ *
+ * Rust callers that don't happen to be using XPCOM strings are better
+ * off using the `idna` crate directly. (See `idna_glue` for what policy
+ * closure to use.)
+ */
+inline nsresult NS_DomainToDisplayAndASCII(const nsACString& aDomain,
+                                           nsACString& aDisplay,
+                                           nsACString& aASCII) {
+  return mozilla_net_domain_to_display_and_ascii_impl(&aDomain, &aDisplay,
+                                                      &aASCII);
+}
+
 namespace mozilla {
 namespace net {
 
@@ -55,32 +79,9 @@ static NS_DEFINE_CID(kThisImplCID, NS_THIS_STANDARDURL_IMPL_CID);
 // can be safely used on other threads.
 StaticRefPtr<nsIIDNService> nsStandardURL::gIDN;
 
-// This value will only be updated on the main thread once.
-static Atomic<bool, Relaxed> gInitialized{false};
+Atomic<bool, Relaxed> nsStandardURL::gInitialized{false};
 
 const char nsStandardURL::gHostLimitDigits[] = {'/', '\\', '?', '#', 0};
-
-// Invalid host characters
-// Note that the array below will be initialized at compile time,
-// so we do not need to "optimize" TestForInvalidHostCharacters.
-//
-constexpr bool TestForInvalidHostCharacters(char c) {
-  // Testing for these:
-  // CONTROL_CHARACTERS " #/:?@[\\]*<>|\"";
-  return (c > 0 && c < 32) ||  // The control characters are [1, 31]
-         c == 0x7F ||          // // DEL (delete)
-         c == ' ' || c == '#' || c == '/' || c == ':' || c == '?' || c == '@' ||
-         c == '[' || c == '\\' || c == ']' || c == '*' || c == '<' ||
-         c == '^' ||
-#if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
-         // Mailnews %-escapes file paths into URLs.
-         c == '>' || c == '|' || c == '"';
-#else
-         c == '>' || c == '|' || c == '"' || c == '%';
-#endif
-}
-constexpr ASCIIMaskArray sInvalidHostChars =
-    CreateASCIIMask(TestForInvalidHostCharacters);
 
 //----------------------------------------------------------------------------
 // nsStandardURL::nsSegmentEncoder
@@ -200,7 +201,7 @@ const nsACString& nsStandardURL::nsSegmentEncoder::EncodeSegment(
 
 #ifdef DEBUG_DUMP_URLS_AT_SHUTDOWN
 static StaticMutex gAllURLsMutex MOZ_UNANNOTATED;
-static LinkedList<nsStandardURL> gAllURLs;
+MOZ_RUNINIT static LinkedList<nsStandardURL> gAllURLs;
 #endif
 
 nsStandardURL::nsStandardURL(bool aSupportsFileURL, bool aTrackURL)
@@ -400,308 +401,56 @@ void nsStandardURL::InvalidateCache(bool invalidateCachedFile) {
   }
 }
 
-// Return the number of "dots" in the string, or -1 if invalid.  Note that the
-// number of relevant entries in the bases/starts/ends arrays is number of
-// dots + 1.
-//
-// length is assumed to be <= host.Length(); the caller is responsible for that
-//
-// Note that the value returned is guaranteed to be in [-1, 3] range.
-inline int32_t ValidateIPv4Number(const nsACString& host, int32_t bases[4],
-                                  int32_t dotIndex[3], bool& onlyBase10,
-                                  int32_t length, bool trailingDot) {
-  MOZ_ASSERT(length <= (int32_t)host.Length());
-  if (length <= 0) {
-    return -1;
-  }
+nsIIDNService* nsStandardURL::GetIDNService() { return gIDN.get(); }
 
-  bool lastWasNumber = false;  // We count on this being false for i == 0
-  int32_t dotCount = 0;
-  onlyBase10 = true;
-
-  for (int32_t i = 0; i < length; i++) {
-    char current = host[i];
-    if (current == '.') {
-      // A dot should not follow a dot, or be first - it can follow an x though.
-      if (!(lastWasNumber ||
-            (i >= 2 && (host[i - 1] == 'X' || host[i - 1] == 'x') &&
-             host[i - 2] == '0')) ||
-          (i == (length - 1) && trailingDot)) {
-        return -1;
-      }
-
-      if (dotCount > 2) {
-        return -1;
-      }
-      lastWasNumber = false;
-      dotIndex[dotCount] = i;
-      dotCount++;
-    } else if (current == 'X' || current == 'x') {
-      if (!lastWasNumber ||  // An X should not follow an X or a dot or be first
-          i == (length - 1) ||  // No trailing Xs allowed
-          (dotCount == 0 &&
-           i != 1) ||            // If we had no dots, an X should be second
-          host[i - 1] != '0' ||  // X should always follow a 0.  Guaranteed i >
-                                 // 0 as lastWasNumber is true
-          (dotCount > 0 &&
-           host[i - 2] != '.')) {  // And that zero follows a dot if it exists
-        return -1;
-      }
-      lastWasNumber = false;
-      bases[dotCount] = 16;
-      onlyBase10 = false;
-
-    } else if (current == '0') {
-      if (i < length - 1 &&      // Trailing zero doesn't signal octal
-          host[i + 1] != '.' &&  // Lone zero is not octal
-          (i == 0 || host[i - 1] == '.')) {  // Zero at start or following a dot
-                                             // is a candidate for octal
-        bases[dotCount] = 8;  // This will turn to 16 above if X shows up
-        onlyBase10 = false;
-      }
-      lastWasNumber = true;
-
-    } else if (current >= '1' && current <= '7') {
-      lastWasNumber = true;
-
-    } else if (current >= '8' && current <= '9') {
-      if (bases[dotCount] == 8) {
-        return -1;
-      }
-      lastWasNumber = true;
-
-    } else if ((current >= 'a' && current <= 'f') ||
-               (current >= 'A' && current <= 'F')) {
-      if (bases[dotCount] != 16) {
-        return -1;
-      }
-      lastWasNumber = true;
-
-    } else {
-      return -1;
-    }
-  }
-
-  return dotCount;
-}
-
-inline nsresult ParseIPv4Number10(const nsACString& input, uint32_t& number,
-                                  uint32_t maxNumber) {
-  uint64_t value = 0;
-  const char* current = input.BeginReading();
-  const char* end = input.EndReading();
-  for (; current < end; ++current) {
-    char c = *current;
-    MOZ_ASSERT(c >= '0' && c <= '9');
-    value *= 10;
-    value += c - '0';
-  }
-  if (value <= maxNumber) {
-    number = value;
-    return NS_OK;
-  }
-
-  // The error case
-  number = 0;
-  return NS_ERROR_FAILURE;
-}
-
-inline nsresult ParseIPv4Number(const nsACString& input, int32_t base,
-                                uint32_t& number, uint32_t maxNumber) {
-  // Accumulate in the 64-bit value
-  uint64_t value = 0;
-  const char* current = input.BeginReading();
-  const char* end = input.EndReading();
-  switch (base) {
-    case 16:
-      ++current;
-      [[fallthrough]];
-    case 8:
-      ++current;
-      break;
-    case 10:
-    default:
-      break;
-  }
-  for (; current < end; ++current) {
-    value *= base;
-    char c = *current;
-    MOZ_ASSERT((base == 10 && IsAsciiDigit(c)) ||
-               (base == 8 && c >= '0' && c <= '7') ||
-               (base == 16 && IsAsciiHexDigit(c)));
-    if (IsAsciiDigit(c)) {
-      value += c - '0';
-    } else if (c >= 'a' && c <= 'f') {
-      value += c - 'a' + 10;
-    } else if (c >= 'A' && c <= 'F') {
-      value += c - 'A' + 10;
-    }
-  }
-
-  if (value <= maxNumber) {
-    number = value;
-    return NS_OK;
-  }
-
-  // The error case
-  number = 0;
-  return NS_ERROR_FAILURE;
-}
-
-// IPv4 parser spec: https://url.spec.whatwg.org/#concept-ipv4-parser
-/* static */
-nsresult nsStandardURL::NormalizeIPv4(const nsACString& host,
-                                      nsCString& result) {
-  int32_t bases[4] = {10, 10, 10, 10};
-  bool onlyBase10 = true;  // Track this as a special case
-  int32_t dotIndex[3];     // The positions of the dots in the string
-
-  // Use "length" rather than host.Length() after call to
-  // ValidateIPv4Number because of potential trailing period.
-  nsDependentCSubstring filteredHost;
-  bool trailingDot = false;
-  if (host.Length() > 0 && host.Last() == '.') {
-    trailingDot = true;
-    filteredHost.Rebind(host.BeginReading(), host.Length() - 1);
-  } else {
-    filteredHost.Rebind(host.BeginReading(), host.Length());
-  }
-
-  int32_t length = static_cast<int32_t>(filteredHost.Length());
-  int32_t dotCount = ValidateIPv4Number(filteredHost, bases, dotIndex,
-                                        onlyBase10, length, trailingDot);
-  if (dotCount < 0 || length <= 0) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Max values specified by the spec
-  static const uint32_t upperBounds[] = {0xffffffffu, 0xffffffu, 0xffffu,
-                                         0xffu};
-  uint32_t ipv4;
-  int32_t start = (dotCount > 0 ? dotIndex[dotCount - 1] + 1 : 0);
-
-  // parse the last part first
-  nsresult res;
-  // Doing a special case for all items being base 10 gives ~35% speedup
-  res = (onlyBase10
-             ? ParseIPv4Number10(Substring(host, start, length - start), ipv4,
-                                 upperBounds[dotCount])
-             : ParseIPv4Number(Substring(host, start, length - start),
-                               bases[dotCount], ipv4, upperBounds[dotCount]));
-  if (NS_FAILED(res)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // parse remaining parts starting from first part
-  int32_t lastUsed = -1;
-  for (int32_t i = 0; i < dotCount; i++) {
-    uint32_t number;
-    start = lastUsed + 1;
-    lastUsed = dotIndex[i];
-    res =
-        (onlyBase10 ? ParseIPv4Number10(
-                          Substring(host, start, lastUsed - start), number, 255)
-                    : ParseIPv4Number(Substring(host, start, lastUsed - start),
-                                      bases[i], number, 255));
-    if (NS_FAILED(res)) {
-      return NS_ERROR_FAILURE;
-    }
-    ipv4 += number << (8 * (3 - i));
-  }
-
-  // A special case for ipv4 URL like "127." should have the same result as
-  // "127".
-  if (dotCount == 1 && dotIndex[0] == length - 1) {
-    ipv4 = (ipv4 & 0xff000000) >> 24;
-  }
-
-  uint8_t ipSegments[4];
-  NetworkEndian::writeUint32(ipSegments, ipv4);
-  result = nsPrintfCString("%d.%d.%d.%d", ipSegments[0], ipSegments[1],
-                           ipSegments[2], ipSegments[3]);
-  return NS_OK;
-}
-
-nsresult nsStandardURL::NormalizeIDN(const nsCString& host, nsCString& result) {
-  result.Truncate();
+nsresult nsStandardURL::NormalizeIDN(const nsACString& aHost,
+                                     nsACString& aResult) {
   mDisplayHost.Truncate();
-  nsresult rv;
-
-  if (!gIDN) {
-    return NS_ERROR_UNEXPECTED;
-  }
-
-  // Even if it's already ACE, we must still call ConvertUTF8toACE in order
-  // for the input normalization to take place.
-  rv = gIDN->ConvertUTF8toACE(host, result);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  // If the ASCII representation doesn't contain the xn-- token then we don't
-  // need to call ConvertToDisplayIDN as that would not change anything.
-  if (!StringBeginsWith(result, "xn--"_ns) &&
-      result.Find(".xn--"_ns) == kNotFound) {
-    mCheckedIfHostA = true;
-    return NS_OK;
-  }
-
-  bool isAscii = true;
-  nsAutoCString displayHost;
-  rv = gIDN->ConvertToDisplayIDN(result, &isAscii, displayHost);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   mCheckedIfHostA = true;
-  if (!isAscii) {
+  nsCString displayHost;  // Intentionally not nsAutoCString to avoid copy when
+                          // assigning to field
+  nsresult rv = NS_DomainToDisplayAndASCII(aHost, displayHost, aResult);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  if (aResult.IsEmpty()) {
+    aResult.Assign(displayHost);
+  } else {
     mDisplayHost = displayHost;
   }
   return NS_OK;
 }
 
-bool nsStandardURL::ValidIPv6orHostname(const char* host, uint32_t length) {
-  if (!host || !*host) {
-    // Should not be NULL or empty string
-    return false;
-  }
-
-  if (length != strlen(host)) {
-    // Embedded null
-    return false;
-  }
-
-  bool openBracket = host[0] == '[';
-  bool closeBracket = host[length - 1] == ']';
-
-  if (openBracket && closeBracket) {
-    return net_IsValidIPv6Addr(Substring(host + 1, length - 2));
-  }
-
-  if (openBracket || closeBracket) {
-    // Fail if only one of the brackets is present
-    return false;
-  }
-
-  const char* end = host + length;
-  const char* iter = host;
-  for (; iter != end && *iter; ++iter) {
-    if (ASCIIMask::IsMasked(sInvalidHostChars, *iter)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 void nsStandardURL::CoalescePath(netCoalesceFlags coalesceFlag, char* path) {
-  net_CoalesceDirs(coalesceFlag, path);
+  auto resultCoalesceDirs = net_CoalesceDirs(coalesceFlag, path);
   int32_t newLen = strlen(path);
-  if (newLen < mPath.mLen) {
+  if (newLen < mPath.mLen && resultCoalesceDirs) {
+    // Obtain indices for the last slash and the end of the basename
+    uint32_t lastSlash = resultCoalesceDirs->first();
+    uint32_t endOfBasename = resultCoalesceDirs->second();
+
     int32_t diff = newLen - mPath.mLen;
     mPath.mLen = newLen;
-    mDirectory.mLen += diff;
+
+    // The directory length includes all characters up to and
+    // including the last slash
+    mDirectory.mLen = static_cast<int32_t>(lastSlash) + 1;
+
+    // basename length includes everything after the last slash
+    // until hash, query, or the null char. However, if there was an extension
+    // we must make sure to update the length.
+    mBasename.mLen = static_cast<int32_t>(endOfBasename - mDirectory.mLen);
+    if (mExtension.mLen >= 0) {
+      mBasename.mLen -= 1;  // Length of the . character
+      mBasename.mLen -= mExtension.mLen;
+    }
+    mBasename.mPos = mDirectory.mPos + mDirectory.mLen;
+
+    // Adjust the positions of extension, query, and ref as needed
+    // This is possible because net_CoalesceDirs does not modify their lengths
+    ShiftFromExtension(diff);
+
     mFilepath.mLen += diff;
-    ShiftFromBasename(diff);
   }
 }
 
@@ -738,71 +487,6 @@ uint32_t nsStandardURL::AppendToBuf(char* buf, uint32_t i, const char* str,
                                     uint32_t len) {
   memcpy(buf + i, str, len);
   return i + len;
-}
-
-static bool ContainsOnlyAsciiDigits(const nsDependentCSubstring& input) {
-  for (const auto* c = input.BeginReading(); c < input.EndReading(); c++) {
-    if (!IsAsciiDigit(*c)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-static bool ContainsOnlyAsciiHexDigits(const nsDependentCSubstring& input) {
-  for (const auto* c = input.BeginReading(); c < input.EndReading(); c++) {
-    if (!IsAsciiHexDigit(*c)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// https://url.spec.whatwg.org/#ends-in-a-number-checker
-static bool EndsInANumber(const nsCString& input) {
-  // 1. Let parts be the result of strictly splitting input on U+002E (.).
-  nsTArray<nsDependentCSubstring> parts;
-  for (const nsDependentCSubstring& part : input.Split('.')) {
-    parts.AppendElement(part);
-  }
-
-  if (parts.Length() == 0) {
-    return false;
-  }
-
-  // 2.If the last item in parts is the empty string, then:
-  //    1. If parts’s size is 1, then return false.
-  //    2. Remove the last item from parts.
-  if (parts.LastElement().IsEmpty()) {
-    if (parts.Length() == 1) {
-      return false;
-    }
-    Unused << parts.PopLastElement();
-  }
-
-  // 3. Let last be the last item in parts.
-  const nsDependentCSubstring& last = parts.LastElement();
-
-  // 4. If last is non-empty and contains only ASCII digits, then return true.
-  // The erroneous input "09" will be caught by the IPv4 parser at a later
-  // stage.
-  if (!last.IsEmpty()) {
-    if (ContainsOnlyAsciiDigits(last)) {
-      return true;
-    }
-  }
-
-  // 5. If parsing last as an IPv4 number does not return failure, then return
-  // true. This is equivalent to checking that last is "0X" or "0x", followed by
-  // zero or more ASCII hex digits.
-  if (StringBeginsWith(last, "0x"_ns) || StringBeginsWith(last, "0X"_ns)) {
-    if (ContainsOnlyAsciiHexDigits(Substring(last, 2))) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 // basic algorithm:
@@ -892,48 +576,34 @@ nsresult nsStandardURL::BuildNormalizedSpec(const char* spec,
   // However, perform Unicode normalization on it, as IDN does.
   // Note that we don't disallow URLs without a host - file:, etc
   if (mHost.mLen > 0) {
-    nsAutoCString tempHost;
-    NS_UnescapeURL(spec + mHost.mPos, mHost.mLen, esc_AlwaysCopy | esc_Host,
-                   tempHost);
-    if (tempHost.Contains('\0')) {
-      return NS_ERROR_MALFORMED_URI;  // null embedded in hostname
-    }
-    if (tempHost.Contains(' ')) {
-      return NS_ERROR_MALFORMED_URI;  // don't allow spaces in the hostname
-    }
-    nsresult rv = NormalizeIDN(tempHost, encHost);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    if (!SegmentIs(spec, mScheme, "resource") &&
-        !SegmentIs(spec, mScheme, "chrome")) {
-      nsAutoCString ipString;
-      if (encHost.Length() > 0 && encHost.First() == '[' &&
-          encHost.Last() == ']' &&
-          ValidIPv6orHostname(encHost.get(), encHost.Length())) {
-        rv = (nsresult)rusturl_parse_ipv6addr(&encHost, &ipString);
+    nsDependentCSubstring tempHost(spec + mHost.mPos, mHost.mLen);
+    nsresult rv;
+    bool allowIp = !SegmentIs(spec, mScheme, "resource") &&
+                   !SegmentIs(spec, mScheme, "chrome");
+    if (tempHost.First() == '[' && allowIp) {
+      mCheckedIfHostA = true;
+      rv = (nsresult)rusturl_parse_ipv6addr(&tempHost, &encHost);
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
+    } else {
+      rv = NormalizeIDN(tempHost, encHost);
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
+      if (IPv4Parser::EndsInANumber(encHost) && allowIp) {
+        nsAutoCString ipString;
+        rv = IPv4Parser::NormalizeIPv4(encHost, ipString);
         if (NS_FAILED(rv)) {
           return rv;
         }
         encHost = ipString;
-      } else {
-        if (EndsInANumber(encHost)) {
-          rv = NormalizeIPv4(encHost, ipString);
-          if (NS_FAILED(rv)) {
-            return rv;
-          }
-          encHost = ipString;
-        }
       }
     }
 
     // NormalizeIDN always copies, if the call was successful.
     useEncHost = true;
     approxLen += encHost.Length();
-
-    if (!ValidIPv6orHostname(encHost.BeginReading(), encHost.Length())) {
-      return NS_ERROR_MALFORMED_URI;
-    }
   } else {
     // empty host means empty mDisplayHost
     mDisplayHost.Truncate();
@@ -1007,7 +677,6 @@ nsresult nsStandardURL::BuildNormalizedSpec(const char* spec,
                            &diff);
     ShiftFromPath(diff);
 
-    net_ToLowerCase(buf + mHost.mPos, mHost.mLen);
     MOZ_ASSERT(mPort >= -1, "Invalid negative mPort");
     if (mPort != -1 && mPort != mDefaultPort) {
       buf[i++] = ':';
@@ -1098,13 +767,14 @@ nsresult nsStandardURL::BuildNormalizedSpec(const char* spec,
   // https://url.spec.whatwg.org/#windows-drive-letter
   if (SegmentIs(buf, mScheme, "file")) {
     char* path = &buf[mPath.mPos];
+    // To account for cases like file:///w|/m and file:///c|
     if (mPath.mLen >= 3 && path[0] == '/' && IsAsciiAlpha(path[1]) &&
-        path[2] == '|') {
+        path[2] == '|' && (mPath.mLen == 3 || path[3] == '/')) {
       buf[mPath.mPos + 2] = ':';
     }
   }
 
-  if (mDirectory.mLen > 1) {
+  if (mDirectory.mLen > 0) {
     netCoalesceFlags coalesceFlag = NET_COALESCE_NORMAL;
     if (SegmentIs(buf, mScheme, "ftp")) {
       coalesceFlag =
@@ -1528,20 +1198,16 @@ nsresult nsStandardURL::CheckIfHostIsAscii() {
 
   mCheckedIfHostA = true;
 
-  if (!gIDN) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-
   nsAutoCString displayHost;
-  bool isAscii;
-  rv = gIDN->ConvertToDisplayIDN(Host(), &isAscii, displayHost);
+  // IPC deseriazation can have IPv6 without square brackets here.
+  rv = NS_DomainToDisplayAllowAnyGlyphfulASCII(Host(), displayHost);
   if (NS_FAILED(rv)) {
     mDisplayHost.Truncate();
     mCheckedIfHostA = false;
     return rv;
   }
 
-  if (!isAscii) {
+  if (!mozilla::IsAscii(displayHost)) {
     mDisplayHost = displayHost;
   }
 
@@ -1764,7 +1430,7 @@ nsresult nsStandardURL::SetSpecWithEncoding(const nsACString& input,
   }
 
   // Make sure that a URLTYPE_AUTHORITY has a non-empty hostname.
-  if (mURLType == URLTYPE_AUTHORITY && mHost.mLen == -1) {
+  if (mURLType == URLTYPE_AUTHORITY && mHost.mLen <= 0) {
     rv = NS_ERROR_MALFORMED_URI;
   }
 
@@ -2190,19 +1856,15 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
   nsAutoCString hostname(input);
   hostname.StripTaggedASCII(ASCIIMask::MaskCRLFTab());
 
+  LOG(("nsStandardURL::SetHost [host=%s]\n", hostname.get()));
+
   nsACString::const_iterator start, end;
   hostname.BeginReading(start);
   hostname.EndReading(end);
 
   FindHostLimit(start, end);
 
-  // Do percent decoding on the the input.
-  nsAutoCString flat;
-  NS_UnescapeURL(hostname.BeginReading(), end - start,
-                 esc_AlwaysCopy | esc_Host, flat);
-  const char* host = flat.get();
-
-  LOG(("nsStandardURL::SetHost [host=%s]\n", host));
+  nsDependentCSubstring flat(start, end);
 
   if (mURLType == URLTYPE_NO_AUTHORITY) {
     if (flat.IsEmpty()) {
@@ -2217,17 +1879,7 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  if (strlen(host) < flat.Length()) {
-    return NS_ERROR_MALFORMED_URI;  // found embedded null
-  }
-
-  // For consistency with SetSpec/nsURLParsers, don't allow spaces
-  // in the hostname.
-  if (strchr(host, ' ')) {
-    return NS_ERROR_MALFORMED_URI;
-  }
-
-  if (mSpec.Length() + strlen(host) - Host().Length() >
+  if (mSpec.Length() + flat.Length() - Host().Length() >
       StaticPrefs::network_standard_url_max_length()) {
     return NS_ERROR_MALFORMED_URI;
   }
@@ -2237,37 +1889,34 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
 
   uint32_t len;
   nsAutoCString hostBuf;
-  nsresult rv = NormalizeIDN(flat, hostBuf);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  if (!SegmentIs(mScheme, "resource") && !SegmentIs(mScheme, "chrome")) {
-    nsAutoCString ipString;
-    if (hostBuf.Length() > 0 && hostBuf.First() == '[' &&
-        hostBuf.Last() == ']' &&
-        ValidIPv6orHostname(hostBuf.get(), hostBuf.Length())) {
-      rv = (nsresult)rusturl_parse_ipv6addr(&hostBuf, &ipString);
+  nsresult rv;
+  bool allowIp =
+      !SegmentIs(mScheme, "resource") && !SegmentIs(mScheme, "chrome");
+  if (!flat.IsEmpty() && flat.First() == '[' && allowIp) {
+    mCheckedIfHostA = true;
+    rv = rusturl_parse_ipv6addr(&flat, &hostBuf);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+  } else {
+    rv = NormalizeIDN(flat, hostBuf);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    if (IPv4Parser::EndsInANumber(hostBuf) && allowIp) {
+      nsAutoCString ipString;
+      rv = IPv4Parser::NormalizeIPv4(hostBuf, ipString);
       if (NS_FAILED(rv)) {
         return rv;
       }
       hostBuf = ipString;
-    } else {
-      if (EndsInANumber(hostBuf)) {
-        rv = NormalizeIPv4(hostBuf, ipString);
-        if (NS_FAILED(rv)) {
-          return rv;
-        }
-        hostBuf = ipString;
-      }
     }
   }
 
   // NormalizeIDN always copies if the call was successful
-  host = hostBuf.get();
   len = hostBuf.Length();
 
-  if (!ValidIPv6orHostname(host, len)) {
+  if (!len) {
     return NS_ERROR_MALFORMED_URI;
   }
 
@@ -2288,7 +1937,7 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
     }
   }
 
-  int32_t shift = ReplaceSegment(mHost.mPos, mHost.mLen, host, len);
+  int32_t shift = ReplaceSegment(mHost.mPos, mHost.mLen, hostBuf.get(), len);
 
   if (shift) {
     mHost.mLen = len;
@@ -2296,8 +1945,6 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
     ShiftFromPath(shift);
   }
 
-  // Now canonicalize the host to lowercase
-  net_ToLowerCase(mSpec.BeginWriting() + mHost.mPos, mHost.mLen);
   return NS_OK;
 }
 
@@ -2497,8 +2144,12 @@ nsresult nsStandardURL::EqualsInternal(
 
     rv = EnsureFile();
     nsresult rv2 = other->EnsureFile();
-    // special case for resource:// urls that don't resolve to files
-    if (rv == NS_ERROR_NO_INTERFACE && rv == rv2) {
+
+    // Special case for resource:// urls that don't resolve to files,
+    // and for moz-extension://UUID/_generated_background_page.html
+    // because it doesn't resolve to a file (instead it resolves to a data: URI,
+    // see ExtensionProtocolHandler::ResolveSpecialCases, see Bug 1926106).
+    if (rv == NS_ERROR_NO_INTERFACE || rv2 == NS_ERROR_NO_INTERFACE) {
       return NS_OK;
     }
 
@@ -2508,6 +2159,7 @@ nsresult nsStandardURL::EqualsInternal(
       return rv;
     }
     NS_ASSERTION(mFile, "EnsureFile() lied!");
+
     rv = rv2;
     if (NS_FAILED(rv)) {
       LOG(
@@ -2671,6 +2323,17 @@ nsStandardURL::Resolve(const nsACString& in, nsACString& out) {
   scheme.mPos = schemePos;
   scheme.mLen = schemeLen;
 
+  // Bug 1873976: For cases involving file:c: against file:
+  if (NS_SUCCEEDED(rv) && protocol == "file"_ns && baseProtocol == "file"_ns) {
+    const char* path = buf.get() + scheme.mPos + scheme.mLen;
+    // For instance: file:c:\foo\bar.html against file:///tmp/mock/path
+    if (path[0] == ':' && IsAsciiAlpha(path[1]) &&
+        (path[2] == ':' || path[2] == '|')) {
+      out = buf;
+      return NS_OK;
+    }
+  }
+
   protocol.Assign(Segment(scheme));
 
   // We need to do backslash replacement for the following cases:
@@ -2765,7 +2428,13 @@ nsStandardURL::Resolve(const nsACString& in, nsACString& out) {
         }
         break;
       default:
-        if (coalesceFlag & NET_COALESCE_DOUBLE_SLASH_IS_ROOT) {
+        if (protocol.IsEmpty() && Scheme() == "file" &&
+            IsAsciiAlpha(realrelpath[0]) && realrelpath[1] == '|') {
+          // For instance, <C|/foo/bar> against <file:///tmp/mock/path>
+          // Treat tmp/mock/C|/foo/bar as /C|/foo/bar
+          // + 1 should account for '/' at the beginning
+          len = mAuthority.mPos + mAuthority.mLen + 1;
+        } else if (coalesceFlag & NET_COALESCE_DOUBLE_SLASH_IS_ROOT) {
           if (Filename().Equals("%2F"_ns, nsCaseInsensitiveCStringComparator)) {
             // if ftp URL ends with %2F then simply
             // append relative part because %2F also
@@ -2789,7 +2458,21 @@ nsStandardURL::Resolve(const nsACString& in, nsACString& out) {
   }
 
   if (resultPath) {
-    net_CoalesceDirs(coalesceFlag, resultPath);
+    constexpr uint32_t slashDriveSpecifierLength = sizeof("/C:") - 1;
+    // starting with file:C:/*
+    // We need to ignore file:C: and begin from /
+    // Note that file:C://* is already handled
+    if (protocol.IsEmpty() && Scheme() == "file") {
+      if (resultPath[0] == '/' && IsAsciiAlpha(resultPath[1]) &&
+          (resultPath[2] == ':' || resultPath[2] == '|')) {
+        resultPath += slashDriveSpecifierLength;
+      }
+    }
+
+    // Edge case: <C|> against <file:///tmp/mock/path>
+    if (resultPath && resultPath[0] == '/') {
+      net_CoalesceDirs(coalesceFlag, resultPath);
+    }
   } else {
     // locate result path
     resultPath = strstr(result, "://");
@@ -4014,21 +3697,3 @@ size_t nsStandardURL::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
 
 }  // namespace net
 }  // namespace mozilla
-
-// For unit tests.  Including nsStandardURL.h seems to cause problems
-nsresult Test_NormalizeIPv4(const nsACString& host, nsCString& result) {
-  return mozilla::net::nsStandardURL::NormalizeIPv4(host, result);
-}
-
-// For unit tests.  Including nsStandardURL.h seems to cause problems
-nsresult Test_ParseIPv4Number(const nsACString& input, int32_t base,
-                              uint32_t& number, uint32_t maxNumber) {
-  return mozilla::net::ParseIPv4Number(input, base, number, maxNumber);
-}
-
-int32_t Test_ValidateIPv4Number(const nsACString& host, int32_t bases[4],
-                                int32_t dotIndex[3], bool& onlyBase10,
-                                int32_t length) {
-  return mozilla::net::ValidateIPv4Number(host, bases, dotIndex, onlyBase10,
-                                          length, false);
-}

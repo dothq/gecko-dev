@@ -2,10 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import React from "react";
 import { TOP_SITES_SOURCE } from "./TopSitesConstants";
 
@@ -71,10 +68,10 @@ export class SearchShortcutsForm extends React.PureComponent {
 
   handleChange(event) {
     const { target } = event;
-    const { name, checked } = target;
+    const { name: targetName, checked } = target;
     this.setState(prevState => {
       const shortcuts = prevState.shortcuts.slice();
-      let shortcut = shortcuts.find(({ keyword }) => keyword === name);
+      let shortcut = shortcuts.find(({ keyword }) => keyword === targetName);
       shortcut.isSelected = checked;
       return { shortcuts };
     });

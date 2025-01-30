@@ -168,7 +168,7 @@ ScreenOrientation::LockOrientationTask::Run() {
     return NS_OK;
   }
 
-  nsCOMPtr<nsPIDOMWindowInner> owner = mScreenOrientation->GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> owner = mScreenOrientation->GetOwnerWindow();
   if (!owner || !owner->IsFullyActive()) {
     mPromise->MaybeRejectWithAbortError("The document is not fully active.");
     return NS_OK;
@@ -441,7 +441,7 @@ already_AddRefed<Promise> ScreenOrientation::LockInternal(
   // If document is not fully active, return a promise rejected with an
   // "InvalidStateError" DOMException.
 
-  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwnerWindow();
   if (NS_WARN_IF(!owner)) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
@@ -560,12 +560,12 @@ already_AddRefed<Promise> ScreenOrientation::LockInternal(
 
 RefPtr<GenericNonExclusivePromise> ScreenOrientation::LockDeviceOrientation(
     hal::ScreenOrientation aOrientation, bool aIsFullscreen) {
-  if (!GetOwner()) {
+  if (!GetOwnerWindow()) {
     return GenericNonExclusivePromise::CreateAndReject(NS_ERROR_DOM_ABORT_ERR,
                                                        __func__);
   }
 
-  nsCOMPtr<EventTarget> target = GetOwner()->GetDoc();
+  nsCOMPtr<EventTarget> target = GetOwnerWindow()->GetDoc();
   // We need to register a listener so we learn when we leave fullscreen
   // and when we will have to unlock the screen.
   // This needs to be done before LockScreenOrientation call to make sure
@@ -608,13 +608,13 @@ void ScreenOrientation::UnlockDeviceOrientation() {
 }
 
 void ScreenOrientation::CleanupFullscreenListener() {
-  if (!mFullscreenListener || !GetOwner()) {
+  if (!mFullscreenListener || !GetOwnerWindow()) {
     mFullscreenListener = nullptr;
     return;
   }
 
   // Remove event listener in case of fullscreen lock.
-  if (nsCOMPtr<EventTarget> target = GetOwner()->GetDoc()) {
+  if (nsCOMPtr<EventTarget> target = GetOwnerWindow()->GetDoc()) {
     target->RemoveSystemEventListener(u"fullscreenchange"_ns,
                                       mFullscreenListener,
                                       /* useCapture */ true);
@@ -626,7 +626,13 @@ void ScreenOrientation::CleanupFullscreenListener() {
 OrientationType ScreenOrientation::DeviceType(CallerType aCallerType) const {
   if (nsContentUtils::ShouldResistFingerprinting(
           aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
-    return OrientationType::Landscape_primary;
+    Document* doc = GetResponsibleDocument();
+    BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
+    if (!bc) {
+      return nsRFPService::GetDefaultOrientationType();
+    }
+    CSSIntSize size = bc->GetTopInnerSizeForRFP();
+    return nsRFPService::ViewportSizeToOrientationType(size.width, size.height);
   }
   return mType;
 }
@@ -634,18 +640,19 @@ OrientationType ScreenOrientation::DeviceType(CallerType aCallerType) const {
 uint16_t ScreenOrientation::DeviceAngle(CallerType aCallerType) const {
   if (nsContentUtils::ShouldResistFingerprinting(
           aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
-    return 0;
+    Document* doc = GetResponsibleDocument();
+    BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
+    if (!bc) {
+      return 0;
+    }
+    CSSIntSize size = bc->GetTopInnerSizeForRFP();
+    return nsRFPService::ViewportSizeToAngle(size.width, size.height);
   }
   return mAngle;
 }
 
 OrientationType ScreenOrientation::GetType(CallerType aCallerType,
                                            ErrorResult& aRv) const {
-  if (nsContentUtils::ShouldResistFingerprinting(
-          aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
-    return OrientationType::Landscape_primary;
-  }
-
   Document* doc = GetResponsibleDocument();
   BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
   if (!bc) {
@@ -653,16 +660,17 @@ OrientationType ScreenOrientation::GetType(CallerType aCallerType,
     return OrientationType::Portrait_primary;
   }
 
-  return bc->GetCurrentOrientationType();
+  OrientationType orientation = bc->GetCurrentOrientationType();
+  if (nsContentUtils::ShouldResistFingerprinting(
+          aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
+    CSSIntSize size = bc->GetTopInnerSizeForRFP();
+    return nsRFPService::ViewportSizeToOrientationType(size.width, size.height);
+  }
+  return orientation;
 }
 
 uint16_t ScreenOrientation::GetAngle(CallerType aCallerType,
                                      ErrorResult& aRv) const {
-  if (nsContentUtils::ShouldResistFingerprinting(
-          aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
-    return 0;
-  }
-
   Document* doc = GetResponsibleDocument();
   BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
   if (!bc) {
@@ -670,12 +678,18 @@ uint16_t ScreenOrientation::GetAngle(CallerType aCallerType,
     return 0;
   }
 
-  return bc->GetCurrentOrientationAngle();
+  uint16_t angle = static_cast<uint16_t>(bc->GetCurrentOrientationAngle());
+  if (nsContentUtils::ShouldResistFingerprinting(
+          aCallerType, GetOwnerGlobal(), RFPTarget::ScreenOrientation)) {
+    CSSIntSize size = bc->GetTopInnerSizeForRFP();
+    return nsRFPService::ViewportSizeToAngle(size.width, size.height);
+  }
+  return angle;
 }
 
 ScreenOrientation::LockPermission
 ScreenOrientation::GetLockOrientationPermission(bool aCheckSandbox) const {
-  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwnerWindow();
   if (!owner) {
     return LOCK_DENIED;
   }
@@ -707,7 +721,7 @@ ScreenOrientation::GetLockOrientationPermission(bool aCheckSandbox) const {
 }
 
 Document* ScreenOrientation::GetResponsibleDocument() const {
-  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> owner = GetOwnerWindow();
   if (!owner) {
     return nullptr;
   }
@@ -788,14 +802,17 @@ ScreenOrientation::DispatchChangeEventAndResolvePromise() {
   RefPtr<ScreenOrientation> self = this;
   return NS_NewRunnableFunction(
       "dom::ScreenOrientation::DispatchChangeEvent", [self, doc]() {
-        DebugOnly<nsresult> rv = self->DispatchTrustedEvent(u"change"_ns);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "DispatchTrustedEvent failed");
+        RefPtr<Promise> pendingPromise;
         if (doc) {
-          Promise* pendingPromise = doc->GetOrientationPendingPromise();
+          pendingPromise = doc->GetOrientationPendingPromise();
           if (pendingPromise) {
-            pendingPromise->MaybeResolveWithUndefined();
             doc->ClearOrientationPendingPromise();
           }
+        }
+        DebugOnly<nsresult> rv = self->DispatchTrustedEvent(u"change"_ns);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "DispatchTrustedEvent failed");
+        if (pendingPromise) {
+          pendingPromise->MaybeResolveWithUndefined();
         }
       });
 }

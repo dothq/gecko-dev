@@ -62,7 +62,7 @@ load 385840-1.svg
 load 385852-1.svg
 load 386475-1.xhtml
 load 386690-1.svg
-load 387290-1.svg
+skip-if(Android||(winWidget&&(!is64Bit))) load 387290-1.svg # bug 1914259
 load 402408-1.svg
 load 404677-1.xhtml
 load 409565-1.xhtml
@@ -123,6 +123,7 @@ load 682411-1.svg
 load 692203-1.svg
 load 692203-2.svg
 load 693424-1.svg
+load 696326-1.svg
 load 709920-1.svg
 load 709920-2.svg
 load 713413-1.svg
@@ -223,8 +224,8 @@ load 1467552-1.html
 load 1474982.html
 load conditional-outer-svg-nondirty-reflow-assert.xhtml
 load extref-test-1.xhtml
-skip-if(wayland) pref(widget.windows.window_occlusion_tracking.enabled,false) load blob-merging-and-retained-display-list.html  # Bug 1819154, wayland: Bug 1857256
-skip-if(wayland) load empty-blob-merging.html  # wayland: Bug 1857256
+load blob-merging-and-retained-display-list.html
+load empty-blob-merging.html
 load grouping-empty-bounds.html
 load 1480275.html
 load 1480224.html
@@ -243,7 +244,7 @@ load 1539318-1.svg
 load 1548985-1.html
 load 1548985-2.svg
 load 1555851.html
-skip-if(wayland) pref(widget.windows.window_occlusion_tracking.enabled,false) load invalidation-of-opacity-0.html  # Bug 1819154, wayland: Bug 1857256
+load invalidation-of-opacity-0.html
 load 1563779.html
 load 1600855.html
 load 1601824.html

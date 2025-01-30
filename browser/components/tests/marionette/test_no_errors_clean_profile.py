@@ -49,10 +49,21 @@ known_errors = [
         "message": "key_toggleReaderMode",
     },
     {
+        # Triggered as soon as anything tries to use shortcut keys.
+        # Bug 1936426 to reconsider warning as we want ctrl-alt-x for chatbot.
+        "message": "viewGenaiChatSidebarKb",
+    },
+    {
         # Triggered on Linux because it doesn't implement the
         # secondsSinceLastOSRestart property at all.
         "message": "(NS_ERROR_NOT_IMPLEMENTED) [nsIAppStartup.secondsSinceLastOSRestart]",
         "filename": "BrowserGlue",
+    },
+    {
+        # Triggered as soon as anything tries to use shortcut keys.
+        # Bug 1936426 to reconsider warning as we want ctrl-z / ctrl-alt-z
+        # for sidebar.
+        "message": "toggleSidebarKb",
     },
 ]
 
@@ -80,7 +91,7 @@ class TestNoErrorsNewProfile(MarionetteTestCase):
             let { BrowserInitState } = ChromeUtils.importESModule("resource:///modules/BrowserGlue.sys.mjs");
             let promises = [
               BrowserInitState.startupIdleTaskPromise,
-              gBrowserInit.idleTasksFinishedPromise,
+              gBrowserInit.idleTasksFinished.promise,
             ];
             Promise.all(promises).then(resolve);
             """
@@ -91,7 +102,7 @@ class TestNoErrorsNewProfile(MarionetteTestCase):
         else:
             self.mod_key = Keys.CONTROL
         # Focus the URL bar by keyboard
-        url_bar = self.marionette.find_element(By.ID, "urlbar-input")
+        url_bar = self.marionette.execute_script("return gURLBar.inputField")
         url_bar.send_keys(self.mod_key, "l")
         # and open a tab by mouse:
         new_tab_button = self.marionette.find_element(By.ID, "new-tab-button")

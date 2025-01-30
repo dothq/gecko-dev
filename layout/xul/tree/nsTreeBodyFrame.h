@@ -32,6 +32,7 @@ class nsTreeImageListener;
 
 namespace mozilla {
 class PresShell;
+class ScrollContainerFrame;
 namespace layout {
 class ScrollbarActivity;
 }  // namespace layout
@@ -59,7 +60,7 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   explicit nsTreeBodyFrame(ComputedStyle* aStyle, nsPresContext* aPresContext);
   ~nsTreeBodyFrame();
 
-  nscoord GetIntrinsicBSize() override;
+  mozilla::IntrinsicSize GetIntrinsicSize() override;
 
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsTreeBodyFrame)
@@ -86,7 +87,6 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   nsresult GetTreeBody(mozilla::dom::Element** aElement);
   int32_t RowHeight() const;
   int32_t RowWidth();
-  int32_t GetHorizontalPosition() const;
   mozilla::Maybe<mozilla::CSSIntRegion> GetSelectionRegion();
   int32_t FirstVisibleRow() const { return mTopRowIndex; }
   int32_t LastVisibleRow() const { return mTopRowIndex + mPageLength; }
@@ -145,7 +145,7 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   void VisibilityChanged(bool aVisible) override { Invalidate(); }
   nsScrollbarFrame* GetScrollbarBox(bool aVertical) override {
     ScrollParts parts = GetScrollParts();
-    return aVertical ? parts.mVScrollbar : parts.mHScrollbar;
+    return aVertical ? parts.mVScrollbar : nullptr;
   }
   void ScrollbarActivityStarted() const override;
   void ScrollbarActivityStopped() const override;
@@ -174,12 +174,8 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   friend class nsTreeColumn;
 
   struct ScrollParts {
-    nsScrollbarFrame* mVScrollbar;
+    nsScrollbarFrame* mVScrollbar = nullptr;
     RefPtr<mozilla::dom::Element> mVScrollbarContent;
-    nsScrollbarFrame* mHScrollbar;
-    RefPtr<mozilla::dom::Element> mHScrollbarContent;
-    nsIFrame* mColumnsFrame;
-    nsIScrollableFrame* mColumnsScrollFrame;
   };
 
   ImgDrawResult PaintTreeBody(gfxContext& aRenderingContext,
@@ -190,7 +186,6 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   mozilla::dom::XULTreeElement* GetBaseElement();
 
   bool GetVerticalOverflow() const { return mVerticalOverflow; }
-  bool GetHorizontalOverflow() const { return mHorizontalOverflow; }
 
   // This returns the property array where atoms are stored for style during
   // draw, whether the row currently being drawn is selected, hovered, etc.
@@ -295,10 +290,10 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
                  nsCSSAnonBoxPseudoStaticAtom** aChildElt);
 
   // Retrieve the area for the twisty for a cell.
-  nsITheme* GetTwistyRect(int32_t aRowIndex, nsTreeColumn* aColumn,
-                          nsRect& aImageRect, nsRect& aTwistyRect,
-                          nsPresContext* aPresContext,
-                          ComputedStyle* aTwistyContext);
+  void GetTwistyRect(int32_t aRowIndex, nsTreeColumn* aColumn,
+                     nsRect& aImageRect, nsRect& aTwistyRect,
+                     nsPresContext* aPresContext,
+                     ComputedStyle* aTwistyContext);
 
   // Fetch an image from the image cache.
   nsresult GetImage(int32_t aRowIndex, nsTreeColumn* aCol, bool aUseContext,
@@ -344,8 +339,7 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   void UpdateScrollbars(const ScrollParts& aParts);
 
   // Update the maxpos of the scrollbar.
-  void InvalidateScrollbars(const ScrollParts& aParts,
-                            AutoWeakFrame& aWeakColumnsFrame);
+  void InvalidateScrollbars(const ScrollParts& aParts);
 
   // Check overflow and generate events.
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void CheckOverflow(const ScrollParts& aParts);
@@ -362,7 +356,6 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   // Our internal scroll method, used by all the public scroll methods.
   nsresult ScrollInternal(const ScrollParts& aParts, int32_t aRow);
   nsresult ScrollToRowInternal(const ScrollParts& aParts, int32_t aRow);
-  nsresult ScrollHorzInternal(const ScrollParts& aParts, int32_t aPosition);
   nsresult EnsureRowIsVisibleInternal(const ScrollParts& aParts, int32_t aRow);
 
   // Convert client pixels into appunits in our coordinate space.
@@ -393,8 +386,9 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
 
   void InvalidateDropFeedback(int32_t aRow, int16_t aOrientation) {
     InvalidateRow(aRow);
-    if (aOrientation != nsITreeView::DROP_ON)
+    if (aOrientation != nsITreeView::DROP_ON) {
       InvalidateRow(aRow + aOrientation);
+    }
   }
 
  public:
@@ -563,9 +557,6 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   // Our desired horizontal width (the width for which we actually have tree
   // columns).
   nscoord mHorzWidth;
-  // The amount by which to adjust the width of the last cell.
-  // This depends on whether or not the columnpicker and scrollbars are present.
-  nscoord mAdjustWidth;
 
   // Our last reflowed rect, used for invalidation, see ManageReflowCallback().
   Maybe<nsRect> mLastReflowRect;
@@ -590,12 +581,11 @@ class nsTreeBodyFrame final : public mozilla::SimpleXULLeafFrame,
   bool mHasFixedRowCount;
 
   bool mVerticalOverflow;
-  bool mHorizontalOverflow;
 
   bool mReflowCallbackPosted;
 
-  // Set while we flush layout to take account of effects of
-  // overflow/underflow event handlers
+  // Set while we flush layout to take account of effects of overflow/underflow
+  // event handlers
   bool mCheckingOverflow;
 
   // Hash set to keep track of which listeners we created and thus

@@ -2,6 +2,19 @@
 
 // This test checks whether the new tab page color properties work per-window.
 
+add_setup(async function () {
+  SpecialPowers.registerConsoleListener(function onConsoleMessage(msg) {
+    if (msg.isWarning || !msg.errorMessage) {
+      // Ignore warnings and non-errors.
+      return;
+    }
+    ok(false, msg.message || msg.errorMessage);
+  });
+  registerCleanupFunction(() => {
+    SpecialPowers.postConsoleSentinel();
+  });
+});
+
 function waitForAboutNewTabReady(browser, url) {
   // Stop-gap fix for https://bugzilla.mozilla.org/show_bug.cgi?id=1697196#c24
   return SpecialPowers.spawn(browser, [url], async url => {
@@ -38,6 +51,10 @@ function test_ntp_theme(browser, theme, isBrightText) {
       ok(
         doc.documentElement.hasAttribute("lwt-newtab"),
         "New tab page should have lwt-newtab attribute"
+      );
+      ok(
+        doc.documentElement.hasAttribute("lwtheme"),
+        "New tab page should have lwtheme attribute"
       );
       is(
         doc.documentElement.hasAttribute("lwt-newtab-brighttext"),
@@ -88,6 +105,10 @@ function test_ntp_default_theme(browser) {
       ok(
         !doc.documentElement.hasAttribute("lwt-newtab"),
         "New tab page should not have lwt-newtab attribute"
+      );
+      ok(
+        !doc.documentElement.hasAttribute("lwtheme"),
+        "New tab page should not have lwtheme attribute"
       );
       ok(
         !doc.documentElement.hasAttribute("lwt-newtab-brighttext"),

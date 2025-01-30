@@ -21,10 +21,6 @@
   margin: 12px 12px 0 12px;
 }
 
-.update-header-box-1 {
-  color: #000;
-}
-
 .update-header-box-text {
   margin: 0;
   padding: 0;
@@ -52,9 +48,6 @@
 }
 
 #update-button-box button {
-  appearance: auto;
-  -moz-default-appearance: toolbarbutton;
-  color: ButtonText;
   min-height: 22px;
 }
 

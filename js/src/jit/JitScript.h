@@ -222,7 +222,7 @@ class alignas(uintptr_t) ICScript final : public TrailingArray<ICScript> {
 
   // List of allocation sites referred to by ICs in this script.
   static constexpr size_t AllocSiteChunkSize = 256;
-  LifoAlloc allocSitesSpace_{AllocSiteChunkSize};
+  LifoAlloc allocSitesSpace_{AllocSiteChunkSize, js::BackgroundMallocArena};
   Vector<gc::AllocSite*, 0, SystemAllocPolicy> allocSites_;
 
   // Number of times this copy of the script has been called or has had
@@ -451,9 +451,13 @@ class alignas(uintptr_t) JitScript final
 
   EnvironmentObject* templateEnvironment() const { return templateEnv_.ref(); }
 
+  std::pair<CallObject*, NamedLambdaObject*> functionEnvironmentTemplates(
+      JSFunction* fun) const;
+
   bool usesEnvironmentChain() const { return *usesEnvironmentChain_; }
 
   bool resetAllocSites(bool resetNurserySites, bool resetPretenuredSites);
+  bool hasPretenuredAllocSites();
 
   void updateLastICStubCounter() { warmUpCountAtLastICStub_ = warmUpCount(); }
   uint32_t warmUpCountAtLastICStub() const { return warmUpCountAtLastICStub_; }
@@ -562,6 +566,12 @@ class alignas(uintptr_t) JitScript final
     }
   }
 #endif
+
+  inline void clearFailedICHash() {
+#ifdef DEBUG
+    failedICHash_.reset();
+#endif
+  }
 };
 
 // Ensures no JitScripts are purged in the current zone.

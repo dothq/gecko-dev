@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "jit/JitSpewer.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "js/Printf.h"
@@ -34,6 +35,7 @@ LIRGraph::LIRGraph(MIRGraph* mir)
       numInstructions_(1),  // First id is 1.
       localSlotsSize_(0),
       argumentSlotCount_(0),
+      extraSafepointUses_(0),
       mir_(*mir) {}
 
 bool LIRGraph::addConstantToPool(const Value& v, uint32_t* index) {

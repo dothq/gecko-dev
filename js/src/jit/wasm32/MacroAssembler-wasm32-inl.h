@@ -25,6 +25,10 @@ void MacroAssembler::moveGPR64ToDouble(Register64 src, FloatRegister dest) {
   MOZ_CRASH();
 }
 
+void MacroAssembler::moveLowDoubleToGPR(FloatRegister src, Register dest) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::move64To32(Register64 src, Register dest) { MOZ_CRASH(); }
 
 void MacroAssembler::move32To64ZeroExtend(Register src, Register64 dest) {
@@ -40,6 +44,14 @@ void MacroAssembler::move16To64SignExtend(Register src, Register64 dest) {
 }
 
 void MacroAssembler::move32To64SignExtend(Register src, Register64 dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::move8SignExtendToPtr(Register src, Register dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::move16SignExtendToPtr(Register src, Register dest) {
   MOZ_CRASH();
 }
 
@@ -136,6 +148,10 @@ void MacroAssembler::rshiftPtrArithmetic(Imm32 imm, Register dest) {
   MOZ_CRASH();
 }
 
+void MacroAssembler::rshiftPtrArithmetic(Register shift, Register srcDest) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::lshift64(Imm32 imm, Register64 dest) { MOZ_CRASH(); }
 
 void MacroAssembler::rshift64(Imm32 imm, Register64 dest) { MOZ_CRASH(); }
@@ -164,9 +180,9 @@ void MacroAssembler::rshift64Arithmetic(Register shift, Register64 srcDest) {
   MOZ_CRASH();
 }
 
-void MacroAssembler::clz64(Register64 src, Register dest) { MOZ_CRASH(); }
+void MacroAssembler::clz64(Register64 src, Register64 dest) { MOZ_CRASH(); }
 
-void MacroAssembler::ctz64(Register64 src, Register dest) { MOZ_CRASH(); }
+void MacroAssembler::ctz64(Register64 src, Register64 dest) { MOZ_CRASH(); }
 
 void MacroAssembler::popcnt64(Register64 src, Register64 dest, Register temp) {
   MOZ_CRASH();
@@ -321,15 +337,13 @@ void MacroAssembler::memoryBarrier(MemoryBarrierBits barrier) { MOZ_CRASH(); }
 
 void MacroAssembler::clampIntToUint8(Register reg) { MOZ_CRASH(); }
 
-template <class L>
 void MacroAssembler::branchTest32(Condition cond, Register lhs, Register rhs,
-                                  L label) {
+                                  Label* label) {
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchTest32(Condition cond, Register lhs, Imm32 rhs,
-                                  L label) {
+                                  Label* label) {
   MOZ_CRASH();
 }
 
@@ -343,12 +357,16 @@ void MacroAssembler::branchTest32(Condition cond, const AbsoluteAddress& lhs,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs,
-                                   L label) {
+                                   Label* label) {
   MOZ_CRASH();
 }
 void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Imm32 rhs,
+                                   Label* label) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::branchTestPtr(Condition cond, Register lhs, ImmWord rhs,
                                    Label* label) {
   MOZ_CRASH();
 }
@@ -358,9 +376,14 @@ void MacroAssembler::branchTestPtr(Condition cond, const Address& lhs,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchTest64(Condition cond, Register64 lhs,
-                                  Register64 rhs, Register temp, L label) {
+                                  Register64 rhs, Register temp, Label* success,
+                                  Label* fail) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::branchTest64(Condition cond, Register64 lhs, Imm64 rhs,
+                                  Label* success, Label* fail) {
   MOZ_CRASH();
 }
 
@@ -604,6 +627,11 @@ void MacroAssembler::fallibleUnboxPtr(const BaseIndex& src, Register dest,
   MOZ_CRASH();
 }
 
+void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Imm32 rhs,
+                                   Register src, Register dest) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Register rhs,
                                    Register src, Register dest) {
   MOZ_CRASH();
@@ -655,15 +683,13 @@ void MacroAssembler::branch16(Condition cond, const Address& lhs, Imm32 rhs,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branch32(Condition cond, Register lhs, Register rhs,
-                              L label) {
+                              Label* label) {
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branch32(Condition cond, Register lhs, Imm32 rhs,
-                              L label) {
+                              Label* label) {
   MOZ_CRASH();
 }
 
@@ -672,9 +698,8 @@ void MacroAssembler::branch32(Condition cond, wasm::SymbolicAddress lhs,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchPtr(Condition cond, Register lhs, Register rhs,
-                               L label) {
+                               Label* label) {
   MOZ_CRASH();
 }
 
@@ -698,9 +723,8 @@ void MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs,
-                               L label) {
+                               Label* label) {
   MOZ_CRASH();
 }
 
@@ -799,6 +823,10 @@ void MacroAssembler::branchMulPtr(Condition cond, Register src, Register dest,
   MOZ_CRASH();
 }
 
+void MacroAssembler::branchNegPtr(Condition cond, Register reg, Label* label) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::decBranchPtr(Condition cond, Register lhs, Imm32 rhs,
                                   Label* label) {
   MOZ_CRASH();
@@ -834,6 +862,15 @@ FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat32(
   MOZ_CRASH();
 }
 
+FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat16(
+    FloatRegister src, const Address& dest, Register) {
+  MOZ_CRASH();
+}
+FaultingCodeOffset MacroAssembler::storeUncanonicalizedFloat16(
+    FloatRegister src, const BaseIndex& dest, Register) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::addPtr(Imm32 imm, const Address& dest) { MOZ_CRASH(); }
 
 void MacroAssembler::addPtr(const Address& src, Register dest) { MOZ_CRASH(); }
@@ -851,6 +888,11 @@ void MacroAssembler::branchTruncateFloat32MaybeModUint32(FloatRegister src,
 void MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src,
                                                         Register dest,
                                                         Label* fail) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::test32MovePtr(Condition cond, Register operand, Imm32 mask,
+                                   Register src, Register dest) {
   MOZ_CRASH();
 }
 
@@ -915,6 +957,14 @@ void MacroAssembler::branchTruncateDoubleToInt32(FloatRegister src,
   MOZ_CRASH();
 }
 
+void MacroAssembler::branchInt64NotInPtrRange(Register64 src, Label* label) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::branchUInt64NotInPtrRange(Register64 src, Label* label) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::mulDoublePtr(ImmPtr imm, Register temp,
                                   FloatRegister dest) {
   MOZ_CRASH();
@@ -922,6 +972,21 @@ void MacroAssembler::mulDoublePtr(ImmPtr imm, Register temp,
 
 template <typename T1, typename T2>
 void MacroAssembler::cmp32Set(Condition cond, T1 lhs, T2 rhs, Register dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::cmp64Set(Condition cond, Register64 lhs, Register64 rhs,
+                              Register dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::cmp64Set(Condition cond, Register64 lhs, Imm64 rhs,
+                              Register dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::cmp64Set(Condition cond, Address lhs, Register64 rhs,
+                              Register dest) {
   MOZ_CRASH();
 }
 
@@ -962,9 +1027,8 @@ void MacroAssembler::branchTestBoolean(Condition cond,
   MOZ_CRASH();
 }
 
-template <class L>
 void MacroAssembler::branchTestMagic(Condition cond, const ValueOperand& value,
-                                     L label) {
+                                     Label* label) {
   MOZ_CRASH();
 }
 
@@ -1021,12 +1085,12 @@ void MacroAssembler::branch64(Condition cond, Register64 lhs, Register64 rhs,
 }
 
 void MacroAssembler::branch64(Condition cond, const Address& lhs, Imm64 val,
-                              Label* label) {
+                              Label* success, Label* fail) {
   MOZ_CRASH();
 }
 
 void MacroAssembler::branch64(Condition cond, const Address& lhs,
-                              Register64 rhs, Label* label) {
+                              Register64 rhs, Label* success, Label* fail) {
   MOZ_CRASH();
 }
 
@@ -1106,6 +1170,19 @@ void MacroAssembler::flexibleRshift32Arithmetic(Register shift,
   MOZ_CRASH();
 }
 
+void MacroAssembler::flexibleLshiftPtr(Register shift, Register srcDest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::flexibleRshiftPtr(Register shift, Register srcDest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::flexibleRshiftPtrArithmetic(Register shift,
+                                                 Register srcDest) {
+  MOZ_CRASH();
+}
+
 void MacroAssembler::branchPrivatePtr(Condition cond, const Address& lhs,
                                       Register rhs, Label* label) {
   MOZ_CRASH();
@@ -1128,6 +1205,14 @@ void MacroAssembler::moveFloat32ToGPR(FloatRegister src, Register dest) {
 }
 
 void MacroAssembler::moveGPRToFloat32(Register src, FloatRegister dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::moveFloat16ToGPR(FloatRegister src, Register dest) {
+  MOZ_CRASH();
+}
+
+void MacroAssembler::moveGPRToFloat16(Register src, FloatRegister dest) {
   MOZ_CRASH();
 }
 

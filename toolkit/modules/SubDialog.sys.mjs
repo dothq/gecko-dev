@@ -184,8 +184,9 @@ SubDialog.prototype = {
       // The drag service getService call fails in puppeteer tests on Linux,
       // so this is in a try...catch as it shouldn't stop us from opening the
       // dialog. Bug 1806870 tracks fixing this.
-      if (lazy.dragService.getCurrentSession()) {
-        lazy.dragService.endDragSession(true);
+      let session = lazy.dragService.getCurrentSession(this._window);
+      if (session) {
+        session.endDragSession(true);
       }
     } catch (ex) {
       console.error(ex);
@@ -229,7 +230,7 @@ SubDialog.prototype = {
       bubbles: true,
       detail: { dialog: this, abort: true },
     });
-    this._frame.contentWindow.close();
+    this._frame.contentWindow?.close();
     // It's possible that we're aborting this dialog before we've had a
     // chance to set up the contentWindow.close function override in
     // _onContentLoaded. If so, call this.close() directly to clean things
@@ -375,9 +376,8 @@ SubDialog.prototype = {
     let { contentDocument } = this._frame;
     // Provide the ability for the dialog to know that it is loaded in a frame
     // rather than as a top-level window.
-    for (let dialog of contentDocument.querySelectorAll("dialog")) {
-      dialog.setAttribute("subdialog", "true");
-    }
+    contentDocument.documentElement.toggleAttribute("subdialog", true);
+
     // Sub-dialogs loaded in a chrome window should use the system font size so
     // that the user has a way to increase or decrease it via system settings.
     // Sub-dialogs loaded in the content area, on the other hand, can be zoomed
@@ -417,6 +417,11 @@ SubDialog.prototype = {
         resizeByWidth,
         resizeByHeight
       );
+    };
+
+    // Defining resizeDialog on the contentWindow object to resize dialogs when prompted
+    this._frame.contentWindow.resizeDialog = () => {
+      return this.resizeDialog();
     };
 
     // Make window.close calls work like dialog closing.
@@ -484,6 +489,33 @@ SubDialog.prototype = {
   },
 
   async resizeDialog() {
+    this.resizeHorizontally();
+    this.resizeVertically();
+
+    this._overlay.dispatchEvent(
+      new CustomEvent("dialogopen", {
+        bubbles: true,
+        detail: { dialog: this },
+      })
+    );
+    this._overlay.style.visibility = "inherit";
+    this._overlay.style.opacity = ""; // XXX: focus hack continued from _onContentLoaded
+
+    if (this._box.getAttribute("resizable") == "true") {
+      this._onResize = this._onResize.bind(this);
+      this._resizeObserver = new this._window.MutationObserver(this._onResize);
+      this._resizeObserver.observe(this._box, { attributes: true });
+    }
+
+    this._trapFocus();
+
+    this._resizeCallback?.({
+      title: this._titleElement,
+      frame: this._frame,
+    });
+  },
+
+  resizeHorizontally() {
     // Do this on load to wait for the CSS to load and apply before calculating the size.
     let docEl = this._frame.contentDocument.documentElement;
 
@@ -529,30 +561,6 @@ SubDialog.prototype = {
       boxMinWidth = `min(80vw, ${boxMinWidth})`;
     }
     this._box.style.minWidth = boxMinWidth;
-
-    this.resizeVertically();
-
-    this._overlay.dispatchEvent(
-      new CustomEvent("dialogopen", {
-        bubbles: true,
-        detail: { dialog: this },
-      })
-    );
-    this._overlay.style.visibility = "inherit";
-    this._overlay.style.opacity = ""; // XXX: focus hack continued from _onContentLoaded
-
-    if (this._box.getAttribute("resizable") == "true") {
-      this._onResize = this._onResize.bind(this);
-      this._resizeObserver = new this._window.MutationObserver(this._onResize);
-      this._resizeObserver.observe(this._box, { attributes: true });
-    }
-
-    this._trapFocus();
-
-    this._resizeCallback?.({
-      title: this._titleElement,
-      frame: this._frame,
-    });
   },
 
   resizeVertically() {

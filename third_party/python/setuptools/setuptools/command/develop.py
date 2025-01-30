@@ -1,14 +1,15 @@
-from distutils.util import convert_path
+import glob
+import os
+
+import setuptools
+from setuptools import _normalization, _path, namespaces
+from setuptools.command.easy_install import easy_install
+
+from ..unicode_utils import _read_utf8_with_fallback
+
 from distutils import log
 from distutils.errors import DistutilsOptionError
-import os
-import glob
-import io
-
-from setuptools.command.easy_install import easy_install
-from setuptools import _path
-from setuptools import namespaces
-import setuptools
+from distutils.util import convert_path
 
 
 class develop(namespaces.DevelopInstaller, easy_install):
@@ -53,7 +54,9 @@ class develop(namespaces.DevelopInstaller, easy_install):
         # pick up setup-dir .egg files only: no .egg-info
         self.package_index.scan(glob.glob('*.egg'))
 
-        egg_link_fn = ei.egg_name + '.egg-link'
+        egg_link_fn = (
+            _normalization.filename_component_broken(ei.egg_name) + '.egg-link'
+        )
         self.egg_link = os.path.join(self.install_dir, egg_link_fn)
         self.egg_base = ei.egg_base
         if self.egg_path is None:
@@ -90,9 +93,7 @@ class develop(namespaces.DevelopInstaller, easy_install):
         path_to_setup = egg_base.replace(os.sep, '/').rstrip('/')
         if path_to_setup != os.curdir:
             path_to_setup = '../' * (path_to_setup.count('/') + 1)
-        resolved = _path.normpath(
-            os.path.join(install_dir, egg_path, path_to_setup)
-        )
+        resolved = _path.normpath(os.path.join(install_dir, egg_path, path_to_setup))
         curdir = _path.normpath(os.curdir)
         if resolved != curdir:
             raise DistutilsOptionError(
@@ -107,7 +108,7 @@ class develop(namespaces.DevelopInstaller, easy_install):
         self.run_command('egg_info')
 
         # Build extensions in-place
-        self.reinitialize_command('build_ext', inplace=1)
+        self.reinitialize_command('build_ext', inplace=True)
         self.run_command('build_ext')
 
         if setuptools.bootstrap_install_from:
@@ -119,7 +120,7 @@ class develop(namespaces.DevelopInstaller, easy_install):
         # create an .egg-link in the installation dir, pointing to our egg
         log.info("Creating %s (link to %s)", self.egg_link, self.egg_base)
         if not self.dry_run:
-            with open(self.egg_link, "w") as f:
+            with open(self.egg_link, "w", encoding="utf-8") as f:
                 f.write(self.egg_path + "\n" + self.setup_path)
         # postprocess the installed distro, fixing up .pth, installing scripts,
         # and handling requirements
@@ -128,9 +129,12 @@ class develop(namespaces.DevelopInstaller, easy_install):
     def uninstall_link(self):
         if os.path.exists(self.egg_link):
             log.info("Removing %s (link to %s)", self.egg_link, self.egg_base)
-            egg_link_file = open(self.egg_link)
-            contents = [line.rstrip() for line in egg_link_file]
-            egg_link_file.close()
+
+            contents = [
+                line.rstrip()
+                for line in _read_utf8_with_fallback(self.egg_link).splitlines()
+            ]
+
             if contents not in ([self.egg_path], [self.egg_path, self.setup_path]):
                 log.warn("Link points to %s: uninstall aborted", contents)
                 return
@@ -156,9 +160,10 @@ class develop(namespaces.DevelopInstaller, easy_install):
         for script_name in self.distribution.scripts or []:
             script_path = os.path.abspath(convert_path(script_name))
             script_name = os.path.basename(script_path)
-            with io.open(script_path) as strm:
-                script_text = strm.read()
+            script_text = _read_utf8_with_fallback(script_path)
             self.install_script(dist, script_name, script_text, script_path)
+
+        return None
 
     def install_wrapper_scripts(self, dist):
         dist = VersionlessRequirement(dist)
@@ -183,7 +188,7 @@ class VersionlessRequirement:
     def __init__(self, dist):
         self.__dist = dist
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         return getattr(self.__dist, name)
 
     def as_requirement(self):

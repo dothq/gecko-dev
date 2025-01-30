@@ -297,12 +297,27 @@ JS::UniqueChars js::StringToLocale(JSContext* cx, JS::Handle<JSObject*> callee,
   return locale;
 }
 
-bool js::ValidateLazinessOfStencilAndGlobal(
-    JSContext* cx, const js::frontend::CompilationStencil& stencil) {
-  if (cx->realm()->behaviors().discardSource() && stencil.canLazilyParse) {
+bool js::ValidateLazinessOfStencilAndGlobal(JSContext* cx,
+                                            const JS::Stencil* stencil) {
+  if (cx->realm()->behaviors().discardSource() && stencil->canLazilyParse()) {
     JS_ReportErrorASCII(cx,
                         "Stencil compiled with with lazy parse option cannot "
                         "be used in a realm with discardSource");
+    return false;
+  }
+
+  return true;
+}
+
+bool js::ValidateModuleCompileOptions(JSContext* cx,
+                                      JS::CompileOptions& options) {
+  if (options.lineno == 0) {
+    JS_ReportErrorASCII(cx, "Module cannot be compiled with lineNumber == 0");
+    return false;
+  }
+
+  if (!options.filename()) {
+    JS_ReportErrorASCII(cx, "Module should have filename");
     return false;
   }
 

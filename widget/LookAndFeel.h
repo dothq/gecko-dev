@@ -53,8 +53,6 @@ class LookAndFeel {
     CaretBlinkCount,
     // pixel width of caret
     CaretWidth,
-    // show the caret when text is selected?
-    ShowCaretDuringSelection,
     // select textfields when focused via tab/accesskey?
     SelectTextfieldsOnKeyFocus,
     // delay before submenus open
@@ -94,8 +92,6 @@ class LookAndFeel {
     TreeScrollDelay,
     // the maximum number of lines to be scrolled at ones
     TreeScrollLinesMax,
-    // What type of tab-order to use
-    TabFocusModel,
     // Should menu items blink when they're chosen?
     ChosenMenuItemsShouldBlink,
 
@@ -108,6 +104,9 @@ class LookAndFeel {
      */
     WindowsAccentColorInTitlebar,
 
+    /* Whether Windows mica effect is enabled and available */
+    WindowsMica,
+
     /*
      * A Boolean value to determine whether the macOS Big Sur-specific
      * theming should be used.
@@ -118,6 +117,9 @@ class LookAndFeel {
      * A Boolean value to determine whether macOS is in RTL mode or not.
      */
     MacRTL,
+
+    /* Native macOS titlebar height. */
+    MacTitlebarHeight,
 
     /*
      * AlertNotificationOrigin indicates from which corner of the
@@ -186,12 +188,19 @@ class LookAndFeel {
      */
     ContextMenuOffsetVertical,
     ContextMenuOffsetHorizontal,
+    TooltipOffsetVertical,
 
     /*
      * A boolean value indicating whether client-side decorations are
      * supported by the user's GTK version.
      */
     GTKCSDAvailable,
+
+    /*
+     * A boolean value indicating whether semi-transparent
+     * windows are available.
+     */
+    GTKCSDTransparencyAvailable,
 
     /*
      * A boolean value indicating whether client-side decorations should
@@ -299,7 +308,6 @@ class LookAndFeel {
      * 1: High
      */
     DynamicRange,
-    VideoDynamicRange,
 
     /** Whether XUL panel animations are enabled. */
     PanelAnimations,
@@ -310,6 +318,16 @@ class LookAndFeel {
     /* The StyleGtkThemeFamily of the current GTK theme. */
     GTKThemeFamily,
 
+    /* Whether macOS' full keyboard access is enabled */
+    FullKeyboardAccess,
+
+    // TODO(krosylight): This should ultimately be able to replace
+    // IntID::AllPointerCapabilities. (Bug 1918207)
+    //
+    // Note that PrimaryPointerCapabilities may not be replaceable as it has a
+    // bit more system specific heuristic, e.g. IsTabletMode on Windows.
+    PointingDeviceKinds,
+
     /*
      * Not an ID; used to define the range of valid IDs.  Must be last.
      */
@@ -319,6 +337,11 @@ class LookAndFeel {
   // This is a common enough integer that seems worth the shortcut.
   static bool UseOverlayScrollbars() {
     return GetInt(IntID::UseOverlayScrollbars);
+  }
+
+  static constexpr int32_t kDefaultTooltipOffset = 21;
+  static int32_t TooltipOffsetVertical() {
+    return GetInt(IntID::TooltipOffsetVertical, kDefaultTooltipOffset);
   }
 
   // Returns keyCode value of a modifier key which is used for accesskey.
@@ -372,6 +395,13 @@ class LookAndFeel {
   };
 
   using FontID = mozilla::StyleSystemFont;
+
+  enum class PointingDeviceKinds : uint8_t {
+    None = 0,
+    Mouse = 1 << 0,
+    Touch = 1 << 1,
+    Pen = 1 << 2,
+  };
 
   static ColorScheme SystemColorScheme() {
     return GetInt(IntID::SystemUsesDarkTheme) ? ColorScheme::Dark
@@ -548,6 +578,8 @@ class LookAndFeel {
     }
   }
 
+  static nsresult GetKeyboardLayout(nsACString& aLayout);
+
  protected:
   static void DoHandleGlobalThemeChange();
   // Set to true when ThemeChanged needs to be called on mTheme (and other
@@ -555,6 +587,8 @@ class LookAndFeel {
   // no need to notify it from more than one prescontext.
   static bool sGlobalThemeChanged;
 };
+
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(LookAndFeel::PointingDeviceKinds);
 
 }  // namespace mozilla
 

@@ -1,6 +1,10 @@
 [DEFAULT]
 support-files = ["head.js"]
 
+["browser_appmenu_signin_cta_variants.js"]
+
+["browser_avatar_menu_signin_cta_variants.js"]
+
 ["browser_contextmenu_sendpage.js"]
 
 ["browser_contextmenu_sendtab.js"]
@@ -10,6 +14,8 @@ support-files = ["head.js"]
 ["browser_fxa_web_channel.js"]
 https_first_disabled = true
 support-files = ["browser_fxa_web_channel.html"]
+
+["browser_signed_out_avatar_variants.js"]
 
 ["browser_sync.js"]
 

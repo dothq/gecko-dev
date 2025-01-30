@@ -10,9 +10,9 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/ScrollableLayerGuid.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "nsIContent.h"
 #include "nsIFrame.h"
-#include "nsIScrollableFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
 #include "nsStyleStruct.h"
@@ -24,18 +24,14 @@ using layers::InputAPZContext;
 using layers::ScrollableLayerGuid;
 
 template <typename Units>
-gfx::Matrix4x4Typed<Units, Units> ViewportUtils::GetVisualToLayoutTransform(
-    ScrollableLayerGuid::ViewID aScrollId) {
+gfx::Matrix4x4TypedFlagged<Units, Units>
+ViewportUtils::GetVisualToLayoutTransform(nsIContent* aContent) {
   static_assert(
       std::is_same_v<Units, CSSPixel> ||
           std::is_same_v<Units, LayoutDevicePixel>,
       "GetCallbackTransform() may only be used with CSS or LayoutDevice units");
 
-  if (aScrollId == ScrollableLayerGuid::NULL_SCROLL_ID) {
-    return {};
-  }
-  nsCOMPtr<nsIContent> content = nsLayoutUtils::FindContentFor(aScrollId);
-  if (!content || !content->GetPrimaryFrame()) {
+  if (!aContent || !aContent->GetPrimaryFrame()) {
     return {};
   }
 
@@ -49,7 +45,7 @@ gfx::Matrix4x4Typed<Units, Units> ViewportUtils::GetVisualToLayoutTransform(
   float resolution = 1.0f;
   if (PresShell* presShell =
           APZCCallbackHelper::GetRootContentDocumentPresShellForContent(
-              content)) {
+              aContent)) {
     resolution = presShell->GetResolution();
   }
 
@@ -57,29 +53,33 @@ gfx::Matrix4x4Typed<Units, Units> ViewportUtils::GetVisualToLayoutTransform(
   // see the comment on GetCumulativeApzCallbackTransform for details.
   gfx::PointTyped<Units> transform;
   CSSPoint transformCSS = nsLayoutUtils::GetCumulativeApzCallbackTransform(
-      content->GetPrimaryFrame());
+      aContent->GetPrimaryFrame());
   if constexpr (std::is_same_v<Units, CSSPixel>) {
     transform = transformCSS;
   } else {  // Units == LayoutDevicePixel
-    transform = transformCSS *
-                content->GetPrimaryFrame()->PresContext()->CSSToDevPixelScale();
+    transform =
+        transformCSS *
+        aContent->GetPrimaryFrame()->PresContext()->CSSToDevPixelScale();
   }
 
-  return gfx::Matrix4x4Typed<Units, Units>::Scaling(1 / resolution,
-                                                    1 / resolution, 1)
+  return gfx::Matrix4x4TypedFlagged<Units, Units>::Scaling(1 / resolution,
+                                                           1 / resolution, 1)
       .PostTranslate(transform.x, transform.y, 0);
 }
 
-CSSToCSSMatrix4x4 GetVisualToLayoutTransform(PresShell* aContext) {
+CSSToCSSMatrix4x4Flagged GetVisualToLayoutTransform(PresShell* aContext) {
   ScrollableLayerGuid::ViewID targetScrollId =
       InputAPZContext::GetTargetLayerGuid().mScrollId;
-  if (targetScrollId == ScrollableLayerGuid::NULL_SCROLL_ID) {
-    if (nsIFrame* rootScrollFrame = aContext->GetRootScrollFrame()) {
-      targetScrollId =
-          nsLayoutUtils::FindOrCreateIDFor(rootScrollFrame->GetContent());
+  nsIContent* targetContent = nullptr;
+  if (targetScrollId != ScrollableLayerGuid::NULL_SCROLL_ID) {
+    targetContent = nsLayoutUtils::FindContentFor(targetScrollId);
+  } else {
+    if (nsIFrame* rootScrollContainerFrame =
+            aContext->GetRootScrollContainerFrame()) {
+      targetContent = rootScrollContainerFrame->GetContent();
     }
   }
-  return ViewportUtils::GetVisualToLayoutTransform(targetScrollId);
+  return ViewportUtils::GetVisualToLayoutTransform(targetContent);
 }
 
 nsPoint ViewportUtils::VisualToLayout(const nsPoint& aPt, PresShell* aContext) {
@@ -117,21 +117,27 @@ nsPoint ViewportUtils::LayoutToVisual(const nsPoint& aPt, PresShell* aContext) {
 
 LayoutDevicePoint ViewportUtils::DocumentRelativeLayoutToVisual(
     const LayoutDevicePoint& aPoint, PresShell* aShell) {
-  ScrollableLayerGuid::ViewID targetScrollId =
-      nsLayoutUtils::ScrollIdForRootScrollFrame(aShell->GetPresContext());
+  nsIContent* targetContent = nullptr;
+  auto* scrollFrame = aShell->GetRootScrollContainerFrame();
+  if (scrollFrame) {
+    targetContent = scrollFrame->GetContent();
+  }
   auto visualToLayout =
       ViewportUtils::GetVisualToLayoutTransform<LayoutDevicePixel>(
-          targetScrollId);
+          targetContent);
   return visualToLayout.Inverse().TransformPoint(aPoint);
 }
 
 LayoutDeviceRect ViewportUtils::DocumentRelativeLayoutToVisual(
     const LayoutDeviceRect& aRect, PresShell* aShell) {
-  ScrollableLayerGuid::ViewID targetScrollId =
-      nsLayoutUtils::ScrollIdForRootScrollFrame(aShell->GetPresContext());
+  nsIContent* targetContent = nullptr;
+  auto* scrollFrame = aShell->GetRootScrollContainerFrame();
+  if (scrollFrame) {
+    targetContent = scrollFrame->GetContent();
+  }
   auto visualToLayout =
       ViewportUtils::GetVisualToLayoutTransform<LayoutDevicePixel>(
-          targetScrollId);
+          targetContent);
   return visualToLayout.Inverse().TransformBounds(aRect);
 }
 
@@ -142,10 +148,13 @@ LayoutDeviceRect ViewportUtils::DocumentRelativeLayoutToVisual(
 
 CSSRect ViewportUtils::DocumentRelativeLayoutToVisual(const CSSRect& aRect,
                                                       PresShell* aShell) {
-  ScrollableLayerGuid::ViewID targetScrollId =
-      nsLayoutUtils::ScrollIdForRootScrollFrame(aShell->GetPresContext());
+  nsIContent* targetContent = nullptr;
+  auto* scrollFrame = aShell->GetRootScrollContainerFrame();
+  if (scrollFrame) {
+    targetContent = scrollFrame->GetContent();
+  }
   auto visualToLayout =
-      ViewportUtils::GetVisualToLayoutTransform(targetScrollId);
+      ViewportUtils::GetVisualToLayoutTransform(targetContent);
   return visualToLayout.Inverse().TransformBounds(aRect);
 }
 
@@ -231,11 +240,10 @@ LayoutDeviceRect ViewportUtils::ToScreenRelativeVisual(
 // Definitions of the two explicit instantiations forward declared in the header
 // file. This causes code for these instantiations to be emitted into the object
 // file for ViewportUtils.cpp.
-template CSSToCSSMatrix4x4 ViewportUtils::GetVisualToLayoutTransform<CSSPixel>(
-    ScrollableLayerGuid::ViewID);
-template LayoutDeviceToLayoutDeviceMatrix4x4
-    ViewportUtils::GetVisualToLayoutTransform<LayoutDevicePixel>(
-        ScrollableLayerGuid::ViewID);
+template CSSToCSSMatrix4x4Flagged
+ViewportUtils::GetVisualToLayoutTransform<CSSPixel>(nsIContent*);
+template LayoutDeviceToLayoutDeviceMatrix4x4Flagged
+ViewportUtils::GetVisualToLayoutTransform<LayoutDevicePixel>(nsIContent*);
 
 const nsIFrame* ViewportUtils::IsZoomedContentRoot(const nsIFrame* aFrame) {
   if (!aFrame) {
@@ -243,7 +251,7 @@ const nsIFrame* ViewportUtils::IsZoomedContentRoot(const nsIFrame* aFrame) {
   }
   if (aFrame->Type() == LayoutFrameType::Canvas ||
       aFrame->Type() == LayoutFrameType::PageSequence) {
-    nsIScrollableFrame* sf = do_QueryFrame(aFrame->GetParent());
+    ScrollContainerFrame* sf = do_QueryFrame(aFrame->GetParent());
     if (sf && sf->IsRootScrollFrameOfDocument() &&
         aFrame->PresContext()->IsRootContentDocumentCrossProcess()) {
       return aFrame->GetParent();
@@ -252,7 +260,7 @@ const nsIFrame* ViewportUtils::IsZoomedContentRoot(const nsIFrame* aFrame) {
              StylePositionProperty::Fixed) {
     if (ViewportFrame* viewportFrame = do_QueryFrame(aFrame->GetParent())) {
       if (viewportFrame->PresContext()->IsRootContentDocumentCrossProcess()) {
-        return viewportFrame->PresShell()->GetRootScrollFrame();
+        return viewportFrame->PresShell()->GetRootScrollContainerFrame();
       }
     }
   }
@@ -260,6 +268,9 @@ const nsIFrame* ViewportUtils::IsZoomedContentRoot(const nsIFrame* aFrame) {
 }
 
 Scale2D ViewportUtils::TryInferEnclosingResolution(PresShell* aShell) {
+  if (!XRE_IsContentProcess()) {
+    return {1.0f, 1.0f};
+  }
   MOZ_ASSERT(aShell && aShell->GetPresContext());
   MOZ_ASSERT(!aShell->GetPresContext()->GetParentPresContext(),
              "TryInferEnclosingResolution can only be called for a root pres "

@@ -1,6 +1,7 @@
 [DEFAULT]
 prefs = [
   "apz.zoom-to-focused-input.enabled=false",
+  "test.ime_content_observer.assert_invalid_cache=true",
   "ui.dragThresholdX=4", # Bug 1873142
   "ui.dragThresholdY=4", # Bug 1873142
 ]
@@ -26,6 +27,7 @@ skip-if = ["os == 'android'"] # Sync with test_abs_positioner_positioning_elemen
 skip-if = [
   "os == 'android'", # Bug 1525959
   "xorigin", # Inconsistent pass/fail in opt and debug
+  "os == 'mac' && os_version == '14.70' && processor == 'x86_64' && debug", # Bug 1929435
 ]
 
 ["test_backspace_vs.html"]
@@ -296,8 +298,6 @@ support-files = ["file_bug966552.html"]
 
 ["test_bug1068979.html"]
 
-["test_bug1094000.html"]
-
 ["test_bug1102906.html"]
 skip-if = ["os == 'android'"]
 
@@ -361,8 +361,6 @@ skip-if = ["headless"]
 
 ["test_bug1352799.html"]
 
-["test_bug1355792.html"]
-
 ["test_bug1358025.html"]
 
 ["test_bug1361008.html"]
@@ -380,8 +378,6 @@ skip-if = ["headless"]
 ["test_bug1406726.html"]
 
 ["test_bug1409520.html"]
-
-["test_bug1425997.html"]
 
 ["test_bug1543312.html"]
 
@@ -442,6 +438,10 @@ skip-if = ["os == 'android'"] # Needs interaction with the scrollbar
 ["test_dom_input_event_on_texteditor.html"]
 
 ["test_dragdrop.html"]
+
+["test_dragend_target.html"]
+
+["test_editing_UI_in_plaintext-only.html"]
 
 ["test_execCommandPaste_noTarget.html"]
 
@@ -556,6 +556,8 @@ skip-if = ["xorigin"] # Testing internal API for comm-central
 
 ["test_nsITableEditor_getTableSize.html"]
 
+["test_nsITableEditor_in_plaintext-only.html"]
+
 ["test_nsITableEditor_insertTableCell.html"]
 
 ["test_nsITableEditor_insertTableColumn.html"]
@@ -588,6 +590,8 @@ skip-if = ["xorigin"] # Testing internal API for comm-central
 skip-if = ["headless"] # The test calls `synthesizeKey`, see bug 1669923.
 
 ["test_pasting_text_longer_than_maxlength.html"]
+
+["test_replace_text.html"]
 
 ["test_resizers_appearance.html"]
 
@@ -628,3 +632,7 @@ skip-if = ["os == 'android'"]
 ["test_undo_redo_stack_after_setting_value.html"]
 
 ["test_undo_with_editingui.html"]
+
+["test_updating_input_value_during_composition_from_async_input.html"]
+
+["test_updating_input_value_during_composition_from_input.html"]

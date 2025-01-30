@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::private::PingType;
 use crate::ClientInfoMetrics;
 use crate::{Configuration, ConfigurationBuilder};
 use std::sync::{Mutex, MutexGuard};
@@ -42,9 +43,10 @@ pub(crate) fn new_glean(
         Some(c) => c,
         None => ConfigurationBuilder::new(true, tmpname, GLOBAL_APPLICATION_ID)
             .with_server_endpoint("invalid-test-host")
-            .with_event_timestamps(false)
             .build(),
     };
+
+    _ = PingType::new("store1", true, true, true, true, true, vec![], vec![], true);
 
     crate::test_reset_glean(cfg, ClientInfoMetrics::unknown(), clear_stores);
     dir

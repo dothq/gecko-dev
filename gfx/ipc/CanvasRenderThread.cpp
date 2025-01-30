@@ -53,8 +53,13 @@ void CanvasRenderThread::Start() {
   sCanvasRenderThreadEverStarted = true;
 #endif
 
+  // If remote canvas is disabled, then ignore the worker threads setting so as
+  // not to interfere with Accelerated Canvas2D.
   int32_t threadPref =
-      StaticPrefs::gfx_canvas_remote_worker_threads_AtStartup();
+      gfxVars::RemoteCanvasEnabled()
+          ? StaticPrefs::gfx_canvas_remote_worker_threads_AtStartup()
+          : 0;
+
   uint32_t threadLimit;
   if (threadPref < 0) {
     // Given that the canvas workers are receiving instructions from
@@ -151,6 +156,9 @@ void CanvasRenderThread::Shutdown() {
 
   // This closes all of the IPDL actors with possibly active task queues.
   CanvasManagerParent::Shutdown();
+
+  // Queue any remaining global cleanup for CanvasTranslator
+  layers::CanvasTranslator::Shutdown();
 
   // Any task queues that are in the process of shutting down are tracked in
   // mPendingShutdownTaskQueues. We need to block on each one until all events
@@ -269,8 +277,7 @@ CanvasRenderThread::CreateWorkerTaskQueue() {
 /* static */ void CanvasRenderThread::Dispatch(
     already_AddRefed<nsIRunnable> aRunnable) {
   if (!sCanvasRenderThread) {
-    MOZ_DIAGNOSTIC_ASSERT(false,
-                          "Dispatching after CanvasRenderThread shutdown!");
+    MOZ_DIAGNOSTIC_CRASH("Dispatching after CanvasRenderThread shutdown!");
     return;
   }
   sCanvasRenderThread->mThread->Dispatch(std::move(aRunnable));

@@ -72,6 +72,20 @@ void wr_compositor_create_external_surface(void* aCompositor,
   compositor->CreateExternalSurface(aId, aIsOpaque);
 }
 
+void wr_compositor_create_swapchain_surface(void* aCompositor,
+                                            wr::NativeSurfaceId aId,
+                                            wr::DeviceIntSize aSize,
+                                            bool aIsOpaque) {
+  RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
+  compositor->CreateSwapChainSurface(aId, aSize, aIsOpaque);
+}
+
+void wr_compositor_resize_swapchain(void* aCompositor, wr::NativeSurfaceId aId,
+                                    wr::DeviceIntSize aSize) {
+  RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
+  compositor->ResizeSwapChainSurface(aId, aSize);
+}
+
 void wr_compositor_create_backdrop_surface(void* aCompositor,
                                            wr::NativeSurfaceId aId,
                                            wr::ColorF aColor) {
@@ -89,6 +103,17 @@ void wr_compositor_destroy_tile(void* aCompositor, wr::NativeSurfaceId aId,
                                 int32_t aX, int32_t aY) {
   RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
   compositor->DestroyTile(aId, aX, aY);
+}
+
+void wr_compositor_bind_swapchain(void* aCompositor, wr::NativeSurfaceId aId) {
+  RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
+  compositor->BindSwapChain(aId);
+}
+
+void wr_compositor_present_swapchain(void* aCompositor,
+                                     wr::NativeSurfaceId aId) {
+  RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
+  compositor->PresentSwapChain(aId);
 }
 
 void wr_compositor_destroy_surface(void* aCompositor, NativeSurfaceId aId) {
@@ -247,40 +272,35 @@ void RenderCompositor::GetWindowVisibility(WindowVisibility* aVisibility) {
   if (!widget) {
     return;
   }
-  aVisibility->size_mode = ToWrWindowSizeMode(widget->GetWindowSizeMode());
   aVisibility->is_fully_occluded = widget->GetWindowIsFullyOccluded();
 #endif
 }
 
-GLenum RenderCompositor::IsContextLost(bool aForce) {
+gfx::DeviceResetReason RenderCompositor::IsContextLost(bool aForce) {
   auto* glc = gl();
   // GetGraphicsResetStatus may trigger an implicit MakeCurrent if robustness
   // is not supported, so unless we are forcing, pass on the check.
   if (!glc || (!aForce && !glc->IsSupported(gl::GLFeature::robustness))) {
-    return LOCAL_GL_NO_ERROR;
+    return gfx::DeviceResetReason::OK;
   }
   auto resetStatus = glc->fGetGraphicsResetStatus();
   switch (resetStatus) {
     case LOCAL_GL_NO_ERROR:
-      break;
+      return gfx::DeviceResetReason::OK;
     case LOCAL_GL_INNOCENT_CONTEXT_RESET_ARB:
-      NS_WARNING("Device reset due to system / different context");
-      break;
+      return gfx::DeviceResetReason::DRIVER_ERROR;
     case LOCAL_GL_PURGED_CONTEXT_RESET_NV:
-      NS_WARNING("Device reset due to NV video memory purged");
-      break;
+      return gfx::DeviceResetReason::NVIDIA_VIDEO;
     case LOCAL_GL_GUILTY_CONTEXT_RESET_ARB:
-      gfxCriticalError() << "Device reset due to WR context";
-      break;
+      return gfx::DeviceResetReason::RESET;
     case LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB:
-      gfxCriticalNote << "Device reset may be due to WR context";
-      break;
+      return gfx::DeviceResetReason::UNKNOWN;
     default:
       gfxCriticalError() << "Device reset with WR context unexpected status: "
                          << gfx::hexa(resetStatus);
       break;
   }
-  return resetStatus;
+  return gfx::DeviceResetReason::OTHER;
 }
 
 }  // namespace mozilla::wr

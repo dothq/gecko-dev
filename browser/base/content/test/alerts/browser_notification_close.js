@@ -9,8 +9,7 @@ const { PermissionTestUtils } = ChromeUtils.importESModule(
 );
 
 let notificationURL =
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
-  "http://example.org/browser/browser/base/content/test/alerts/file_dom_notifications.html";
+  "https://example.org/browser/browser/base/content/test/alerts/file_dom_notifications.html";
 let oldShowFavicons;
 
 add_task(async function test_notificationClose() {
@@ -21,19 +20,10 @@ add_task(async function test_notificationClose() {
   Services.prefs.setBoolPref("alerts.showFavicons", true);
 
   await PlacesTestUtils.addVisits(notificationURI);
-  let faviconURI = await new Promise(resolve => {
-    let uri = makeURI(
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4//8/AAX+Av7czFnnAAAAAElFTkSuQmCC"
-    );
-    PlacesUtils.favicons.setAndFetchFaviconForPage(
-      notificationURI,
-      uri,
-      true,
-      PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-      uriResult => resolve(uriResult),
-      Services.scriptSecurityManager.getSystemPrincipal()
-    );
-  });
+  let dataURL = makeURI(
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4//8/AAX+Av7czFnnAAAAAElFTkSuQmCC"
+  );
+  await PlacesTestUtils.setFaviconForPage(notificationURI, dataURL, dataURL);
 
   await BrowserTestUtils.withNewTab(
     {
@@ -67,11 +57,7 @@ add_task(async function test_notificationClose() {
         "Body text of notification should be present"
       );
       let alertIcon = alertWindow.document.getElementById("alertIcon");
-      is(
-        alertIcon.src,
-        faviconURI.spec,
-        "Icon of notification should be present"
-      );
+      is(alertIcon.src, dataURL.spec, "Icon of notification should be present");
 
       let alertCloseButton = alertWindow.document.querySelector(".close-icon");
       is(alertCloseButton.localName, "toolbarbutton", "close button found");

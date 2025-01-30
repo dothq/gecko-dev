@@ -4,8 +4,11 @@ support-files = [
   "empty_window.xhtml",
   "clipboard_helper.js",
 ]
+tags = "os_integration"
 
 ["test_alwaysontop_focus.xhtml"]
+
+["test_autocorrect_in_parent.html"]
 
 # Privacy relevant
 
@@ -66,9 +69,6 @@ run-if = ["os == 'mac'"] # Cocoa widget test
 ["test_bug1123480.xhtml"]
 skip-if = ["win11_2009 && bits == 32"]
 
-["test_clipboard_asyncGetData_chrome.html"]
-support-files = "file_test_clipboard_asyncGetData.js"
-
 ["test_clipboard_asyncSetData_chrome.html"]
 support-files = "file_test_clipboard_asyncSetData.js"
 
@@ -79,6 +79,9 @@ support-files = "file_test_clipboard.js"
 
 ["test_clipboard_getDataSnapshotSync_chrome.html"]
 support-files = "file_test_clipboard_getDataSnapshotSync.js"
+
+["test_clipboard_getDataSnapshot_chrome.html"]
+support-files = "file_test_clipboard_getDataSnapshot.js"
 
 ["test_clipboard_owner_chrome.html"]
 
@@ -152,6 +155,9 @@ skip-if = [
 ["test_native_menus.xhtml"]
 run-if = ["os == 'mac'"] # Cocoa widget test
 support-files = ["native_menus_window.xhtml"]
+
+["test_native_context_menus.xhtml"]
+run-if = ["os == 'mac'"] # Cocoa widget test
 
 ["test_panel_mouse_coords.xhtml"]
 skip-if = ["os == 'win'"] # bug 1009955

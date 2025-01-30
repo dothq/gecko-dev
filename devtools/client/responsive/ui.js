@@ -97,8 +97,10 @@ class ResponsiveUI {
     this.onTargetAvailable = this.onTargetAvailable.bind(this);
 
     this.networkFront = null;
-    // Promise resovled when the UI init has completed.
-    this.inited = this.init();
+    // Promise resolved when the UI init has completed.
+    const { promise, resolve } = Promise.withResolvers();
+    this.initialized = promise;
+    this.resolveInited = resolve;
 
     EventEmitter.decorate(this);
   }
@@ -126,7 +128,7 @@ class ResponsiveUI {
   /**
    * Open RDM while preserving the state of the page.
    */
-  async init() {
+  async initialize() {
     debug("Init start");
 
     this.initRDMFrame();
@@ -160,6 +162,7 @@ class ResponsiveUI {
     message.post(this.toolWindow, "post-init");
 
     debug("Init done");
+    this.resolveInited();
   }
 
   /**
@@ -273,7 +276,7 @@ class ResponsiveUI {
 
     // Ensure init has finished before starting destroy
     if (!isTabContentDestroying) {
-      await this.inited;
+      await this.initialized;
 
       // Restore screen orientation of physical device.
       await Promise.all([
@@ -355,7 +358,7 @@ class ResponsiveUI {
     this.browserStackEl = null;
     this.browserWindow = null;
     this.tab = null;
-    this.inited = null;
+    this.initialized = null;
     this.rdmFrame = null;
     this.resizeHandle = null;
     this.resizeHandleX = null;
@@ -471,7 +474,7 @@ class ResponsiveUI {
         this.onExit();
         break;
       case "remove-device-association":
-        this.onRemoveDeviceAssociation();
+        this.onRemoveDeviceAssociation(event);
         break;
       case "viewport-orientation-change":
         this.onRotateViewport(event);
@@ -563,23 +566,26 @@ class ResponsiveUI {
     this.manager.closeIfNeeded(browserWindow, tab);
   }
 
-  async onRemoveDeviceAssociation() {
-    let reloadNeeded = false;
-    await this.updateDPPX(null);
-    reloadNeeded |=
-      (await this.updateUserAgent()) && this.reloadOnChange("userAgent");
+  async onRemoveDeviceAssociation(event) {
+    const { resetProfile } = event.data;
 
-    // Don't reload on the server if we're already doing a reload on the client
-    const reloadOnTouchSimulationChange =
-      this.reloadOnChange("touchSimulation") && !reloadNeeded;
-    await this.updateTouchSimulation(null, reloadOnTouchSimulationChange);
-    if (reloadNeeded) {
-      this.reloadBrowser();
+    if (resetProfile) {
+      let reloadNeeded = false;
+      await this.updateDPPX(null);
+      reloadNeeded |=
+        (await this.updateUserAgent()) && this.reloadOnChange("userAgent");
+
+      // Don't reload on the server if we're already doing a reload on the client
+      const reloadOnTouchSimulationChange =
+        this.reloadOnChange("touchSimulation") && !reloadNeeded;
+      await this.updateTouchSimulation(null, reloadOnTouchSimulationChange);
+      if (reloadNeeded) {
+        this.reloadBrowser();
+      }
     }
+
     // Used by tests
-    this.emitForTests("device-association-removed", {
-      reloadTriggered: reloadNeeded || reloadOnTouchSimulationChange,
-    });
+    this.emitForTests("device-association-removed");
   }
 
   /**
@@ -1000,7 +1006,7 @@ class ResponsiveUI {
    * Helper for tests, etc. Assumes a single viewport for now.
    */
   async setViewportSize(size) {
-    await this.inited;
+    await this.initialized;
 
     // Ensure that width and height are valid.
     let { width, height } = size;

@@ -7,7 +7,7 @@ const isEveryFrameTargetEnabled = Services.prefs.getBoolPref(
   false
 );
 
-const WEBEXTENSION_FALLBACK_DOC_URL =
+export const WEBEXTENSION_FALLBACK_DOC_URL =
   "chrome://devtools/content/shared/webextension-fallback.html";
 
 /**
@@ -382,7 +382,7 @@ export function getAllBrowsingContextsForContext(
       sessionContext.browserId
     );
     // topBrowsingContext can be null if getCurrentTopByBrowserId is called for a tab that is unloaded.
-    if (topBrowsingContext) {
+    if (topBrowsingContext?.embedderElement) {
       // Unfortunately, getCurrentTopByBrowserId is subject to race conditions and may refer to a BrowsingContext
       // that already navigated away.
       // Query the current "live" BrowsingContext by going through the embedder element (i.e. the <browser>/<iframe> element)
@@ -419,6 +419,7 @@ export function getAllBrowsingContextsForContext(
 }
 
 if (typeof module == "object") {
+  // eslint-disable-next-line no-undef
   module.exports = {
     isBrowsingContextPartOfContext,
     isWindowGlobalPartOfContext,

@@ -21,48 +21,50 @@ const REMOTE_SETTINGS_DATA = [
   },
 ];
 
+// Avoid timeouts in verify mode. They're especially common on Mac.
+requestLongerTimeout(5);
+
 add_setup(async function () {
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     remoteSettingsRecords: REMOTE_SETTINGS_DATA,
   });
 });
 
-add_tasks_with_rust(async function basic() {
-  const suggestion = REMOTE_SETTINGS_DATA[0].attachment[0];
-  await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window,
-    value: suggestion.keywords[0],
+add_task(async function basic() {
+  await BrowserTestUtils.withNewTab("about:blank", async () => {
+    const suggestion = REMOTE_SETTINGS_DATA[0].attachment[0];
+    await UrlbarTestUtils.promiseAutocompleteResultPopup({
+      window,
+      value: suggestion.keywords[0],
+    });
+    Assert.equal(UrlbarTestUtils.getResultCount(window), 2);
+
+    const { element, result } = await UrlbarTestUtils.getDetailsOfResultAt(
+      window,
+      1
+    );
+    Assert.equal(
+      result.providerName,
+      UrlbarProviderQuickSuggest.name,
+      "The result should be from the expected provider"
+    );
+    Assert.equal(result.payload.provider, "Mdn");
+
+    const onLoad = BrowserTestUtils.browserLoaded(
+      gBrowser.selectedBrowser,
+      false,
+      result.payload.url
+    );
+    EventUtils.synthesizeMouseAtCenter(element.row, {});
+    await onLoad;
+    Assert.ok(true, "Expected page is loaded");
   });
-  Assert.equal(UrlbarTestUtils.getResultCount(window), 2);
-
-  const { element, result } = await UrlbarTestUtils.getDetailsOfResultAt(
-    window,
-    1
-  );
-  Assert.equal(
-    result.providerName,
-    UrlbarProviderQuickSuggest.name,
-    "The result should be from the expected provider"
-  );
-  Assert.equal(
-    result.payload.provider,
-    UrlbarPrefs.get("quickSuggestRustEnabled") ? "Mdn" : "MDNSuggestions"
-  );
-
-  const onLoad = BrowserTestUtils.browserLoaded(
-    gBrowser.selectedBrowser,
-    false,
-    result.payload.url
-  );
-  EventUtils.synthesizeMouseAtCenter(element.row, {});
-  await onLoad;
-  Assert.ok(true, "Expected page is loaded");
 
   await PlacesUtils.history.clear();
 });
 
 // Tests the row/group label.
-add_tasks_with_rust(async function rowLabel() {
+add_task(async function rowLabel() {
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     window,
     value: REMOTE_SETTINGS_DATA[0].attachment[0].keywords[0],
@@ -76,7 +78,7 @@ add_tasks_with_rust(async function rowLabel() {
   await UrlbarTestUtils.promisePopupClose(window);
 });
 
-add_tasks_with_rust(async function disable() {
+add_task(async function disable() {
   await SpecialPowers.pushPrefEnv({
     set: [["browser.urlbar.mdn.featureGate", false]],
   });
@@ -95,7 +97,7 @@ add_tasks_with_rust(async function disable() {
 });
 
 // Tests the "Not interested" result menu dismissal command.
-add_tasks_with_rust(async function resultMenu_notInterested() {
+add_task(async function resultMenu_notInterested() {
   await doDismissTest("not_interested");
 
   Assert.equal(UrlbarPrefs.get("suggest.mdn"), false);
@@ -111,7 +113,7 @@ add_tasks_with_rust(async function resultMenu_notInterested() {
 });
 
 // Tests the "Not relevant" result menu dismissal command.
-add_tasks_with_rust(async function notRelevant() {
+add_task(async function resultMenu_notRelevant() {
   await doDismissTest("not_relevant");
 
   Assert.equal(UrlbarPrefs.get("suggest.mdn"), true);
@@ -121,6 +123,11 @@ add_tasks_with_rust(async function notRelevant() {
   Assert.ok(exists);
 
   await QuickSuggest.blockedSuggestions.clear();
+});
+
+// Tests the "Manage" result menu.
+add_task(async function resultMenu_manage() {
+  await doManageTest({ input: "array", index: 1 });
 });
 
 async function doDismissTest(command) {

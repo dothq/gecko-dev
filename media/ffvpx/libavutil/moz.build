@@ -35,6 +35,7 @@ SOURCES += [
     'imgutils.c',
     'log.c',
     'log2_tab.c',
+    'mastering_display_metadata.c',
     'mathematics.c',
     'mem.c',
     'opt.c',
@@ -56,13 +57,11 @@ if not CONFIG['MOZ_FFVPX_AUDIOONLY']:
     SOURCES += [
         'adler32.c',
         'base64.c',
-        'color_utils.c',
         'film_grain_params.c',
         'hdr_dynamic_metadata.c',
         'integer.c',
         'intmath.c',
         'lls.c',
-        'mastering_display_metadata.c',
         'pixelutils.c',
         'threadmessage.c',
         'timecode.c',
@@ -74,10 +73,19 @@ if not CONFIG['MOZ_FFVPX_AUDIOONLY']:
             'hwcontext_vaapi.c',
         ]
         USE_LIBS += ['mozva']
+    elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+        SOURCES += [
+            'hwcontext_d3d11va.c',
+        ]
 
-EXPORTS.ffvpx = [
+EXPORTS.ffvpx += [
     "tx.h"
 ]
+
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+    EXPORTS.ffvpx += [
+        "hwcontext_d3d11va.h"
+    ]
 
 SYMBOLS_FILE =  'avutil.symbols'
 NoVisibilityFlags()
@@ -86,7 +94,6 @@ OS_LIBS += CONFIG['REALTIME_LIBS']
 if CONFIG['OS_TARGET'] != 'WINNT':
     OS_LIBS += ['m']
 
-if CONFIG['MOZ_NEEDS_LIBATOMIC']:
-    OS_LIBS += ['atomic']
+OS_LIBS += CONFIG["LIBATOMIC_LIBS"]
 
 include("../ffvpxcommon.mozbuild")

@@ -8,7 +8,9 @@ with Files("**"):
     BUG_COMPONENT = ("Core", "Privacy: Anti-Tracking")
 
 XPIDL_SOURCES += [
+    "nsIBounceTrackingMapEntry.idl",
     "nsIBounceTrackingProtection.idl",
+    "nsIBTPRemoteExceptionList.idl",
 ]
 
 XPIDL_MODULE = "toolkit_antitracking"
@@ -18,22 +20,34 @@ XPCOM_MANIFESTS += [
     "components.conf",
 ]
 
+EXTRA_JS_MODULES += [
+    "BTPRemoteExceptionList.sys.mjs",
+]
+
 EXPORTS.mozilla += [
+    "BounceTrackingAllowList.h",
+    "BounceTrackingMapEntry.h",
     "BounceTrackingProtection.h",
     "BounceTrackingProtectionStorage.h",
     "BounceTrackingRecord.h",
     "BounceTrackingState.h",
     "BounceTrackingStateGlobal.h",
     "BounceTrackingStorageObserver.h",
+    "ClearDataCallback.h",
+    "PromiseNativeWrapper.h",
 ]
 
 UNIFIED_SOURCES += [
+    "BounceTrackingAllowList.cpp",
+    "BounceTrackingMapEntry.cpp",
     "BounceTrackingProtection.cpp",
     "BounceTrackingProtectionStorage.cpp",
     "BounceTrackingRecord.cpp",
     "BounceTrackingState.cpp",
     "BounceTrackingStateGlobal.cpp",
     "BounceTrackingStorageObserver.cpp",
+    "ClearDataCallback.cpp",
+    "PromiseNativeWrapper.cpp",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
@@ -49,3 +63,5 @@ BROWSER_CHROME_MANIFESTS += [
 ]
 
 XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.toml"]
+
+MARIONETTE_MANIFESTS += ["test/marionette/manifest.toml"]

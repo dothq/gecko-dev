@@ -29,7 +29,6 @@
 #include "nsCocoaFeatures.h"
 #include "nsCocoaWindow.h"
 #include "nsNativeThemeColors.h"
-#include "nsIScrollableFrame.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Range.h"
 #include "mozilla/dom/Element.h"
@@ -399,9 +398,8 @@ static BOOL FrameIsInActiveWindow(nsIFrame* aFrame) {
 
 // Toolbar controls and content controls respond to different window
 // activeness states.
-static BOOL IsActive(nsIFrame* aFrame, BOOL aIsToolbarControl) {
-  if (aIsToolbarControl) return [NativeWindowForFrame(aFrame) isMainWindow];
-  return FrameIsInActiveWindow(aFrame);
+static BOOL IsActiveToolbarControl(nsIFrame* aFrame) {
+  return NativeWindowForFrame(aFrame).isMainWindow;
 }
 
 NS_IMPL_ISUPPORTS_INHERITED(nsNativeThemeCocoa, nsNativeTheme, nsITheme)
@@ -459,8 +457,6 @@ nsNativeThemeCocoa::nsNativeThemeCocoa() : ThemeCocoa(ScrollbarStyle()) {
   mMeterBarCell = [[NSLevelIndicatorCell alloc]
       initWithLevelIndicatorStyle:NSLevelIndicatorStyleContinuousCapacity];
 
-  mTreeHeaderCell = [[NSTableHeaderCell alloc] init];
-
   mCellDrawView = [[MOZCellDrawView alloc] init];
 
   if (XRE_IsParentProcess()) {
@@ -499,7 +495,6 @@ nsNativeThemeCocoa::~nsNativeThemeCocoa() {
   [mSearchFieldCell release];
   [mDropdownCell release];
   [mComboBoxCell release];
-  [mTreeHeaderCell release];
   [mCellDrawWindow release];
   [mCellDrawView release];
 
@@ -794,7 +789,7 @@ static void DrawCellWithSnapping(NSCell* cell, CGContextRef cgContext,
     // Snap to the smaller control size.
     controlSize = smallerControlSize;
     sizeIndex = smallerControlSizeIndex;
-    MOZ_ASSERT(sizeIndex < ArrayLength(settings.naturalSizes));
+    MOZ_ASSERT(sizeIndex < std::size(settings.naturalSizes));
 
     // Resize and center the drawRect.
     if (sizes[sizeIndex].width) {
@@ -819,7 +814,7 @@ static void DrawCellWithSnapping(NSCell* cell, CGContextRef cgContext,
 
   [cell setControlSize:controlSize];
 
-  MOZ_ASSERT(sizeIndex < ArrayLength(settings.minimumSizes));
+  MOZ_ASSERT(sizeIndex < std::size(settings.minimumSizes));
   const NSSize minimumSize = settings.minimumSizes[sizeIndex];
   DrawCellWithScaling(cell, cgContext, drawRect, controlSize, sizes[sizeIndex],
                       minimumSize, settings.margins, view, mirrorHorizontal);
@@ -902,7 +897,7 @@ static void ApplyControlParamsToNSCell(
 // These are the sizes that Gecko needs to request to draw if it wants
 // to get a standard-sized Aqua radio button drawn. Note that the rects
 // that draw these are actually a little bigger.
-static const CellRenderSettings radioSettings = {
+MOZ_RUNINIT static const CellRenderSettings radioSettings = {
     {
         NSMakeSize(11, 11),  // mini
         NSMakeSize(13, 13),  // small
@@ -922,7 +917,7 @@ static const CellRenderSettings radioSettings = {
          {0, 0, 0, 0}   // regular
      }}};
 
-static const CellRenderSettings checkboxSettings = {
+MOZ_RUNINIT static const CellRenderSettings checkboxSettings = {
     {
         NSMakeSize(11, 11),  // mini
         NSMakeSize(13, 13),  // small
@@ -985,7 +980,7 @@ void nsNativeThemeCocoa::DrawCheckboxOrRadio(
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
-static const CellRenderSettings searchFieldSettings = {
+MOZ_RUNINIT static const CellRenderSettings searchFieldSettings = {
     {
         NSMakeSize(0, 16),  // mini
         NSMakeSize(0, 19),  // small
@@ -1021,7 +1016,6 @@ static bool IsToolbarStyleContainer(nsIFrame* aFrame) {
   }
 
   switch (aFrame->StyleDisplay()->EffectiveAppearance()) {
-    case StyleAppearance::Toolbar:
     case StyleAppearance::Statusbar:
       return true;
     default:
@@ -1096,6 +1090,7 @@ static bool ShouldUnconditionallyDrawFocusRingIfFocused(nsIFrame* aFrame) {
   // Mac always draws focus rings for textboxes and lists.
   switch (aFrame->StyleDisplay()->EffectiveAppearance()) {
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Searchfield:
@@ -1120,10 +1115,10 @@ nsNativeThemeCocoa::ControlParams nsNativeThemeCocoa::ComputeControlParams(
   return params;
 }
 
-static const NSSize kHelpButtonSize = NSMakeSize(20, 20);
-static const NSSize kDisclosureButtonSize = NSMakeSize(21, 21);
+MOZ_RUNINIT static const NSSize kHelpButtonSize = NSMakeSize(20, 20);
+MOZ_RUNINIT static const NSSize kDisclosureButtonSize = NSMakeSize(21, 21);
 
-static const CellRenderSettings pushButtonSettings = {
+MOZ_RUNINIT static const CellRenderSettings pushButtonSettings = {
     {
         NSMakeSize(0, 16),  // mini
         NSMakeSize(0, 19),  // small
@@ -1318,17 +1313,6 @@ static void RenderButton(CGContextRef cgContext, const HIRect& aRenderRect,
                     NULL);
 }
 
-static ThemeDrawState ToThemeDrawState(
-    const nsNativeThemeCocoa::ControlParams& aParams) {
-  if (aParams.disabled) {
-    return kThemeStateUnavailable;
-  }
-  if (aParams.pressed) {
-    return kThemeStatePressed;
-  }
-  return kThemeStateActive;
-}
-
 void nsNativeThemeCocoa::DrawHIThemeButton(
     CGContextRef cgContext, const HIRect& aRect, ThemeButtonKind aKind,
     ThemeButtonValue aValue, ThemeDrawState aState,
@@ -1378,16 +1362,6 @@ void nsNativeThemeCocoa::DrawButton(CGContextRef cgContext,
     case ButtonType::eHelpButton:
       DrawHelpButton(cgContext, inBoxRect, controlParams);
       return;
-    case ButtonType::eTreeTwistyPointingRight:
-      DrawHIThemeButton(cgContext, inBoxRect, kThemeDisclosureButton,
-                        kThemeDisclosureRight, ToThemeDrawState(controlParams),
-                        kThemeAdornmentNone, controlParams);
-      return;
-    case ButtonType::eTreeTwistyPointingDown:
-      DrawHIThemeButton(cgContext, inBoxRect, kThemeDisclosureButton,
-                        kThemeDisclosureDown, ToThemeDrawState(controlParams),
-                        kThemeAdornmentNone, controlParams);
-      return;
     case ButtonType::eDisclosureButtonClosed:
       DrawDisclosureButton(cgContext, inBoxRect, controlParams,
                            NSControlStateValueOff);
@@ -1399,88 +1373,7 @@ void nsNativeThemeCocoa::DrawButton(CGContextRef cgContext,
   }
 }
 
-nsNativeThemeCocoa::TreeHeaderCellParams
-nsNativeThemeCocoa::ComputeTreeHeaderCellParams(nsIFrame* aFrame,
-                                                ElementState aEventState) {
-  TreeHeaderCellParams params;
-  params.controlParams = ComputeControlParams(aFrame, aEventState);
-  params.sortDirection = GetTreeSortDirection(aFrame);
-  params.lastTreeHeaderCell = IsLastTreeHeaderCell(aFrame);
-  return params;
-}
-
-@interface NSTableHeaderCell (NSTableHeaderCell_setSortable)
-// This method has been present in the same form since at least macOS 10.4.
-- (void)_setSortable:(BOOL)arg1
-    showSortIndicator:(BOOL)arg2
-            ascending:(BOOL)arg3
-             priority:(NSInteger)arg4
-     highlightForSort:(BOOL)arg5;
-@end
-
-void nsNativeThemeCocoa::DrawTreeHeaderCell(
-    CGContextRef cgContext, const HIRect& inBoxRect,
-    const TreeHeaderCellParams& aParams) {
-  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
-
-  // Without clearing the cell's title, it takes on a default value of "Field",
-  // which is displayed underneath the title set in the front-end.
-  NSCell* cell = (NSCell*)mTreeHeaderCell;
-  cell.title = @"";
-
-  if ([mTreeHeaderCell
-          respondsToSelector:@selector
-          (_setSortable:
-              showSortIndicator:ascending:priority:highlightForSort:)]) {
-    switch (aParams.sortDirection) {
-      case eTreeSortDirection_Ascending:
-        [mTreeHeaderCell _setSortable:YES
-                    showSortIndicator:YES
-                            ascending:YES
-                             priority:0
-                     highlightForSort:YES];
-        break;
-      case eTreeSortDirection_Descending:
-        [mTreeHeaderCell _setSortable:YES
-                    showSortIndicator:YES
-                            ascending:NO
-                             priority:0
-                     highlightForSort:YES];
-        break;
-      default:
-        // eTreeSortDirection_Natural
-        [mTreeHeaderCell _setSortable:YES
-                    showSortIndicator:NO
-                            ascending:YES
-                             priority:0
-                     highlightForSort:NO];
-        break;
-    }
-  }
-
-  mTreeHeaderCell.enabled = !aParams.controlParams.disabled;
-  mTreeHeaderCell.state =
-      (mTreeHeaderCell.enabled && aParams.controlParams.pressed)
-          ? NSControlStateValueOn
-          : NSControlStateValueOff;
-
-  mCellDrawView._drawingEndSeparator = !aParams.lastTreeHeaderCell;
-
-  NSGraphicsContext* savedContext = NSGraphicsContext.currentContext;
-  NSGraphicsContext.currentContext =
-      [NSGraphicsContext graphicsContextWithCGContext:cgContext flipped:YES];
-  DrawCellIncludingFocusRing(mTreeHeaderCell, inBoxRect, mCellDrawView);
-  NSGraphicsContext.currentContext = savedContext;
-
-#if DRAW_IN_FRAME_DEBUG
-  CGContextSetRGBFillColor(cgContext, 0.0, 0.0, 0.5, 0.25);
-  CGContextFillRect(cgContext, inBoxRect);
-#endif
-
-  NS_OBJC_END_TRY_IGNORE_BLOCK;
-}
-
-static const CellRenderSettings dropdownSettings = {
+MOZ_RUNINIT static const CellRenderSettings dropdownSettings = {
     {
         NSMakeSize(0, 16),  // mini
         NSMakeSize(0, 19),  // small
@@ -1504,7 +1397,7 @@ static const CellRenderSettings dropdownSettings = {
          {3, 0, 3, 0}   // regular
      }}};
 
-static const CellRenderSettings editableMenulistSettings = {
+MOZ_RUNINIT static const CellRenderSettings editableMenulistSettings = {
     {
         NSMakeSize(0, 15),  // mini
         NSMakeSize(0, 18),  // small
@@ -1558,7 +1451,7 @@ void nsNativeThemeCocoa::DrawDropdown(CGContextRef cgContext,
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
-static const CellRenderSettings spinnerSettings = {
+MOZ_RUNINIT static const CellRenderSettings spinnerSettings = {
     {
         NSMakeSize(11,
                    16),  // mini (width trimmed by 2px to reduce blank border)
@@ -1651,7 +1544,7 @@ void nsNativeThemeCocoa::DrawSpinButton(CGContextRef cgContext,
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
-static const CellRenderSettings progressSettings[2][2] = {
+MOZ_RUNINIT static const CellRenderSettings progressSettings[2][2] = {
     // Vertical progress bar.
     {// Determined settings.
      {{
@@ -1764,7 +1657,7 @@ void nsNativeThemeCocoa::DrawProgress(CGContextRef cgContext,
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
-static const CellRenderSettings meterSetting = {
+MOZ_RUNINIT static const CellRenderSettings meterSetting = {
     {
         NSMakeSize(0, 16),  // mini
         NSMakeSize(0, 16),  // small
@@ -2078,35 +1971,6 @@ void nsNativeThemeCocoa::DrawSegment(CGContextRef cgContext,
   RenderWithCoreUI(drawRect, cgContext, dict);
 }
 
-void nsNativeThemeCocoa::DrawToolbar(CGContextRef cgContext,
-                                     const CGRect& inBoxRect, bool aIsMain) {
-  CGRect drawRect = inBoxRect;
-
-  // top border
-  drawRect.size.height = 1.0f;
-  DrawNativeGreyColorInRect(cgContext, toolbarTopBorderGrey, drawRect, aIsMain);
-
-  // background
-  drawRect.origin.y += drawRect.size.height;
-  drawRect.size.height = inBoxRect.size.height - 2.0f;
-  DrawNativeGreyColorInRect(cgContext, toolbarFillGrey, drawRect, aIsMain);
-
-  // bottom border
-  drawRect.origin.y += drawRect.size.height;
-  drawRect.size.height = 1.0f;
-  DrawNativeGreyColorInRect(cgContext, toolbarBottomBorderGrey, drawRect,
-                            aIsMain);
-}
-
-static bool ToolbarCanBeUnified(const gfx::Rect& aRect, NSWindow* aWindow) {
-  if (![aWindow isKindOfClass:[ToolbarWindow class]]) return false;
-
-  ToolbarWindow* win = (ToolbarWindow*)aWindow;
-  float unifiedToolbarHeight = [win unifiedToolbarHeight];
-  return aRect.X() == 0 && aRect.Width() >= [win frame].size.width &&
-         aRect.YMost() <= unifiedToolbarHeight;
-}
-
 void nsNativeThemeCocoa::DrawStatusBar(CGContextRef cgContext,
                                        const HIRect& inBoxRect, bool aIsMain) {
   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
@@ -2190,8 +2054,6 @@ Maybe<nsNativeThemeCocoa::WidgetInfo> nsNativeThemeCocoa::ComputeWidgetInfo(
 
   switch (aAppearance) {
     case StyleAppearance::Menupopup:
-      return Nothing();
-
     case StyleAppearance::Tooltip:
       return Nothing();
 
@@ -2329,25 +2191,13 @@ Maybe<nsNativeThemeCocoa::WidgetInfo> nsNativeThemeCocoa::ComputeWidgetInfo(
     case StyleAppearance::Separator:
       return Some(WidgetInfo::Separator());
 
-    case StyleAppearance::Toolbar: {
-      NSWindow* win = NativeWindowForFrame(aFrame);
-      bool isMain = [win isMainWindow];
-      if (ToolbarCanBeUnified(nativeWidgetRect, win)) {
-        // Unified toolbars are drawn similar to vibrancy; we communicate their
-        // extents via the theme geometry mechanism and then place native views
-        // under Gecko's rendering. So Gecko just needs to be transparent in the
-        // place where the toolbar should be visible.
-        return Nothing();
-      }
-      return Some(WidgetInfo::Toolbar(isMain));
-    }
-
+    case StyleAppearance::MozSidebar:
     case StyleAppearance::MozWindowTitlebar: {
       return Nothing();
     }
 
     case StyleAppearance::Statusbar:
-      return Some(WidgetInfo::StatusBar(IsActive(aFrame, YES)));
+      return Some(WidgetInfo::StatusBar(IsActiveToolbarControl(aFrame)));
 
     case StyleAppearance::MenulistButton:
     case StyleAppearance::Menulist: {
@@ -2367,6 +2217,7 @@ Maybe<nsNativeThemeCocoa::WidgetInfo> nsNativeThemeCocoa::ComputeWidgetInfo(
 
     case StyleAppearance::Textfield:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
       return Some(
           WidgetInfo::TextField(ComputeTextFieldParams(aFrame, elementState)));
 
@@ -2390,30 +2241,6 @@ Maybe<nsNativeThemeCocoa::WidgetInfo> nsNativeThemeCocoa::ComputeWidgetInfo(
     case StyleAppearance::Progresschunk:
     case StyleAppearance::Meterchunk:
       // Do nothing: progress and meter bars cases will draw chunks.
-      break;
-
-    case StyleAppearance::Treetwisty:
-      return Some(WidgetInfo::Button(
-          ButtonParams{ComputeControlParams(aFrame, elementState),
-                       ButtonType::eTreeTwistyPointingRight}));
-
-    case StyleAppearance::Treetwistyopen:
-      return Some(WidgetInfo::Button(
-          ButtonParams{ComputeControlParams(aFrame, elementState),
-                       ButtonType::eTreeTwistyPointingDown}));
-
-    case StyleAppearance::Treeheadercell:
-      return Some(WidgetInfo::TreeHeaderCell(
-          ComputeTreeHeaderCellParams(aFrame, elementState)));
-
-    case StyleAppearance::Treeitem:
-    case StyleAppearance::Treeview:
-      return Some(WidgetInfo::ColorFill(sRGBColor(1.0, 1.0, 1.0, 1.0)));
-
-    case StyleAppearance::Treeheader:
-      // do nothing, taken care of by individual header cells
-    case StyleAppearance::Treeline:
-      // do nothing, these lines don't exist on macos
       break;
 
     case StyleAppearance::Range: {
@@ -2594,11 +2421,6 @@ void nsNativeThemeCocoa::RenderWidget(const WidgetInfo& aWidgetInfo,
           HIThemeDrawSeparator(&macRect, &sdi, cgContext, HITHEME_ORIENTATION);
           break;
         }
-        case Widget::eToolbar: {
-          bool isMain = aWidgetInfo.Params<bool>();
-          DrawToolbar(cgContext, macRect, isMain);
-          break;
-        }
         case Widget::eStatusBar: {
           bool isMain = aWidgetInfo.Params<bool>();
           DrawStatusBar(cgContext, macRect, isMain);
@@ -2628,12 +2450,6 @@ void nsNativeThemeCocoa::RenderWidget(const WidgetInfo& aWidgetInfo,
         case Widget::eMeter: {
           MeterParams params = aWidgetInfo.Params<MeterParams>();
           DrawMeter(cgContext, macRect, params);
-          break;
-        }
-        case Widget::eTreeHeaderCell: {
-          TreeHeaderCellParams params =
-              aWidgetInfo.Params<TreeHeaderCellParams>();
-          DrawTreeHeaderCell(cgContext, macRect, params);
           break;
         }
         case Widget::eScale: {
@@ -2710,22 +2526,16 @@ bool nsNativeThemeCocoa::CreateWebRenderCommandsForWidget(
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::Toolbarbutton:
     case StyleAppearance::Separator:
-    case StyleAppearance::Toolbar:
-    case StyleAppearance::MozWindowTitlebar:
     case StyleAppearance::Statusbar:
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
     case StyleAppearance::MozMenulistArrowButton:
     case StyleAppearance::Textfield:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Searchfield:
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Meter:
-    case StyleAppearance::Treeheadercell:
-    case StyleAppearance::Treetwisty:
-    case StyleAppearance::Treetwistyopen:
-    case StyleAppearance::Treeitem:
-    case StyleAppearance::Treeview:
     case StyleAppearance::Range:
       return false;
 
@@ -2752,10 +2562,14 @@ LayoutDeviceIntMargin nsNativeThemeCocoa::DirectionAwareMargin(
   return LayoutDeviceIntMargin(m.top, m.right, m.bottom, m.left);
 }
 
-static const LayoutDeviceIntMargin kAquaDropdownBorder(1, 22, 2, 5);
-static const LayoutDeviceIntMargin kAquaComboboxBorder(3, 20, 3, 4);
-static const LayoutDeviceIntMargin kAquaSearchfieldBorder(3, 5, 2, 19);
-static const LayoutDeviceIntMargin kAquaSearchfieldBorderBigSur(5, 5, 4, 26);
+MOZ_RUNINIT static const LayoutDeviceIntMargin kAquaDropdownBorder(1, 22, 2, 5);
+MOZ_RUNINIT static const LayoutDeviceIntMargin kAquaComboboxBorder(3, 20, 3, 4);
+MOZ_RUNINIT static const LayoutDeviceIntMargin kAquaSearchfieldBorder(3, 5, 2,
+                                                                      19);
+MOZ_RUNINIT static const LayoutDeviceIntMargin kAquaSearchfieldBorderBigSur(5,
+                                                                            5,
+                                                                            4,
+                                                                            26);
 
 LayoutDeviceIntMargin nsNativeThemeCocoa::GetWidgetBorder(
     nsDeviceContext* aContext, nsIFrame* aFrame, StyleAppearance aAppearance) {
@@ -2782,14 +2596,6 @@ LayoutDeviceIntMargin nsNativeThemeCocoa::GetWidgetBorder(
       break;
     }
 
-    case StyleAppearance::Checkbox:
-    case StyleAppearance::Radio: {
-      // nsCheckboxRadioFrame::GetIntrinsicWidth and
-      // nsCheckboxRadioFrame::GetIntrinsicHeight assume a border width of 2px.
-      result.SizeTo(2, 2, 2, 2);
-      break;
-    }
-
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
     case StyleAppearance::MozMenulistArrowButton:
@@ -2797,6 +2603,7 @@ LayoutDeviceIntMargin nsNativeThemeCocoa::GetWidgetBorder(
       break;
 
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield: {
       SInt32 frameOutset = 0;
       ::GetThemeMetric(kThemeMetricEditTextFrameOutset, &frameOutset);
@@ -2895,6 +2702,7 @@ bool nsNativeThemeCocoa::GetWidgetOverflow(nsDeviceContext* aContext,
     case StyleAppearance::MozMacHelpButton:
     case StyleAppearance::Toolbarbutton:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Searchfield:
@@ -3007,6 +2815,7 @@ LayoutDeviceIntSize nsNativeThemeCocoa::GetMinimumWidgetSize(
     }
 
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Searchfield: {
@@ -3032,23 +2841,6 @@ LayoutDeviceIntSize nsNativeThemeCocoa::GetMinimumWidgetSize(
 
     case StyleAppearance::Separator: {
       result.SizeTo(1, 1);
-      break;
-    }
-
-    case StyleAppearance::Treetwisty:
-    case StyleAppearance::Treetwistyopen: {
-      SInt32 twistyHeight = 0, twistyWidth = 0;
-      ::GetThemeMetric(kThemeMetricDisclosureButtonWidth, &twistyWidth);
-      ::GetThemeMetric(kThemeMetricDisclosureButtonHeight, &twistyHeight);
-      result.SizeTo(twistyWidth, twistyHeight);
-      break;
-    }
-
-    case StyleAppearance::Treeheader:
-    case StyleAppearance::Treeheadercell: {
-      SInt32 headerHeight = 0;
-      ::GetThemeMetric(kThemeMetricListHeaderHeight, &headerHeight);
-      result.SizeTo(0, headerHeight);
       break;
     }
 
@@ -3083,16 +2875,12 @@ LayoutDeviceIntSize nsNativeThemeCocoa::GetMinimumWidgetSize(
   NS_OBJC_END_TRY_BLOCK_RETURN(LayoutDeviceIntSize());
 }
 
-NS_IMETHODIMP
-nsNativeThemeCocoa::WidgetStateChanged(nsIFrame* aFrame,
-                                       StyleAppearance aAppearance,
-                                       nsAtom* aAttribute, bool* aShouldRepaint,
-                                       const nsAttrValue* aOldValue) {
+bool nsNativeThemeCocoa::WidgetAttributeChangeRequiresRepaint(
+    StyleAppearance aAppearance, nsAtom* aAttribute) {
   // Some widget types just never change state.
   switch (aAppearance) {
     case StyleAppearance::MozWindowTitlebar:
-    case StyleAppearance::Toolbox:
-    case StyleAppearance::Toolbar:
+    case StyleAppearance::MozSidebar:
     case StyleAppearance::Statusbar:
     case StyleAppearance::Tooltip:
     case StyleAppearance::Tabpanels:
@@ -3102,33 +2890,11 @@ nsNativeThemeCocoa::WidgetStateChanged(nsIFrame* aFrame,
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Meter:
     case StyleAppearance::Meterchunk:
-      *aShouldRepaint = false;
-      return NS_OK;
+      return false;
     default:
       break;
   }
-
-  // XXXdwh Not sure what can really be done here.  Can at least guess for
-  // specific widgets that they're highly unlikely to have certain states.
-  // For example, a toolbar doesn't care about any states.
-  if (!aAttribute) {
-    // Hover/focus/active changed.  Always repaint.
-    *aShouldRepaint = true;
-  } else {
-    // Check the attribute to see if it's relevant.
-    // disabled, checked, dlgtype, default, etc.
-    *aShouldRepaint = false;
-    if (aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::checked ||
-        aAttribute == nsGkAtoms::selected ||
-        aAttribute == nsGkAtoms::visuallyselected ||
-        aAttribute == nsGkAtoms::menuactive ||
-        aAttribute == nsGkAtoms::sortDirection ||
-        aAttribute == nsGkAtoms::focused || aAttribute == nsGkAtoms::_default ||
-        aAttribute == nsGkAtoms::open || aAttribute == nsGkAtoms::hover)
-      *aShouldRepaint = true;
-  }
-
-  return NS_OK;
+  return Theme::WidgetAttributeChangeRequiresRepaint(aAppearance, aAttribute);
 }
 
 NS_IMETHODIMP
@@ -3164,6 +2930,7 @@ bool nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::Listbox:
     case StyleAppearance::MozWindowButtonBox:
     case StyleAppearance::MozWindowTitlebar:
+    case StyleAppearance::MozSidebar:
     case StyleAppearance::Menupopup:
     case StyleAppearance::Tooltip:
 
@@ -3172,19 +2939,18 @@ bool nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::MozMacHelpButton:
     case StyleAppearance::MozMacDisclosureButtonOpen:
     case StyleAppearance::MozMacDisclosureButtonClosed:
-    case StyleAppearance::MozMacUnifiedToolbarWindow:
+    case StyleAppearance::MozMacWindow:
     case StyleAppearance::Button:
     case StyleAppearance::Toolbarbutton:
     case StyleAppearance::Spinner:
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
-    case StyleAppearance::Toolbar:
     case StyleAppearance::Statusbar:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Searchfield:
-    case StyleAppearance::Toolbox:
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Progresschunk:
     case StyleAppearance::Meter:
@@ -3193,14 +2959,6 @@ bool nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext,
 
     case StyleAppearance::Tabpanels:
     case StyleAppearance::Tab:
-
-    case StyleAppearance::Treetwisty:
-    case StyleAppearance::Treetwistyopen:
-    case StyleAppearance::Treeview:
-    case StyleAppearance::Treeheader:
-    case StyleAppearance::Treeheadercell:
-    case StyleAppearance::Treeitem:
-    case StyleAppearance::Treeline:
 
     case StyleAppearance::Range:
       return !IsWidgetStyled(aPresContext, aFrame, aAppearance);
@@ -3238,6 +2996,7 @@ bool nsNativeThemeCocoa::ThemeDrawsFocusForWidget(nsIFrame*,
     case StyleAppearance::Textfield:
     case StyleAppearance::Searchfield:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
     case StyleAppearance::Button:
@@ -3265,11 +3024,9 @@ bool nsNativeThemeCocoa::WidgetAppearanceDependsOnWindowFocus(
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::Separator:
-    case StyleAppearance::Toolbox:
     case StyleAppearance::NumberInput:
+    case StyleAppearance::PasswordInput:
     case StyleAppearance::Textfield:
-    case StyleAppearance::Treeview:
-    case StyleAppearance::Treeline:
     case StyleAppearance::Textarea:
     case StyleAppearance::Listbox:
       return false;
@@ -3281,18 +3038,12 @@ bool nsNativeThemeCocoa::WidgetAppearanceDependsOnWindowFocus(
 nsITheme::ThemeGeometryType nsNativeThemeCocoa::ThemeGeometryTypeForWidget(
     nsIFrame* aFrame, StyleAppearance aAppearance) {
   switch (aAppearance) {
+    case StyleAppearance::MozSidebar:
+      return eThemeGeometryTypeSidebar;
     case StyleAppearance::MozWindowTitlebar:
       return eThemeGeometryTypeTitlebar;
-    case StyleAppearance::Toolbar:
-      return eThemeGeometryTypeToolbar;
-    case StyleAppearance::Toolbox:
-      return eThemeGeometryTypeToolbox;
     case StyleAppearance::MozWindowButtonBox:
       return eThemeGeometryTypeWindowButtons;
-    case StyleAppearance::Tooltip:
-      return eThemeGeometryTypeTooltip;
-    case StyleAppearance::Menupopup:
-      return eThemeGeometryTypeMenu;
     default:
       return eThemeGeometryTypeUnknown;
   }
@@ -3307,9 +3058,8 @@ nsITheme::Transparency nsNativeThemeCocoa::GetWidgetTransparency(
   switch (aAppearance) {
     case StyleAppearance::Menupopup:
     case StyleAppearance::Tooltip:
-    case StyleAppearance::Toolbar:
       return eTransparent;
-    case StyleAppearance::MozMacUnifiedToolbarWindow:
+    case StyleAppearance::MozMacWindow:
       // We want these to be treated as opaque by Gecko. We ensure there's an
       // appropriate OS-level clear color to make sure that's the case.
       return eOpaque;

@@ -23,11 +23,18 @@ interface nsIWebAuthnRegisterResult : nsISupports {
 
     readonly attribute Array<AString> transports;
 
-    readonly attribute bool hmacCreateSecret;
+    readonly attribute boolean hmacCreateSecret;
 
-    [must_use] attribute bool credPropsRk;
+    [must_use] attribute boolean credPropsRk;
+
+    readonly attribute boolean prfEnabled;
+    readonly attribute Array<octet> prfResultsFirst;
+    readonly attribute Array<octet> prfResultsSecond;
 
     [must_use] readonly attribute AString authenticatorAttachment;
+
+    boolean hasIdentifyingAttestation();
+    void anonymize();
 };
 
 // The nsIWebAuthnSignResult interface is used to construct IPDL-defined
@@ -56,7 +63,11 @@ interface nsIWebAuthnSignResult : nsISupports {
     [must_use] readonly attribute ACString userName;
 
     // appId field of AuthenticationExtensionsClientOutputs (Optional)
-    [must_use] attribute bool usedAppId;
+    [must_use] attribute boolean usedAppId;
+
+    readonly attribute boolean prfMaybe; // prf output can be present but empty
+    readonly attribute Array<octet> prfResultsFirst;
+    readonly attribute Array<octet> prfResultsSecond;
 
     [must_use] readonly attribute AString authenticatorAttachment;
 };

@@ -8,11 +8,6 @@
 
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 
-toolbox {
-  appearance: auto;
-  -moz-default-appearance: toolbox;
-}
-
 toolbar {
   background-color: -moz-headerbar;
   color: -moz-headerbartext;
@@ -20,7 +15,7 @@ toolbar {
   min-height: 20px;
   padding: 2px 0;
 
-  &:-moz-window-inactive {
+  &:where(:-moz-window-inactive) {
     background-color: -moz-headerbarinactive;
     color: -moz-headerbarinactivetext;
   }

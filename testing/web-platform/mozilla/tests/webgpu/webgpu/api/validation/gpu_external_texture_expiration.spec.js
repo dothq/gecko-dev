@@ -20,7 +20,7 @@ class GPUExternalTextureExpireTest extends ValidationTest {
     const kWidth = 16;
     const kFormat = 'rgba8unorm';
 
-    const colorAttachment = this.device.createTexture({
+    const colorAttachment = this.createTextureTracked({
       format: kFormat,
       size: { width: kWidth, height: kHeight, depthOrArrayLayers: 1 },
       usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT
@@ -86,10 +86,7 @@ fn(async (t) => {
     sourceType === 'VideoFrame' ?
     await getVideoFrameFromVideoElement(t, videoElement) :
     videoElement;
-    externalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    externalTexture = t.device.importExternalTexture({ source });
 
     bindGroup = t.device.createBindGroup({
       layout: t.getDefaultBindGroupLayout(),
@@ -99,10 +96,7 @@ fn(async (t) => {
     t.submitCommandBuffer(bindGroup, true);
 
     // Import again in the same task scope should return same object.
-    const mayBeTheSameExternalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    const mayBeTheSameExternalTexture = t.device.importExternalTexture({ source });
 
     if (externalTexture === mayBeTheSameExternalTexture) {
       t.submitCommandBuffer(bindGroup, true);
@@ -142,10 +136,7 @@ fn(async (t) => {
 
     // Import GPUExternalTexture
     queueMicrotask(() => {
-      externalTexture = t.device.importExternalTexture({
-
-        source: source
-      });
+      externalTexture = t.device.importExternalTexture({ source });
     });
 
     // Submit GPUExternalTexture
@@ -182,10 +173,7 @@ fn(async (t) => {
     sourceType === 'VideoFrame' ?
     await getVideoFrameFromVideoElement(t, videoElement) :
     videoElement;
-    externalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    externalTexture = t.device.importExternalTexture({ source });
 
     bindGroup = t.device.createBindGroup({
       layout: t.getDefaultBindGroupLayout(),
@@ -218,10 +206,7 @@ fn(async (t) => {
   let source;
   await startPlayingAndWaitForVideo(videoElement, () => {
     source = videoElement;
-    externalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    externalTexture = t.device.importExternalTexture({ source });
 
     bindGroup = t.device.createBindGroup({
       layout: t.getDefaultBindGroupLayout(),
@@ -232,10 +217,7 @@ fn(async (t) => {
   });
 
   await waitForNextTask(() => {
-    const mayBeTheSameExternalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    const mayBeTheSameExternalTexture = t.device.importExternalTexture({ source });
 
     if (externalTexture === mayBeTheSameExternalTexture) {
       // ImportExternalTexture should refresh expired GPUExternalTexture.
@@ -243,7 +225,7 @@ fn(async (t) => {
     } else {
       bindGroup = t.device.createBindGroup({
         layout: t.getDefaultBindGroupLayout(),
-        entries: [{ binding: 0, resource: externalTexture }]
+        entries: [{ binding: 0, resource: mayBeTheSameExternalTexture }]
       });
       t.submitCommandBuffer(bindGroup, true);
     }
@@ -264,10 +246,7 @@ fn(async (t) => {
   let externalTexture;
   await startPlayingAndWaitForVideo(videoElement, async () => {
     const source = await getVideoFrameFromVideoElement(t, videoElement);
-    externalTexture = t.device.importExternalTexture({
-
-      source: source
-    });
+    externalTexture = t.device.importExternalTexture({ source });
 
     bindGroup = t.device.createBindGroup({
       layout: t.getDefaultBindGroupLayout(),

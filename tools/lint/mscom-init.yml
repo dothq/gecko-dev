@@ -17,6 +17,7 @@ forbid-mscom-init:
         - c
         - cc
         - cpp
+        - rs
     exclude:
         # These files contain utilities for using COM more safely.
         - ipc/mscom/ApartmentRegion.h
@@ -35,8 +36,9 @@ forbid-mscom-init:
         - browser/components/shell/nsWindowsShellService.cpp
         - gfx/thebes/gfxWindowsPlatform.cpp
         - image/DecodePool.cpp
-        - ipc/glue/BrowserProcessSubThread.cpp
+        - ipc/glue/IOThread.cpp
         - netwerk/system/win32/nsNotifyAddrListener.cpp
+        - toolkit/components/bitsdownload/bits_client/bits/src/lib.rs
         - toolkit/components/parentalcontrols/nsParentalControlsServiceWin.cpp
         - toolkit/crashreporter/google-breakpad/src/common/windows/pdb_source_line_writer.cc
         - toolkit/mozapps/defaultagent/proxy/main.cpp
@@ -70,5 +72,3 @@ forbid-apartment-region:
         - ipc/mscom/ProcessRuntime.cpp
         - ipc/mscom/ProcessRuntime.h
         - widget/windows/filedialog/WinFileDialogCommands.cpp
-        # These files are existing uses that must eventually be fixed.
-        - widget/windows/LegacyJumpListBuilder.cpp

@@ -211,7 +211,8 @@ static void MarkAsComputeValuesFailureKey(PropertyValuePair& aPair);
 
 static nsTArray<ComputedKeyframeValues> GetComputedKeyframeValues(
     const nsTArray<Keyframe>& aKeyframes, dom::Element* aElement,
-    PseudoStyleType aPseudoType, const ComputedStyle* aComputedValues);
+    const PseudoStyleRequest& aPseudoRequest,
+    const ComputedStyle* aComputedValues);
 
 static void BuildSegmentsFromValueEntries(
     nsTArray<KeyframeValueEntry>& aEntries,
@@ -307,12 +308,12 @@ void KeyframeUtils::DistributeKeyframes(nsTArray<Keyframe>& aKeyframes) {
 /* static */
 nsTArray<AnimationProperty> KeyframeUtils::GetAnimationPropertiesFromKeyframes(
     const nsTArray<Keyframe>& aKeyframes, dom::Element* aElement,
-    PseudoStyleType aPseudoType, const ComputedStyle* aStyle,
+    const PseudoStyleRequest& aPseudoRequest, const ComputedStyle* aStyle,
     dom::CompositeOperation aEffectComposite) {
   nsTArray<AnimationProperty> result;
 
   const nsTArray<ComputedKeyframeValues> computedValues =
-      GetComputedKeyframeValues(aKeyframes, aElement, aPseudoType, aStyle);
+      GetComputedKeyframeValues(aKeyframes, aElement, aPseudoRequest, aStyle);
   if (computedValues.IsEmpty()) {
     // In rare cases GetComputedKeyframeValues might fail and return an empty
     // array, in which case we likewise return an empty array from here.
@@ -460,9 +461,7 @@ static bool ConvertKeyframeSequence(JSContext* aCx, dom::Document* aDocument,
       keyframe->mOffset.emplace(keyframeDict.mOffset.Value());
     }
 
-    if (StaticPrefs::dom_animations_api_compositing_enabled()) {
-      keyframe->mComposite = keyframeDict.mComposite;
-    }
+    keyframe->mComposite = keyframeDict.mComposite;
 
     // Look for additional property-values pairs on the object.
     nsTArray<PropertyValuesPair> propertyValuePairs;
@@ -744,7 +743,8 @@ static void MarkAsComputeValuesFailureKey(PropertyValuePair& aPair) {
  */
 static nsTArray<ComputedKeyframeValues> GetComputedKeyframeValues(
     const nsTArray<Keyframe>& aKeyframes, dom::Element* aElement,
-    PseudoStyleType aPseudoType, const ComputedStyle* aComputedStyle) {
+    const PseudoStyleRequest& aPseudoRequest,
+    const ComputedStyle* aComputedStyle) {
   MOZ_ASSERT(aElement);
 
   nsTArray<ComputedKeyframeValues> result;
@@ -759,7 +759,7 @@ static nsTArray<ComputedKeyframeValues> GetComputedKeyframeValues(
   }
 
   result = presContext->StyleSet()->GetComputedKeyframeValuesFor(
-      aKeyframes, aElement, aPseudoType, aComputedStyle);
+      aKeyframes, aElement, aPseudoRequest, aComputedStyle);
   return result;
 }
 
@@ -1155,26 +1155,23 @@ static void GetKeyframeListFromPropertyIndexedKeyframe(
   //
   // This corresponds to step 5, "Otherwise," branch, substep 12 of
   // https://drafts.csswg.org/web-animations/#processing-a-keyframes-argument
-  if (StaticPrefs::dom_animations_api_compositing_enabled()) {
-    const FallibleTArray<dom::CompositeOperationOrAuto>* compositeOps = nullptr;
-    AutoTArray<dom::CompositeOperationOrAuto, 1> singleCompositeOp;
-    auto& composite = keyframeDict.mComposite;
-    if (composite.IsCompositeOperationOrAuto()) {
-      singleCompositeOp.AppendElement(
-          composite.GetAsCompositeOperationOrAuto());
-      const FallibleTArray<dom::CompositeOperationOrAuto>& asFallibleArray =
-          singleCompositeOp;
-      compositeOps = &asFallibleArray;
-    } else if (composite.IsCompositeOperationOrAutoSequence()) {
-      compositeOps = &composite.GetAsCompositeOperationOrAutoSequence();
-    }
+  const FallibleTArray<dom::CompositeOperationOrAuto>* compositeOps = nullptr;
+  AutoTArray<dom::CompositeOperationOrAuto, 1> singleCompositeOp;
+  auto& composite = keyframeDict.mComposite;
+  if (composite.IsCompositeOperationOrAuto()) {
+    singleCompositeOp.AppendElement(composite.GetAsCompositeOperationOrAuto());
+    const FallibleTArray<dom::CompositeOperationOrAuto>& asFallibleArray =
+        singleCompositeOp;
+    compositeOps = &asFallibleArray;
+  } else if (composite.IsCompositeOperationOrAutoSequence()) {
+    compositeOps = &composite.GetAsCompositeOperationOrAutoSequence();
+  }
 
-    // Fill in and repeat as needed.
-    if (compositeOps && !compositeOps->IsEmpty()) {
-      size_t length = compositeOps->Length();
-      for (size_t i = 0; i < aResult.Length(); i++) {
-        aResult[i].mComposite = compositeOps->ElementAt(i % length);
-      }
+  // Fill in and repeat as needed.
+  if (compositeOps && !compositeOps->IsEmpty()) {
+    size_t length = compositeOps->Length();
+    for (size_t i = 0; i < aResult.Length(); i++) {
+      aResult[i].mComposite = compositeOps->ElementAt(i % length);
     }
   }
 }

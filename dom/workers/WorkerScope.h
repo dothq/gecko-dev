@@ -24,6 +24,7 @@
 #include "mozilla/dom/SafeRefPtr.h"
 #include "mozilla/dom/TrustedTypePolicyFactory.h"
 #include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/TimeoutManager.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIGlobalObject.h"
@@ -55,6 +56,7 @@ class ClientInfo;
 class ClientSource;
 class Clients;
 class Console;
+class CookieStore;
 class Crypto;
 class DOMString;
 class DebuggerNotificationManager;
@@ -62,13 +64,14 @@ enum class EventCallbackDebuggerNotificationType : uint8_t;
 class EventHandlerNonNull;
 class FontFaceSet;
 class Function;
+class FunctionOrTrustedScriptOrString;
 class IDBFactory;
 class OnErrorEventHandlerNonNull;
 template <typename T>
 class Optional;
 class Performance;
 class Promise;
-class RequestOrUSVString;
+class RequestOrUTF8String;
 template <typename T>
 class Sequence;
 class ServiceWorkerDescriptor;
@@ -103,6 +106,10 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
   WorkerGlobalScopeBase(WorkerPrivate* aWorkerPrivate,
                         UniquePtr<ClientSource> aClientSource);
 
+  mozilla::dom::TimeoutManager* GetTimeoutManager() override final {
+    return mTimeoutManager.get();
+  }
+
   virtual bool WrapGlobalObject(JSContext* aCx,
                                 JS::MutableHandle<JSObject*> aReflector) = 0;
 
@@ -125,7 +132,12 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
 
   StorageAccess GetStorageAccess() final;
 
+  nsICookieJarSettings* GetCookieJarSettings() final;
+
+  nsIURI* GetBaseURI() const final;
+
   Maybe<ClientInfo> GetClientInfo() const final;
+  Maybe<ClientState> GetClientState() const final;
 
   Maybe<ServiceWorkerDescriptor> GetController() const final;
 
@@ -194,6 +206,7 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
 #ifdef DEBUG
   PRThread* mWorkerThreadUsedOnlyForAssert;
 #endif
+  mozilla::UniquePtr<mozilla::dom::TimeoutManager> mTimeoutManager;
 };
 
 namespace workerinternals {
@@ -226,6 +239,11 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase {
   void NoteShuttingDown();
 
   // nsIGlobalObject implementation
+  already_AddRefed<ServiceWorkerContainer> GetServiceWorkerContainer() final;
+
+  RefPtr<ServiceWorker> GetOrCreateServiceWorker(
+      const ServiceWorkerDescriptor& aDescriptor) final;
+
   RefPtr<ServiceWorkerRegistration> GetServiceWorkerRegistration(
       const ServiceWorkerRegistrationDescriptor& aDescriptor) const final;
 
@@ -244,6 +262,12 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase {
   void SetIsNotEligibleForMessaging() { mIsEligibleForMessaging = false; }
 
   bool IsEligibleForMessaging() final;
+
+  void ReportToConsole(uint32_t aErrorFlags, const nsCString& aCategory,
+                       nsContentUtils::PropertiesFile aFile,
+                       const nsCString& aMessageName,
+                       const nsTArray<nsString>& aParams,
+                       const mozilla::SourceLocation& aLocation) final;
 
   // WorkerGlobalScope WebIDL implementation
   WorkerGlobalScope* Self() { return this; }
@@ -291,23 +315,18 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase {
   bool CrossOriginIsolated() const final;
 
   MOZ_CAN_RUN_SCRIPT
-  int32_t SetTimeout(JSContext* aCx, Function& aHandler, int32_t aTimeout,
-                     const Sequence<JS::Value>& aArguments, ErrorResult& aRv);
-
-  MOZ_CAN_RUN_SCRIPT
-  int32_t SetTimeout(JSContext* aCx, const nsAString& aHandler,
-                     int32_t aTimeout, const Sequence<JS::Value>&,
+  int32_t SetTimeout(JSContext* aCx,
+                     const FunctionOrTrustedScriptOrString& aHandler,
+                     int32_t aTimeout, const Sequence<JS::Value>& aArguments,
                      ErrorResult& aRv);
 
   MOZ_CAN_RUN_SCRIPT
   void ClearTimeout(int32_t aHandle);
 
   MOZ_CAN_RUN_SCRIPT
-  int32_t SetInterval(JSContext* aCx, Function& aHandler, int32_t aTimeout,
-                      const Sequence<JS::Value>& aArguments, ErrorResult& aRv);
-  MOZ_CAN_RUN_SCRIPT
-  int32_t SetInterval(JSContext* aCx, const nsAString& aHandler,
-                      int32_t aTimeout, const Sequence<JS::Value>&,
+  int32_t SetInterval(JSContext* aCx,
+                      const FunctionOrTrustedScriptOrString& aHandler,
+                      int32_t aTimeout, const Sequence<JS::Value>& aArguments,
                       ErrorResult& aRv);
 
   MOZ_CAN_RUN_SCRIPT
@@ -326,7 +345,7 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase {
                        JS::MutableHandle<JS::Value> aRetval,
                        ErrorResult& aError);
 
-  already_AddRefed<Promise> Fetch(const RequestOrUSVString& aInput,
+  already_AddRefed<Promise> Fetch(const RequestOrUTF8String& aInput,
                                   const RequestInit& aInit,
                                   CallerType aCallerType, ErrorResult& aRv);
 
@@ -360,15 +379,11 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase {
 
  private:
   MOZ_CAN_RUN_SCRIPT
-  int32_t SetTimeoutOrInterval(JSContext* aCx, Function& aHandler,
+  int32_t SetTimeoutOrInterval(JSContext* aCx,
+                               const FunctionOrTrustedScriptOrString& aHandler,
                                int32_t aTimeout,
                                const Sequence<JS::Value>& aArguments,
                                bool aIsInterval, ErrorResult& aRv);
-
-  MOZ_CAN_RUN_SCRIPT
-  int32_t SetTimeoutOrInterval(JSContext* aCx, const nsAString& aHandler,
-                               int32_t aTimeout, bool aIsInterval,
-                               ErrorResult& aRv);
 
   RefPtr<Crypto> mCrypto;
   RefPtr<WorkerLocation> mLocation;
@@ -409,11 +424,11 @@ class DedicatedWorkerGlobalScope final
   void Close();
 
   MOZ_CAN_RUN_SCRIPT
-  int32_t RequestAnimationFrame(FrameRequestCallback& aCallback,
-                                ErrorResult& aError);
+  uint32_t RequestAnimationFrame(FrameRequestCallback& aCallback,
+                                 ErrorResult& aError);
 
   MOZ_CAN_RUN_SCRIPT
-  void CancelAnimationFrame(int32_t aHandle, ErrorResult& aError);
+  void CancelAnimationFrame(uint32_t aHandle, ErrorResult& aError);
 
   void OnDocumentVisible(bool aVisible) override;
 
@@ -482,6 +497,8 @@ class ServiceWorkerGlobalScope final : public WorkerGlobalScope {
 
   void EventListenerAdded(nsAtom* aType) override;
 
+  already_AddRefed<mozilla::dom::CookieStore> CookieStore();
+
   IMPL_EVENT_HANDLER(message)
   IMPL_EVENT_HANDLER(messageerror)
 
@@ -490,6 +507,8 @@ class ServiceWorkerGlobalScope final : public WorkerGlobalScope {
 
   IMPL_EVENT_HANDLER(push)
   IMPL_EVENT_HANDLER(pushsubscriptionchange)
+
+  IMPL_EVENT_HANDLER(cookiechange)
 
  private:
   ~ServiceWorkerGlobalScope();
@@ -500,6 +519,7 @@ class ServiceWorkerGlobalScope final : public WorkerGlobalScope {
   const nsString mScope;
   RefPtr<ServiceWorkerRegistration> mRegistration;
   SafeRefPtr<extensions::ExtensionBrowser> mExtensionBrowser;
+  RefPtr<mozilla::dom::CookieStore> mCookieStore;
 };
 
 class WorkerDebuggerGlobalScope final : public WorkerGlobalScopeBase {

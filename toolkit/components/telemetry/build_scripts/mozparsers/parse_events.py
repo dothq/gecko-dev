@@ -265,14 +265,12 @@ class EventData:
                 ParserError(
                     self.identifier + ": Unknown value in products: " + product
                 ).handle_later()
-            if utils.is_geckoview_streaming_product(product):
-                ParserError(
-                    "{}: Product `{}` unsupported for Event Telemetry".format(
-                        self.identifier, product
-                    )
-                ).handle_later()
 
         # Check operating_systems.
+        if strict_type_checks and "operating_systems" in definition:
+            ParserError(
+                f"{self.identifier}: Uses obsolete field 'operating_systems'."
+            ).handle_later()
         operating_systems = definition.get("operating_systems", [])
         for operating_system in operating_systems:
             if not utils.is_valid_os(operating_system):

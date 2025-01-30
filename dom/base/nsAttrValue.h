@@ -16,7 +16,7 @@
 
 #include "nscore.h"
 #include "nsString.h"
-#include "nsStringBuffer.h"
+#include "mozilla/StringBuffer.h"
 #include "nsColor.h"
 #include "nsCaseTreatment.h"
 #include "nsMargin.h"
@@ -61,6 +61,11 @@ struct AttrAtomArray {
     return mArray == aOther.mArray;
   }
 
+  size_t ShallowSizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
+    return aMallocSizeOf(this) +
+           mArray.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  }
+
  private:
   UniquePtr<AttrAtomArray> CreateDeduplicatedCopyIfDifferentImpl() const;
 };
@@ -95,20 +100,22 @@ const uintptr_t NS_ATTRVALUE_BASETYPE_MASK = 3;
               ~NS_ATTRVALUE_ENUMTABLE_VALUE_NEEDS_TO_UPPER)))
 
 /**
- * A class used to construct a nsString from a nsStringBuffer (we might
+ * A class used to construct a nsString from a mozilla::StringBuffer (we might
  * want to move this to nsString at some point).
  *
  * WARNING: Note that nsCheapString doesn't take an explicit length -- it
- * assumes the string is maximally large, given the nsStringBuffer's storage
- * size.  This means the given string buffer *must* be sized exactly correctly
- * for the string it contains (including one byte for a null terminator).  If
- * it has any unused storage space, then that will result in bogus characters
- * at the end of our nsCheapString.
+ * assumes the string is maximally large, given the mozilla::StringBuffer's
+ * storage size.  This means the given string buffer *must* be sized exactly
+ * correctly for the string it contains (including one byte for a null
+ * terminator).  If it has any unused storage space, then that will result in
+ * bogus characters at the end of our nsCheapString.
  */
 class nsCheapString : public nsString {
  public:
-  explicit nsCheapString(nsStringBuffer* aBuf) {
-    if (aBuf) aBuf->ToString(aBuf->StorageSize() / sizeof(char16_t) - 1, *this);
+  explicit nsCheapString(mozilla::StringBuffer* aBuf) {
+    if (aBuf) {
+      Assign(aBuf, aBuf->StorageSize() / sizeof(char16_t) - 1);
+    }
   }
 };
 
@@ -484,7 +491,7 @@ class nsAttrValue {
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   nsAtom* GetStoredAtom() const;
-  nsStringBuffer* GetStoredStringBuffer() const;
+  mozilla::StringBuffer* GetStoredStringBuffer() const;
 
  private:
   // These have to be the same as in ValueType
@@ -513,7 +520,7 @@ class nsAttrValue {
   // aType can be ePercent or eDoubleValue.
   void SetDoubleValueAndType(double aValue, ValueType aType,
                              const nsAString* aStringValue);
-  void SetColorValue(nscolor aColor, const nsAString& aString);
+  bool SetColorValue(nscolor aColor, const nsAString& aString);
   void SetMiscAtomOrString(const nsAString* aValue);
   void ResetMiscAtomOrString();
   void SetSVGType(ValueType aType, const void* aValue,
@@ -530,7 +537,7 @@ class nsAttrValue {
   // Like ClearMiscContainer, except allocates a new container if one does not
   // exist already.
   MiscContainer* EnsureEmptyMiscContainer();
-  already_AddRefed<nsStringBuffer> GetStringBuffer(
+  already_AddRefed<mozilla::StringBuffer> GetStringBuffer(
       const nsAString& aValue) const;
   // Given an enum table and a particular entry in that table, return
   // the actual integer value we should store.

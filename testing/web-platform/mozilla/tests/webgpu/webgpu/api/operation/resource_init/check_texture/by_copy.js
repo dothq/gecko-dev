@@ -3,6 +3,7 @@
 **/import { assert } from '../../../../../common/util/util.js';import { kTextureFormatInfo } from '../../../../format_info.js';import { virtualMipSize } from '../../../../util/texture/base.js';
 
 
+
 export const checkContentsByBufferCopy = (
 t,
 params,
@@ -41,13 +42,12 @@ subresourceRange) =>
       level
     );
 
-    const dst = t.device.createTexture({
+    const dst = t.createTextureTracked({
       dimension: params.dimension,
       size: [width, height, depth],
       format: params.format,
       usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC
     });
-    t.trackForCleanup(dst);
 
     const commandEncoder = t.device.createCommandEncoder();
     commandEncoder.copyTextureToTexture(

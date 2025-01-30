@@ -14,9 +14,7 @@
 #include <memory>
 #include <string>
 
-#include "api/call/call_factory_interface.h"
 #include "api/environment/environment.h"
-#include "api/field_trials_view.h"
 #include "api/media_stream_interface.h"
 #include "api/peer_connection_interface.h"
 #include "api/ref_counted_base.h"
@@ -46,8 +44,7 @@ namespace webrtc {
 // interferes with the operation of other PeerConnections.
 //
 // This class must be created and destroyed on the signaling thread.
-class ConnectionContext final
-    : public rtc::RefCountedNonVirtual<ConnectionContext> {
+class ConnectionContext final : public RefCountedNonVirtual<ConnectionContext> {
  public:
   // Creates a ConnectionContext. May return null if initialization fails.
   // The Dependencies class allows simple management of all new dependencies
@@ -81,12 +78,6 @@ class ConnectionContext final
   // but they are not supposed to change after creating the PeerConnection.
   const Environment& env() const { return env_; }
 
-  // Field trials associated with the PeerConnectionFactory.
-  // Note: that there can be different field trials for different
-  // PeerConnections (but they are not supposed change after creating the
-  // PeerConnection).
-  const FieldTrialsView& field_trials() const { return env_.field_trials(); }
-
   // Accessors only used from the PeerConnectionFactory class
   rtc::NetworkManager* default_network_manager() {
     RTC_DCHECK_RUN_ON(signaling_thread_);
@@ -114,7 +105,7 @@ class ConnectionContext final
   ConnectionContext(const Environment& env,
                     PeerConnectionFactoryDependencies* dependencies);
 
-  friend class rtc::RefCountedNonVirtual<ConnectionContext>;
+  friend class RefCountedNonVirtual<ConnectionContext>;
   ~ConnectionContext();
 
  private:

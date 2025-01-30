@@ -339,8 +339,6 @@ def print_header(idl, fd, filename, relpath):
             write_interface(p, fd)
             continue
         if p.kind == "typedef":
-            if p.substitute:
-                continue
             printComments(fd, p.doccomments, "")
             fd.write("typedef %s %s;\n\n" % (p.realtype.nativeType("in"), p.name))
 
@@ -494,11 +492,11 @@ def write_interface(iface, fd):
         names.add(name)
 
     for m in iface.members:
-        if type(m) == xpidl.Attribute:
+        if type(m) is xpidl.Attribute:
             record_name(attributeNativeName(m, getter=True))
             if not m.readonly:
                 record_name(attributeNativeName(m, getter=False))
-        elif type(m) == xpidl.Method:
+        elif type(m) is xpidl.Method:
             record_name(methodNativeName(m))
 
     def write_const_decls(g):

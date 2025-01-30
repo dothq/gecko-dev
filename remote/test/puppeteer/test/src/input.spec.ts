@@ -168,10 +168,20 @@ describe('input tests', function () {
         page.waitForFileChooser(),
         page.waitForFileChooser(),
         page.$eval('input', input => {
-          return (input as HTMLInputElement).click();
+          return input.click();
         }),
       ]);
       expect(fileChooser1 === fileChooser2).toBe(true);
+    });
+
+    it('should be able to abort', async () => {
+      const {page} = await getTestState();
+
+      const abortController = new AbortController();
+      const task = page.waitForFileChooser({signal: abortController.signal});
+
+      abortController.abort();
+      await expect(task).rejects.toThrow(/aborted/);
     });
   });
 
@@ -192,12 +202,12 @@ describe('input tests', function () {
       ]);
       expect(
         await page.$eval('input', input => {
-          return (input as HTMLInputElement).files!.length;
+          return input.files!.length;
         })
       ).toBe(1);
       expect(
         await page.$eval('input', input => {
-          return (input as HTMLInputElement).files![0]!.name;
+          return input.files![0]!.name;
         })
       ).toBe('file-to-upload.txt');
     });
@@ -209,8 +219,7 @@ describe('input tests', function () {
         return chooser.accept([FILE_TO_UPLOAD]);
       });
       expect(
-        await page.$eval('input', async picker => {
-          const pick = picker as HTMLInputElement;
+        await page.$eval('input', async pick => {
           pick.click();
           await new Promise(x => {
             return (pick.oninput = x);
@@ -234,8 +243,7 @@ describe('input tests', function () {
         return chooser.accept([FILE_TO_UPLOAD]);
       });
       expect(
-        await page.$eval('input', async picker => {
-          const pick = picker as HTMLInputElement;
+        await page.$eval('input', async pick => {
           pick.click();
           await new Promise(x => {
             return (pick.oninput = x);
@@ -247,8 +255,7 @@ describe('input tests', function () {
         return chooser.accept([]);
       });
       expect(
-        await page.$eval('input', async picker => {
-          const pick = picker as HTMLInputElement;
+        await page.$eval('input', async pick => {
           pick.click();
           await new Promise(x => {
             return (pick.oninput = x);
@@ -301,8 +308,7 @@ describe('input tests', function () {
         return chooser.accept(['file-does-not-exist.txt']);
       });
       expect(
-        await page.$eval('input', async picker => {
-          const pick = picker as HTMLInputElement;
+        await page.$eval('input', async pick => {
           pick.click();
           await new Promise(x => {
             return (pick.oninput = x);
@@ -325,7 +331,7 @@ describe('input tests', function () {
       const [fileChooser] = await Promise.all([
         page.waitForFileChooser(),
         page.$eval('input', input => {
-          return (input as HTMLInputElement).click();
+          return input.click();
         }),
       ]);
       await fileChooser.accept([]);
@@ -350,7 +356,7 @@ describe('input tests', function () {
       const [fileChooser1] = await Promise.all([
         page.waitForFileChooser(),
         page.$eval('input', input => {
-          return (input as HTMLInputElement).click();
+          return input.click();
         }),
       ]);
       await fileChooser1.cancel();
@@ -358,7 +364,7 @@ describe('input tests', function () {
       await Promise.all([
         page.waitForFileChooser(),
         page.$eval('input', input => {
-          return (input as HTMLInputElement).click();
+          return input.click();
         }),
       ]);
     });
@@ -369,7 +375,7 @@ describe('input tests', function () {
       const [fileChooser] = await Promise.all([
         page.waitForFileChooser(),
         page.$eval('input', input => {
-          return (input as HTMLElement).click();
+          return input.click();
         }),
       ]);
       await fileChooser.cancel();

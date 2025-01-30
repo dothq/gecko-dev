@@ -9,6 +9,7 @@
 #include "AntiTrackingUtils.h"
 #include "TemporaryAccessGrantObserver.h"
 
+#include "mozilla/BounceTrackingProtection.h"
 #include "mozilla/Components.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/ContentBlockingUserInteraction.h"
@@ -475,13 +476,17 @@ StorageAccessAPIHelper::CompleteAllowAccessForOnParentProcess(
       [aParentContext, aTopLevelWindowId, trackingOrigin, trackingPrincipal,
        aCookieBehavior,
        aReason](int aAllowMode) -> RefPtr<StorageAccessPermissionGrantPromise> {
-    MOZ_ASSERT(!aParentContext->IsInProcess());
     // We don't have the window, send an IPC to the content process that
     // owns the parent window. But there is a special case, for window.open,
     // we'll return to the content process we need to inform when this
     // function is done. So we don't need to create an extra IPC for the case.
     if (aReason != ContentBlockingNotifier::eOpener) {
       dom::ContentParent* cp = aParentContext->Canonical()->GetContentParent();
+      if (!cp) {
+        return StorageAccessPermissionGrantPromise::CreateAndReject(false,
+                                                                    __func__);
+      }
+
       Unused << cp->SendOnAllowAccessFor(aParentContext, trackingOrigin,
                                          aCookieBehavior, aReason);
     }
@@ -497,11 +502,14 @@ StorageAccessAPIHelper::CompleteAllowAccessForOnParentProcess(
     LOG(("Saving the permission: trackingOrigin=%s", trackingOrigin.get()));
     bool frameOnly = StaticPrefs::dom_storage_access_frame_only() &&
                      aReason == ContentBlockingNotifier::eStorageAccessAPI;
+
+    uint64_t innerWindowId = aParentContext->GetCurrentInnerWindowId();
+
     return SaveAccessForOriginOnParentProcess(aTopLevelWindowId, aParentContext,
                                               trackingPrincipal, aAllowMode,
                                               frameOnly)
         ->Then(GetCurrentSerialEventTarget(), __func__,
-               [aReason, trackingPrincipal](
+               [aReason, trackingPrincipal, innerWindowId](
                    ParentAccessGrantPromise::ResolveOrRejectValue&& aValue) {
                  if (!aValue.IsResolve()) {
                    return StorageAccessPermissionGrantPromise::CreateAndReject(
@@ -514,6 +522,12 @@ StorageAccessAPIHelper::CompleteAllowAccessForOnParentProcess(
                  // occur through the clicking accept on the doorhanger.
                  if (aReason == ContentBlockingNotifier::eStorageAccessAPI) {
                    ContentBlockingUserInteraction::Observe(trackingPrincipal);
+                   RefPtr<dom::WindowContext> windowContext =
+                       dom::WindowContext::GetById(innerWindowId);
+                   if (windowContext) {
+                     Unused << BounceTrackingProtection::RecordUserActivation(
+                         windowContext);
+                   }
                  }
                  return StorageAccessPermissionGrantPromise::CreateAndResolve(
                      StorageAccessAPIHelper::eAllow, __func__);
@@ -633,20 +647,29 @@ StorageAccessAPIHelper::CompleteAllowAccessForOnChildProcess(
     // sending the request of storing a permission.
     bool frameOnly = StaticPrefs::dom_storage_access_frame_only() &&
                      aReason == ContentBlockingNotifier::eStorageAccessAPI;
+
+    uint64_t innerWindowId = aParentContext->GetCurrentInnerWindowId();
+
     return cc
         ->SendStorageAccessPermissionGrantedForOrigin(
             aTopLevelWindowId, aParentContext, trackingPrincipal,
             trackingOrigin, aAllowMode, reportReason, frameOnly)
         ->Then(
             GetCurrentSerialEventTarget(), __func__,
-            [aReason, trackingPrincipal](
-                const ContentChild::
-                    StorageAccessPermissionGrantedForOriginPromise::
-                        ResolveOrRejectValue& aValue) {
+            [aReason, trackingPrincipal,
+             innerWindowId](const ContentChild::
+                                StorageAccessPermissionGrantedForOriginPromise::
+                                    ResolveOrRejectValue& aValue) {
               if (aValue.IsResolve()) {
                 if (aValue.ResolveValue() &&
                     (aReason == ContentBlockingNotifier::eStorageAccessAPI)) {
                   ContentBlockingUserInteraction::Observe(trackingPrincipal);
+                  RefPtr<dom::WindowContext> windowContext =
+                      dom::WindowContext::GetById(innerWindowId);
+                  if (windowContext) {
+                    Unused << BounceTrackingProtection::RecordUserActivation(
+                        windowContext);
+                  }
                 }
                 return StorageAccessPermissionGrantPromise::CreateAndResolve(
                     aValue.ResolveValue(), __func__);
@@ -1060,12 +1083,7 @@ StorageAccessAPIHelper::CheckSameSiteCallingContextDecidesStorageAccessAPI(
     }
   }
 
-  nsIChannel* chan = aDocument->GetChannel();
-  if (!chan) {
-    return Some(false);
-  }
-  nsCOMPtr<nsILoadInfo> loadInfo = chan->LoadInfo();
-  if (loadInfo->GetIsThirdPartyContextToTopWindow()) {
+  if (AntiTrackingUtils::IsThirdPartyDocument(aDocument)) {
     return Some(false);
   }
 

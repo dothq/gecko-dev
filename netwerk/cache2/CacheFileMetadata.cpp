@@ -17,6 +17,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "prnetdb.h"
 
 namespace mozilla::net {
@@ -257,14 +258,16 @@ nsresult CacheFileMetadata::WriteMetadata(
   char* writeBuffer = mWriteBuf;
   if (aListener) {
     mListener = aListener;
+    rv = CacheFileIOManager::Write(mHandle, aOffset, writeBuffer,
+                                   p - writeBuffer, true, true, this);
   } else {
     // We are not going to pass |this| as a callback so the buffer will be
     // released by CacheFileIOManager. Just null out mWriteBuf here.
     mWriteBuf = nullptr;
+    rv = CacheFileIOManager::WriteWithoutCallback(mHandle, aOffset, writeBuffer,
+                                                  p - writeBuffer, true, true);
   }
 
-  rv = CacheFileIOManager::Write(mHandle, aOffset, writeBuffer, p - writeBuffer,
-                                 true, true, aListener ? this : nullptr);
   if (NS_FAILED(rv)) {
     LOG(
         ("CacheFileMetadata::WriteMetadata() - CacheFileIOManager::Write() "
@@ -633,13 +636,16 @@ nsresult CacheFileMetadata::OnDataRead(CacheFileHandle* aHandle, char* aBuf,
     return NS_OK;
   }
 
+#ifndef ANDROID
+  mozilla::TimeStamp readEnd = mozilla::TimeStamp::Now();
   if (mFirstRead) {
-    Telemetry::AccumulateTimeDelta(
-        Telemetry::NETWORK_CACHE_METADATA_FIRST_READ_TIME_MS, mReadStart);
+    mozilla::glean::networking::cache_metadata_first_read_time
+        .AccumulateRawDuration(readEnd - mReadStart);
   } else {
-    Telemetry::AccumulateTimeDelta(
-        Telemetry::NETWORK_CACHE_METADATA_SECOND_READ_TIME_MS, mReadStart);
+    mozilla::glean::networking::cache_metadata_second_read_time
+        .AccumulateRawDuration(readEnd - mReadStart);
   }
+#endif
 
   // check whether we have read all necessary data
   uint32_t realOffset =
@@ -724,8 +730,9 @@ nsresult CacheFileMetadata::OnDataRead(CacheFileHandle* aHandle, char* aBuf,
     return NS_OK;
   }
 
-  Telemetry::Accumulate(Telemetry::NETWORK_CACHE_METADATA_SIZE_2,
-                        size - realOffset);
+#ifndef ANDROID
+  mozilla::glean::networking::cache_metadata_size.Accumulate(size - realOffset);
+#endif
 
   // We have all data according to offset information at the end of the entry.
   // Try to parse it.

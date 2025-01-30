@@ -12,16 +12,17 @@
 #include "nsContainerFrame.h"
 #include "nsIAnonymousContentCreator.h"
 #include "nsIContent.h"
-#include "nsITextControlFrame.h"
 #include "nsIStatefulFrame.h"
 
 class nsISelectionController;
 class EditorInitializerEntryTracker;
 namespace mozilla {
 class AutoTextControlHandlingState;
+class ScrollContainerFrame;
 class TextEditor;
 class TextControlState;
 enum class PseudoStyleType : uint8_t;
+enum class SelectionDirection : uint8_t;
 namespace dom {
 class Element;
 }  // namespace dom
@@ -29,7 +30,6 @@ class Element;
 
 class nsTextControlFrame : public nsContainerFrame,
                            public nsIAnonymousContentCreator,
-                           public nsITextControlFrame,
                            public nsIStatefulFrame {
   using Element = mozilla::dom::Element;
 
@@ -58,18 +58,10 @@ class nsTextControlFrame : public nsContainerFrame,
    */
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void Destroy(DestroyContext&) override;
 
-  nsIScrollableFrame* GetScrollTargetFrame() const override;
+  mozilla::ScrollContainerFrame* GetScrollTargetFrame() const override;
 
-  nscoord GetMinISize(gfxContext* aRenderingContext) override;
-  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
-
-  mozilla::LogicalSize ComputeAutoSize(
-      gfxContext* aRenderingContext, mozilla::WritingMode aWM,
-      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
-      const mozilla::LogicalSize& aMargin,
-      const mozilla::LogicalSize& aBorderPadding,
-      const mozilla::StyleSizeOverrides& aSizeOverrides,
-      mozilla::ComputeSizeFlags aFlags) override;
+  nscoord IntrinsicISize(const mozilla::IntrinsicSizeInput& aInput,
+                         mozilla::IntrinsicISizeType aType) override;
 
   void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
               const ReflowInput& aReflowInput,
@@ -117,23 +109,14 @@ class nsTextControlFrame : public nsContainerFrame,
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                         const nsDisplayListSet& aLists) override;
 
-  //==== BEGIN NSIFORMCONTROLFRAME
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY void SetFocus(bool aOn, bool aRepaint) override;
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult
-  SetFormProperty(nsAtom* aName, const nsAString& aValue) override;
-
-  //==== END NSIFORMCONTROLFRAME
-
-  //==== NSITEXTCONTROLFRAME
-
   MOZ_CAN_RUN_SCRIPT_BOUNDARY already_AddRefed<mozilla::TextEditor>
-  GetTextEditor() override;
-  MOZ_CAN_RUN_SCRIPT NS_IMETHOD
-  SetSelectionRange(uint32_t aSelectionStart, uint32_t aSelectionEnd,
-                    SelectionDirection = SelectionDirection::None) override;
-  NS_IMETHOD GetOwnedSelectionController(
-      nsISelectionController** aSelCon) override;
-  nsFrameSelection* GetOwnedFrameSelection() override {
+  GetTextEditor();
+
+  MOZ_CAN_RUN_SCRIPT NS_IMETHOD SetSelectionRange(uint32_t aSelectionStart,
+                                                  uint32_t aSelectionEnd,
+                                                  mozilla::SelectionDirection);
+  NS_IMETHOD GetOwnedSelectionController(nsISelectionController** aSelCon);
+  nsFrameSelection* GetOwnedFrameSelection() {
     return ControlElement()->GetConstFrameSelection();
   }
   nsISelectionController* GetSelectionController() {
@@ -147,7 +130,7 @@ class nsTextControlFrame : public nsContainerFrame,
    * @throws NS_ERROR_NOT_INITIALIZED if mEditor has not been created
    * @throws various and sundry other things
    */
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult EnsureEditorInitialized() override;
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult EnsureEditorInitialized();
 
   //==== END NSITEXTCONTROLFRAME
 
@@ -175,15 +158,17 @@ class nsTextControlFrame : public nsContainerFrame,
   void ScrollSelectionIntoViewAsync(ScrollAncestors = ScrollAncestors::No);
 
  protected:
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void OnFocus();
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void HandleReadonlyOrDisabledChange();
 
   /**
    * Launch the reflow on the child frames - see nsTextControlFrame::Reflow()
    */
-  void ReflowTextControlChild(nsIFrame* aFrame, nsPresContext* aPresContext,
+  void ReflowTextControlChild(nsIFrame* aKid, nsPresContext* aPresContext,
                               const ReflowInput& aReflowInput,
                               nsReflowStatus& aStatus,
                               ReflowOutput& aParentDesiredSize,
+                              const mozilla::LogicalSize& aParentContentBoxSize,
                               nscoord& aButtonBoxISize);
 
  public:
@@ -196,7 +181,11 @@ class nsTextControlFrame : public nsContainerFrame,
 
   Element* GetPlaceholderNode() const { return mPlaceholderDiv; }
 
-  Element* GetRevealButton() const { return mRevealButton; }
+  Element* GetButton() const { return mButton; }
+
+  bool IsButtonBox(const nsIFrame* aFrame) const {
+    return aFrame->GetContent() == GetButton();
+  }
 
   // called by the focus listener
   nsresult MaybeBeginSecureKeyboardInput();
@@ -213,10 +202,13 @@ class nsTextControlFrame : public nsContainerFrame,
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsSingleLineTextControl)
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsTextArea)
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsPasswordTextControl)
-  DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetCols)
+  DEFINE_TEXTCTRL_CONST_FORWARDER(Maybe<int32_t>, GetCols)
+  DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetColsOrDefault)
   DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetRows)
 
 #undef DEFINE_TEXTCTRL_CONST_FORWARDER
+
+  MOZ_CAN_RUN_SCRIPT nsresult SelectAll();
 
  protected:
   class EditorInitializer;
@@ -278,18 +270,17 @@ class nsTextControlFrame : public nsContainerFrame,
   // etc.  Just the size of our actual area for the text (and the scrollbars,
   // for <textarea>).
   mozilla::LogicalSize CalcIntrinsicSize(gfxContext* aRenderingContext,
-                                         mozilla::WritingMode aWM,
-                                         float aFontSizeInflation) const;
+                                         mozilla::WritingMode aWM) const;
 
  private:
   // helper methods
-  MOZ_CAN_RUN_SCRIPT nsresult SetSelectionInternal(
-      nsINode* aStartNode, uint32_t aStartOffset, nsINode* aEndNode,
-      uint32_t aEndOffset, SelectionDirection = SelectionDirection::None);
-  MOZ_CAN_RUN_SCRIPT nsresult SelectAllOrCollapseToEndOfText(bool aSelect);
-  MOZ_CAN_RUN_SCRIPT nsresult
-  SetSelectionEndPoints(uint32_t aSelStart, uint32_t aSelEnd,
-                        SelectionDirection = SelectionDirection::None);
+  MOZ_CAN_RUN_SCRIPT nsresult SetSelectionInternal(nsINode* aStartNode,
+                                                   uint32_t aStartOffset,
+                                                   nsINode* aEndNode,
+                                                   uint32_t aEndOffset,
+                                                   mozilla::SelectionDirection);
+  MOZ_CAN_RUN_SCRIPT nsresult SetSelectionEndPoints(
+      uint32_t aSelStart, uint32_t aSelEnd, mozilla::SelectionDirection);
 
   void FinishedInitializer() { RemoveProperty(TextControlInitializer()); }
 
@@ -327,9 +318,9 @@ class nsTextControlFrame : public nsContainerFrame,
   RefPtr<Element> mRootNode;
   RefPtr<Element> mPlaceholderDiv;
   RefPtr<Element> mPreviewDiv;
-  // The Reveal Password button.  Only used for type=password, nullptr
-  // otherwise.
-  RefPtr<Element> mRevealButton;
+  // If we have type=password, number, or search, then mButton is our
+  // reveal-password, spinner, or search button box. Otherwise, it's nullptr.
+  RefPtr<Element> mButton;
   RefPtr<nsAnonDivObserver> mMutationObserver;
   // Cache of the |.value| of <input> or <textarea> element without hard-wrap.
   // If its IsVoid() returns true, it doesn't cache |.value|.

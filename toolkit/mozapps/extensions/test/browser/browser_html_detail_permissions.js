@@ -1,7 +1,8 @@
-/* eslint max-len: ["error", 80] */
-
 const { AddonTestUtils } = ChromeUtils.importESModule(
   "resource://testing-common/AddonTestUtils.sys.mjs"
+);
+const { Management } = ChromeUtils.importESModule(
+  "resource://gre/modules/Extension.sys.mjs"
 );
 const { ExtensionPermissions } = ChromeUtils.importESModule(
   "resource://gre/modules/ExtensionPermissions.sys.mjs"
@@ -15,14 +16,28 @@ AddonTestUtils.initMochitest(this);
 
 async function background() {
   browser.permissions.onAdded.addListener(perms => {
-    browser.test.sendMessage("permission-added", perms);
+    if (localStorage.getItem("listening")) {
+      browser.test.sendMessage("permission-added", perms);
+    } else {
+      browser.test.log(
+        `permissions-added before listening ${JSON.stringify({
+          id: browser.runtime.id,
+          perms,
+        })}`
+      );
+    }
   });
   browser.permissions.onRemoved.addListener(perms => {
     browser.test.sendMessage("permission-removed", perms);
   });
+
+  browser.test.onMessage.addListener(async _ => {
+    localStorage.setItem("listening", true);
+    browser.test.sendMessage("ready");
+  });
 }
 
-async function getExtensions({ manifest_version = 2 } = {}) {
+async function getExtensions({ manifest_version = 2, expectGranted } = {}) {
   let extensions = {
     "addon0@mochi.test": ExtensionTestUtils.loadExtension({
       manifest: {
@@ -144,10 +159,53 @@ async function getExtensions({ manifest_version = 2 } = {}) {
       useAddonManager: "temporary",
     }),
   };
-  for (let ext of Object.values(extensions)) {
+  for (let [id, ext] of Object.entries(extensions)) {
+    let promiseGranted;
+
+    // We need to start listening for changes only after we get the first
+    // `change-permissions` event to avoid intermittent events from initial
+    // granting of origin permissions in mv3 on startup.
+
+    // This can happen because we're not awaiting in _setupStartupPermissions:
+    // https://searchfox.org/mozilla-central/rev/55944eaee1/toolkit/components/extensions/Extension.sys.mjs#3694-3697
+
+    if (manifest_version >= 3 && expectGranted && id === "addon1@mochi.test") {
+      promiseGranted = new Promise(resolve => {
+        info(`Waiting for ${id} host permissions to be granted.`);
+        Management.on("change-permissions", function listener(_, e) {
+          info(`Got change-permissions event: ${JSON.stringify(e)}`);
+          if (e.extensionId === id && e.added?.origins?.length) {
+            Management.off("change-permissions", listener);
+            resolve();
+          }
+        });
+      });
+    }
+
     await ext.startup();
+    await promiseGranted;
+
+    if (id !== "other@mochi.test") {
+      ext.sendMessage("init");
+      await ext.awaitMessage("ready");
+    }
   }
   return extensions;
+}
+
+function waitForPermissionChange(id) {
+  return new Promise(resolve => {
+    info(`listening for change on ${id}`);
+    let listener = (type, data) => {
+      info(`change permissions ${JSON.stringify(data)}`);
+      if (data.extensionId !== id) {
+        return;
+      }
+      ExtensionPermissions.removeListener(listener);
+      resolve(data);
+    };
+    ExtensionPermissions.addListener(listener);
+  });
 }
 
 async function runTest(options) {
@@ -213,7 +271,7 @@ async function runTest(options) {
   if (!num_permissions) {
     is(
       win.document.l10n.getAttributes(rows[0]).id,
-      "addon-permissions-empty",
+      "addon-permissions-empty2",
       "There's a message when no permissions are shown"
     );
   }
@@ -230,21 +288,6 @@ async function runTest(options) {
 
   let addon = await AddonManager.getAddonByID(addonId);
   info(`addon ${addon.id} is ${addon.userDisabled ? "disabled" : "enabled"}`);
-
-  function waitForPermissionChange(id) {
-    return new Promise(resolve => {
-      info(`listening for change on ${id}`);
-      let listener = (type, data) => {
-        info(`change permissions ${JSON.stringify(data)}`);
-        if (data.extensionId !== id) {
-          return;
-        }
-        ExtensionPermissions.removeListener(listener);
-        resolve(data);
-      };
-      ExtensionPermissions.addListener(listener);
-    });
-  }
 
   // This tests the permission change and button state when the user
   // changes the state in about:addons.
@@ -419,7 +462,11 @@ async function runTest(options) {
   }
 }
 
-async function testPermissionsView({ manifestV3enabled, manifest_version }) {
+async function testPermissionsView({
+  manifestV3enabled,
+  manifest_version,
+  expectGranted,
+}) {
   await SpecialPowers.pushPrefEnv({
     set: [["extensions.manifestV3.enabled", manifestV3enabled]],
   });
@@ -430,7 +477,7 @@ async function testPermissionsView({ manifestV3enabled, manifest_version }) {
     origins: [],
   });
 
-  let extensions = await getExtensions({ manifest_version });
+  let extensions = await getExtensions({ manifest_version, expectGranted });
 
   info("Check add-on with required permissions");
   if (manifest_version < 3) {
@@ -438,7 +485,16 @@ async function testPermissionsView({ manifestV3enabled, manifest_version }) {
       extension: extensions["addon1@mochi.test"],
       permissions: ["<all_urls>", "tabs", "webNavigation"],
     });
-  } else {
+  }
+  if (manifest_version >= 3 && expectGranted) {
+    await runTest({
+      extension: extensions["addon1@mochi.test"],
+      permissions: ["tabs", "webNavigation"],
+      optional_permissions: ["<all_urls>"],
+      optional_enabled: ["<all_urls>"],
+    });
+  }
+  if (manifest_version >= 3 && !expectGranted) {
     await runTest({
       extension: extensions["addon1@mochi.test"],
       permissions: ["tabs", "webNavigation"],
@@ -544,8 +600,28 @@ add_task(async function testPermissionsView_MV2_manifestV3enabled() {
   await testPermissionsView({ manifestV3enabled: true, manifest_version: 2 });
 });
 
+add_task(async function testPermissionsView_MV3_noInstallPrompt() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["extensions.originControls.grantByDefault", false]],
+  });
+  await testPermissionsView({
+    manifestV3enabled: true,
+    manifest_version: 3,
+    expectGranted: false,
+  });
+  await SpecialPowers.popPrefEnv();
+});
+
 add_task(async function testPermissionsView_MV3() {
-  await testPermissionsView({ manifestV3enabled: true, manifest_version: 3 });
+  await SpecialPowers.pushPrefEnv({
+    set: [["extensions.originControls.grantByDefault", true]],
+  });
+  await testPermissionsView({
+    manifestV3enabled: true,
+    manifest_version: 3,
+    expectGranted: true,
+  });
+  await SpecialPowers.popPrefEnv();
 });
 
 add_task(async function testPermissionsViewStates() {
@@ -613,7 +689,7 @@ add_task(async function testPermissionsViewStates() {
   let card = getAddonCard(view, addon.id);
   await Assert.rejects(
     card.setAddonPermission("webRequest", "permission", "add"),
-    /permission missing from manifest/,
+    /was not declared in optional_permissions/,
     "unable to set the addon permission"
   );
 
@@ -621,9 +697,85 @@ add_task(async function testPermissionsViewStates() {
   await extension.unload();
 });
 
+add_task(async function testTempOrigins() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["extensions.webextOptionalPermissionPrompts", false]],
+  });
+
+  const addonId = "temp@mochi.test";
+  const originA = "*://a.com/*";
+  const originB = "*://b.net/*";
+
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      manifest_version: 3,
+      browser_specific_settings: { gecko: { id: addonId } },
+      optional_permissions: ["<all_urls>"],
+    },
+    useAddonManager: "permanent",
+    background() {
+      browser.test.onMessage.addListener(origins => {
+        browser.test.withHandlingUserInput(() => {
+          browser.permissions.request({ origins });
+        });
+      });
+    },
+  });
+
+  async function checkExpected(origins, granted) {
+    let view = await loadInitialView("extension");
+    await runTest({
+      addonId,
+      optional_permissions: ["<all_urls>", ...origins],
+      optional_enabled: granted,
+      view,
+    });
+    await closeView(view);
+  }
+
+  await extension.startup();
+
+  info("Checking before any runtime permission requests.");
+  await checkExpected([], []);
+
+  let grantA = waitForPermissionChange(addonId);
+  extension.sendMessage([originA]);
+  let perms = await grantA;
+  Assert.deepEqual(perms.added.origins, [originA], `Granted ${originA}`);
+
+  info(`Expect ${originA} granted.`);
+  await checkExpected([originA], [originA]);
+
+  let revokeA = waitForPermissionChange(addonId);
+  ExtensionPermissions.remove(addonId, { origins: [originA], permissions: [] });
+  let perms2 = await revokeA;
+  Assert.deepEqual(perms2.removed.origins, [originA], `Revoked ${originA}`);
+
+  let grantB = waitForPermissionChange(addonId);
+  extension.sendMessage([originB]);
+  let perms3 = await grantB;
+  Assert.deepEqual(perms3.added.origins, [originB], `Granted ${originB}`);
+
+  info(`Expect ${originA} revoked and ${originB} granted.`);
+  await checkExpected([originA, originB], [originB]);
+
+  let revokeB = waitForPermissionChange(addonId);
+  ExtensionPermissions.remove(addonId, { origins: [originB], permissions: [] });
+  let perms4 = await revokeB;
+  Assert.deepEqual(perms4.removed.origins, [originB], `Revoked ${originB}`);
+
+  info(`Expect both origins revoked, but still present in the list.`);
+  await checkExpected([originA, originB], []);
+
+  await extension.unload();
+});
+
 add_task(async function testAllUrlsNotGrantedUnconditionally_MV3() {
   await SpecialPowers.pushPrefEnv({
-    set: [["extensions.manifestV3.enabled", true]],
+    set: [
+      ["extensions.manifestV3.enabled", true],
+      ["extensions.originControls.grantByDefault", false],
+    ],
   });
 
   const extension = ExtensionTestUtils.loadExtension({
@@ -667,6 +819,8 @@ add_task(async function test_OneOfMany_AllSites_toggle() {
     useAddonManager: "permanent",
   });
   await extension.startup();
+  extension.sendMessage("init");
+  await extension.awaitMessage("ready");
 
   // Grant the second "all sites" permission as listed in the manifest.
   await ExtensionPermissions.add("addon9@mochi.test", {

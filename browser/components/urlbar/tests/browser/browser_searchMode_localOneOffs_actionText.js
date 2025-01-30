@@ -17,11 +17,10 @@ add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["browser.urlbar.suggest.searches", true],
-      ["browser.urlbar.suggest.quickactions", false],
-      ["browser.urlbar.shortcuts.quickactions", false],
+      ["browser.urlbar.scotchBonnet.enableOverride", false],
     ],
   });
-  engine = await SearchTestUtils.promiseNewSearchEngine({
+  engine = await SearchTestUtils.installOpenSearchEngine({
     url: getRootDirectory(gTestPath) + SUGGESTIONS_ENGINE_NAME,
     setAsDefault: true,
   });
@@ -226,7 +225,7 @@ add_task(async function localOneOff_withVisit() {
   );
   Assert.equal(
     result.image,
-    "chrome://browser/skin/tab.svg",
+    "chrome://browser/skin/tabs.svg",
     "Check the heuristic icon"
   );
 

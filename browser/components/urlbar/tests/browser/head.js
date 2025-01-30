@@ -5,6 +5,7 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   AboutNewTab: "resource:///modules/AboutNewTab.sys.mjs",
+  BrowsetUIUtils: "resource:///modules/BrowserUIUtils.sys.mjs",
   ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
   ExperimentFakes: "resource://testing-common/NimbusTestUtils.sys.mjs",
   ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
@@ -15,6 +16,7 @@ ChromeUtils.defineESModuleGetters(this, {
   UrlbarController: "resource:///modules/UrlbarController.sys.mjs",
   UrlbarEventBufferer: "resource:///modules/UrlbarEventBufferer.sys.mjs",
   UrlbarQueryContext: "resource:///modules/UrlbarUtils.sys.mjs",
+  UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
@@ -161,7 +163,7 @@ async function search({
   // Set the input value and move the caret to the end to simulate the user
   // typing. It's important the caret is at the end because otherwise autofill
   // won't happen.
-  gURLBar.value = searchString;
+  gURLBar._setValue(searchString);
   gURLBar.inputField.setSelectionRange(
     searchString.length,
     searchString.length
@@ -173,28 +175,21 @@ async function search({
   // autofill before the search completes.
   UrlbarTestUtils.fireInputEvent(window);
 
-  // Subtract the protocol length, when the searchString contains the https://
-  // protocol and trimHttps is enabled.
-  let trimmedProtocolWSlashes = UrlbarTestUtils.getTrimmedProtocolWithSlashes();
-  let selectionOffset = searchString.includes(trimmedProtocolWSlashes)
-    ? trimmedProtocolWSlashes.length
-    : 0;
-
   // Check the input value and selection immediately, before waiting on the
   // search to complete.
   Assert.equal(
     gURLBar.value,
-    UrlbarTestUtils.trimURL(valueBefore),
+    valueBefore,
     "gURLBar.value before the search completes"
   );
   Assert.equal(
     gURLBar.selectionStart,
-    searchString.length - selectionOffset,
+    searchString.length,
     "gURLBar.selectionStart before the search completes"
   );
   Assert.equal(
     gURLBar.selectionEnd,
-    valueBefore.length - selectionOffset,
+    valueBefore.length,
     "gURLBar.selectionEnd before the search completes"
   );
 
@@ -205,17 +200,17 @@ async function search({
   // Check the final value after the results arrived.
   Assert.equal(
     gURLBar.value,
-    UrlbarTestUtils.trimURL(valueAfter),
+    valueAfter,
     "gURLBar.value after the search completes"
   );
   Assert.equal(
     gURLBar.selectionStart,
-    searchString.length - selectionOffset,
+    searchString.length,
     "gURLBar.selectionStart after the search completes"
   );
   Assert.equal(
     gURLBar.selectionEnd,
-    valueAfter.length - selectionOffset,
+    valueAfter.length,
     "gURLBar.selectionEnd after the search completes"
   );
 
@@ -227,7 +222,7 @@ async function search({
     );
     Assert.strictEqual(
       gURLBar._autofillPlaceholder.value,
-      UrlbarTestUtils.trimURL(placeholderAfter),
+      placeholderAfter,
       "gURLBar._autofillPlaceholder.value after the search completes"
     );
   } else {
@@ -244,5 +239,164 @@ async function search({
     !!details.autofill,
     !!placeholderAfter,
     "First result is an autofill result iff a placeholder is expected"
+  );
+}
+
+function selectWithMouseDrag(fromX, toX, win = window) {
+  let target = win.gURLBar.inputField;
+  let rect = target.getBoundingClientRect();
+  let promise = BrowserTestUtils.waitForEvent(target, "mouseup");
+  EventUtils.synthesizeMouse(
+    target,
+    fromX,
+    rect.height / 2,
+    { type: "mousemove" },
+    target.ownerGlobal
+  );
+  EventUtils.synthesizeMouse(
+    target,
+    fromX,
+    rect.height / 2,
+    { type: "mousedown" },
+    target.ownerGlobal
+  );
+  EventUtils.synthesizeMouse(
+    target,
+    toX,
+    rect.height / 2,
+    { type: "mousemove" },
+    target.ownerGlobal
+  );
+  EventUtils.synthesizeMouse(
+    target,
+    toX,
+    rect.height / 2,
+    { type: "mouseup" },
+    target.ownerGlobal
+  );
+  return promise;
+}
+
+function selectWithDoubleClick(offsetX, win = window) {
+  let target = win.gURLBar.inputField;
+  let rect = target.getBoundingClientRect();
+  let promise = BrowserTestUtils.waitForEvent(target, "dblclick");
+  EventUtils.synthesizeMouse(target, offsetX, rect.height / 2, {
+    clickCount: 1,
+  });
+  EventUtils.synthesizeMouse(target, offsetX, rect.height / 2, {
+    clickCount: 2,
+  });
+  return promise;
+}
+
+/**
+ * Asserts a search term is in the url bar and state values are
+ * what they should be.
+ *
+ * @param {string} searchString
+ *   String that should be matched in the url bar.
+ * @param {object | null} options
+ *   Options for the assertions.
+ * @param {Window | null} options.window
+ *   Window to use for tests.
+ * @param {string | null} options.pageProxyState
+ *   The pageproxystate that should be expected.
+ * @param {string | null} options.userTypedValue
+ *   The userTypedValue that should be expected.
+ * @param {boolean | null} options.persistSearchTerms
+ *   The attribute persistsearchterms that should be expected.
+ */
+function assertSearchStringIsInUrlbar(
+  searchString,
+  {
+    win = window,
+    pageProxyState = "invalid",
+    userTypedValue = searchString,
+    persistSearchTerms = true,
+  } = {}
+) {
+  Assert.equal(
+    win.gURLBar.value,
+    searchString,
+    `Search string should be the urlbar value.`
+  );
+  let state = win.gURLBar.getBrowserState(win.gBrowser.selectedBrowser);
+  Assert.equal(
+    state.persist.searchTerms,
+    searchString,
+    `Search terms should match.`
+  );
+  Assert.equal(
+    win.gBrowser.userTypedValue,
+    userTypedValue,
+    "userTypedValue should match."
+  );
+  Assert.equal(
+    win.gURLBar.getAttribute("pageproxystate"),
+    pageProxyState,
+    "Pageproxystate should match."
+  );
+  if (persistSearchTerms) {
+    Assert.ok(
+      win.gURLBar.hasAttribute("persistsearchterms"),
+      "Urlbar has persistsearchterms attribute."
+    );
+  } else {
+    Assert.ok(
+      !win.gURLBar.hasAttribute("persistsearchterms"),
+      "Urlbar does not have persistsearchterms attribute."
+    );
+  }
+}
+
+async function searchWithTab(
+  searchString,
+  tab = null,
+  engine = Services.search.defaultEngine,
+  expectedPersistedSearchTerms = true
+) {
+  if (!tab) {
+    tab = await BrowserTestUtils.openNewForegroundTab(gBrowser);
+  }
+
+  let [expectedSearchUrl] = UrlbarUtils.getSearchQueryUrl(engine, searchString);
+  let browserLoadedPromise = BrowserTestUtils.browserLoaded(
+    tab.linkedBrowser,
+    false,
+    expectedSearchUrl
+  );
+
+  gURLBar.focus();
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    waitForFocus,
+    value: searchString,
+    fireInputEvent: true,
+  });
+  EventUtils.synthesizeKey("KEY_Enter");
+  await browserLoadedPromise;
+
+  if (expectedPersistedSearchTerms) {
+    info("Load a tab with search terms persisting in the urlbar.");
+    assertSearchStringIsInUrlbar(searchString);
+  }
+
+  return { tab, expectedSearchUrl };
+}
+
+async function focusSwitcher(win = window) {
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window: win,
+    waitForFocus: true,
+    value: "",
+    fireInputEvent: true,
+  });
+  Assert.ok(win.gURLBar.hasAttribute("focused"));
+
+  EventUtils.synthesizeKey("KEY_Tab", { shiftKey: true }, win);
+  let switcher = win.document.getElementById("urlbar-searchmode-switcher");
+  await BrowserTestUtils.waitForCondition(
+    () => win.document.activeElement == switcher
   );
 }

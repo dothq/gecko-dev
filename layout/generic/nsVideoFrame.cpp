@@ -226,7 +226,6 @@ void nsVideoFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
                           nsReflowStatus& aStatus) {
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsVideoFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aMetrics, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_FRAME_TRACE(
       NS_FRAME_TRACE_CALLS,
@@ -374,20 +373,10 @@ nsIFrame::SizeComputationResult nsVideoFrame::ComputeSize(
           AspectRatioUsage::None};
 }
 
-nscoord nsVideoFrame::GetMinISize(gfxContext* aRenderingContext) {
-  nscoord result;
-  // Bind the result variable to a RAII-based debug object - the variable
-  // therefore must match the function's return value.
-  DISPLAY_MIN_INLINE_SIZE(this, result);
-  // This call handles size-containment
-  nsSize size = GetIntrinsicSize().ToSize().valueOr(nsSize());
-  result = GetWritingMode().IsVertical() ? size.height : size.width;
-  return result;
-}
-
-nscoord nsVideoFrame::GetPrefISize(gfxContext* aRenderingContext) {
+nscoord nsVideoFrame::IntrinsicISize(const IntrinsicSizeInput& aInput,
+                                     IntrinsicISizeType aType) {
   // <audio> / <video> has the same min / pref ISize.
-  return GetMinISize(aRenderingContext);
+  return GetIntrinsicSize().ISize(GetWritingMode()).valueOr(0);
 }
 
 Maybe<nsSize> nsVideoFrame::PosterImageSize() const {
@@ -550,14 +539,14 @@ void nsVideoFrame::UpdateTextTrack() {
 
 namespace mozilla {
 
-class nsDisplayVideo : public nsPaintedDisplayItem {
+class nsDisplayVideo final : public nsPaintedDisplayItem {
  public:
   nsDisplayVideo(nsDisplayListBuilder* aBuilder, nsVideoFrame* aFrame)
       : nsPaintedDisplayItem(aBuilder, aFrame) {
     MOZ_COUNT_CTOR(nsDisplayVideo);
   }
 
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayVideo)
+  MOZ_COUNTED_DTOR_FINAL(nsDisplayVideo)
 
   NS_DISPLAY_DECL_NAME("Video", TYPE_VIDEO)
 
@@ -695,7 +684,9 @@ class nsDisplayVideo : public nsPaintedDisplayItem {
 
 void nsVideoFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                     const nsDisplayListSet& aLists) {
-  if (!IsVisibleForPainting()) return;
+  if (!IsVisibleForPainting()) {
+    return;
+  }
 
   DO_GLOBAL_REFLOW_COUNT_DSP("nsVideoFrame");
 

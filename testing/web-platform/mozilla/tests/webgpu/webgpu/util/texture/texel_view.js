@@ -1,6 +1,6 @@
 /**
 * AUTO-GENERATED - DO NOT EDIT. Source: https://github.com/gpuweb/cts
-**/import { assert, memcpy } from '../../../common/util/util.js';import { kTextureFormatInfo } from '../../format_info.js';import { generatePrettyTable } from '../pretty_diff_tables.js';
+**/import { assert, memcpy } from '../../../common/util/util.js';import { kTextureFormatInfo } from '../../format_info.js';import { generatePrettyTable, numericToStringBuilder } from '../pretty_diff_tables.js';
 import { reifyExtent3D, reifyOrigin3D } from '../unions.js';
 
 import { fullSubrectCoordinates } from './base.js';
@@ -56,7 +56,9 @@ export class TexelView {
     bytesPerRow,
     rowsPerImage,
     subrectOrigin,
-    subrectSize
+    subrectSize,
+    sampleCount = 1
+
 
 
 
@@ -83,7 +85,9 @@ export class TexelView {
 
       const imageOffsetInRows = (coords.z - origin.z) * rowsPerImage;
       const rowOffset = (imageOffsetInRows + (coords.y - origin.y)) * bytesPerRow;
-      const offset = rowOffset + (coords.x - origin.x) * info.bytesPerBlock;
+      const offset =
+      rowOffset +
+      ((coords.x - origin.x) * sampleCount + (coords.sampleIndex ?? 0)) * info.bytesPerBlock;
 
       // MAINTENANCE_TODO: To support block formats, decode the block and then index into the result.
       return subrectData.subarray(offset, offset + info.bytesPerBlock);
@@ -136,7 +140,9 @@ export class TexelView {
     bytesPerRow,
     rowsPerImage,
     subrectOrigin: subrectOrigin_,
-    subrectSize: subrectSize_
+    subrectSize: subrectSize_,
+    sampleCount = 1
+
 
 
 
@@ -153,8 +159,12 @@ export class TexelView {
     for (let z = subrectOrigin.z; z < subrectOrigin.z + subrectSize.depthOrArrayLayers; ++z) {
       for (let y = subrectOrigin.y; y < subrectOrigin.y + subrectSize.height; ++y) {
         for (let x = subrectOrigin.x; x < subrectOrigin.x + subrectSize.width; ++x) {
-          const start = (z * rowsPerImage + y) * bytesPerRow + x * info.bytesPerBlock;
-          memcpy({ src: this.bytes({ x, y, z }) }, { dst: subrectData, start });
+          for (let sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+            const start =
+            (z * rowsPerImage + y) * bytesPerRow +
+            (x * sampleCount + sampleIndex) * info.bytesPerBlock;
+            memcpy({ src: this.bytes({ x, y, z, sampleIndex }) }, { dst: subrectData, start });
+          }
         }
       }
     }
@@ -166,10 +176,13 @@ export class TexelView {
     const info = kTextureFormatInfo[this.format];
     const repr = kTexelRepresentationInfo[this.format];
 
-    const integerSampleType = info.sampleType === 'uint' || info.sampleType === 'sint';
-    const numberToString = integerSampleType ?
-    (n) => n.toFixed() :
-    (n) => n.toPrecision(6);
+    // MAINTENANCE_TODO: Print depth-stencil formats as float+int instead of float+float.
+    const printAsInteger = info.color ?
+    // For color, pick the type based on the format type
+    ['uint', 'sint'].includes(info.color.type) :
+    // Print depth as "float", depth-stencil as "float,float", stencil as "int".
+    !info.depth;
+    const numericToString = numericToStringBuilder(printAsInteger);
 
     const componentOrderStr = repr.componentOrder.join(',') + ':';
     const subrectCoords = [...fullSubrectCoordinates(subrectOrigin, subrectSize)];
@@ -188,13 +201,13 @@ export class TexelView {
       yield* [' act. colors', '==', componentOrderStr];
       for (const coords of subrectCoords) {
         const pixel = t.color(coords);
-        yield `${repr.componentOrder.map((ch) => numberToString(pixel[ch])).join(',')}`;
+        yield `${repr.componentOrder.map((ch) => numericToString(pixel[ch])).join(',')}`;
       }
     }(this);
 
     const opts = {
       fillToWidth: 120,
-      numberToString
+      numericToString
     };
     return `${generatePrettyTable(opts, [printCoords, printActualBytes, printActualColors])}`;
   }

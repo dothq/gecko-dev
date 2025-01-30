@@ -2,21 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const CONFIG_DEFAULT = [
-  {
-    webExtension: { id: "basic@search.mozilla.org" },
-    appliesTo: [{ included: { everywhere: true } }],
-    urls: {
-      trending: {
-        fullPath:
-          "https://example.com/browser/browser/components/search/test/browser/trendingSuggestionEngine.sjs",
-        query: "",
-      },
-    },
-    default: "yes",
-  },
-];
-
 const CONFIG_DEFAULT_V2 = [
   {
     recordType: "engine",
@@ -60,15 +45,11 @@ const TOP_SITES = [
 SearchTestUtils.init(this);
 
 add_setup(async () => {
-  // Use engines in test directory
-  let searchExtensions = getChromeDir(getResolvedURI(gTestPath));
-  searchExtensions.append("search-engines");
-  await SearchTestUtils.useMochitestEngines(searchExtensions);
-
   await SpecialPowers.pushPrefEnv({
     set: [
       ["browser.urlbar.suggest.searches", true],
       ["browser.urlbar.suggest.recentsearches", true],
+      ["browser.urlbar.suggest.topsites", false],
       ["browser.urlbar.recentsearches.featureGate", true],
       // Disable UrlbarProviderSearchTips
       [
@@ -78,31 +59,26 @@ add_setup(async () => {
     ],
   });
 
-  SearchTestUtils.useMockIdleService();
-  await SearchTestUtils.updateRemoteSettingsConfig(
-    SearchUtils.newSearchConfigEnabled ? CONFIG_DEFAULT_V2 : CONFIG_DEFAULT
-  );
+  await SearchTestUtils.updateRemoteSettingsConfig(CONFIG_DEFAULT_V2);
   Services.telemetry.clearScalars();
 
   registerCleanupFunction(async () => {
-    let settingsWritten = SearchTestUtils.promiseSearchNotification(
-      "write-settings-to-disk-complete"
-    );
-    await SearchTestUtils.updateRemoteSettingsConfig();
-    await settingsWritten;
     await UrlbarTestUtils.formHistory.clear();
   });
 });
 
 add_task(async () => {
-  let tab = await BrowserTestUtils.openNewForegroundTab(
-    window.gBrowser,
-    "data:text/html,"
-  );
+  let tab = await BrowserTestUtils.openNewForegroundTab({
+    gBrowser: window.gBrowser,
+    opening: "data:text/html,",
+    waitForStateStop: true,
+  });
 
   info("Perform a search that will be added to search history.");
   let browserLoaded = BrowserTestUtils.browserLoaded(
-    window.gBrowser.selectedBrowser
+    window.gBrowser.selectedBrowser,
+    false,
+    "https://example.com/?q=Bob+Vylan"
   );
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     window,
@@ -130,7 +106,9 @@ add_task(async () => {
 
   info("Selecting the recent search should be indicated in telemetry.");
   browserLoaded = BrowserTestUtils.browserLoaded(
-    window.gBrowser.selectedBrowser
+    window.gBrowser.selectedBrowser,
+    false,
+    "https://example.com/?q=Bob+Vylan"
   );
   await UrlbarTestUtils.promisePopupClose(window, () => {
     EventUtils.synthesizeKey("KEY_ArrowDown", {}, window);

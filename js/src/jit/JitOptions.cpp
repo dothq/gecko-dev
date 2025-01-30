@@ -19,7 +19,7 @@ using mozilla::Maybe;
 namespace js {
 namespace jit {
 
-DefaultJitOptions JitOptions;
+MOZ_RUNINIT DefaultJitOptions JitOptions;
 
 static void Warn(const char* env, const char* value) {
   fprintf(stderr, "Warning: I didn't understand %s=\"%s\"\n", env, value);
@@ -184,6 +184,20 @@ DefaultJitOptions::DefaultJitOptions() {
   // Whether to enable extra code to perform dynamic validations.
   SET_DEFAULT(runExtraChecks, false);
 
+#ifdef ENABLE_JS_AOT_ICS
+  SET_DEFAULT(enableAOTICs, false);
+  SET_DEFAULT(enableAOTICEnforce, false);
+#endif
+
+#ifdef ENABLE_JS_AOT_ICS_FORCE
+  SET_DEFAULT(enableAOTICs, true);
+#endif
+
+#ifdef ENABLE_JS_AOT_ICS_ENFORCE
+  SET_DEFAULT(enableAOTICs, true);
+  SET_DEFAULT(enableAOTICEnforce, true);
+#endif
+
   // How many invocations or loop iterations are needed before functions
   // enter the Baseline Interpreter.
   SET_DEFAULT(baselineInterpreterWarmUpThreshold, 10);
@@ -343,8 +357,10 @@ DefaultJitOptions::DefaultJitOptions() {
 
   // Until which wasm bytecode size should we accumulate functions, in order
   // to compile efficiently on helper threads. Baseline code compiles much
-  // faster than Ion code so use scaled thresholds (see also bug 1320374).
-  SET_DEFAULT(wasmBatchBaselineThreshold, 10000);
+  // faster than Ion code so use scaled thresholds (see also bug 1320374
+  // and bug 1930875).  Ion compilation can use a lot of memory, so having a
+  // low threshold here (1100) helps avoid OOMs in the per-task pool allocators.
+  SET_DEFAULT(wasmBatchBaselineThreshold, 25000);
   SET_DEFAULT(wasmBatchIonThreshold, 1100);
 
   // Controls how much assertion checking code is emitted
@@ -377,9 +393,9 @@ DefaultJitOptions::DefaultJitOptions() {
   // ***** Irregexp shim flags *****
 
   // Whether the stage 3 regexp modifiers proposal is enabled.
-  SET_DEFAULT(js_regexp_modifiers, false);
+  SET_DEFAULT(js_regexp_modifiers, true);
   // Whether the stage 3 duplicate named capture groups proposal is enabled.
-  SET_DEFAULT(js_regexp_duplicate_named_groups, false);
+  SET_DEFAULT(js_regexp_duplicate_named_groups, true);
   // V8 uses this for differential fuzzing to handle stack overflows.
   // We address the same problem in StackLimitCheck::HasOverflowed.
   SET_DEFAULT(correctness_fuzzer_suppressions, false);
@@ -447,7 +463,8 @@ void DefaultJitOptions::resetNormalIonWarmUpThreshold() {
 
 void DefaultJitOptions::maybeSetWriteProtectCode(bool val) {
 #ifdef JS_USE_APPLE_FAST_WX
-  // On Apple Silicon we always use pthread_jit_write_protect_np.
+  // On Apple Silicon we always use pthread_jit_write_protect_np, or
+  // be_memory_inline_jit_restrict_*.
   MOZ_ASSERT(!writeProtectCode);
 #else
   writeProtectCode = val;

@@ -11,6 +11,8 @@ use euclid::{SideOffsets2D, Size2D};
 use malloc_size_of::MallocSizeOf;
 use crate::composite::CompositorSurfaceKind;
 use crate::clip::ClipLeafId;
+use crate::pattern::{Pattern, PatternBuilder, PatternBuilderContext, PatternBuilderState};
+use crate::quad::QuadTileClassifier;
 use crate::segment::EdgeAaSegmentMask;
 use crate::border::BorderSegmentCacheKey;
 use crate::debug_item::{DebugItem, DebugMessage};
@@ -48,6 +50,7 @@ use image::{ImageDataHandle, ImageInstance, YuvImageDataHandle};
 use line_dec::LineDecorationDataHandle;
 use picture::PictureDataHandle;
 use text_run::{TextRunDataHandle, TextRunPrimitive};
+use crate::box_shadow::BoxShadowDataHandle;
 
 pub const VECS_PER_SEGMENT: usize = 2;
 
@@ -568,6 +571,41 @@ pub struct PrimitiveTemplate {
     pub kind: PrimitiveTemplateKind,
 }
 
+impl PatternBuilder for PrimitiveTemplate {
+    fn build(
+        &self,
+        _sub_rect: Option<DeviceRect>,
+        ctx: &PatternBuilderContext,
+        _state: &mut PatternBuilderState,
+    ) -> crate::pattern::Pattern {
+        match self.kind {
+            PrimitiveTemplateKind::Clear => Pattern::clear(),
+            PrimitiveTemplateKind::Rectangle { ref color, .. } => {
+                let color = ctx.scene_properties.resolve_color(color);
+                Pattern::color(color)
+            }
+        }
+    }
+
+    fn get_base_color(
+        &self,
+        ctx: &PatternBuilderContext,
+    ) -> ColorF {
+        match self.kind {
+            PrimitiveTemplateKind::Clear => ColorF::BLACK,
+            PrimitiveTemplateKind::Rectangle { ref color, .. } => {
+                ctx.scene_properties.resolve_color(color)
+            }
+        }
+    }
+
+    fn use_shared_pattern(
+        &self,
+    ) -> bool {
+        true
+    }
+}
+
 impl ops::Deref for PrimitiveTemplate {
     type Target = PrimTemplateCommonData;
     fn deref(&self) -> &Self::Target {
@@ -636,7 +674,6 @@ impl InternablePrimitive for PrimitiveKeyKind {
         key: PrimitiveKey,
         data_handle: PrimitiveDataHandle,
         prim_store: &mut PrimitiveStore,
-        _reference_frame_relative_offset: LayoutVector2D,
     ) -> PrimitiveInstanceKind {
         match key.kind {
             PrimitiveKeyKind::Clear => {
@@ -1029,11 +1066,13 @@ pub enum PrimitiveInstanceKind {
         /// Handle to the common interned data for this primitive.
         data_handle: RadialGradientDataHandle,
         visible_tiles_range: GradientTileRange,
+        cached: bool,
     },
     ConicGradient {
         /// Handle to the common interned data for this primitive.
         data_handle: ConicGradientDataHandle,
         visible_tiles_range: GradientTileRange,
+        cached: bool,
     },
     /// Clear out a rect, used for special effects.
     Clear {
@@ -1047,6 +1086,9 @@ pub enum PrimitiveInstanceKind {
     BackdropRender {
         data_handle: BackdropRenderDataHandle,
         pic_index: PictureIndex,
+    },
+    BoxShadow {
+        data_handle: BoxShadowDataHandle,
     },
 }
 
@@ -1148,6 +1190,9 @@ impl PrimitiveInstance {
             PrimitiveInstanceKind::BackdropRender { data_handle, .. } => {
                 data_handle.uid()
             }
+            PrimitiveInstanceKind::BoxShadow { data_handle, .. } => {
+                data_handle.uid()
+            }
         }
     }
 }
@@ -1214,8 +1259,14 @@ pub struct PrimitiveScratchBuffer {
     /// Set of sub-graphs that are required, determined during visibility pass
     pub required_sub_graphs: FastHashSet<PictureIndex>,
 
-    /// Temporary buffer for building segments in to during prepare pass
-    pub quad_segments: Vec<QuadSegment>,
+    /// Temporary buffers for building segments in to during prepare pass
+    pub quad_direct_segments: Vec<QuadSegment>,
+    pub quad_color_segments: Vec<QuadSegment>,
+    pub quad_indirect_segments: Vec<QuadSegment>,
+
+    /// A retained classifier for checking which segments of a tiled primitive
+    /// need a mask / are clipped / can be rendered directly
+    pub quad_tile_classifier: QuadTileClassifier,
 }
 
 impl Default for PrimitiveScratchBuffer {
@@ -1230,7 +1281,10 @@ impl Default for PrimitiveScratchBuffer {
             debug_items: Vec::new(),
             messages: Vec::new(),
             required_sub_graphs: FastHashSet::default(),
-            quad_segments: Vec::new(),
+            quad_direct_segments: Vec::new(),
+            quad_color_segments: Vec::new(),
+            quad_indirect_segments: Vec::new(),
+            quad_tile_classifier: QuadTileClassifier::new(),
         }
     }
 }
@@ -1244,7 +1298,9 @@ impl PrimitiveScratchBuffer {
         self.segment_instances.recycle(recycler);
         self.gradient_tiles.recycle(recycler);
         recycler.recycle_vec(&mut self.debug_items);
-        recycler.recycle_vec(&mut self.quad_segments);
+        recycler.recycle_vec(&mut self.quad_direct_segments);
+        recycler.recycle_vec(&mut self.quad_color_segments);
+        recycler.recycle_vec(&mut self.quad_indirect_segments);
     }
 
     pub fn begin_frame(&mut self) {
@@ -1253,7 +1309,9 @@ impl PrimitiveScratchBuffer {
         // location.
         self.clip_mask_instances.clear();
         self.clip_mask_instances.push(ClipMaskKind::None);
-        self.quad_segments.clear();
+        self.quad_direct_segments.clear();
+        self.quad_color_segments.clear();
+        self.quad_indirect_segments.clear();
 
         self.border_cache_handles.clear();
 
@@ -1322,31 +1380,32 @@ impl PrimitiveScratchBuffer {
             WorldPoint::new(rect.min.x + stroke_width, rect.min.y),
             WorldPoint::new(rect.max.x - stroke_width, rect.min.y + stroke_width)
         );
-        self.push_debug_rect(top_edge * DevicePixelScale::new(1.0), border, border);
+        self.push_debug_rect(top_edge * DevicePixelScale::new(1.0), 1, border, border);
 
         let bottom_edge = WorldRect::new(
             WorldPoint::new(rect.min.x + stroke_width, rect.max.y - stroke_width),
             WorldPoint::new(rect.max.x - stroke_width, rect.max.y)
         );
-        self.push_debug_rect(bottom_edge * DevicePixelScale::new(1.0), border, border);
+        self.push_debug_rect(bottom_edge * DevicePixelScale::new(1.0), 1, border, border);
 
         let right_edge = WorldRect::new(
             WorldPoint::new(rect.max.x - stroke_width, rect.min.y),
             rect.max
         );
-        self.push_debug_rect(right_edge * DevicePixelScale::new(1.0), border, border);
+        self.push_debug_rect(right_edge * DevicePixelScale::new(1.0), 1, border, border);
 
         let left_edge = WorldRect::new(
             rect.min,
             WorldPoint::new(rect.min.x + stroke_width, rect.max.y)
         );
-        self.push_debug_rect(left_edge * DevicePixelScale::new(1.0), border, border);
+        self.push_debug_rect(left_edge * DevicePixelScale::new(1.0), 1, border, border);
     }
 
     #[allow(dead_code)]
     pub fn push_debug_rect(
         &mut self,
         rect: DeviceRect,
+        thickness: i32,
         outer_color: ColorF,
         inner_color: ColorF,
     ) {
@@ -1354,6 +1413,7 @@ impl PrimitiveScratchBuffer {
             rect,
             outer_color,
             inner_color,
+            thickness,
         });
     }
 
@@ -1432,6 +1492,14 @@ impl PrimitiveStore {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.pictures.clear();
+        self.text_runs.clear();
+        self.images.clear();
+        self.color_bindings.clear();
+        self.linear_gradients.clear();
+    }
+
     pub fn get_stats(&self) -> PrimitiveStoreStats {
         PrimitiveStoreStats {
             picture_count: self.pictures.len(),
@@ -1450,6 +1518,12 @@ impl PrimitiveStore {
     }
 }
 
+impl Default for PrimitiveStore {
+    fn default() -> Self {
+        PrimitiveStore::new(&PrimitiveStoreStats::empty())
+    }
+}
+
 /// Trait for primitives that are directly internable.
 /// see SceneBuilder::add_primitive<P>
 pub trait InternablePrimitive: intern::Internable<InternData = ()> + Sized {
@@ -1463,7 +1537,6 @@ pub trait InternablePrimitive: intern::Internable<InternData = ()> + Sized {
         key: Self::Key,
         data_handle: intern::Handle<Self>,
         prim_store: &mut PrimitiveStore,
-        reference_frame_relative_offset: LayoutVector2D,
     ) -> PrimitiveInstanceKind;
 }
 

@@ -302,7 +302,7 @@ JS_PUBLIC_API void JS::NonIncrementalGC(JSContext* cx, JS::GCOptions options,
 
 JS_PUBLIC_API void JS::StartIncrementalGC(JSContext* cx, JS::GCOptions options,
                                           GCReason reason,
-                                          const js::SliceBudget& budget) {
+                                          const JS::SliceBudget& budget) {
   AssertHeapIsIdle();
   CHECK_THREAD(cx);
   CheckGCOptions(options);
@@ -311,7 +311,7 @@ JS_PUBLIC_API void JS::StartIncrementalGC(JSContext* cx, JS::GCOptions options,
 }
 
 JS_PUBLIC_API void JS::IncrementalGCSlice(JSContext* cx, GCReason reason,
-                                          const js::SliceBudget& budget) {
+                                          const JS::SliceBudget& budget) {
   AssertHeapIsIdle();
   CHECK_THREAD(cx);
 
@@ -431,13 +431,8 @@ JS_PUBLIC_API void JS::SetLowMemoryState(JSContext* cx, bool newState) {
   return cx->runtime()->gc.setLowMemoryState(newState);
 }
 
-JS_PUBLIC_API void JS::DisableIncrementalGC(JSContext* cx) {
-  cx->runtime()->gc.disallowIncrementalGC();
-}
-
 JS_PUBLIC_API bool JS::IsIncrementalGCEnabled(JSContext* cx) {
-  GCRuntime& gc = cx->runtime()->gc;
-  return gc.isIncrementalGCEnabled() && gc.isIncrementalGCAllowed();
+  return cx->runtime()->gc.isIncrementalGCEnabled();
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCInProgress(JSContext* cx) {
@@ -487,8 +482,7 @@ JS_PUBLIC_API bool JS::WasIncrementalGC(JSRuntime* rt) {
 bool js::gc::CreateUniqueIdForNativeObject(NativeObject* nobj, uint64_t* uidp) {
   JSRuntime* runtime = nobj->runtimeFromMainThread();
   *uidp = NextCellUniqueId(runtime);
-  JSContext* cx = runtime->mainContextFromOwnThread();
-  return nobj->setUniqueId(cx, *uidp);
+  return nobj->setUniqueId(runtime, *uidp);
 }
 
 bool js::gc::CreateUniqueIdForNonNativeObject(Cell* cell,
@@ -793,17 +787,9 @@ const char* CellColorName(CellColor color) {
 } /* namespace gc */
 } /* namespace js */
 
-JS_PUBLIC_API void js::gc::FinalizeDeadNurseryObject(JSContext* cx,
-                                                     JSObject* obj) {
+JS_PUBLIC_API JS::GCContext* js::gc::GetGCContext(JSContext* cx) {
   CHECK_THREAD(cx);
-  MOZ_ASSERT(JS::RuntimeHeapIsMinorCollecting());
-
-  MOZ_ASSERT(obj);
-  MOZ_ASSERT(IsInsideNursery(obj));
-  MOZ_ASSERT(!IsForwarded(obj));
-
-  const JSClass* jsClass = JS::GetClass(obj);
-  jsClass->doFinalize(cx->gcContext(), obj);
+  return cx->gcContext();
 }
 
 JS_PUBLIC_API void js::gc::SetPerformanceHint(JSContext* cx,
@@ -858,3 +844,24 @@ JS_PUBLIC_API void js::gc::UnlockStoreBuffer(JSRuntime* runtime) {
   MOZ_ASSERT(runtime);
   runtime->gc.unlockStoreBuffer();
 }
+
+#ifdef JS_GC_ZEAL
+JS_PUBLIC_API void JS::GetGCZealBits(JSContext* cx, uint32_t* zealBits,
+                                     uint32_t* frequency,
+                                     uint32_t* nextScheduled) {
+  cx->runtime()->gc.getZealBits(zealBits, frequency, nextScheduled);
+}
+
+JS_PUBLIC_API void JS::SetGCZeal(JSContext* cx, uint8_t zeal,
+                                 uint32_t frequency) {
+  cx->runtime()->gc.setZeal(zeal, frequency);
+}
+
+JS_PUBLIC_API void JS::UnsetGCZeal(JSContext* cx, uint8_t zeal) {
+  cx->runtime()->gc.unsetZeal(zeal);
+}
+
+JS_PUBLIC_API void JS::ScheduleGC(JSContext* cx, uint32_t count) {
+  cx->runtime()->gc.setNextScheduled(count);
+}
+#endif

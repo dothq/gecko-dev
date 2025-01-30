@@ -10,6 +10,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   SearchUIUtils: "resource:///modules/SearchUIUtils.sys.mjs",
   SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
+  UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
+  CustomizableUI: "resource:///modules/CustomizableUI.sys.mjs",
 });
 
 const PREF_URLBAR_QUICKSUGGEST_BLOCKLIST =
@@ -20,7 +22,6 @@ Preferences.addAll([
   { id: "browser.search.suggest.enabled", type: "bool" },
   { id: "browser.urlbar.suggest.searches", type: "bool" },
   { id: "browser.search.suggest.enabled.private", type: "bool" },
-  { id: "browser.search.widget.inNavBar", type: "bool" },
   { id: "browser.urlbar.showSearchSuggestionsFirst", type: "bool" },
   { id: "browser.urlbar.showSearchTerms.enabled", type: "bool" },
   { id: "browser.search.separatePrivateDefault", type: "bool" },
@@ -29,6 +30,7 @@ Preferences.addAll([
   { id: "browser.urlbar.trending.featureGate", type: "bool" },
   { id: "browser.urlbar.recentsearches.featureGate", type: "bool" },
   { id: "browser.urlbar.suggest.recentsearches", type: "bool" },
+  { id: "browser.urlbar.scotchBonnet.enableOverride", type: "bool" },
 ]);
 
 const ENGINE_FLAVOR = "text/x-moz-search-engine";
@@ -78,7 +80,6 @@ var gSearchPane = {
 
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
     let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
-    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
     let privateSuggestsPref = Preferences.get(
       "browser.search.suggest.enabled.private"
     );
@@ -87,7 +88,18 @@ var gSearchPane = {
       this._updateSuggestionCheckboxes.bind(this);
     suggestsPref.on("change", updateSuggestionCheckboxes);
     urlbarSuggestsPref.on("change", updateSuggestionCheckboxes);
-    searchBarPref.on("change", updateSuggestionCheckboxes);
+    let customizableUIListener = {
+      onWidgetAfterDOMChange: node => {
+        if (node.id == "search-container") {
+          updateSuggestionCheckboxes();
+        }
+      },
+    };
+    lazy.CustomizableUI.addListener(customizableUIListener);
+    window.addEventListener("unload", () => {
+      lazy.CustomizableUI.removeListener(customizableUIListener);
+    });
+
     let urlbarSuggests = document.getElementById("urlBarSuggestion");
     urlbarSuggests.addEventListener("command", () => {
       urlbarSuggestsPref.value = urlbarSuggests.checked;
@@ -99,7 +111,7 @@ var gSearchPane = {
     // all prefs.
     suggestionsInSearchFieldsCheckbox.addEventListener("command", () => {
       this._skipUpdateSuggestionCheckboxesFromPrefChanges = true;
-      if (!searchBarPref.value) {
+      if (!lazy.CustomizableUI.getPlacementOfWidget("search-container")) {
         urlbarSuggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
       }
       suggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
@@ -155,28 +167,30 @@ var gSearchPane = {
 
   _initShowSearchTermsCheckbox() {
     let checkbox = document.getElementById("searchShowSearchTermCheckbox");
-
-    // Add Nimbus event to show/hide checkbox.
-    let onNimbus = () => {
-      checkbox.hidden = !UrlbarPrefs.get("showSearchTermsFeatureGate");
-    };
-    NimbusFeatures.urlbar.onUpdate(onNimbus);
-
-    // Add observer of Search Bar preference as showSearchTerms
-    // can't be shown/hidden while Search Bar is enabled.
-    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
     let updateCheckboxHidden = () => {
       checkbox.hidden =
-        !UrlbarPrefs.get("showSearchTermsFeatureGate") || searchBarPref.value;
+        !UrlbarPrefs.get("showSearchTermsFeatureGate") ||
+        !!lazy.CustomizableUI.getPlacementOfWidget("search-container");
     };
-    searchBarPref.on("change", updateCheckboxHidden);
+
+    // Add observer of CustomizableUI as showSearchTerms checkbox
+    // should be hidden while Search Bar is enabled.
+    let customizableUIListener = {
+      onWidgetAfterDOMChange: node => {
+        if (node.id == "search-container") {
+          updateCheckboxHidden();
+        }
+      },
+    };
+    lazy.CustomizableUI.addListener(customizableUIListener);
+    NimbusFeatures.urlbar.onUpdate(updateCheckboxHidden);
 
     // Fire once to initialize.
-    onNimbus();
     updateCheckboxHidden();
 
     window.addEventListener("unload", () => {
-      NimbusFeatures.urlbar.offUpdate(onNimbus);
+      NimbusFeatures.urlbar.offUpdate(updateCheckboxHidden);
+      lazy.CustomizableUI.removeListener(customizableUIListener);
     });
   },
 
@@ -214,14 +228,14 @@ var gSearchPane = {
       "showSearchSuggestionsPrivateWindows"
     );
     let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
-    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
+    let searchBarVisible =
+      !!lazy.CustomizableUI.getPlacementOfWidget("search-container");
 
     suggestionsInSearchFieldsCheckbox.checked =
-      suggestsPref.value &&
-      (searchBarPref.value ? true : urlbarSuggestsPref.value);
+      suggestsPref.value && (searchBarVisible || urlbarSuggestsPref.value);
 
     urlbarSuggests.disabled = !suggestsPref.value || permanentPB;
-    urlbarSuggests.hidden = !searchBarPref.value;
+    urlbarSuggests.hidden = !searchBarVisible;
 
     privateWindowCheckbox.disabled = !suggestsPref.value;
     privateWindowCheckbox.checked = Preferences.get(
@@ -248,7 +262,7 @@ var gSearchPane = {
     }
     if (
       suggestionsInSearchFieldsCheckbox.checked &&
-      !searchBarPref.value &&
+      !searchBarVisible &&
       !urlbarSuggests.checked
     ) {
       urlbarSuggestsPref.value = true;
@@ -332,7 +346,10 @@ var gSearchPane = {
   _updateFirefoxSuggestSection(onInit = false) {
     let container = document.getElementById("firefoxSuggestContainer");
 
-    if (UrlbarPrefs.get("quickSuggestEnabled")) {
+    if (
+      UrlbarPrefs.get("quickSuggestEnabled") &&
+      !UrlbarPrefs.get("quickSuggestHideSettingsUI")
+    ) {
       // Update the l10n IDs of text elements.
       let l10nIdByElementId = {
         locationBarGroupHeader: "addressbar-header-firefox-suggest",
@@ -367,9 +384,10 @@ var gSearchPane = {
       let elementIds = ["locationBarGroupHeader", "locationBarSuggestionLabel"];
       for (let id of elementIds) {
         let element = document.getElementById(id);
-        element.dataset.l10nId = element.dataset.l10nIdOriginal;
-        delete element.dataset.l10nIdOriginal;
-        document.l10n.translateElements([element]);
+        if (element.dataset.l10nIdOriginal) {
+          document.l10n.setAttributes(element, element.dataset.l10nIdOriginal);
+          delete element.dataset.l10nIdOriginal;
+        }
       }
     }
   },
@@ -429,8 +447,13 @@ var gSearchPane = {
 
   _initQuickActionsSection() {
     let showPref = Preferences.get("browser.urlbar.quickactions.showPrefs");
+    let scotchBonnet = Preferences.get(
+      "browser.urlbar.scotchBonnet.enableOverride"
+    );
     let showQuickActionsGroup = () => {
-      document.getElementById("quickActionsBox").hidden = !showPref.value;
+      document.getElementById("quickActionsBox").hidden = !(
+        showPref.value || scotchBonnet.value
+      );
     };
     showPref.on("change", showQuickActionsGroup);
     showQuickActionsGroup();
@@ -749,6 +772,7 @@ class EngineStore {
         this.notifyRowCountChanged(gEngineView.lastEngineIndex, 1);
         break;
       case "engine-changed":
+      case "engine-icon-changed":
         this.updateEngine(engine);
         this.notifyRebuildViews();
         break;
@@ -841,26 +865,47 @@ class EngineView {
     this.#showAddEngineButton();
   }
 
-  loadL10nNames() {
+  async loadL10nNames() {
     // This maps local shortcut sources to their l10n names.  The names are needed
     // by getCellText.  Getting the names is async but getCellText is not, so we
     // cache them here to retrieve them syncronously in getCellText.
     this._localShortcutL10nNames = new Map();
-    return document.l10n
-      .formatValues(
-        UrlbarUtils.LOCAL_SEARCH_MODES.map(mode => {
-          let name = UrlbarUtils.getResultSourceName(mode.source);
-          return { id: `urlbar-search-mode-${name}` };
-        })
-      )
-      .then(names => {
-        for (let { source } of UrlbarUtils.LOCAL_SEARCH_MODES) {
-          this._localShortcutL10nNames.set(source, names.shift());
-        }
+
+    let getIDs = (suffix = "") =>
+      UrlbarUtils.LOCAL_SEARCH_MODES.map(mode => {
+        let name = UrlbarUtils.getResultSourceName(mode.source);
+        return { id: `urlbar-search-mode-${name}${suffix}` };
+      });
+
+    try {
+      let localizedIDs = getIDs();
+      let englishIDs = getIDs("-en");
+
+      let englishSearchStrings = new Localization([
+        "preview/enUS-searchFeatures.ftl",
+      ]);
+      let localizedNames = await document.l10n.formatValues(localizedIDs);
+      let englishNames = await englishSearchStrings.formatValues(englishIDs);
+
+      UrlbarUtils.LOCAL_SEARCH_MODES.forEach(({ source }, index) => {
+        let localizedName = localizedNames[index];
+        let englishName = englishNames[index];
+
+        // Add only the English name if localized and English are the same
+        let names =
+          localizedName === englishName
+            ? [englishName]
+            : [localizedName, englishName];
+
+        this._localShortcutL10nNames.set(source, names);
+
         // Invalidate the tree now that we have the names in case getCellText was
         // called before name retrieval finished.
         this.invalidate();
       });
+    } catch (ex) {
+      console.error("Error loading l10n names", ex);
+    }
   }
 
   #addListeners() {
@@ -1149,9 +1194,13 @@ class EngineView {
 
   // nsITreeView
   get rowCount() {
-    return (
-      this._engineStore.engines.length + UrlbarUtils.LOCAL_SEARCH_MODES.length
-    );
+    let localModes = UrlbarUtils.LOCAL_SEARCH_MODES;
+    if (!lazy.UrlbarPrefs.get("scotchBonnet.enableOverride")) {
+      localModes = localModes.filter(
+        mode => mode.source != UrlbarUtils.RESULT_SOURCE.ACTIONS
+      );
+    }
+    return this._engineStore.engines.length + localModes.length;
   }
 
   getImageSrc(index, column) {
@@ -1171,12 +1220,25 @@ class EngineView {
     if (column.id == "engineName") {
       let shortcut = this._getLocalShortcut(index);
       if (shortcut) {
-        return this._localShortcutL10nNames.get(shortcut.source) || "";
+        return this._localShortcutL10nNames.get(shortcut.source)[0] || "";
       }
       return this._engineStore.engines[index].name;
     } else if (column.id == "engineKeyword") {
       let shortcut = this._getLocalShortcut(index);
       if (shortcut) {
+        if (
+          lazy.UrlbarPrefs.getScotchBonnetPref(
+            "searchRestrictKeywords.featureGate"
+          )
+        ) {
+          let keywords = this._localShortcutL10nNames
+            .get(shortcut.source)
+            .map(keyword => `@${keyword.toLowerCase()}`)
+            .join(", ");
+
+          return `${keywords}, ${shortcut.restrict}`;
+        }
+
         return shortcut.restrict;
       }
       return this._engineStore.engines[index].originalEngine.aliases.join(", ");
@@ -1422,9 +1484,10 @@ class DefaultEngineDropDown {
     ) {
       return;
     }
-    let defaultEngine = await Services.search[
-      this.#type == "normal" ? "getDefault" : "getDefaultPrivate"
-    ]();
+    let defaultEngine =
+      await Services.search[
+        this.#type == "normal" ? "getDefault" : "getDefaultPrivate"
+      ]();
 
     this.#element.removeAllItems();
     for (let engine of enginesList) {

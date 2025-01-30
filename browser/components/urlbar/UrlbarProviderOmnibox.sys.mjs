@@ -71,7 +71,8 @@ class ProviderOmnibox extends UrlbarProvider {
       UrlbarUtils.substringAfter(
         queryContext.searchString,
         queryContext.tokens[0].value
-      )
+      ) &&
+      !queryContext.searchMode
     ) {
       return true;
     }
@@ -178,12 +179,8 @@ class ProviderOmnibox extends UrlbarProvider {
     );
   }
 
-  onEngagement(state, queryContext, details, controller) {
+  onEngagement(queryContext, controller, details) {
     let { result } = details;
-    if (result?.providerName != this.name) {
-      return;
-    }
-
     if (details.selType == "dismiss" && result.payload.isBlockable) {
       lazy.ExtensionSearchHandler.handleInputDeleted(result.payload.title);
       controller.removeResult(result);

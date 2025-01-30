@@ -22,6 +22,7 @@
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkVertices.h"
 #include "include/private/SkIDChangeListener.h"
+#include "include/private/base/SkFloatingPoint.h"
 #include "include/private/base/SkTPin.h"
 #include "include/private/base/SkTemplates.h"
 #include "include/private/base/SkTo.h"
@@ -360,7 +361,7 @@ public:
     void writeKey(void* key) const {
         fShapeForKey.writeUnstyledKey(reinterpret_cast<uint32_t*>(key));
     }
-    bool isRRect(SkRRect* rrect) { return fShapeForKey.asRRect(rrect, nullptr, nullptr, nullptr); }
+    bool isRRect(SkRRect* rrect) { return fShapeForKey.asRRect(rrect, nullptr); }
 #else
     int keyBytes() const { return -1; }
     void writeKey(void* key) const { SK_ABORT("Should never be called"); }
@@ -586,10 +587,10 @@ bool SkShadowUtils::GetLocalBounds(const SkMatrix& ctm, const SkPath& path,
 
 static bool validate_rec(const SkDrawShadowRec& rec) {
     return rec.fLightPos.isFinite() && rec.fZPlaneParams.isFinite() &&
-           SkScalarIsFinite(rec.fLightRadius);
+           SkIsFinite(rec.fLightRadius);
 }
 
-void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
+void SkDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
     if (!validate_rec(rec)) {
         return;
     }

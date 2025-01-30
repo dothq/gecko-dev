@@ -150,7 +150,8 @@ static inline void AssertScopeMatchesEnvironment(Scope* scope,
   //
   // In the case of a syntactic env chain, the outermost env is always a
   // GlobalObject.
-  MOZ_ASSERT(env->is<GlobalObject>() || IsGlobalLexicalEnvironment(env) ||
+  MOZ_ASSERT(env->is<GlobalObject>() ||
+             env->is<GlobalLexicalEnvironmentObject>() ||
              env->is<DebugEnvironmentProxy>());
 #endif
 }
@@ -509,9 +510,8 @@ void JS::ProfilingFrameIterator::operator++() {
 
 void JS::ProfilingFrameIterator::settleFrames() {
   // Handle transition frames (see comment in JitFrameIter::operator++).
-  if (isJSJit() && !jsJitIter().done() &&
-      jsJitIter().frameType() == jit::FrameType::WasmToJSJit) {
-    wasm::Frame* fp = (wasm::Frame*)jsJitIter().fp();
+  if (isJSJit() && jsJitIter().done() && jsJitIter().wasmCallerFP()) {
+    wasm::Frame* fp = (wasm::Frame*)jsJitIter().wasmCallerFP();
     iteratorDestroy();
     new (storage()) wasm::ProfilingFrameIterator(fp);
     kind_ = Kind::Wasm;
@@ -529,7 +529,6 @@ void JS::ProfilingFrameIterator::settleFrames() {
     new (storage())
         jit::JSJitProfilingFrameIterator((jit::CommonFrameLayout*)fp);
     kind_ = Kind::JSJit;
-    MOZ_ASSERT(!jsJitIter().done());
     maybeSetEndStackAddress(jsJitIter().endStackAddress());
     return;
   }
@@ -638,7 +637,11 @@ JS::ProfilingFrameIterator::getPhysicalFrameAndEntry(
   void* stackAddr = stackAddress();
 
   MOZ_DIAGNOSTIC_ASSERT(endStackAddress_);
+#ifndef ENABLE_WASM_JSPI
+  // The stack addresses are monotonically increasing, except when
+  // suspendable stacks are present (e.g. when JS PI is enabled).
   MOZ_DIAGNOSTIC_ASSERT(stackAddr >= endStackAddress_);
+#endif
 
   if (isWasm()) {
     Frame frame;

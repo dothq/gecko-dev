@@ -10,7 +10,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
   requestIdleCallback: "resource://gre/modules/Timer.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
-  ToolbarPanelHub: "resource:///modules/asrouter/ToolbarPanelHub.sys.mjs",
 });
 
 let notificationsByWindow = new WeakMap();
@@ -19,9 +18,6 @@ export class _ToolbarBadgeHub {
   constructor() {
     this.id = "toolbar-badge-hub";
     this.state = {};
-    this.prefs = {
-      WHATSNEW_TOOLBAR_PANEL: "browser.messaging-system.whatsNewPanel.enabled",
-    };
     this.removeAllNotifications = this.removeAllNotifications.bind(this);
     this.removeToolbarNotification = this.removeToolbarNotification.bind(this);
     this.addToolbarNotification = this.addToolbarNotification.bind(this);
@@ -62,32 +58,10 @@ export class _ToolbarBadgeHub {
       triggerId: "toolbarBadgeUpdate",
       template: "toolbar_badge",
     });
-    // Listen for pref changes that could trigger new badges
-    Services.prefs.addObserver(this.prefs.WHATSNEW_TOOLBAR_PANEL, this);
-  }
-
-  observe(aSubject, aTopic, aPrefName) {
-    switch (aPrefName) {
-      case this.prefs.WHATSNEW_TOOLBAR_PANEL:
-        this.messageRequest({
-          triggerId: "toolbarBadgeUpdate",
-          template: "toolbar_badge",
-        });
-        break;
-    }
   }
 
   maybeInsertFTL(win) {
     win.MozXULElement.insertFTLIfNeeded("browser/newtab/asrouter.ftl");
-  }
-
-  executeAction({ id }) {
-    switch (id) {
-      case "show-whatsnew-button":
-        lazy.ToolbarPanelHub.enableToolbarButton();
-        lazy.ToolbarPanelHub.enableAppmenuButton();
-        break;
-    }
   }
 
   _clearBadgeTimeout() {
@@ -140,6 +114,7 @@ export class _ToolbarBadgeHub {
       .querySelector(".toolbarbutton-badge")
       .classList.remove("feature-callout");
     toolbarButton.removeAttribute("badged");
+    toolbarButton.removeAttribute("showing-callout");
     // Remove id used for for aria-label badge description
     const notificationDescription = toolbarButton.querySelector(
       "#toolbarbutton-notification-description"
@@ -153,14 +128,12 @@ export class _ToolbarBadgeHub {
 
   addToolbarNotification(win, message) {
     const document = win.browser.ownerDocument;
-    if (message.content.action) {
-      this.executeAction({ ...message.content.action, message_id: message.id });
-    }
     let toolbarbutton = document.getElementById(message.content.target);
     if (toolbarbutton) {
       const badge = toolbarbutton.querySelector(".toolbarbutton-badge");
       badge.classList.add("feature-callout");
       toolbarbutton.setAttribute("badged", true);
+      toolbarbutton.setAttribute("showing-callout", true);
       // If we have additional aria-label information for the notification
       // we add this content to the hidden `toolbarbutton-text` node.
       // We then use `aria-labelledby` to link this description to the button
@@ -211,12 +184,6 @@ export class _ToolbarBadgeHub {
   }
 
   registerBadgeToAllWindows(message) {
-    if (message.template === "update_action") {
-      this.executeAction({ ...message.content.action, message_id: message.id });
-      // No badge to set only an action to execute
-      return;
-    }
-
     lazy.EveryWindow.registerCallback(
       this.id,
       win => {
@@ -297,7 +264,6 @@ export class _ToolbarBadgeHub {
     this.state = {};
     this._initialized = false;
     notificationsByWindow = new WeakMap();
-    Services.prefs.removeObserver(this.prefs.WHATSNEW_TOOLBAR_PANEL, this);
   }
 }
 

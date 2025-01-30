@@ -15,6 +15,7 @@ use style_traits::{CssWriter, KeywordsCollectFn, ParseError, SpecifiedValueInfo,
 #[derive(
     Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct AlignFlags(u8);
 bitflags! {
@@ -54,6 +55,8 @@ bitflags! {
         const SPACE_AROUND = 15;
         /// 'space-evenly'
         const SPACE_EVENLY = 16;
+        /// `anchor-center`
+        const ANCHOR_CENTER = 17;
 
         // Additional flags stored in the upper bits:
         /// 'legacy' (mutually exclusive w. SAFE & UNSAFE)
@@ -71,8 +74,14 @@ bitflags! {
 impl AlignFlags {
     /// Returns the enumeration value stored in the lower 5 bits.
     #[inline]
-    fn value(&self) -> Self {
+    pub fn value(&self) -> Self {
         *self & !AlignFlags::FLAG_BITS
+    }
+
+    /// Returns the flags stored in the upper 3 bits.
+    #[inline]
+    pub fn flags(&self) -> Self {
+        *self & AlignFlags::FLAG_BITS
     }
 }
 
@@ -117,6 +126,7 @@ impl ToCss for AlignFlags {
             AlignFlags::SPACE_BETWEEN => "space-between",
             AlignFlags::SPACE_AROUND => "space-around",
             AlignFlags::SPACE_EVENLY => "space-evenly",
+            AlignFlags::ANCHOR_CENTER => "anchor-center",
             _ => unreachable!(),
         })
     }
@@ -147,8 +157,8 @@ pub enum AxisDirection {
     ToResolvedValue,
     ToShmem,
 )]
-#[repr(C)]
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[repr(C)]
 pub struct ContentDistribution {
     primary: AlignFlags,
     // FIXME(https://github.com/w3c/csswg-drafts/issues/1002): This will need to
@@ -265,6 +275,7 @@ impl ContentDistribution {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(transparent)]
 pub struct AlignContent(pub ContentDistribution);
 
@@ -288,36 +299,6 @@ impl SpecifiedValueInfo for AlignContent {
     }
 }
 
-/// Value for the `align-tracks` property.
-///
-/// <https://github.com/w3c/csswg-drafts/issues/4650>
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Eq,
-    MallocSizeOf,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToComputedValue,
-    ToCss,
-    ToResolvedValue,
-    ToShmem,
-)]
-#[repr(transparent)]
-#[css(comma)]
-pub struct AlignTracks(#[css(iterable, if_empty = "normal")] pub crate::OwnedSlice<AlignContent>);
-
-impl Parse for AlignTracks {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let values = input.parse_comma_separated(|input| AlignContent::parse(context, input))?;
-        Ok(AlignTracks(values.into()))
-    }
-}
-
 /// Value for the `justify-content` property.
 ///
 /// <https://drafts.csswg.org/css-align/#propdef-justify-content>
@@ -333,6 +314,7 @@ impl Parse for AlignTracks {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(transparent)]
 pub struct JustifyContent(pub ContentDistribution);
 
@@ -355,37 +337,6 @@ impl SpecifiedValueInfo for JustifyContent {
         ContentDistribution::list_keywords(f, AxisDirection::Inline);
     }
 }
-/// Value for the `justify-tracks` property.
-///
-/// <https://github.com/w3c/csswg-drafts/issues/4650>
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Eq,
-    MallocSizeOf,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToComputedValue,
-    ToCss,
-    ToResolvedValue,
-    ToShmem,
-)]
-#[repr(transparent)]
-#[css(comma)]
-pub struct JustifyTracks(
-    #[css(iterable, if_empty = "normal")] pub crate::OwnedSlice<JustifyContent>,
-);
-
-impl Parse for JustifyTracks {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let values = input.parse_comma_separated(|input| JustifyContent::parse(context, input))?;
-        Ok(JustifyTracks(values.into()))
-    }
-}
 
 /// <https://drafts.csswg.org/css-align/#self-alignment>
 #[derive(
@@ -400,6 +351,7 @@ impl Parse for JustifyTracks {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(transparent)]
 pub struct SelfAlignment(pub AlignFlags);
 
@@ -472,6 +424,7 @@ impl SelfAlignment {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct AlignSelf(pub SelfAlignment);
 
@@ -510,6 +463,7 @@ impl SpecifiedValueInfo for AlignSelf {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct JustifySelf(pub SelfAlignment);
 
@@ -548,6 +502,7 @@ impl SpecifiedValueInfo for JustifySelf {
     ToResolvedValue,
     ToShmem,
 )]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct AlignItems(pub AlignFlags);
 
@@ -600,6 +555,7 @@ impl SpecifiedValueInfo for AlignItems {
 ///
 /// <https://drafts.csswg.org/css-align/#justify-items-property>
 #[derive(Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, ToCss, ToResolvedValue, ToShmem)]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct JustifyItems(pub AlignFlags);
 
@@ -765,6 +721,7 @@ fn parse_self_position<'i, 't>(
         "self-end" => AlignFlags::SELF_END,
         "left" if axis == AxisDirection::Inline => AlignFlags::LEFT,
         "right" if axis == AxisDirection::Inline => AlignFlags::RIGHT,
+        "anchor-center" if static_prefs::pref!("layout.css.anchor-positioning.enabled") => AlignFlags::ANCHOR_CENTER,
     })
 }
 
@@ -777,6 +734,7 @@ fn list_self_position_keywords(f: KeywordsCollectFn, axis: AxisDirection) {
         "center",
         "self-start",
         "self-end",
+        "anchor-center",
     ]);
     if axis == AxisDirection::Inline {
         f(&["left", "right"]);

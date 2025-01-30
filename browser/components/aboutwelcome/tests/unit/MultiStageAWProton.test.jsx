@@ -480,6 +480,7 @@ describe("MultiStageAboutWelcomeProton module", () => {
       let data = await getData();
 
       if (evalFalseScreenIds?.length) {
+        // eslint-disable-next-line no-shadow
         data.screens.forEach(async screen => {
           if (evalFalseScreenIds.includes(screen.id)) {
             screen.targeting = false;
@@ -569,9 +570,8 @@ describe("MultiStageAboutWelcomeProton module", () => {
     };
     it("should not set url for default qrcode svg", async () => {
       sandbox.stub(global.AppConstants, "isChinaRepack").returns(false);
-      const data = await AboutWelcomeDefaults.prepareContentForReact(
-        TEST_CONTENT
-      );
+      const data =
+        await AboutWelcomeDefaults.prepareContentForReact(TEST_CONTENT);
       assert.propertyVal(
         data.screens[0].content.hero_image,
         "url",
@@ -580,9 +580,8 @@ describe("MultiStageAboutWelcomeProton module", () => {
     });
     it("should set url for cn qrcode svg", async () => {
       sandbox.stub(global.AppConstants, "isChinaRepack").returns(true);
-      const data = await AboutWelcomeDefaults.prepareContentForReact(
-        TEST_CONTENT
-      );
+      const data =
+        await AboutWelcomeDefaults.prepareContentForReact(TEST_CONTENT);
       assert.propertyVal(
         data.screens[0].content.hero_image,
         "url",
@@ -616,9 +615,8 @@ describe("MultiStageAboutWelcomeProton module", () => {
           },
         ],
       };
-      const data = await AboutWelcomeDefaults.prepareContentForReact(
-        TEST_CONTENT
-      );
+      const data =
+        await AboutWelcomeDefaults.prepareContentForReact(TEST_CONTENT);
       assert.propertyVal(data, "ua", "test");
       assert.propertyVal(
         data.screens[0].content.primary_button.action.data,
@@ -643,9 +641,8 @@ describe("MultiStageAboutWelcomeProton module", () => {
           },
         ],
       };
-      const data = await AboutWelcomeDefaults.prepareContentForReact(
-        TEST_CONTENT
-      );
+      const data =
+        await AboutWelcomeDefaults.prepareContentForReact(TEST_CONTENT);
       assert.propertyVal(data, "ua", "test");
       assert.notPropertyVal(
         data.screens[0].content.primary_button.action.data,
@@ -669,6 +666,29 @@ describe("MultiStageAboutWelcomeProton module", () => {
       const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
       assert.ok(wrapper.exists());
       assert.isTrue(wrapper.find("migration-wizard").exists());
+    });
+  });
+
+  describe("Custom main content inner custom justify content", () => {
+    const SCREEN_PROPS = {
+      content: {
+        title: "test title",
+        position: "split",
+        split_content_justify_content: "flex-start",
+      },
+    };
+
+    it("should render split screen with custom justify-content", async () => {
+      const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
+      assert.ok(wrapper.exists());
+      assert.equal(wrapper.find("main").prop("pos"), "split");
+      assert.exists(wrapper.find(".main-content-inner"));
+      assert.ok(
+        wrapper
+          .find(".main-content-inner")
+          .prop("style")
+          .justifyContent.includes("flex-start")
+      );
     });
   });
 });

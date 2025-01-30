@@ -53,7 +53,8 @@
 #include "vm/Opcodes.h"
 #include "vm/Realm.h"
 #include "vm/Shape.h"
-#include "vm/ToSource.h"  // js::ValueToSource
+#include "vm/ToSource.h"         // js::ValueToSource
+#include "vm/TypeofEqOperand.h"  // TypeofEqOperand
 
 #include "gc/GC-inl.h"
 #include "vm/BytecodeIterator-inl.h"
@@ -130,10 +131,11 @@ static bool DecompileArgumentFromStack(JSContext* cx, int formalIndex,
 
 [[nodiscard]] static bool DumpPCCounts(JSContext* cx, HandleScript script,
                                        StringPrinter* sp) {
-  MOZ_ASSERT(script->hasScriptCounts());
-
-  // Ensure the Disassemble1 call below does not discard the script counts.
-  gc::AutoSuppressGC suppress(cx);
+  // In some edge cases Disassemble1 can end up invoking JS code, so ensure
+  // script counts haven't been discarded.
+  if (!script->hasScriptCounts()) {
+    return true;
+  }
 
 #ifdef DEBUG
   jsbytecode* pc = script->code();
@@ -145,16 +147,21 @@ static bool DecompileArgumentFromStack(JSContext* cx, int formalIndex,
     }
 
     sp->put("                  {");
-
-    PCCounts* counts = script->maybeGetPCCounts(pc);
-    if (double val = counts ? counts->numExec() : 0.0) {
-      sp->printf("\"%s\": %.0f", PCCounts::numExecName, val);
+    if (script->hasScriptCounts()) {
+      PCCounts* counts = script->maybeGetPCCounts(pc);
+      if (double val = counts ? counts->numExec() : 0.0) {
+        sp->printf("\"%s\": %.0f", PCCounts::numExecName, val);
+      }
     }
     sp->put("}\n");
 
     pc = next;
   }
 #endif
+
+  if (!script->hasScriptCounts()) {
+    return true;
+  }
 
   jit::IonScriptCounts* ionCounts = script->getIonCounts();
   while (ionCounts) {
@@ -405,21 +412,12 @@ class BytecodeParser {
   // Dedicated mode for stack dump.
   // Capture stack after each opcode, and also enable special handling for
   // some opcodes to make stack transition clearer.
-  bool isStackDump;
+  bool isStackDump = false;
 #endif
 
  public:
   BytecodeParser(JSContext* cx, LifoAlloc& alloc, JSScript* script)
-      : cx_(cx),
-        alloc_(alloc),
-        script_(cx, script),
-        codeArray_(nullptr)
-#ifdef DEBUG
-        ,
-        isStackDump(false)
-#endif
-  {
-  }
+      : cx_(cx), alloc_(alloc), script_(cx, script), codeArray_(nullptr) {}
 
   bool parse();
 
@@ -1104,7 +1102,7 @@ JS_PUBLIC_API bool js::DumpScript(JSContext* cx, JSScript* scriptArg,
   return ok;
 }
 
-static UniqueChars ToDisassemblySource(JSContext* cx, HandleValue v) {
+UniqueChars js::ToDisassemblySource(JSContext* cx, HandleValue v) {
   if (v.isString()) {
     return QuoteString(cx, v.toString(), '"');
   }
@@ -1893,6 +1891,16 @@ bool ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex) {
       return write("(typeof ") && decompilePCForStackOperand(pc, -1) &&
              write(")");
 
+    case JSOp::TypeofEq: {
+      auto operand = TypeofEqOperand::fromRawValue(GET_UINT8(pc));
+      JSType type = operand.type();
+      JSOp compareOp = operand.compareOp();
+
+      return write("(typeof ") && decompilePCForStackOperand(pc, -1) &&
+             write(compareOp == JSOp::Ne ? " != \"" : " == \"") &&
+             write(JSTypeToString(type)) && write("\")");
+    }
+
     case JSOp::InitElemArray:
       return write("[...]");
 
@@ -1923,7 +1931,7 @@ bool ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex) {
 #if defined(DEBUG) || defined(JS_JITSPEW)
       // BigInt::dumpLiteral() only available in this configuration.
       script->getBigInt(pc)->dumpLiteral(sprinter);
-      return !sprinter.hadOutOfMemory();
+      return true;
 #else
       return write("[bigint]");
 #endif
@@ -1964,10 +1972,11 @@ bool ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex) {
         return write("arguments[") && decompilePCForStackOperand(pc, -1) &&
                write("]");
 
-      case JSOp::BindGName:
+      case JSOp::BindUnqualifiedGName:
         return write("GLOBAL");
 
       case JSOp::BindName:
+      case JSOp::BindUnqualifiedName:
       case JSOp::BindVar:
         return write("ENV");
 
@@ -2129,6 +2138,18 @@ bool ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex) {
       case JSOp::HasOwn:
         return write("HasOwn(") && decompilePCForStackOperand(pc, -2) &&
                write(", ") && decompilePCForStackOperand(pc, -1) && write(")");
+
+#  ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+      case JSOp::AddDisposable:
+        return decompilePCForStackOperand(pc, -1);
+
+      case JSOp::TakeDisposeCapability:
+        if (defIndex == 0) {
+          return write("DISPOSECAPABILITY");
+        }
+        MOZ_ASSERT(defIndex == 1);
+        return write("COUNT");
+#  endif
 
       default:
         break;
@@ -2828,11 +2849,6 @@ static bool GetPCCountJSON(JSContext* cx, const ScriptAndCounts& sac,
   }
 
   json.endObject();
-
-  if (sp.hadOutOfMemory()) {
-    sp.reportOutOfMemory();
-    return false;
-  }
 
   return true;
 }

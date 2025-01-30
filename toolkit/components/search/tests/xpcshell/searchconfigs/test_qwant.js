@@ -14,6 +14,9 @@ const test = new SearchConfigTest({
       {
         locales: ["fr"],
       },
+      {
+        regions: ["be", "ch", "es", "fr", "it", "nl"],
+      },
     ],
   },
   details: [

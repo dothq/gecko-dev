@@ -24,6 +24,7 @@ const {
   ERRNO_INVALID_AUTH_TOKEN,
   ONLOGIN_NOTIFICATION,
   ONVERIFIED_NOTIFICATION,
+  SCOPE_APP_SYNC,
 } = ChromeUtils.importESModule(
   "resource://gre/modules/FxAccountsCommon.sys.mjs"
 );
@@ -66,8 +67,8 @@ MockFxAccountsClient.prototype = {
   },
   getScopedKeyData() {
     return Promise.resolve({
-      "https://identity.mozilla.com/apps/oldsync": {
-        identifier: "https://identity.mozilla.com/apps/oldsync",
+      [SCOPE_APP_SYNC]: {
+        identifier: SCOPE_APP_SYNC,
         keyRotationSecret:
           "0000000000000000000000000000000000000000000000000000000000000000",
         keyRotationTimestamp: 1234567890123,
@@ -728,6 +729,9 @@ add_task(async function test_getHAWKErrors() {
 
 add_task(async function test_getGetKeysFailing401() {
   _("SyncAuthManager correctly handles 401 responses fetching keys.");
+  if (Services.prefs.getBoolPref("identity.fxaccounts.oauth.enabled", false)) {
+    return;
+  }
 
   _("Arrange for a 401 - Sync should reflect an auth error.");
   let config = makeIdentityConfig();
@@ -751,6 +755,9 @@ add_task(async function test_getGetKeysFailing401() {
 
 add_task(async function test_getGetKeysFailing503() {
   _("SyncAuthManager correctly handles 5XX responses fetching keys.");
+  if (Services.prefs.getBoolPref("identity.fxaccounts.oauth.enabled", false)) {
+    return;
+  }
 
   _("Arrange for a 503 - Sync should reflect a network error.");
   let config = makeIdentityConfig();
@@ -780,6 +787,9 @@ add_task(async function test_getKeysMissing() {
   _(
     "SyncAuthManager correctly handles getKeyForScope succeeding but not returning the key."
   );
+  if (Services.prefs.getBoolPref("identity.fxaccounts.oauth.enabled", false)) {
+    return;
+  }
 
   let syncAuthManager = new SyncAuthManager();
   let identityConfig = makeIdentityConfig();
@@ -820,6 +830,10 @@ add_task(async function test_getKeysUnexpecedError() {
   _(
     "SyncAuthManager correctly handles getKeyForScope throwing an unexpected error."
   );
+
+  if (Services.prefs.getBoolPref("identity.fxaccounts.oauth.enabled", false)) {
+    return;
+  }
 
   let syncAuthManager = new SyncAuthManager();
   let identityConfig = makeIdentityConfig();

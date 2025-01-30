@@ -588,6 +588,9 @@ void gfxPlatformMac::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
     case Script::WANCHO:
       aFontList.AppendElement("Noto Sans Wancho");
       break;
+    case Script::ARABIC_NASTALIQ:
+      aFontList.AppendElement("Noto Nastaliq Urdu");
+      break;
 
     // Script codes for which no commonly-installed font is currently known.
     // Probably future macOS versions will add Noto fonts for many of these,
@@ -646,6 +649,13 @@ void gfxPlatformMac::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
     case Script::VITHKUQI:
     case Script::KAWI:
     case Script::NAG_MUNDARI:
+    case Script::GARAY:
+    case Script::GURUNG_KHEMA:
+    case Script::KIRAT_RAI:
+    case Script::OL_ONAL:
+    case Script::SUNUWAR:
+    case Script::TODHRI:
+    case Script::TULU_TIGALARI:
       break;
   }
 
@@ -962,27 +972,6 @@ gfxPlatformMac::CreateGlobalHardwareVsyncSource() {
 #else
   // TODO: CADisplayLink
   return GetSoftwareVsyncSource();
-#endif
-}
-
-bool gfxPlatformMac::SupportsHDR() {
-  // HDR has 3 requirements:
-  // 1) high peak brightness
-  // 2) high contrast ratio
-  // 3) color depth > 24
-  if (GetScreenDepth() <= 24) {
-    return false;
-  }
-
-#ifdef MOZ_WIDGET_UIKIT
-  return false;
-#elif defined(EARLY_BETA_OR_EARLIER)
-  // Screen is capable. Is the OS capable?
-  // More-or-less supported in Catalina.
-  return true;
-#else
-  // Definitely supported in Big Sur.
-  return nsCocoaFeatures::OnBigSurOrLater();
 #endif
 }
 

@@ -82,7 +82,7 @@ class _BuiltInThemes {
       lazy.AddonManager.maybeInstallBuiltinAddon(
         activeThemeID,
         activeBuiltInTheme.version,
-        `resource://builtin-themes/${activeBuiltInTheme.path}`
+        activeBuiltInTheme.path
       );
     }
   }
@@ -277,8 +277,8 @@ class _BuiltInThemes {
    *   there's none.
    */
   getColorwayIntensityL10nId(colorwayId) {
-    const result = ColorwayIntensityIdPostfixToL10nMap.find(
-      ([postfix, l10nId]) => colorwayId.endsWith(postfix)
+    const result = ColorwayIntensityIdPostfixToL10nMap.find(([postfix]) =>
+      colorwayId.endsWith(postfix)
     );
     return result ? result[1] : null;
   }

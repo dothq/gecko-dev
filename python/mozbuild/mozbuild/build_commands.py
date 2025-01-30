@@ -113,10 +113,10 @@ def _set_priority(priority, verbose):
 )
 @CommandArgument(
     "--priority",
-    default="less",
+    default="idle",
     metavar="priority",
     type=str,
-    help="idle/less/normal/more/high. (Default less)",
+    help="idle/less/normal/more/high. (Default idle)",
 )
 def build(
     command_context,
@@ -126,7 +126,7 @@ def build(
     directory=None,
     verbose=False,
     keep_going=False,
-    priority="less",
+    priority="idle",
 ):
     """Build the source tree.
 
@@ -279,7 +279,6 @@ def configure(
 )
 @CommandArgument(
     "--browser",
-    default="firefox",
     help="Web browser to automatically open. See webbrowser Python module.",
 )
 @CommandArgument("--url", help="URL of a build profile to display")

@@ -349,22 +349,22 @@ class HostCompileFlags(BaseCompileFlags):
             (
                 "HOST_CXXFLAGS",
                 context.config.substs.get("HOST_CXXFLAGS"),
-                ("HOST_CXXFLAGS", "HOST_CXX_LDFLAGS"),
+                ("HOST_CXXFLAGS",),
             ),
             (
                 "HOST_CFLAGS",
                 context.config.substs.get("HOST_CFLAGS"),
-                ("HOST_CFLAGS", "HOST_C_LDFLAGS"),
+                ("HOST_CFLAGS",),
             ),
             (
                 "HOST_OPTIMIZE",
                 self._optimize_flags(),
-                ("HOST_CFLAGS", "HOST_CXXFLAGS", "HOST_C_LDFLAGS", "HOST_CXX_LDFLAGS"),
+                ("HOST_CFLAGS", "HOST_CXXFLAGS"),
             ),
-            ("RTL", None, ("HOST_CFLAGS", "HOST_C_LDFLAGS")),
+            ("RTL", None, ("HOST_CFLAGS",)),
             ("HOST_DEFINES", None, ("HOST_CFLAGS", "HOST_CXXFLAGS")),
-            ("MOZBUILD_HOST_CFLAGS", [], ("HOST_CFLAGS", "HOST_C_LDFLAGS")),
-            ("MOZBUILD_HOST_CXXFLAGS", [], ("HOST_CXXFLAGS", "HOST_CXX_LDFLAGS")),
+            ("MOZBUILD_HOST_CFLAGS", [], ("HOST_CFLAGS",)),
+            ("MOZBUILD_HOST_CXXFLAGS", [], ("HOST_CXXFLAGS",)),
             (
                 "BASE_INCLUDES",
                 ["-I%s" % main_src_dir, "-I%s" % context.objdir],
@@ -419,16 +419,16 @@ class AsmFlags(BaseCompileFlags):
                     debug_flags += ["-F", "cv8"]
                 elif self._context.config.substs.get("OS_ARCH") != "Darwin":
                     debug_flags += ["-F", "dwarf"]
-            elif (
-                self._context.config.substs.get("OS_ARCH") == "WINNT"
-                and self._context.config.substs.get("TARGET_CPU") == "aarch64"
-            ):
-                # armasm64 accepts a paucity of options compared to ml/ml64.
-                pass
+            elif self._context.config.substs.get("CC_TYPE") == "clang-cl":
+                if self._context.config.substs.get("TARGET_CPU") == "aarch64":
+                    # armasm64 accepts a paucity of options compared to ml/ml64.
+                    pass
+                else:
+                    # Unintuitively, -Zi for ml/ml64 is equivalent to -Z7 for cl.exe.
+                    # -Zi for cl.exe has a different purpose, so this is only used here.
+                    debug_flags += ["-Zi"]
             else:
-                debug_flags += self._context.config.substs.get(
-                    "MOZ_DEBUG_FLAGS", ""
-                ).split()
+                debug_flags += self._context.config.substs.get("MOZ_DEBUG_FLAGS", [])
         return debug_flags
 
 
@@ -484,7 +484,7 @@ class LinkFlags(BaseCompileFlags):
         if all(
             [
                 self._context.config.substs.get("OS_ARCH") == "WINNT",
-                not self._context.config.substs.get("GNU_CC"),
+                self._context.config.substs.get("CC_TYPE") == "clang-cl",
                 not self._context.config.substs.get("MOZ_DEBUG"),
             ]
         ):
@@ -503,7 +503,7 @@ class TargetCompileFlags(BaseCompileFlags):
         if self._context.config.substs.get(
             "MOZ_DEBUG"
         ) or self._context.config.substs.get("MOZ_DEBUG_SYMBOLS"):
-            return self._context.config.substs.get("MOZ_DEBUG_FLAGS", "").split()
+            return self._context.config.substs.get("MOZ_DEBUG_FLAGS", [])
         return []
 
     def _warnings_as_errors(self):
@@ -514,14 +514,14 @@ class TargetCompileFlags(BaseCompileFlags):
     def _optimize_flags(self):
         if not self._context.config.substs.get("MOZ_OPTIMIZE"):
             return []
-        optimize_flags = None
-        if self._context.config.substs.get("MOZ_PGO"):
-            optimize_flags = self._context.config.substs.get("MOZ_PGO_OPTIMIZE_FLAGS")
-        if not optimize_flags:
-            # If MOZ_PGO_OPTIMIZE_FLAGS is empty we fall back to
-            # MOZ_OPTIMIZE_FLAGS. Presently this occurs on Windows.
-            optimize_flags = self._context.config.substs.get("MOZ_OPTIMIZE_FLAGS")
-        return optimize_flags
+        # js/src/* have their own optimization flag when not in js standalone
+        # mode.
+        if not self._context.config.substs.get("JS_STANDALONE"):
+            relsrcdir = self._context.relsrcdir
+            if relsrcdir == "js/src" or relsrcdir.startswith("js/src/"):
+                return self._context.config.substs.get("MOZ_JS_OPTIMIZE_FLAGS")
+
+        return self._context.config.substs.get("MOZ_OPTIMIZE_FLAGS")
 
     def __setitem__(self, key, value):
         if key not in self._known_keys:
@@ -710,25 +710,6 @@ class WasmFlags(TargetCompileFlags):
             (
                 "EXTRA_INCLUDES",
                 ["-I%s/dist/include" % context.config.topobjdir],
-                ("WASM_CXXFLAGS", "WASM_CFLAGS"),
-            ),
-            (
-                "OS_INCLUDES",
-                list(
-                    itertools.chain(
-                        *(
-                            context.config.substs.get(v, [])
-                            for v in (
-                                "NSPR_CFLAGS",
-                                "NSS_CFLAGS",
-                                "MOZ_JPEG_CFLAGS",
-                                "MOZ_PNG_CFLAGS",
-                                "MOZ_ZLIB_CFLAGS",
-                                "MOZ_PIXMAN_CFLAGS",
-                            )
-                        )
-                    )
-                ),
                 ("WASM_CXXFLAGS", "WASM_CFLAGS"),
             ),
             ("DEBUG", self._debug_flags(), ("WASM_CFLAGS", "WASM_CXXFLAGS")),
@@ -1223,8 +1204,8 @@ class Files(SubContext):
 
     ``foo.html``
        Will match only the ``foo.html`` file in the current directory.
-    ``*.jsm``
-       Will match all ``.jsm`` files in the current directory.
+    ``*.mjs``
+       Will match all ``.mjs`` files in the current directory.
     ``**/*.cpp``
        Will match all ``.cpp`` files in this and all child directories.
     ``foo/*.css``
@@ -2266,12 +2247,6 @@ VARIABLES = {
         """List of manifest files defining MozPerftest performance tests.
         """,
     ),
-    "CRAMTEST_MANIFESTS": (
-        ManifestparserManifestList,
-        list,
-        """List of manifest files defining cram unit tests.
-        """,
-    ),
     "TELEMETRY_TESTS_CLIENT_MANIFESTS": (
         ManifestparserManifestList,
         list,
@@ -2623,7 +2598,7 @@ VARIABLES = {
 
 # Sanity check: we don't want any variable above to have a list as storage type.
 for name, (storage_type, input_types, docs) in VARIABLES.items():
-    if storage_type == list:
+    if storage_type is list:
         raise RuntimeError('%s has a "list" storage type. Use "List" instead.' % name)
 
 # Set of variables that are only allowed in templates:
@@ -2943,19 +2918,21 @@ SPECIAL_VARIABLES = {
         list,
         """JavaScript modules to install in the test-only destination.
 
-        Some JavaScript modules (JSMs) are test-only and not distributed
+        Some JavaScript modules are test-only and not distributed
         with Firefox. This variable defines them.
 
         To install modules in a subdirectory, use properties of this
         variable to control the final destination. e.g.
 
-        ``TESTING_JS_MODULES.foo += ['module.jsm']``.
+        ``TESTING_JS_MODULES.foo += ['module.sys.mjs']``.
         """,
     ),
     "TEST_DIRS": (
-        lambda context: context["DIRS"]
-        if context.config.substs.get("ENABLE_TESTS")
-        else TestDirsPlaceHolder,
+        lambda context: (
+            context["DIRS"]
+            if context.config.substs.get("ENABLE_TESTS")
+            else TestDirsPlaceHolder
+        ),
         list,
         """Like DIRS but only for directories that contain test-only code.
 

@@ -15,12 +15,12 @@
 // it.
 export const backgroundTaskTimeoutSec = 30;
 
-export async function runBackgroundTask(commandLine) {
+export async function runBackgroundTask() {
   console.log("Running BackgroundTask_install.");
 
   console.log("Cleaning up update files.");
   try {
-    Cc["@mozilla.org/updates/update-manager;1"]
+    await Cc["@mozilla.org/updates/update-manager;1"]
       .getService(Ci.nsIUpdateManager)
       .doInstallCleanup();
   } catch (ex) {

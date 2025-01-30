@@ -16,13 +16,16 @@ Please note that some targeting attributes require stricter controls on the tele
 * [attributionData](#attributiondata)
 * [backgroundTaskName](#backgroundtaskname)
 * [blockedCountByType](#blockedcountbytype)
+* [browserIsSelected](#browserisselected)
 * [browserSettings](#browsersettings)
+* [canCreateSelectableProfiles](#cancreateselectableprofiles)
 * [creditCardsSaved](#creditcardssaved)
 * [currentDate](#currentdate)
 * [defaultPDFHandler](#defaultpdfhandler)
 * [devToolsOpenedCount](#devtoolsopenedcount)
-* [distributionId](#distributionId)
+* [distributionId](#distributionid)
 * [doesAppNeedPin](#doesappneedpin)
+* [doesAppNeedPinUncached](#doesappneedpinuncached)
 * [doesAppNeedPrivatePin](#doesappneedprivatepin)
 * [firefoxVersion](#firefoxversion)
 * [fxViewButtonAreaType](#fxviewbuttonareatype)
@@ -33,18 +36,20 @@ Please note that some targeting attributes require stricter controls on the tele
 * [hasMigratedHistory](#hasmigratedhistory)
 * [hasMigratedPasswords](#hasmigratedpasswords)
 * [hasPinnedTabs](#haspinnedtabs)
+* [hasSelectableProfiles](#hasselectableprofiles)
 * [homePageSettings](#homepagesettings)
-* [inMr2022Holdback](#inmr2022holdback)
 * [isBackgroundTaskMode](#isbackgroundtaskmode)
 * [isChinaRepack](#ischinarepack)
 * [isDefaultBrowser](#isdefaultbrowser)
+* [isDefaultBrowserUncached](#isdefaultbrowseruncached)
 * [isDefaultHandler](#isdefaulthandler)
 * [isDeviceMigration](#isdevicemigration)
 * [isFxAEnabled](#isfxaenabled)
-* [isFxASignedIn](#isFxASignedIn)
+* [isFxASignedIn](#isfxasignedin)
 * [isMajorUpgrade](#ismajorupgrade)
+* [isMSIX](#ismsix)
 * [isRTAMO](#isrtamo)
-* [isWhatsNewPanelEnabled](#iswhatsnewpanelenabled)
+* [unhandledCampaignAction](#unhandledCampaignAction)
 * [launchOnLoginEnabled](#launchonloginenabled)
 * [locale](#locale)
 * [localeLanguageCode](#localelanguagecode)
@@ -62,9 +67,10 @@ Please note that some targeting attributes require stricter controls on the tele
 * [providerCohorts](#providercohorts)
 * [recentBookmarks](#recentbookmarks)
 * [region](#region)
-* [screenImpressions](#screenImpressions)
+* [screenImpressions](#screenimpressions)
 * [searchEngines](#searchengines)
 * [sync](#sync)
+* [systemArch](#systemarch)
 * [topFrecentSites](#topfrecentsites)
 * [totalBlockedCount](#totalblockedcount)
 * [totalBookmarksCount](#totalbookmarkscount)
@@ -74,7 +80,8 @@ Please note that some targeting attributes require stricter controls on the tele
 * [useEmbeddedMigrationWizard](#useembeddedmigrationwizard)
 * [userPrefs](#userprefs)
 * [usesFirefoxSync](#usesfirefoxsync)
-* [xpinstallEnabled](#xpinstallEnabled)
+* [xpinstallEnabled](#xpinstallenabled)
+* [totalSearches](#totalsearches)
 
 ## Detailed usage
 
@@ -233,6 +240,10 @@ Is Firefox the user's default browser?
 ```ts
 declare const isDefaultBrowser: boolean;
 ```
+
+### `isDefaultBrowserUncached`
+
+Behaves the same as `isDefaultBrowser`, but retrieves the current value directly from shell service instead of using the cached value. This may not be as performant.
 
 ### `isDefaultHandler`
 
@@ -630,16 +641,6 @@ Boolean pref that gets set the first time the user opens the FxA toolbar panel
 declare const hasAccessedFxAPanel: boolean;
 ```
 
-### `isWhatsNewPanelEnabled`
-
-Boolean pref that controls if the What's New panel feature is enabled
-
-#### Definition
-
-```ts
-declare const isWhatsNewPanelEnabled: boolean;
-```
-
 ### `totalBlockedCount`
 
 Total number of events from the content blocking database
@@ -757,7 +758,7 @@ Returns a breakdown by category of all blocked resources in the past 42 days.
 #### Definition
 
 ```
-declare const messageImpressions: { [key: string]: number };
+declare const blockedCountByType: { [key: string]: number };
 ```
 
 #### Examples
@@ -770,6 +771,19 @@ Object {
   fingerprinterCount: 3,
   socialCount: 2
 }
+```
+
+### `browserIsSelected`
+
+A context property included for all triggers, indicating whether the tab the
+trigger came from is the currently selected tab. For some triggers that don't
+actually emit from tabs, this is always true. For other triggers, like
+`openURL`, this can be false if the trigger happened in a background tab.
+
+#### Definition
+
+```ts
+declare const browserIsSelected: boolean;
 ```
 
 ### `isChinaRepack`
@@ -964,7 +978,11 @@ user activity where the first entry is the total urls visited for that day.
 
 ### `doesAppNeedPin`
 
-Checks if Firefox app can be and isn't pinned to OS taskbar/dock.
+Checks if Firefox app can be and isn't pinned to OS taskbar/dock or Windows start menu in MSIX builds.
+
+### `doesAppNeedPinUncached`
+
+Does the same as `doesAppNeedPin`, but retrieves the current value directly from shell service instead of using the cached value. This may not be as performant.
 
 ### `doesAppNeedPrivatePin`
 
@@ -982,10 +1000,6 @@ mode, or `null` if this invocation is not running in background task mode.
 ### `userPrefersReducedMotion`
 
 Checks if user prefers reduced motion as indicated by the value of a media query for `prefers-reduced-motion`.
-
-### `inMr2022Holdback`
-
-A boolean. `true` when the user is in the Major Release 2022 holdback study.
 
 ### `distributionId`
 
@@ -1020,9 +1034,26 @@ A boolean. `true` if the user is configured to use the embedded Migration Wizard
 
 A boolean. `true` when [RTAMO](first-run.md#return-to-amo-rtamo) has been used to download Firefox, `false` otherwise.
 
+### `canCreateSelectableProfiles`
+
+A boolean. `true` when both the current install and current profile support creating additional profiles using the `SelectableProfileService`; `false` otherwise.
+
+### `hasSelectableProfiles`
+
+A boolean. `true` when the `toolkit.profiles.storeID` pref has a value. Indicates that the profile is part of a profile group managed by the `SelectableProfileService`, and the user has used the multiple profiles feature. `false` otherwise.
+
+### `unhandledCampaignAction`
+
+A string. A special message action to be executed on first-run. For example, `"SET_DEFAULT_BROWSER"` when the user selected to set as default via the [install marketing page](https://www.mozilla.org/firefox/new/) and set default has not yet been automatically triggered, `null` otherwise.
+
+### `isMSIX`
+
+A boolean. `true` when hasPackageId is `true` on Windows, `false` otherwise.
+
 ### `isDeviceMigration`
 
 A boolean. `true` when [support.mozilla.org](https://support.mozilla.org) has been used to download the browser as part of a "migration" campaign, for device migration guidance, `false` otherwise.
+
 ### `screenImpressions`
 
 An array that maps about:welcome screen IDs to their most recent impression timestamp. Should only be used for unique screen IDs to avoid unintentionally targeting messages with identical screen IDs.
@@ -1031,3 +1062,17 @@ An array that maps about:welcome screen IDs to their most recent impression time
 ```
 declare const screenImpressions: { [key: string]: Array<UnixEpochNumber> };
 ```
+
+### `systemArch`
+
+The architecture of this Firefox build: x86, x86-64 or aarch64.
+
+#### Definition
+
+```ts
+declare const systemArch: string | null;
+```
+
+### `totalSearches`
+
+Returns the number of times a user has completed a search in the URL Bar. The number is arbitrarily capped at 100.

@@ -18,7 +18,7 @@
 
 #include "nsCharTraits.h"
 #include "nsString.h"
-#include "nsStringBuffer.h"
+#include "mozilla/StringBuffer.h"
 #include "nsReadableUtils.h"
 #include "nsISupportsImpl.h"
 
@@ -113,8 +113,7 @@ class nsTextFragment final {
     }
     ReleaseText();
     if (aForce2b && !aUpdateBidi) {
-      nsStringBuffer* buffer = nsStringBuffer::FromString(aString);
-      if (buffer) {
+      if (mozilla::StringBuffer* buffer = aString.GetStringBuffer()) {
         NS_ADDREF(m2b = buffer);
         mState.mInHeap = true;
         mState.mIs2b = true;
@@ -154,19 +153,13 @@ class nsTextFragment final {
                               const mozilla::fallible_t& aFallible) const {
     if (mState.mIs2b) {
       if (aString.IsEmpty()) {
-        m2b->ToString(mState.mLength, aString);
+        aString.Assign(m2b, mState.mLength);
         return true;
       }
-      bool ok = aString.Append(Get2b(), mState.mLength, aFallible);
-      if (!ok) {
-        return false;
-      }
-
-      return true;
-    } else {
-      return AppendASCIItoUTF16(Substring(m1b, mState.mLength), aString,
-                                aFallible);
+      return aString.Append(Get2b(), mState.mLength, aFallible);
     }
+    return AppendASCIItoUTF16(Substring(m1b, mState.mLength), aString,
+                              aFallible);
   }
 
   /**
@@ -293,6 +286,55 @@ class nsTextFragment final {
    */
   [[nodiscard]] bool TextEquals(const nsTextFragment& aOther) const;
 
+  constexpr static uint32_t kNotFound = UINT32_MAX;
+
+  [[nodiscard]] uint32_t FindChar(char aChar, uint32_t aOffset = 0) const {
+    if (aOffset >= GetLength()) {
+      return kNotFound;
+    }
+    if (Is2b()) {
+      const char16_t* end = Get2b() + GetLength();
+      for (const char16_t* ch = Get2b() + aOffset; ch != end; ch++) {
+        if (*ch == aChar) {
+          return ch - Get2b();
+        }
+      }
+      return kNotFound;
+    }
+    const char* end = Get1b() + GetLength();
+    for (const char* ch = Get1b() + aOffset; ch != end; ch++) {
+      if (*ch == aChar) {
+        return ch - Get1b();
+      }
+    }
+    return kNotFound;
+  }
+
+  [[nodiscard]] uint32_t FindChar(char16_t aChar, uint32_t aOffset = 0) const {
+    if (aOffset >= GetLength()) {
+      return kNotFound;
+    }
+    if (Is2b()) {
+      const char16_t* end = Get2b() + GetLength();
+      for (const char16_t* ch = Get2b() + aOffset; ch != end; ch++) {
+        if (*ch == aChar) {
+          return ch - Get2b();
+        }
+      }
+      return kNotFound;
+    }
+    if (aChar > 0xFF) {
+      return kNotFound;
+    }
+    const char* end = Get1b() + GetLength();
+    for (const char* ch = Get1b() + aOffset; ch != end; ch++) {
+      if (*ch == aChar) {
+        return ch - Get1b();
+      }
+    }
+    return kNotFound;
+  }
+
  private:
   void ReleaseText();
 
@@ -303,7 +345,7 @@ class nsTextFragment final {
   void UpdateBidiFlag(const char16_t* aBuffer, uint32_t aLength);
 
   union {
-    nsStringBuffer* m2b;
+    mozilla::StringBuffer* m2b;
     const char* m1b;  // This is const since it can point to shared data
   };
 

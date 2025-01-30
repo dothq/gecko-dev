@@ -1,7 +1,4 @@
-import {
-  actionCreators as ac,
-  actionTypes as at,
-} from "common/Actions.sys.mjs";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
 import { DetectUserSessionStart } from "content-src/lib/detect-user-session-start";
 
 describe("detectUserSessionStart", () => {
@@ -59,7 +56,11 @@ describe("detectUserSessionStart", () => {
         dispatch,
         ac.AlsoToMain({
           type: at.SAVE_SESSION_PERF_DATA,
-          data: { visibility_event_rcvd_ts: sinon.match.number },
+          data: {
+            visibility_event_rcvd_ts: sinon.match.number,
+            window_inner_width: sinon.match.number,
+            window_inner_height: sinon.match.number,
+          },
         })
       );
     });

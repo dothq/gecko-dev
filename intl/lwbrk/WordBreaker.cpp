@@ -41,21 +41,6 @@ using mozilla::unicode::GetGenCategory;
 #define IS_HIRAGANA(c) ((0x3040 <= (c)) && ((c) <= 0x309F))
 #define IS_HALFWIDTHKATAKANA(c) ((0xFF60 <= (c)) && ((c) <= 0xFF9F))
 
-// Return true if aChar belongs to a SEAsian script that is written without
-// word spaces, so we need to use the "complex breaker" to find possible word
-// boundaries. (https://en.wikipedia.org/wiki/Scriptio_continua)
-// (How well this works depends on the level of platform support for finding
-// possible line breaks - or possible word boundaries - in the particular
-// script. Thai, at least, works pretty well on the major desktop OSes. If
-// the script is not supported by the platform, we just won't find any useful
-// boundaries.)
-static bool IsScriptioContinua(char16_t aChar) {
-  Script sc = UnicodeProperties::GetScriptCode(aChar);
-  return sc == Script::THAI || sc == Script::MYANMAR || sc == Script::KHMER ||
-         sc == Script::JAVANESE || sc == Script::BALINESE ||
-         sc == Script::SUNDANESE || sc == Script::LAO;
-}
-
 /* static */
 WordBreaker::WordBreakClass WordBreaker::GetClass(char16_t c) {
   // begin of the hack
@@ -77,7 +62,7 @@ WordBreaker::WordBreakClass WordBreaker::GetClass(char16_t c) {
     if (GetGenCategory(c) == nsUGenCategory::kPunctuation) {
       return kWbClassPunct;
     }
-    if (IsScriptioContinua(c)) {
+    if (UnicodeProperties::IsScriptioContinua(c)) {
       return kWbClassScriptioContinua;
     }
     return kWbClassAlphaLetter;
@@ -97,7 +82,7 @@ WordBreaker::WordBreakClass WordBreaker::GetClass(char16_t c) {
   if (GetGenCategory(c) == nsUGenCategory::kPunctuation) {
     return kWbClassPunct;
   }
-  if (IsScriptioContinua(c)) {
+  if (UnicodeProperties::IsScriptioContinua(c)) {
     return kWbClassScriptioContinua;
   }
   return kWbClassAlphaLetter;
@@ -120,9 +105,8 @@ WordRange WordBreaker::FindWord(const nsAString& aText, uint32_t aPos,
         capi::ICU4XWordSegmenter_create_auto(mozilla::intl::GetDataProvider());
     MOZ_ASSERT(result.is_ok);
     ICU4XWordSegmenter segmenter(result.ok);
-    ICU4XWordBreakIteratorUtf16 iterator =
-        segmenter.segment_utf16(diplomat::span<const uint16_t>(
-            (const uint16_t*)aText.BeginReading(), aText.Length()));
+    ICU4XWordBreakIteratorUtf16 iterator = segmenter.segment_utf16(
+        std::u16string_view(aText.BeginReading(), aText.Length()));
 
     uint32_t previousPos = 0;
     while (true) {

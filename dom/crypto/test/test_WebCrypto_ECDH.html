@@ -154,10 +154,22 @@ TestArray.addTest(
 
 // -----------------------------------------------------------------------------
 TestArray.addTest(
+  "Verify that ECDH import fails with a key with a mismatched 'crv' field",
+  function() {
+    var that = this;
+    var alg = { name: "ECDH", namedCurve: "P-521"};
+
+    crypto.subtle.importKey("jwk", tv.ecdsa_jwk_crv_mismatch.pub_jwk, alg, true, ["verify"])
+      .then(error(that), complete(that));
+  }
+);
+
+// -----------------------------------------------------------------------------
+TestArray.addTest(
   "JWK import an ECDH public and private key and derive bits (P-256)",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve: "P-256" };
 
     var pubKey, privKey;
     function setPub(x) { pubKey = x; }
@@ -170,7 +182,7 @@ TestArray.addTest(
     Promise.all([
       crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, alg, false, ["deriveBits"])
         .then(setPriv, error(that)),
-      crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, alg, false, ["deriveBits"])
+      crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, alg, false, [])
         .then(setPub, error(that)),
     ]).then(doDerive, error(that))
       .then(memcmp_complete(that, tv.ecdh_p256.secret), error(that));
@@ -182,7 +194,7 @@ TestArray.addTest(
   "JWK import an ECDH public and private key and derive bits (P-384)",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve: "P-384"};
 
     var pubKey, privKey;
     function setPub(x) { pubKey = x; }
@@ -195,7 +207,7 @@ TestArray.addTest(
     Promise.all([
       crypto.subtle.importKey("jwk", tv.ecdh_p384.jwk_priv, alg, false, ["deriveBits"])
         .then(setPriv, error(that)),
-      crypto.subtle.importKey("jwk", tv.ecdh_p384.jwk_pub, alg, false, ["deriveBits"])
+      crypto.subtle.importKey("jwk", tv.ecdh_p384.jwk_pub, alg, false, [])
         .then(setPub, error(that)),
     ]).then(doDerive, error(that))
       .then(memcmp_complete(that, tv.ecdh_p384.secret), error(that));
@@ -207,7 +219,7 @@ TestArray.addTest(
   "JWK import an ECDH public and private key and derive bits (P-521)",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve : "P-521" };
 
     var pubKey, privKey;
     function setPub(x) { pubKey = x; }
@@ -220,7 +232,7 @@ TestArray.addTest(
     Promise.all([
       crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_priv, alg, false, ["deriveBits"])
         .then(setPriv, error(that)),
-      crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_pub, alg, false, ["deriveBits"])
+      crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_pub, alg, false, [])
         .then(setPub, error(that)),
     ]).then(doDerive, error(that))
       .then(memcmp_complete(that, tv.ecdh_p521.secret), error(that));
@@ -232,7 +244,7 @@ TestArray.addTest(
   "JWK import/export roundtrip with ECDH (P-256)",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve : "P-256" };
 
     var pubKey, privKey;
     function setPub(x) { pubKey = x; }
@@ -248,7 +260,7 @@ TestArray.addTest(
     Promise.all([
       crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, alg, true, ["deriveBits"])
         .then(setPriv, error(that)),
-      crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, alg, true, ["deriveBits"])
+      crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, alg, true, [])
         .then(setPub, error(that)),
     ]).then(doExportPub, error(that))
       .then(function(x) {
@@ -277,7 +289,7 @@ TestArray.addTest(
   "PKCS8 import/export roundtrip with ECDH (P-256)",
   function() {
     var that = this;
-    var alg = { name: "ECDH",  namedCurve: "P-256" };
+    var alg = { name: "ECDH", namedCurve: "P-256" };
 
     function doExportPriv(x) {
       return crypto.subtle.exportKey("pkcs8", x);
@@ -296,7 +308,7 @@ TestArray.addTest(
   "Test that importing bad JWKs fails",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve: "P-256" };
     var tvs = tv.ecdh_p256_negative;
 
     function doTryImport(jwk) {
@@ -306,6 +318,7 @@ TestArray.addTest(
     }
 
     doTryImport(tvs.jwk_bad_crv)()
+      .then(error(that), doTryImport(tvs.jwk_different_crv))
       .then(error(that), doTryImport(tvs.jwk_missing_crv))
       .then(error(that), doTryImport(tvs.jwk_missing_x))
       .then(error(that), doTryImport(tvs.jwk_missing_y))
@@ -349,7 +362,7 @@ TestArray.addTest(
   "Derive an HMAC key from two ECDH keys and test sign/verify",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve: "P-521" };
     var algDerived = { name: "HMAC", hash: {name: "SHA-1"} };
 
     var pubKey, privKey;
@@ -383,7 +396,7 @@ TestArray.addTest(
     Promise.all([
       crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_priv, alg, false, ["deriveKey"])
         .then(setPriv),
-      crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_pub, alg, false, ["deriveKey"])
+      crypto.subtle.importKey("jwk", tv.ecdh_p521.jwk_pub, alg, false, [])
         .then(setPub),
     ]).then(doDerive)
       .then(doSignAndVerify)
@@ -396,10 +409,11 @@ TestArray.addTest(
   "Derive an HKDF key from two ECDH keys and derive an HMAC key from that",
   function() {
     var that = this;
+    var alg = { name: "ECDH", namedCurve: "P-256" };
 
     async function doTest() {
-      let privKey = await crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, "ECDH", false, ["deriveKey"]);
-      let pubKey = await crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, "ECDH", false, []);
+      let privKey = await crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, alg, false, ["deriveKey"]);
+      let pubKey = await crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_pub, alg, false, []);
       let ecdhAlg = { name: "ECDH", public: pubKey };
       let hkdfAlg = { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(), info: new Uint8Array() };
       let hkdfKey = await crypto.subtle.deriveKey(ecdhAlg, privKey, hkdfAlg, false, ["deriveKey"]);
@@ -421,7 +435,7 @@ TestArray.addTest(
     var keys = ["spki", "spki_id_ecpk"];
 
     function doImport(key) {
-      return crypto.subtle.importKey("spki", tv.ecdh_p256[key], alg, true, ["deriveBits"]);
+      return crypto.subtle.importKey("spki", tv.ecdh_p256[key], alg, true, []);
     }
 
     function doExport(x) {
@@ -454,7 +468,7 @@ TestArray.addTest(
   "SPKI/JWK import ECDH keys (P-256) and derive a known secret",
   function() {
     var that = this;
-    var alg = { name: "ECDH" };
+    var alg = { name: "ECDH", namedCurve: "P-256" };
 
     var pubKey, privKey;
     function setPub(x) { pubKey = x; }
@@ -465,7 +479,7 @@ TestArray.addTest(
     }
 
     Promise.all([
-      crypto.subtle.importKey("spki", tv.ecdh_p256.spki, alg, false, ["deriveBits"])
+      crypto.subtle.importKey("spki", tv.ecdh_p256.spki, alg, false, [])
         .then(setPub),
       crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, alg, false, ["deriveBits"])
         .then(setPriv),
@@ -485,7 +499,7 @@ TestArray.addTest(
       return crypto.subtle.exportKey("raw", x);
     }
 
-    crypto.subtle.importKey("raw", tv.ecdh_p256.raw, alg, true, ["deriveBits"])
+    crypto.subtle.importKey("raw", tv.ecdh_p256.raw, alg, true, [])
       .then(doExport)
       .then(memcmp_complete(that, tv.ecdh_p256.raw), error(that));
   }
@@ -498,7 +512,7 @@ TestArray.addTest(
     var that = this;
     var alg = { name: "ECDH", namedCurve: "P-256" };
 
-    crypto.subtle.importKey("raw", tv, alg, false, ["deriveBits"])
+    crypto.subtle.importKey("raw", tv.ecdh_p256_negative.raw_bad, alg, false, [])
       .then(error(that), complete(that));
   }
 );
@@ -510,7 +524,7 @@ TestArray.addTest(
     var that = this;
     var alg = { name: "ECDH", namedCurve: "P-256" };
 
-    crypto.subtle.importKey("unknown", tv, alg, false, ["deriveBits"])
+    crypto.subtle.importKey("unknown", tv.ecdh_p256.raw, alg, false, [])
       .then(error(that), complete(that));
   }
 );
@@ -522,7 +536,7 @@ TestArray.addTest(
     var that = this;
     var alg = { name: "ECDH", namedCurve: "P-256" };
 
-    crypto.subtle.importKey("raw", tv, alg, false, ["deriveBits"])
+    crypto.subtle.importKey("raw", tv.ecdh_p256_negative.raw_short, alg, false, [])
       .then(error(that), complete(that));
   }
 );
@@ -534,7 +548,7 @@ TestArray.addTest(
     var that = this;
     var alg = { name: "ECDH", namedCurve: "P-256" };
 
-    crypto.subtle.importKey("raw", tv, alg, false, ["deriveBits"])
+    crypto.subtle.importKey("raw", tv.ecdh_p256_negative.raw_long, alg, false, [])
       .then(error(that), complete(that));
   }
 );
@@ -546,7 +560,7 @@ TestArray.addTest(
     var that = this;
     var alg = { name: "ECDH", namedCurve: "P-256" };
 
-    crypto.subtle.importKey("raw", tv, alg, false, ["deriveBits"])
+    crypto.subtle.importKey("raw", tv.ecdh_p256_negative.raw_compressed, alg, false, [])
       .then(error(that), complete(that));
   }
 );
@@ -567,7 +581,7 @@ TestArray.addTest(
     }
 
     Promise.all([
-      crypto.subtle.importKey("raw", tv.ecdh_p256.raw, alg, false, ["deriveBits"])
+      crypto.subtle.importKey("raw", tv.ecdh_p256.raw, alg, false, [])
         .then(setPub),
       crypto.subtle.importKey("jwk", tv.ecdh_p256.jwk_priv, alg, false, ["deriveBits"])
         .then(setPriv),

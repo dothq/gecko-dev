@@ -76,8 +76,6 @@ export let HomePage = {
       return;
     }
 
-    Services.telemetry.setEventRecordingEnabled("homepage", true);
-
     // Now we have the values, listen for future updates.
     this._ignoreListListener = this._handleIgnoreListUpdated.bind(this);
 
@@ -189,12 +187,7 @@ export let HomePage = {
       console.error(
         `Ignoring homepage setting for ${value} as it is on the ignore list.`
       );
-      Services.telemetry.recordEvent(
-        "homepage",
-        "preference",
-        "ignore",
-        "set_blocked"
-      );
+      Glean.homepage.preferenceIgnore.record({ value: "set_blocked" });
       return false;
     }
     Services.prefs.setStringPref(kPrefName, value);
@@ -274,9 +267,10 @@ export let HomePage = {
             return;
           }
           // getSetting does not need the module to be loaded.
-          const item = await lazy.ExtensionPreferencesManager.getSetting(
-            "homepage_override"
-          );
+          const item =
+            await lazy.ExtensionPreferencesManager.getSetting(
+              "homepage_override"
+            );
           if (item && item.id) {
             // During startup some modules may not be loaded yet, so we load
             // the setting we need prior to removal.
@@ -298,17 +292,12 @@ export let HomePage = {
         } else {
           this.clear();
         }
-        Services.telemetry.recordEvent(
-          "homepage",
-          "preference",
-          "ignore",
-          "saved_reset"
-        );
+        Glean.homepage.preferenceIgnore.record({ value: "saved_reset" });
       }
     }
   },
 
-  onWidgetRemoved(widgetId, area) {
+  onWidgetRemoved(widgetId) {
     if (widgetId == kWidgetId) {
       Services.prefs.setBoolPref(kWidgetRemovedPref, true);
       lazy.CustomizableUI.removeListener(this);
@@ -338,7 +327,10 @@ export let HomePage = {
       let navbarPlacements = lazy.CustomizableUI.getWidgetIdsInArea("nav-bar");
       let position = navbarPlacements.indexOf("urlbar-container");
       for (let i = position - 1; i >= 0; i--) {
-        if (!navbarPlacements[i].startsWith("customizableui-special-spring")) {
+        if (
+          !navbarPlacements[i].startsWith("customizableui-special-spring") &&
+          !navbarPlacements[i].includes("spacer")
+        ) {
           position = i + 1;
           break;
         }

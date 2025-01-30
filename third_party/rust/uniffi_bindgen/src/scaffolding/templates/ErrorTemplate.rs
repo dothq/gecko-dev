@@ -1,20 +1,17 @@
 {#
-// For each error declared in the UDL, we assume the caller has provided a corresponding
-// rust `enum`. We provide the traits for sending it across the FFI, which will fail to
-// compile if the provided struct has a different shape to the one declared in the UDL.
-//
-// We define a unit-struct to implement the trait to sidestep Rust's orphan rule (ADR-0006). It's
-// public so other crates can refer to it via an `[External='crate'] typedef`
+// Forward work to `uniffi_macros` This keeps macro-based and UDL-based generated code consistent.
 #}
 
-#[::uniffi::derive_error_for_udl(
-    {% if e.is_flat() -%}
-    flat_error,
-    {% if ci.should_generate_error_read(e) -%}
-    with_try_read,
-    {%- endif %}
-    {%- endif %}
-)]
+#[::uniffi::udl_derive(Error)]
+{% if e.is_flat() -%}
+#[uniffi(flat_error)]
+{% if ci.should_generate_error_read(e) -%}
+#[uniffi(with_try_read)]
+{%- endif %}
+{%- endif %}
+{%- if e.is_non_exhaustive() -%}
+#[non_exhaustive]
+{%- endif %}
 enum r#{{ e.name() }} {
     {%- for variant in e.variants() %}
     r#{{ variant.name() }} {

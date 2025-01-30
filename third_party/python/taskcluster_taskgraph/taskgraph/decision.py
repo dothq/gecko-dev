@@ -46,21 +46,21 @@ try_task_config_schema_v2 = Schema(
 )
 
 
-def full_task_graph_to_runnable_jobs(full_task_json):
-    runnable_jobs = {}
+def full_task_graph_to_runnable_tasks(full_task_json):
+    runnable_tasks = {}
     for label, node in full_task_json.items():
         if not ("extra" in node["task"] and "treeherder" in node["task"]["extra"]):
             continue
 
         th = node["task"]["extra"]["treeherder"]
-        runnable_jobs[label] = {"symbol": th["symbol"]}
+        runnable_tasks[label] = {"symbol": th["symbol"]}
 
         for i in ("groupName", "groupSymbol", "collection"):
             if i in th:
-                runnable_jobs[label][i] = th[i]
+                runnable_tasks[label][i] = th[i]
         if th.get("machine", {}).get("platform"):
-            runnable_jobs[label]["platform"] = th["machine"]["platform"]
-    return runnable_jobs
+            runnable_tasks[label]["platform"] = th["machine"]["platform"]
+    return runnable_tasks
 
 
 def taskgraph_decision(options, parameters=None):
@@ -74,6 +74,28 @@ def taskgraph_decision(options, parameters=None):
      * generating a set of artifacts to memorialize the graph
      * calling TaskCluster APIs to create the graph
     """
+    level = logging.INFO
+    if options.get("verbose"):
+        level = logging.DEBUG
+
+    logging.root.setLevel(level)
+    # Handlers must have an explicit level set for them to properly filter
+    # messages from child loggers (such as the optimization log a few lines
+    # down).
+    for h in logging.root.handlers:
+        h.setLevel(level)
+
+    if not os.path.isdir(ARTIFACTS_DIR):
+        os.mkdir(ARTIFACTS_DIR)
+
+    # optimizations are difficult to debug after the fact, so we always
+    # log them at DEBUG level, and write the log as a separate artifact
+    opt_log = logging.getLogger("optimization")
+    opt_log.setLevel(logging.DEBUG)
+    opt_handler = logging.FileHandler(ARTIFACTS_DIR / "optimizations.log", mode="w")
+    if logging.root.handlers:
+        opt_handler.setFormatter(logging.root.handlers[0].formatter)
+    opt_log.addHandler(opt_handler)
 
     parameters = parameters or (
         lambda graph_config: get_decision_parameters(graph_config, options)
@@ -104,7 +126,7 @@ def taskgraph_decision(options, parameters=None):
 
     # write out the public/runnable-jobs.json file
     write_artifact(
-        "runnable-jobs.json", full_task_graph_to_runnable_jobs(full_task_json)
+        "runnable-jobs.json", full_task_graph_to_runnable_tasks(full_task_json)
     )
 
     # this is just a test to check whether the from_json() function is working
@@ -185,6 +207,9 @@ def get_decision_parameters(graph_config, options):
 
     # Define default filter list, as most configurations shouldn't need
     # custom filters.
+    parameters["files_changed"] = repo.get_changed_files(
+        rev=parameters["head_rev"], base_rev=parameters["base_rev"]
+    )
     parameters["filters"] = [
         "target_tasks_method",
     ]
@@ -214,9 +239,9 @@ def get_decision_parameters(graph_config, options):
         parameters.update(PER_PROJECT_PARAMETERS[project])
     except KeyError:
         logger.warning(
-            "using default project parameters; add {} to "
-            "PER_PROJECT_PARAMETERS in {} to customize behavior "
-            "for this project".format(project, __file__)
+            f"using default project parameters; add {project} to "
+            f"PER_PROJECT_PARAMETERS in {__file__} to customize behavior "
+            "for this project"
         )
         parameters.update(PER_PROJECT_PARAMETERS["default"])
 
@@ -354,7 +379,7 @@ def write_artifact(filename, data):
         import gzip
 
         with gzip.open(path, "wb") as f:
-            f.write(json.dumps(data))
+            f.write(json.dumps(data))  # type: ignore
     else:
         raise TypeError(f"Don't know how to write to {filename}")
 

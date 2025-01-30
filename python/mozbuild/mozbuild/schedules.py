@@ -43,6 +43,10 @@ EXCLUSIVE_COMPONENTS = [
     "macosx",
     "windows",
     "ios",
+    # application
+    "firefox",
+    "fenix",
+    "focus-android",
     # broad test harness categories
     "awsy",
     "condprofile",
@@ -66,6 +70,7 @@ EXCLUSIVE_COMPONENTS = [
     "mochitest-browser-a11y",
     "mochitest-browser-media",
     "mochitest-browser-chrome",
+    "mochitest-browser-translations",
     "mochitest-chrome",
     "mochitest-plain",
     "web-platform-tests-crashtest",

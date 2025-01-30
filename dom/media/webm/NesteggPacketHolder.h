@@ -78,7 +78,7 @@ class NesteggPacketHolder {
  private:
   ~NesteggPacketHolder() { nestegg_free_packet(mPacket); }
 
-  bool IsInitialized() { return mOffset >= 0; }
+  bool IsInitialized() const { return mOffset >= 0; }
 
   nestegg_packet* mPacket;
 
@@ -90,6 +90,7 @@ class NesteggPacketHolder {
   int64_t mTimestamp;
 
   // Packet duration in microseconds; -1 if unknown or retrieval failed.
+  // https://www.webmproject.org/docs/container/#BlockDuration
   int64_t mDuration;
 
   // Track ID.

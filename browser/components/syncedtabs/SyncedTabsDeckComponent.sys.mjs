@@ -87,6 +87,7 @@ SyncedTabsDeckComponent.prototype = {
     );
     // Set the initial panel to display
     this.updatePanel();
+    this._recordPanelToggle(true);
   },
 
   uninit() {
@@ -94,9 +95,20 @@ SyncedTabsDeckComponent.prototype = {
     Services.obs.removeObserver(this, UIState.ON_UPDATE);
     Services.obs.removeObserver(this, "intl:app-locales-changed");
     this._deckView.destroy();
+    this._recordPanelToggle(false);
   },
 
-  observe(subject, topic, data) {
+  async _recordPanelToggle(opened) {
+    const state = UIState.get();
+    const { status } = state;
+    Glean.syncedTabs.sidebarToggle.record({
+      opened,
+      synced_tabs_loaded: status === UIState.STATUS_SIGNED_IN,
+      version: "old",
+    });
+  },
+
+  observe(subject, topic) {
     switch (topic) {
       case this._SyncedTabs.TOPIC_TABS_CHANGED:
         this._syncedTabsListStore.getData();

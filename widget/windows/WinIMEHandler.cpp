@@ -295,16 +295,28 @@ nsresult IMEHandler::NotifyIME(nsWindow* aWindow,
         }
         return TSFTextStore::OnMouseButtonEvent(aIMENotification);
       case REQUEST_TO_COMMIT_COMPOSITION:
-        if (TSFTextStore::IsComposingOn(aWindow)) {
+        // In the TSF world, a DLL might manage hidden composition and that
+        // might cause a crash if we don't terminate it and disassociate the
+        // context.  Therefore, we should always try to commit composition.
+        if (IsTSFAvailable()) {
           TSFTextStore::CommitComposition(false);
-        } else if (IsIMMActive()) {
+        }
+        // Even if we're in the TSF mode, the active IME may be IMM.  Therefore,
+        // we need to use IMM handler too.
+        if (IsIMMActive()) {
           IMMHandler::CommitComposition(aWindow);
         }
         return NS_OK;
       case REQUEST_TO_CANCEL_COMPOSITION:
-        if (TSFTextStore::IsComposingOn(aWindow)) {
+        // In the TSF world, a DLL might manage hidden composition and that
+        // might cause a crash if we don't terminate it and disassociate the
+        // context.  Therefore, we should always try to commit composition.
+        if (IsTSFAvailable()) {
           TSFTextStore::CommitComposition(true);
-        } else if (IsIMMActive()) {
+        }
+        // Even if we're in the TSF mode, the active IME may be IMM.  Therefore,
+        // we need to use IMM handler too.
+        if (IsIMMActive()) {
           IMMHandler::CancelComposition(aWindow);
         }
         return NS_OK;
@@ -715,7 +727,7 @@ bool IMEHandler::IsOnScreenKeyboardSupported() {
   if (!IsWin11OrLater()) {
     // On Windows 10 we require tablet mode, unless the user has set the
     // relevant setting to enable the on-screen keyboard in desktop mode.
-    if (!IsInTabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
+    if (!IsInWin10TabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
       return false;
     }
   }
@@ -906,8 +918,8 @@ bool IMEHandler::IsKeyboardPresentOnSlate() {
 }
 
 // static
-bool IMEHandler::IsInTabletMode() {
-  bool isInTabletMode = WindowsUIUtils::GetInTabletMode();
+bool IMEHandler::IsInWin10TabletMode() {
+  bool isInTabletMode = WindowsUIUtils::GetInWin10TabletMode();
   if (isInTabletMode) {
     Preferences::SetString(kOskDebugReason, L"IITM: GetInTabletMode=true.");
   } else {

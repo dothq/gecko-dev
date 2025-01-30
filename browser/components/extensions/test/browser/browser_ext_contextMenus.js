@@ -693,6 +693,17 @@ function bookmarkContextMenuExtension() {
 }
 
 add_task(async function test_bookmark_contextmenu() {
+  info("Adding a bookmark to the bookmarks toolbar.");
+  let addedBookmark = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+    title: "Test",
+    url: "https://example.com",
+  });
+
+  registerCleanupFunction(async () => {
+    await PlacesUtils.bookmarks.remove(addedBookmark);
+  });
+
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, PAGE);
 
   await toggleBookmarksToolbar(true);
@@ -724,7 +735,7 @@ add_task(async function test_bookmark_sidebar_contextmenu() {
     await extension.startup();
     let bookmarkGuid = await extension.awaitMessage("bookmark-created");
 
-    let sidebar = window.SidebarUI.browser;
+    let sidebar = window.SidebarController.browser;
     let menu = sidebar.contentDocument.getElementById("placesContext");
     tree.selectItems([bookmarkGuid]);
     let shown = BrowserTestUtils.waitForEvent(menu, "popupshown");

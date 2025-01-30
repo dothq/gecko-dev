@@ -8,12 +8,6 @@ use crate::proc::Emitter;
 
 pub type BlockId = u32;
 
-#[derive(Copy, Clone, Debug)]
-pub struct MergeInstruction {
-    pub merge_block_id: BlockId,
-    pub continue_block_id: Option<BlockId>,
-}
-
 impl<I: Iterator<Item = u32>> super::Frontend<I> {
     // Registers a function call. It will generate a dummy handle to call, which
     // gets resolved after all the functions are processed.
@@ -59,10 +53,14 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                     })
                 },
                 local_variables: Arena::new(),
-                expressions: self
-                    .make_expression_storage(&module.global_variables, &module.constants),
+                expressions: self.make_expression_storage(
+                    &module.global_variables,
+                    &module.constants,
+                    &module.overrides,
+                ),
                 named_expressions: crate::NamedExpressions::default(),
                 body: crate::Block::new(),
+                diagnostic_filter_leaf: None,
             }
         };
 
@@ -113,6 +111,9 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
             }
         }
 
+        // Note the index this function's handle will be assigned, for tracing.
+        let function_index = module.functions.len();
+
         // Read body
         self.function_call_graph.add_node(fun_id);
         let mut parameters_sampling =
@@ -124,13 +125,10 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
             body_for_label: Default::default(),
             mergers: Default::default(),
             bodies: Default::default(),
+            module,
             function_id: fun_id,
             expressions: &mut fun.expressions,
             local_arena: &mut fun.local_variables,
-            const_arena: &mut module.constants,
-            const_expressions: &mut module.const_expressions,
-            type_arena: &module.types,
-            global_arena: &module.global_variables,
             arguments: &fun.arguments,
             parameter_sampling: &mut parameters_sampling,
         };
@@ -168,7 +166,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
         if let Some(ref prefix) = self.options.block_ctx_dump_prefix {
             let dump_suffix = match self.lookup_entry_point.get(&fun_id) {
                 Some(ep) => format!("block_ctx.{:?}-{}.txt", ep.stage, ep.name),
-                None => format!("block_ctx.Fun-{}.txt", module.functions.len()),
+                None => format!("block_ctx.Fun-{}.txt", function_index),
             };
             let dest = prefix.join(dump_suffix);
             let dump = format!("{block_ctx:#?}");
@@ -313,6 +311,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
             expressions: Arena::new(),
             named_expressions: crate::NamedExpressions::default(),
             body: crate::Block::new(),
+            diagnostic_filter_leaf: None,
         };
 
         // 1. copy the inputs from arguments to privates
@@ -569,6 +568,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
             stage: ep.stage,
             early_depth_test: ep.early_depth_test,
             workgroup_size: ep.workgroup_size,
+            workgroup_size_overrides: None,
             function,
         });
 
@@ -576,12 +576,13 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
     }
 }
 
-impl<'function> BlockContext<'function> {
+impl BlockContext<'_> {
     pub(super) fn gctx(&self) -> crate::proc::GlobalCtx {
         crate::proc::GlobalCtx {
-            types: self.type_arena,
-            constants: self.const_arena,
-            const_expressions: self.const_expressions,
+            types: &self.module.types,
+            constants: &self.module.constants,
+            overrides: &self.module.overrides,
+            global_expressions: &self.module.global_expressions,
         }
     }
 

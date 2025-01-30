@@ -35,6 +35,11 @@ namespace xsimd
     {
     };
 
+    template <class T, class A>
+    struct has_simd_register<std::complex<T>, A> : has_simd_register<T, A>
+    {
+    };
+
     namespace detail
     {
         template <class T, bool>
@@ -86,7 +91,7 @@ namespace xsimd
 
         // consistency checker
         template <class T, class A>
-        inline void static_check_supported_config()
+        XSIMD_INLINE void static_check_supported_config()
         {
             (void)static_check_supported_config_emitter<T, A>();
         }

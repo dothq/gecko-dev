@@ -7,11 +7,11 @@
 #ifndef mozilla_dom_BodyConsumer_h
 #define mozilla_dom_BodyConsumer_h
 
-#include "mozilla/dom/AbortSignal.h"
+#include "mozilla/GlobalTeardownObserver.h"
+#include "mozilla/GlobalFreezeObserver.h"
+#include "mozilla/dom/AbortFollower.h"
 #include "mozilla/dom/MutableBlobStorage.h"
 #include "nsIInputStreamPump.h"
-#include "nsIObserver.h"
-#include "nsWeakReference.h"
 
 class nsIThread;
 
@@ -22,19 +22,19 @@ class ThreadSafeWorkerRef;
 
 // In order to keep alive the object all the time, we use a ThreadSafeWorkerRef,
 // if created on workers.
-class BodyConsumer final : public nsIObserver,
-                           public nsSupportsWeakReference,
-                           public AbortFollower {
+class BodyConsumer final : public AbortFollower,
+                           public GlobalTeardownObserver,
+                           public GlobalFreezeObserver {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_NSIOBSERVER
 
-  enum ConsumeType {
-    CONSUME_ARRAYBUFFER,
-    CONSUME_BLOB,
-    CONSUME_FORMDATA,
-    CONSUME_JSON,
-    CONSUME_TEXT,
+  enum class ConsumeType {
+    ArrayBuffer,
+    Blob,
+    Bytes,
+    FormData,
+    JSON,
+    Text,
   };
 
   /**
@@ -48,15 +48,15 @@ class BodyConsumer final : public nsIObserver,
    * @param aSignalImpl an AbortSignal object. Optional.
    * @param aType the consume type.
    * @param aBodyBlobURISpec this is used only if the consume type is
-   *          CONSUME_BLOB. Optional.
+   *          ConsumeType::Blob. Optional.
    * @param aBodyLocalPath local path in case the blob is created from a local
-   *          file. Used only by CONSUME_BLOB. Optional.
-   * @param aBodyMimeType the mime-type for blob. Used only by CONSUME_BLOB.
-   *          Optional.
+   *          file. Used only by ConsumeType::Blob. Optional.
+   * @param aBodyMimeType the mime-type for blob. Used only by
+   * ConsumeType::Blob. Optional.
    * @param aMixedCaseMimeType is needed to get mixed case multipart
    *          boundary value to FormDataParser.
    * @param aBlobStorageType Blobs can be saved in temporary file. This is the
-   *          type of blob storage to use. Used only by CONSUME_BLOB.
+   *          type of blob storage to use. Used only by ConsumeType::Blob.
    * @param aRv An ErrorResult.
    */
   static already_AddRefed<Promise> Create(
@@ -75,8 +75,8 @@ class BodyConsumer final : public nsIObserver,
   void OnBlobResult(BlobImpl* aBlobImpl,
                     ThreadSafeWorkerRef* aWorkerRef = nullptr);
 
-  void ContinueConsumeBody(nsresult aStatus, uint32_t aLength, uint8_t* aResult,
-                           bool aShuttingDown = false);
+  void ContinueConsumeBody(nsresult aStatus, uint32_t aResultLength,
+                           uint8_t* aResult, bool aShuttingDown = false);
 
   void ContinueConsumeBlobBody(BlobImpl* aBlobImpl, bool aShuttingDown = false);
 
@@ -107,6 +107,17 @@ class BodyConsumer final : public nsIObserver,
   nsresult GetBodyLocalFile(nsIFile** aFile) const;
 
   void AssertIsOnTargetThread() const;
+
+  void MaybeAbortConsumption();
+
+  void DisconnectFromOwner() override {
+    MaybeAbortConsumption();
+    GlobalTeardownObserver::DisconnectFromOwner();
+  }
+  void FrozenCallback(nsIGlobalObject* aGlobal) override {
+    // XXX: But we should not abort on window freeze, see bug 1910124
+    MaybeAbortConsumption();
+  }
 
   nsCOMPtr<nsIThread> mTargetThread;
   nsCOMPtr<nsISerialEventTarget> mMainThreadEventTarget;

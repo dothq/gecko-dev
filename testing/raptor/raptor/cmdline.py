@@ -7,11 +7,11 @@ import os
 import six
 from mozlog.commandline import add_logging_group
 
-(FIREFOX, CHROME, CHROMIUM, SAFARI, CHROMIUM_RELEASE) = DESKTOP_APPS = [
+(FIREFOX, CHROME, SAFARI, SAFARI_TP, CHROMIUM_RELEASE) = DESKTOP_APPS = [
     "firefox",
     "chrome",
-    "chromium",
     "safari",
+    "safari-tp",
     "custom-car",
 ]
 (GECKOVIEW, REFBROW, FENIX) = FIREFOX_ANDROID_APPS = [
@@ -25,12 +25,12 @@ from mozlog.commandline import add_logging_group
 ]
 FIREFOX_APPS = FIREFOX_ANDROID_APPS + [FIREFOX]
 
-CHROMIUM_DISTROS = [CHROME, CHROMIUM]
+CHROMIUM_DISTROS = [CHROME, CHROMIUM_RELEASE]
 APPS = {
     FIREFOX: {"long_name": "Firefox Desktop"},
     CHROME: {"long_name": "Google Chrome Desktop"},
-    CHROMIUM: {"long_name": "Google Chromium Desktop"},
     SAFARI: {"long_name": "Safari Desktop"},
+    SAFARI_TP: {"long_name": "Safari Technology Preview Desktop"},
     CHROMIUM_RELEASE: {"long_name": "Custom Chromium-as-Release desktop"},
     GECKOVIEW: {
         "long_name": "Firefox GeckoView on Android",
@@ -62,7 +62,7 @@ INTEGRATED_APPS = list(APPS.keys())
 
 GECKO_PROFILER_APPS = (FIREFOX, GECKOVIEW, REFBROW, FENIX)
 
-TRACE_APPS = (CHROME, CHROMIUM, CHROMIUM_RELEASE)
+TRACE_APPS = (CHROME, CHROMIUM_RELEASE)
 
 APP_BINARIES = {
     "fenix": "org.mozilla.fenix",
@@ -200,7 +200,7 @@ def create_parser(mach_interface=False):
     add_arg(
         "--gecko-profile-interval",
         dest="gecko_profile_interval",
-        type=int,
+        type=float,
         help="How frequently to take samples (milliseconds)",
     )
     add_arg(
@@ -348,8 +348,8 @@ def create_parser(mach_interface=False):
             help="This contains the path to mozbuild.",
         )
     add_arg(
-        "--noinstall",
-        dest="noinstall",
+        "--no-install",
+        dest="no_install",
         default=False,
         action="store_true",
         help="Flag which indicates if Raptor should not offer to install Android APK.",
@@ -533,6 +533,13 @@ def create_parser(mach_interface=False):
         dest="screenshot_on_failure",
         default=False,
         help="Take a screenshot when the test fails.",
+    )
+    add_arg(
+        "--power-test",
+        action="store_true",
+        dest="power_test",
+        default=False,
+        help="Gather power usage measurements on this test (Android only).",
     )
 
     add_logging_group(parser)
@@ -726,7 +733,7 @@ class _PrintTests(_StopAction):
         # exit Raptor
         parser.exit()
 
-    def filter_app(self, tests, values):
+    def filter_app(self, tests, values, strict=True):
         for test in tests:
             if values["app"] in test["apps"]:
                 yield test

@@ -4,52 +4,46 @@
  */
 
 use std::{
-    collections::BTreeMap,
+    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use error_support::handle_error;
+use error_support::{breadcrumb, handle_error};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
-use remote_settings::{
-    self, GetItemsOptions, RemoteSettingsConfig, RemoteSettingsRecord, SortOrder,
-};
-use rusqlite::{
-    types::{FromSql, ToSqlOutput},
-    ToSql,
-};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use remote_settings::{self, RemoteSettingsConfig, RemoteSettingsServer};
+
+use serde::de::DeserializeOwned;
 
 use crate::{
     config::{SuggestGlobalConfig, SuggestProviderConfig},
-    db::{
-        ConnectionType, SuggestDao, SuggestDb, LAST_INGEST_META_KEY, UNPARSABLE_RECORDS_META_KEY,
-    },
+    db::{ConnectionType, IngestedRecord, Sqlite3Extension, SuggestDao, SuggestDb},
     error::Error,
-    provider::SuggestionProvider,
+    geoname::{Geoname, GeonameMatch, GeonameType},
+    metrics::{MetricsContext, SuggestIngestionMetrics, SuggestQueryMetrics},
+    provider::{SuggestionProvider, SuggestionProviderConstraints, DEFAULT_INGEST_PROVIDERS},
     rs::{
-        SuggestAttachment, SuggestRecord, SuggestRecordId, SuggestRemoteSettingsClient,
-        REMOTE_SETTINGS_COLLECTION, SUGGESTIONS_PER_ATTACHMENT,
+        Client, Collection, DownloadedExposureRecord, Record, RemoteSettingsClient,
+        SuggestAttachment, SuggestRecord, SuggestRecordId, SuggestRecordType,
     },
-    schema::VERSION,
-    Result, SuggestApiResult, Suggestion, SuggestionQuery,
+    suggestion::AmpSuggestionType,
+    QueryWithMetricsResult, Result, SuggestApiResult, Suggestion, SuggestionQuery,
 };
-
-/// The chunk size used to request unparsable records.
-pub const UNPARSABLE_IDS_PER_REQUEST: usize = 150;
 
 /// Builder for [SuggestStore]
 ///
 /// Using a builder is preferred to calling the constructor directly since it's harder to confuse
 /// the data_path and cache_path strings.
+#[derive(uniffi::Object)]
 pub struct SuggestStoreBuilder(Mutex<SuggestStoreBuilderInner>);
 
 #[derive(Default)]
 struct SuggestStoreBuilderInner {
     data_path: Option<String>,
-    cache_path: Option<String>,
-    remote_settings_config: Option<RemoteSettingsConfig>,
+    remote_settings_server: Option<RemoteSettingsServer>,
+    remote_settings_bucket_name: Option<String>,
+    extensions_to_load: Vec<Sqlite3Extension>,
 }
 
 impl Default for SuggestStoreBuilder {
@@ -58,7 +52,9 @@ impl Default for SuggestStoreBuilder {
     }
 }
 
+#[uniffi::export]
 impl SuggestStoreBuilder {
+    #[uniffi::constructor]
     pub fn new() -> SuggestStoreBuilder {
         Self(Mutex::new(SuggestStoreBuilderInner::default()))
     }
@@ -68,39 +64,70 @@ impl SuggestStoreBuilder {
         self
     }
 
-    pub fn cache_path(self: Arc<Self>, path: String) -> Arc<Self> {
-        self.0.lock().cache_path = Some(path);
+    /// Deprecated: this is no longer used by the suggest component.
+    pub fn cache_path(self: Arc<Self>, _path: String) -> Arc<Self> {
+        // We used to use this, but we're not using it anymore, just ignore the call
         self
     }
 
-    pub fn remote_settings_config(self: Arc<Self>, config: RemoteSettingsConfig) -> Arc<Self> {
-        self.0.lock().remote_settings_config = Some(config);
+    pub fn remote_settings_server(self: Arc<Self>, server: RemoteSettingsServer) -> Arc<Self> {
+        self.0.lock().remote_settings_server = Some(server);
+        self
+    }
+
+    pub fn remote_settings_bucket_name(self: Arc<Self>, bucket_name: String) -> Arc<Self> {
+        self.0.lock().remote_settings_bucket_name = Some(bucket_name);
+        self
+    }
+
+    /// Add an sqlite3 extension to load
+    ///
+    /// library_name should be the name of the library without any extension, for example `libmozsqlite3`.
+    /// entrypoint should be the entry point, for example `sqlite3_fts5_init`.  If `null` (the default)
+    /// entry point will be used (see https://sqlite.org/loadext.html for details).
+    pub fn load_extension(
+        self: Arc<Self>,
+        library: String,
+        entry_point: Option<String>,
+    ) -> Arc<Self> {
+        self.0.lock().extensions_to_load.push(Sqlite3Extension {
+            library,
+            entry_point,
+        });
         self
     }
 
     #[handle_error(Error)]
     pub fn build(&self) -> SuggestApiResult<Arc<SuggestStore>> {
         let inner = self.0.lock();
+        let extensions_to_load = inner.extensions_to_load.clone();
         let data_path = inner
             .data_path
             .clone()
             .ok_or_else(|| Error::SuggestStoreBuilder("data_path not specified".to_owned()))?;
-        let cache_path = inner
-            .cache_path
-            .clone()
-            .ok_or_else(|| Error::SuggestStoreBuilder("cache_path not specified".to_owned()))?;
-        let settings_client =
-            remote_settings::Client::new(inner.remote_settings_config.clone().unwrap_or_else(
-                || RemoteSettingsConfig {
-                    server_url: None,
-                    bucket_name: None,
-                    collection_name: REMOTE_SETTINGS_COLLECTION.into(),
-                },
-            ))?;
+
+        let client = RemoteSettingsClient::new(
+            inner.remote_settings_server.clone(),
+            inner.remote_settings_bucket_name.clone(),
+            None,
+        )?;
+
         Ok(Arc::new(SuggestStore {
-            inner: SuggestStoreInner::new(data_path, cache_path, settings_client),
+            inner: SuggestStoreInner::new(data_path, extensions_to_load, client),
         }))
     }
+}
+
+/// What should be interrupted when [SuggestStore::interrupt] is called?
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, uniffi::Enum)]
+pub enum InterruptKind {
+    /// Interrupt read operations like [SuggestStore::query]
+    Read,
+    /// Interrupt write operations.  This mostly means [SuggestStore::ingest], but
+    /// [SuggestStore::dismiss_suggestion] may also be interrupted.
+    Write,
+    /// Interrupt both read and write operations,
+    ReadWrite,
 }
 
 /// The store is the entry point to the Suggest component. It incrementally
@@ -131,65 +158,66 @@ impl SuggestStoreBuilder {
 ///    to request a small subset of the Suggest data and download the rest
 ///    later, while a desktop on a fast link might download the entire dataset
 ///    on the first launch.
+#[derive(uniffi::Object)]
 pub struct SuggestStore {
-    inner: SuggestStoreInner<remote_settings::Client>,
+    inner: SuggestStoreInner<RemoteSettingsClient>,
 }
 
-/// For records that aren't currently parsable,
-/// the record ID and the schema version it's first seen in
-/// is recorded in the meta table using `UNPARSABLE_RECORDS_META_KEY` as its key.
-/// On the first ingest after an upgrade, re-request those records from Remote Settings,
-/// and try to ingest them again.
-#[derive(Deserialize, Serialize, Default, Debug)]
-#[serde(transparent)]
-pub(crate) struct UnparsableRecords(pub BTreeMap<String, UnparsableRecord>);
-
-impl FromSql for UnparsableRecords {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        serde_json::from_str(value.as_str()?)
-            .map_err(|err| rusqlite::types::FromSqlError::Other(Box::new(err)))
-    }
-}
-
-impl ToSql for UnparsableRecords {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(serde_json::to_string(self).map_err(
-            |err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)),
-        )?))
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct UnparsableRecord {
-    #[serde(rename = "v")]
-    pub schema_version: u32,
-}
-
+#[uniffi::export]
 impl SuggestStore {
     /// Creates a Suggest store.
     #[handle_error(Error)]
+    #[uniffi::constructor(default(settings_config = None))]
     pub fn new(
         path: &str,
         settings_config: Option<RemoteSettingsConfig>,
     ) -> SuggestApiResult<Self> {
-        let settings_client = || -> Result<_> {
-            Ok(remote_settings::Client::new(
-                settings_config.unwrap_or_else(|| RemoteSettingsConfig {
-                    server_url: None,
-                    bucket_name: None,
-                    collection_name: REMOTE_SETTINGS_COLLECTION.into(),
-                }),
-            )?)
-        }()?;
+        let client = match settings_config {
+            Some(settings_config) => RemoteSettingsClient::new(
+                settings_config.server,
+                settings_config.bucket_name,
+                settings_config.server_url,
+                // Note: collection name is ignored, since we fetch from multiple collections
+                // (fakespot-suggest-products and quicksuggest).  No consumer sets it to a
+                // non-default value anyways.
+            )?,
+            None => RemoteSettingsClient::new(None, None, None)?,
+        };
+
         Ok(Self {
-            inner: SuggestStoreInner::new("".to_owned(), path.to_owned(), settings_client),
+            inner: SuggestStoreInner::new(path.to_owned(), vec![], client),
         })
     }
 
     /// Queries the database for suggestions.
     #[handle_error(Error)]
     pub fn query(&self, query: SuggestionQuery) -> SuggestApiResult<Vec<Suggestion>> {
+        Ok(self.inner.query(query)?.suggestions)
+    }
+
+    /// Queries the database for suggestions.
+    #[handle_error(Error)]
+    pub fn query_with_metrics(
+        &self,
+        query: SuggestionQuery,
+    ) -> SuggestApiResult<QueryWithMetricsResult> {
         self.inner.query(query)
+    }
+
+    /// Dismiss a suggestion
+    ///
+    /// Dismissed suggestions will not be returned again
+    ///
+    /// In the case of AMP suggestions this should be the raw URL.
+    #[handle_error(Error)]
+    pub fn dismiss_suggestion(&self, suggestion_url: String) -> SuggestApiResult<()> {
+        self.inner.dismiss_suggestion(suggestion_url)
+    }
+
+    /// Clear dismissed suggestions
+    #[handle_error(Error)]
+    pub fn clear_dismissed_suggestions(&self) -> SuggestApiResult<()> {
+        self.inner.clear_dismissed_suggestions()
     }
 
     /// Interrupts any ongoing queries.
@@ -197,13 +225,17 @@ impl SuggestStore {
     /// This should be called when the user types new input into the address
     /// bar, to ensure that they see fresh suggestions as they type. This
     /// method does not interrupt any ongoing ingests.
-    pub fn interrupt(&self) {
-        self.inner.interrupt()
+    #[uniffi::method(default(kind = None))]
+    pub fn interrupt(&self, kind: Option<InterruptKind>) {
+        self.inner.interrupt(kind)
     }
 
     /// Ingests new suggestions from Remote Settings.
     #[handle_error(Error)]
-    pub fn ingest(&self, constraints: SuggestIngestionConstraints) -> SuggestApiResult<()> {
+    pub fn ingest(
+        &self,
+        constraints: SuggestIngestionConstraints,
+    ) -> SuggestApiResult<SuggestIngestionMetrics> {
         self.inner.ingest(constraints)
     }
 
@@ -213,13 +245,13 @@ impl SuggestStore {
         self.inner.clear()
     }
 
-    // Returns global Suggest configuration data.
+    /// Returns global Suggest configuration data.
     #[handle_error(Error)]
     pub fn fetch_global_config(&self) -> SuggestApiResult<SuggestGlobalConfig> {
         self.inner.fetch_global_config()
     }
 
-    // Returns per-provider Suggest configuration data.
+    /// Returns per-provider Suggest configuration data.
     #[handle_error(Error)]
     pub fn fetch_provider_config(
         &self,
@@ -227,17 +259,108 @@ impl SuggestStore {
     ) -> SuggestApiResult<Option<SuggestProviderConfig>> {
         self.inner.fetch_provider_config(provider)
     }
+
+    /// Fetches geonames stored in the database. A geoname represents a
+    /// geographic place.
+    ///
+    /// `query` is a string that will be matched directly against geoname names.
+    /// It is not a query string in the usual Suggest sense. `match_name_prefix`
+    /// determines whether prefix matching is performed on names excluding
+    /// abbreviations and airport codes. When `true`, names that start with
+    /// `query` will match. When false, names that equal `query` will match.
+    ///
+    /// `geoname_type` restricts returned geonames to a [`GeonameType`].
+    ///
+    /// `filter` restricts returned geonames to certain cities or regions.
+    /// Cities can be restricted to regions by including the regions in
+    /// `filter`, and regions can be restricted to those containing certain
+    /// cities by including the cities in `filter`. This is especially useful
+    /// since city and region names are not unique. `filter` is disjunctive: If
+    /// any item in `filter` matches a geoname, the geoname will be filtered in.
+    ///
+    /// The query can match a single geoname in more than one way. For example,
+    /// it can match both a full name and an abbreviation. The returned vec of
+    /// [`GeonameMatch`] values will include all matches for a geoname, one
+    /// match per `match_type` per geoname. In other words, a matched geoname
+    /// can map to more than one `GeonameMatch`.
+    #[handle_error(Error)]
+    pub fn fetch_geonames(
+        &self,
+        query: &str,
+        match_name_prefix: bool,
+        geoname_type: Option<GeonameType>,
+        filter: Option<Vec<Geoname>>,
+    ) -> SuggestApiResult<Vec<GeonameMatch>> {
+        self.inner
+            .fetch_geonames(query, match_name_prefix, geoname_type, filter)
+    }
+}
+
+impl SuggestStore {
+    pub fn force_reingest(&self) {
+        self.inner.force_reingest()
+    }
+}
+
+#[cfg(feature = "benchmark_api")]
+impl SuggestStore {
+    /// Creates a WAL checkpoint. This will cause changes in the write-ahead log
+    /// to be written to the DB. See:
+    /// https://sqlite.org/pragma.html#pragma_wal_checkpoint
+    pub fn checkpoint(&self) {
+        self.inner.checkpoint();
+    }
 }
 
 /// Constraints limit which suggestions to ingest from Remote Settings.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, uniffi::Record)]
 pub struct SuggestIngestionConstraints {
-    /// The approximate maximum number of suggestions to ingest. Set to [`None`]
-    /// for "no limit".
+    #[uniffi(default = None)]
+    pub providers: Option<Vec<SuggestionProvider>>,
+    #[uniffi(default = None)]
+    pub provider_constraints: Option<SuggestionProviderConstraints>,
+    /// Only run ingestion if the table `suggestions` is empty
     ///
-    /// Because of how suggestions are partitioned in Remote Settings, this is a
-    /// soft limit, and the store might ingest more than requested.
-    pub max_suggestions: Option<u64>,
+    // This is indented to handle periodic updates.  Consumers can schedule an ingest with
+    // `empty_only=true` on startup and a regular ingest with `empty_only=false` to run on a long periodic schedule (maybe
+    // once a day). This allows ingestion to normally be run at a slow, periodic rate.  However, if
+    // there is a schema upgrade that causes the database to be thrown away, then the
+    // `empty_only=true` ingestion that runs on startup will repopulate it.
+    #[uniffi(default = false)]
+    pub empty_only: bool,
+}
+
+impl SuggestIngestionConstraints {
+    pub fn all_providers() -> Self {
+        Self {
+            providers: Some(vec![
+                SuggestionProvider::Amp,
+                SuggestionProvider::Wikipedia,
+                SuggestionProvider::Amo,
+                SuggestionProvider::Pocket,
+                SuggestionProvider::Yelp,
+                SuggestionProvider::Mdn,
+                SuggestionProvider::Weather,
+                SuggestionProvider::AmpMobile,
+                SuggestionProvider::Fakespot,
+                SuggestionProvider::Exposure,
+            ]),
+            ..Self::default()
+        }
+    }
+
+    fn matches_exposure_record(&self, record: &DownloadedExposureRecord) -> bool {
+        match self
+            .provider_constraints
+            .as_ref()
+            .and_then(|c| c.exposure_suggestion_types.as_ref())
+        {
+            None => false,
+            Some(suggestion_types) => suggestion_types
+                .iter()
+                .any(|t| *t == record.suggestion_type),
+        }
+    }
 }
 
 /// The implementation of the store. This is generic over the Remote Settings
@@ -250,23 +373,20 @@ pub(crate) struct SuggestStoreInner<S> {
     /// It's not currently used because not all consumers pass this in yet.
     #[allow(unused)]
     data_path: PathBuf,
-    /// Path to the temporary SQL database.
-    ///
-    /// This stores things that should be deleted when the user clears their cache.
-    cache_path: PathBuf,
     dbs: OnceCell<SuggestStoreDbs>,
+    extensions_to_load: Vec<Sqlite3Extension>,
     settings_client: S,
 }
 
 impl<S> SuggestStoreInner<S> {
-    fn new(
+    pub fn new(
         data_path: impl Into<PathBuf>,
-        cache_path: impl Into<PathBuf>,
+        extensions_to_load: Vec<Sqlite3Extension>,
         settings_client: S,
     ) -> Self {
         Self {
             data_path: data_path.into(),
-            cache_path: cache_path.into(),
+            extensions_to_load,
             dbs: OnceCell::new(),
             settings_client,
         }
@@ -276,20 +396,77 @@ impl<S> SuggestStoreInner<S> {
     /// they're not already open.
     fn dbs(&self) -> Result<&SuggestStoreDbs> {
         self.dbs
-            .get_or_try_init(|| SuggestStoreDbs::open(&self.cache_path))
+            .get_or_try_init(|| SuggestStoreDbs::open(&self.data_path, &self.extensions_to_load))
     }
 
-    fn query(&self, query: SuggestionQuery) -> Result<Vec<Suggestion>> {
-        if query.keyword.is_empty() || query.providers.is_empty() {
-            return Ok(Vec::new());
+    fn query(&self, query: SuggestionQuery) -> Result<QueryWithMetricsResult> {
+        let mut metrics = SuggestQueryMetrics::default();
+        let mut suggestions = vec![];
+
+        let unique_providers = query.providers.iter().collect::<HashSet<_>>();
+        let reader = &self.dbs()?.reader;
+        for provider in unique_providers {
+            let new_suggestions = metrics.measure_query(provider.to_string(), || {
+                reader.read(|dao| match provider {
+                    SuggestionProvider::Amp => {
+                        dao.fetch_amp_suggestions(&query, AmpSuggestionType::Desktop)
+                    }
+                    SuggestionProvider::AmpMobile => {
+                        dao.fetch_amp_suggestions(&query, AmpSuggestionType::Mobile)
+                    }
+                    SuggestionProvider::Wikipedia => dao.fetch_wikipedia_suggestions(&query),
+                    SuggestionProvider::Amo => dao.fetch_amo_suggestions(&query),
+                    SuggestionProvider::Pocket => dao.fetch_pocket_suggestions(&query),
+                    SuggestionProvider::Yelp => dao.fetch_yelp_suggestions(&query),
+                    SuggestionProvider::Mdn => dao.fetch_mdn_suggestions(&query),
+                    SuggestionProvider::Weather => dao.fetch_weather_suggestions(&query),
+                    SuggestionProvider::Fakespot => dao.fetch_fakespot_suggestions(&query),
+                    SuggestionProvider::Exposure => dao.fetch_exposure_suggestions(&query),
+                })
+            })?;
+            suggestions.extend(new_suggestions);
         }
-        self.dbs()?.reader.read(|dao| dao.fetch_suggestions(&query))
+
+        // Note: it's important that this is a stable sort to keep the intra-provider order stable.
+        // For example, we can return multiple fakespot-suggestions all with `score=0.245`.  In
+        // that case, they must be in the same order that `fetch_fakespot_suggestions` returned
+        // them in.
+        suggestions.sort();
+        if let Some(limit) = query.limit.and_then(|limit| usize::try_from(limit).ok()) {
+            suggestions.truncate(limit);
+        }
+        Ok(QueryWithMetricsResult {
+            suggestions,
+            query_times: metrics.times,
+        })
     }
 
-    fn interrupt(&self) {
+    fn dismiss_suggestion(&self, suggestion_url: String) -> Result<()> {
+        self.dbs()?
+            .writer
+            .write(|dao| dao.insert_dismissal(&suggestion_url))
+    }
+
+    fn clear_dismissed_suggestions(&self) -> Result<()> {
+        self.dbs()?.writer.write(|dao| dao.clear_dismissals())?;
+        Ok(())
+    }
+
+    fn interrupt(&self, kind: Option<InterruptKind>) {
         if let Some(dbs) = self.dbs.get() {
             // Only interrupt if the databases are already open.
-            dbs.reader.interrupt_handle.interrupt();
+            match kind.unwrap_or(InterruptKind::Read) {
+                InterruptKind::Read => {
+                    dbs.reader.interrupt_handle.interrupt();
+                }
+                InterruptKind::Write => {
+                    dbs.writer.interrupt_handle.interrupt();
+                }
+                InterruptKind::ReadWrite => {
+                    dbs.reader.interrupt_handle.interrupt();
+                    dbs.writer.interrupt_handle.interrupt();
+                }
+            }
         }
     }
 
@@ -309,194 +486,405 @@ impl<S> SuggestStoreInner<S> {
             .reader
             .read(|dao| dao.get_provider_config(provider))
     }
+
+    // Cause the next ingestion to re-ingest all data
+    pub fn force_reingest(&self) {
+        let writer = &self.dbs().unwrap().writer;
+        writer.write(|dao| dao.force_reingest()).unwrap();
+    }
+
+    fn fetch_geonames(
+        &self,
+        query: &str,
+        match_name_prefix: bool,
+        geoname_type: Option<GeonameType>,
+        filter: Option<Vec<Geoname>>,
+    ) -> Result<Vec<GeonameMatch>> {
+        self.dbs()?.reader.read(|dao| {
+            dao.fetch_geonames(
+                query,
+                match_name_prefix,
+                geoname_type,
+                filter.as_ref().map(|f| f.iter().collect()),
+            )
+        })
+    }
 }
 
 impl<S> SuggestStoreInner<S>
 where
-    S: SuggestRemoteSettingsClient,
+    S: Client,
 {
-    fn ingest(&self, constraints: SuggestIngestionConstraints) -> Result<()> {
-        let writer = &self.dbs()?.writer;
-
-        if let Some(unparsable_records) =
-            writer.read(|dao| dao.get_meta::<UnparsableRecords>(UNPARSABLE_RECORDS_META_KEY))?
-        {
-            let all_unparsable_ids = unparsable_records
-                .0
-                .iter()
-                .filter(|(_, unparsable_record)| unparsable_record.schema_version < VERSION)
-                .map(|(record_id, _)| record_id)
-                .collect::<Vec<_>>();
-            for unparsable_ids in all_unparsable_ids.chunks(UNPARSABLE_IDS_PER_REQUEST) {
-                let mut options = GetItemsOptions::new();
-                for unparsable_id in unparsable_ids {
-                    options.eq("id", *unparsable_id);
-                }
-                let records_chunk = self
-                    .settings_client
-                    .get_records_with_options(&options)?
-                    .records;
-
-                self.ingest_records(writer, &records_chunk)?;
-            }
-        }
-
-        let mut options = GetItemsOptions::new();
-        // Remote Settings returns records in descending modification order
-        // (newest first), but we want them in ascending order (oldest first),
-        // so that we can eventually resume downloading where we left off.
-        options.sort("last_modified", SortOrder::Ascending);
-        if let Some(last_ingest) = writer.read(|dao| dao.get_meta::<u64>(LAST_INGEST_META_KEY))? {
-            // Only download changes since our last ingest. If our last ingest
-            // was interrupted, we'll pick up where we left off.
-            options.gt("last_modified", last_ingest.to_string());
-        }
-
-        if let Some(max_suggestions) = constraints.max_suggestions {
-            // Each record's attachment has 200 suggestions, so download enough
-            // records to cover the requested maximum.
-            let max_records = (max_suggestions.saturating_sub(1) / SUGGESTIONS_PER_ATTACHMENT) + 1;
-            options.limit(max_records);
-        }
-
-        let records = self
-            .settings_client
-            .get_records_with_options(&options)?
-            .records;
-        self.ingest_records(writer, &records)?;
-
-        Ok(())
-    }
-
-    fn ingest_records(&self, writer: &SuggestDb, records: &[RemoteSettingsRecord]) -> Result<()> {
-        for record in records {
-            let record_id = SuggestRecordId::from(&record.id);
-            if record.deleted {
-                // If the entire record was deleted, drop all its suggestions
-                // and advance the last ingest time.
-                writer.write(|dao| dao.handle_deleted_record(record))?;
-                continue;
-            }
-            let Ok(fields) =
-                serde_json::from_value(serde_json::Value::Object(record.fields.clone()))
-            else {
-                // We don't recognize this record's type, so we don't know how
-                // to ingest its suggestions. Record this in the meta table.
-                writer.write(|dao| dao.handle_unparsable_record(record))?;
-                continue;
-            };
-
-            match fields {
-                SuggestRecord::AmpWikipedia => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        dao.insert_amp_wikipedia_suggestions(record_id, suggestions)
-                    })?;
-                }
-                SuggestRecord::AmpMobile => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        dao.insert_amp_mobile_suggestions(record_id, suggestions)
-                    })?;
-                }
-                SuggestRecord::Icon => {
-                    let (Some(icon_id), Some(attachment)) =
-                        (record_id.as_icon_id(), record.attachment.as_ref())
-                    else {
-                        // An icon record should have an icon ID and an
-                        // attachment. Icons that don't have these are
-                        // malformed, so skip to the next record.
-                        writer.write(|dao| dao.put_last_ingest_if_newer(record.last_modified))?;
-                        continue;
-                    };
-                    let data = self.settings_client.get_attachment(&attachment.location)?;
-                    writer.write(|dao| {
-                        dao.put_icon(icon_id, &data)?;
-                        dao.handle_ingested_record(record)
-                    })?;
-                }
-                SuggestRecord::Amo => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        dao.insert_amo_suggestions(record_id, suggestions)
-                    })?;
-                }
-                SuggestRecord::Pocket => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        dao.insert_pocket_suggestions(record_id, suggestions)
-                    })?;
-                }
-                SuggestRecord::Yelp => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        match suggestions.first() {
-                            Some(suggestion) => dao.insert_yelp_suggestions(record_id, suggestion),
-                            None => Ok(()),
-                        }
-                    })?;
-                }
-                SuggestRecord::Mdn => {
-                    self.ingest_attachment(writer, record, |dao, record_id, suggestions| {
-                        dao.insert_mdn_suggestions(record_id, suggestions)
-                    })?;
-                }
-                SuggestRecord::Weather(data) => {
-                    self.ingest_record(writer, record, |dao, record_id| {
-                        dao.insert_weather_data(record_id, &data)
-                    })?;
-                }
-                SuggestRecord::GlobalConfig(config) => {
-                    self.ingest_record(writer, record, |dao, _| {
-                        dao.put_global_config(&SuggestGlobalConfig::from(&config))
-                    })?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn ingest_record(
+    pub fn ingest(
         &self,
-        writer: &SuggestDb,
-        record: &RemoteSettingsRecord,
-        ingestion_handler: impl FnOnce(&mut SuggestDao<'_>, &SuggestRecordId) -> Result<()>,
-    ) -> Result<()> {
-        let record_id = SuggestRecordId::from(&record.id);
+        constraints: SuggestIngestionConstraints,
+    ) -> Result<SuggestIngestionMetrics> {
+        breadcrumb!("Ingestion starting");
+        let writer = &self.dbs()?.writer;
+        let mut metrics = SuggestIngestionMetrics::default();
+        if constraints.empty_only && !writer.read(|dao| dao.suggestions_table_empty())? {
+            return Ok(metrics);
+        }
 
-        writer.write(|dao| {
+        // Figure out which record types we're ingesting and group them by
+        // collection. A record type may be used by multiple providers, but we
+        // want to ingest each one at most once.
+        let mut record_types_by_collection = HashMap::<Collection, BTreeSet<_>>::new();
+        for p in constraints
+            .providers
+            .as_ref()
+            .unwrap_or(&DEFAULT_INGEST_PROVIDERS.to_vec())
+            .iter()
+        {
+            for t in p.record_types() {
+                record_types_by_collection
+                    .entry(t.collection())
+                    .or_default()
+                    .insert(t);
+            }
+        }
+
+        // Always ingest these record types.
+        for rt in [SuggestRecordType::Icon, SuggestRecordType::GlobalConfig] {
+            record_types_by_collection
+                .entry(rt.collection())
+                .or_default()
+                .insert(rt);
+        }
+
+        // Create a single write scope for all DB operations
+        let mut write_scope = writer.write_scope()?;
+
+        // Read the previously ingested records.  We use this to calculate what's changed
+        let ingested_records = write_scope.read(|dao| dao.get_ingested_records())?;
+
+        // For each collection, fetch all records
+        for (collection, record_types) in record_types_by_collection {
+            breadcrumb!("Ingesting collection {}", collection.name());
+            let records =
+                write_scope.write(|dao| self.settings_client.get_records(collection, dao))?;
+
+            // For each record type in that collection, calculate the changes and pass them to
+            // [Self::ingest_records]
+            for record_type in record_types {
+                breadcrumb!("Ingesting record_type: {record_type}");
+                metrics.measure_ingest(record_type.to_string(), |context| {
+                    let changes = RecordChanges::new(
+                        records.iter().filter(|r| r.record_type() == record_type),
+                        ingested_records.iter().filter(|i| {
+                            i.record_type == record_type.as_str()
+                                && i.collection == collection.name()
+                        }),
+                    );
+                    write_scope.write(|dao| {
+                        self.process_changes(dao, collection, changes, &constraints, context)
+                    })
+                })?;
+                write_scope.err_if_interrupted()?;
+            }
+        }
+        breadcrumb!("Ingestion complete");
+
+        Ok(metrics)
+    }
+
+    fn process_changes(
+        &self,
+        dao: &mut SuggestDao,
+        collection: Collection,
+        changes: RecordChanges<'_>,
+        constraints: &SuggestIngestionConstraints,
+        context: &mut MetricsContext,
+    ) -> Result<()> {
+        for record in &changes.new {
+            log::trace!("Ingesting record ID: {}", record.id.as_str());
+            self.process_record(dao, record, constraints, context)?;
+        }
+        for record in &changes.updated {
             // Drop any data that we previously ingested from this record.
             // Suggestions in particular don't have a stable identifier, and
             // determining which suggestions in the record actually changed is
             // more complicated than dropping and re-ingesting all of them.
-            dao.drop_suggestions(&record_id)?;
-
-            // Ingest (or re-ingest) all data in the record.
-            ingestion_handler(dao, &record_id)?;
-
-            dao.handle_ingested_record(record)
-        })
+            log::trace!("Reingesting updated record ID: {}", record.id.as_str());
+            dao.delete_record_data(&record.id)?;
+            self.process_record(dao, record, constraints, context)?;
+        }
+        for record in &changes.unchanged {
+            if self.should_reprocess_record(dao, record, constraints)? {
+                log::trace!("Reingesting unchanged record ID: {}", record.id.as_str());
+                self.process_record(dao, record, constraints, context)?;
+            }
+        }
+        for record in &changes.deleted {
+            log::trace!("Deleting record ID: {:?}", record.id);
+            dao.delete_record_data(&record.id)?;
+        }
+        dao.update_ingested_records(
+            collection.name(),
+            &changes.new,
+            &changes.updated,
+            &changes.deleted,
+        )?;
+        Ok(())
     }
 
-    fn ingest_attachment<T>(
+    fn process_record(
         &self,
-        writer: &SuggestDb,
-        record: &RemoteSettingsRecord,
+        dao: &mut SuggestDao,
+        record: &Record,
+        constraints: &SuggestIngestionConstraints,
+        context: &mut MetricsContext,
+    ) -> Result<()> {
+        match &record.payload {
+            SuggestRecord::AmpWikipedia => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_amp_wikipedia_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::AmpMobile => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_amp_mobile_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::Icon => {
+                let (Some(icon_id), Some(attachment)) =
+                    (record.id.as_icon_id(), record.attachment.as_ref())
+                else {
+                    // An icon record should have an icon ID and an
+                    // attachment. Icons that don't have these are
+                    // malformed, so skip to the next record.
+                    return Ok(());
+                };
+                let data = context
+                    .measure_download(|| self.settings_client.download_attachment(record))?;
+                dao.put_icon(icon_id, &data, &attachment.mimetype)?;
+            }
+            SuggestRecord::Amo => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_amo_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::Pocket => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_pocket_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::Yelp => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    match suggestions.first() {
+                        Some(suggestion) => dao.insert_yelp_suggestions(record_id, suggestion),
+                        None => Ok(()),
+                    }
+                })?;
+            }
+            SuggestRecord::Mdn => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_mdn_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::Weather => self.process_weather_record(dao, record, context)?,
+            SuggestRecord::GlobalConfig(config) => {
+                dao.put_global_config(&SuggestGlobalConfig::from(config))?
+            }
+            SuggestRecord::Fakespot => {
+                self.download_attachment(dao, record, context, |dao, record_id, suggestions| {
+                    dao.insert_fakespot_suggestions(record_id, suggestions)
+                })?;
+            }
+            SuggestRecord::Exposure(r) => {
+                if constraints.matches_exposure_record(r) {
+                    self.download_attachment(
+                        dao,
+                        record,
+                        context,
+                        |dao, record_id, suggestions| {
+                            dao.insert_exposure_suggestions(
+                                record_id,
+                                &r.suggestion_type,
+                                suggestions,
+                            )
+                        },
+                    )?;
+                }
+            }
+            SuggestRecord::Geonames => self.process_geoname_record(dao, record, context)?,
+        }
+        Ok(())
+    }
+
+    pub(crate) fn download_attachment<T>(
+        &self,
+        dao: &mut SuggestDao,
+        record: &Record,
+        context: &mut MetricsContext,
         ingestion_handler: impl FnOnce(&mut SuggestDao<'_>, &SuggestRecordId, &[T]) -> Result<()>,
     ) -> Result<()>
     where
         T: DeserializeOwned,
     {
-        let Some(attachment) = record.attachment.as_ref() else {
-            // This method should be called only when a record is expected to
-            // have an attachment. If it doesn't have one, it's malformed, so
-            // skip to the next record.
-            writer.write(|dao| dao.put_last_ingest_if_newer(record.last_modified))?;
+        if record.attachment.is_none() {
             return Ok(());
         };
 
-        let attachment_data = self.settings_client.get_attachment(&attachment.location)?;
+        let attachment_data =
+            context.measure_download(|| self.settings_client.download_attachment(record))?;
         match serde_json::from_slice::<SuggestAttachment<T>>(&attachment_data) {
-            Ok(attachment) => self.ingest_record(writer, record, |dao, record_id| {
-                ingestion_handler(dao, record_id, attachment.suggestions())
-            }),
-            Err(_) => writer.write(|dao| dao.handle_unparsable_record(record)),
+            Ok(attachment) => ingestion_handler(dao, &record.id, attachment.suggestions()),
+            // If the attachment doesn't match our expected schema, just skip it.  It's possible
+            // that we're using an older version.  If so, we'll get the data when we re-ingest
+            // after updating the schema.
+            Err(_) => Ok(()),
         }
+    }
+
+    fn should_reprocess_record(
+        &self,
+        dao: &mut SuggestDao,
+        record: &Record,
+        constraints: &SuggestIngestionConstraints,
+    ) -> Result<bool> {
+        match &record.payload {
+            SuggestRecord::Exposure(r) => {
+                // Even though the record was previously ingested, its
+                // suggestion wouldn't have been if it never matched the
+                // provider constraints of any ingest. Return true if the
+                // suggestion is not ingested and the provider constraints of
+                // the current ingest do match the suggestion.
+                Ok(!dao.is_exposure_suggestion_ingested(&record.id)?
+                    && constraints.matches_exposure_record(r))
+            }
+            _ => Ok(false),
+        }
+    }
+}
+
+/// Tracks changes in suggest records since the last ingestion
+struct RecordChanges<'a> {
+    new: Vec<&'a Record>,
+    updated: Vec<&'a Record>,
+    deleted: Vec<&'a IngestedRecord>,
+    unchanged: Vec<&'a Record>,
+}
+
+impl<'a> RecordChanges<'a> {
+    fn new(
+        current: impl Iterator<Item = &'a Record>,
+        previously_ingested: impl Iterator<Item = &'a IngestedRecord>,
+    ) -> Self {
+        let mut ingested_map: HashMap<&str, &IngestedRecord> =
+            previously_ingested.map(|i| (i.id.as_str(), i)).collect();
+        // Iterate through current, finding new/updated records.
+        // Remove existing records from ingested_map.
+        let mut new = vec![];
+        let mut updated = vec![];
+        let mut unchanged = vec![];
+        for r in current {
+            match ingested_map.entry(r.id.as_str()) {
+                Entry::Vacant(_) => new.push(r),
+                Entry::Occupied(e) => {
+                    if e.remove().last_modified != r.last_modified {
+                        updated.push(r);
+                    } else {
+                        unchanged.push(r);
+                    }
+                }
+            }
+        }
+        // Anything left in ingested_map is a deleted record
+        let deleted = ingested_map.into_values().collect();
+        Self {
+            new,
+            deleted,
+            updated,
+            unchanged,
+        }
+    }
+}
+
+#[cfg(feature = "benchmark_api")]
+impl<S> SuggestStoreInner<S>
+where
+    S: Client,
+{
+    pub fn into_settings_client(self) -> S {
+        self.settings_client
+    }
+
+    pub fn ensure_db_initialized(&self) {
+        self.dbs().unwrap();
+    }
+
+    fn checkpoint(&self) {
+        let conn = self.dbs().unwrap().writer.conn.lock();
+        conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")
+            .expect("Error performing checkpoint");
+    }
+
+    pub fn ingest_records_by_type(&self, ingest_record_type: SuggestRecordType) {
+        let writer = &self.dbs().unwrap().writer;
+        let mut context = MetricsContext::default();
+        let ingested_records = writer.read(|dao| dao.get_ingested_records()).unwrap();
+        let records = writer
+            .write(|dao| {
+                self.settings_client
+                    .get_records(ingest_record_type.collection(), dao)
+            })
+            .unwrap();
+
+        let changes = RecordChanges::new(
+            records
+                .iter()
+                .filter(|r| r.record_type() == ingest_record_type),
+            ingested_records
+                .iter()
+                .filter(|i| i.record_type == ingest_record_type.as_str()),
+        );
+        writer
+            .write(|dao| {
+                self.process_changes(
+                    dao,
+                    ingest_record_type.collection(),
+                    changes,
+                    &SuggestIngestionConstraints::default(),
+                    &mut context,
+                )
+            })
+            .unwrap();
+    }
+
+    pub fn table_row_counts(&self) -> Vec<(String, u32)> {
+        use sql_support::ConnExt;
+
+        // Note: since this is just used for debugging, use unwrap to simplify the error handling.
+        let reader = &self.dbs().unwrap().reader;
+        let conn = reader.conn.lock();
+        let table_names: Vec<String> = conn
+            .query_rows_and_then(
+                "SELECT name FROM sqlite_master where type = 'table'",
+                (),
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut table_names_with_counts: Vec<(String, u32)> = table_names
+            .into_iter()
+            .map(|name| {
+                let count: u32 = conn
+                    .query_one(&format!("SELECT COUNT(*) FROM {name}"))
+                    .unwrap();
+                (name, count)
+            })
+            .collect();
+        table_names_with_counts.sort_by(|a, b| (b.1.cmp(&a.1)));
+        table_names_with_counts
+    }
+
+    pub fn db_size(&self) -> usize {
+        use sql_support::ConnExt;
+
+        let reader = &self.dbs().unwrap().reader;
+        let conn = reader.conn.lock();
+        conn.query_one("SELECT page_size * page_count FROM pragma_page_count(), pragma_page_size()")
+            .unwrap()
     }
 }
 
@@ -509,168 +897,88 @@ struct SuggestStoreDbs {
 }
 
 impl SuggestStoreDbs {
-    fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path, extensions_to_load: &[Sqlite3Extension]) -> Result<Self> {
         // Order is important here: the writer must be opened first, so that it
         // can set up the database and run any migrations.
-        let writer = SuggestDb::open(path, ConnectionType::ReadWrite)?;
-        let reader = SuggestDb::open(path, ConnectionType::ReadOnly)?;
+        let writer = SuggestDb::open(path, extensions_to_load, ConnectionType::ReadWrite)?;
+        let reader = SuggestDb::open(path, extensions_to_load, ConnectionType::ReadOnly)?;
         Ok(Self { writer, reader })
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    use std::{cell::RefCell, collections::HashMap};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use anyhow::{anyhow, Context};
-    use expect_test::expect;
-    use parking_lot::Once;
-    use rc_crypto::rand;
-    use remote_settings::{RemoteSettingsRecord, RemoteSettingsResponse};
-    use serde_json::json;
-    use sql_support::ConnExt;
+    use crate::{testing::*, SuggestionProvider};
 
-    use crate::SuggestionProvider;
+    /// In-memory Suggest store for testing
+    pub(crate) struct TestStore {
+        pub inner: SuggestStoreInner<MockRemoteSettingsClient>,
+    }
 
-    /// Creates a unique in-memory Suggest store.
-    fn unique_test_store<S>(settings_client: S) -> SuggestStoreInner<S>
-    where
-        S: SuggestRemoteSettingsClient,
-    {
-        let mut unique_suffix = [0u8; 8];
-        rand::fill(&mut unique_suffix).expect("Failed to generate unique suffix for test store");
-        // A store opens separate connections to the same database for reading
-        // and writing, so we must give our in-memory database a name, and open
-        // it in shared-cache mode so that both connections can access it.
-        SuggestStoreInner::new(
-            format!(
+    impl TestStore {
+        pub fn new(client: MockRemoteSettingsClient) -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let db_path = format!(
                 "file:test_store_data_{}?mode=memory&cache=shared",
-                hex::encode(unique_suffix),
-            ),
-            format!(
-                "file:test_store_cache_{}?mode=memory&cache=shared",
-                hex::encode(unique_suffix),
-            ),
-            settings_client,
-        )
-    }
-
-    /// A snapshot containing fake Remote Settings records and attachments for
-    /// the store to ingest. We use snapshots to test the store's behavior in a
-    /// data-driven way.
-    struct Snapshot {
-        records: Vec<RemoteSettingsRecord>,
-        attachments: HashMap<&'static str, Vec<u8>>,
-    }
-
-    impl Snapshot {
-        /// Creates a snapshot from a JSON value that represents a collection of
-        /// Suggest Remote Settings records.
-        ///
-        /// You can use the [`serde_json::json!`] macro to construct the JSON
-        /// value, then pass it to this function. It's easier to use the
-        /// `Snapshot::with_records(json!(...))` idiom than to construct the
-        /// records by hand.
-        fn with_records(value: serde_json::Value) -> anyhow::Result<Self> {
-            Ok(Self {
-                records: serde_json::from_value(value)
-                    .context("Couldn't create snapshot with Remote Settings records")?,
-                attachments: HashMap::new(),
-            })
-        }
-
-        /// Adds a data attachment with one or more suggestions to the snapshot.
-        fn with_data(
-            mut self,
-            location: &'static str,
-            value: serde_json::Value,
-        ) -> anyhow::Result<Self> {
-            self.attachments.insert(
-                location,
-                serde_json::to_vec(&value).context("Couldn't add data attachment to snapshot")?,
+                COUNTER.fetch_add(1, Ordering::Relaxed),
             );
-            Ok(self)
-        }
-
-        /// Adds an icon attachment to the snapshot.
-        fn with_icon(mut self, location: &'static str, bytes: Vec<u8>) -> Self {
-            self.attachments.insert(location, bytes);
-            self
-        }
-    }
-
-    /// A fake Remote Settings client that returns records and attachments from
-    /// a snapshot.
-    struct SnapshotSettingsClient {
-        /// The current snapshot. You can modify it using
-        /// [`RefCell::borrow_mut()`] to simulate remote updates in tests.
-        snapshot: RefCell<Snapshot>,
-
-        /// The options passed to the last [`Self::get_records_with_options()`]
-        /// call.
-        last_get_records_options: RefCell<Option<GetItemsOptions>>,
-    }
-
-    impl SnapshotSettingsClient {
-        /// Creates a client with an initial snapshot.
-        fn with_snapshot(snapshot: Snapshot) -> Self {
             Self {
-                snapshot: RefCell::new(snapshot),
-                last_get_records_options: RefCell::default(),
+                inner: SuggestStoreInner::new(db_path, vec![], client),
             }
         }
 
-        /// Returns the most recent value of an option passed to
-        /// [`Self::get_records_with_options()`].
-        fn last_get_records_option(&self, option: &str) -> Option<String> {
-            self.last_get_records_options
-                .borrow()
-                .as_ref()
-                .and_then(|options| {
-                    options
-                        .iter_query_pairs()
-                        .find(|(key, _)| key == option)
-                        .map(|(_, value)| value.into())
-                })
+        pub fn client_mut(&mut self) -> &mut MockRemoteSettingsClient {
+            &mut self.inner.settings_client
         }
-    }
 
-    impl SuggestRemoteSettingsClient for SnapshotSettingsClient {
-        fn get_records_with_options(
+        pub fn read<T>(&self, op: impl FnOnce(&SuggestDao) -> Result<T>) -> Result<T> {
+            self.inner.dbs().unwrap().reader.read(op)
+        }
+
+        pub fn count_rows(&self, table_name: &str) -> u64 {
+            let sql = format!("SELECT count(*) FROM {table_name}");
+            self.read(|dao| Ok(dao.conn.query_one(&sql)?))
+                .unwrap_or_else(|e| panic!("SQL error in count: {e}"))
+        }
+
+        pub fn ingest(&self, constraints: SuggestIngestionConstraints) {
+            self.inner.ingest(constraints).unwrap();
+        }
+
+        pub fn fetch_suggestions(&self, query: SuggestionQuery) -> Vec<Suggestion> {
+            self.inner.query(query).unwrap().suggestions
+        }
+
+        pub fn fetch_global_config(&self) -> SuggestGlobalConfig {
+            self.inner
+                .fetch_global_config()
+                .expect("Error fetching global config")
+        }
+
+        pub fn fetch_provider_config(
             &self,
-            options: &GetItemsOptions,
-        ) -> Result<RemoteSettingsResponse> {
-            *self.last_get_records_options.borrow_mut() = Some(options.clone());
-            let records = self.snapshot.borrow().records.clone();
-            let last_modified = records
-                .iter()
-                .map(|record| record.last_modified)
-                .max()
-                .unwrap_or(0);
-            Ok(RemoteSettingsResponse {
-                records,
-                last_modified,
-            })
+            provider: SuggestionProvider,
+        ) -> Option<SuggestProviderConfig> {
+            self.inner
+                .fetch_provider_config(provider)
+                .expect("Error fetching provider config")
         }
 
-        fn get_attachment(&self, location: &str) -> Result<Vec<u8>> {
-            Ok(self
-                .snapshot
-                .borrow()
-                .attachments
-                .get(location)
-                .unwrap_or_else(|| unreachable!("Unexpected request for attachment `{}`", location))
-                .clone())
+        pub fn fetch_geonames(
+            &self,
+            query: &str,
+            match_name_prefix: bool,
+            geoname_type: Option<GeonameType>,
+            filter: Option<Vec<Geoname>>,
+        ) -> Vec<GeonameMatch> {
+            self.inner
+                .fetch_geonames(query, match_name_prefix, geoname_type, filter)
+                .expect("Error fetching geonames")
         }
-    }
-
-    fn before_each() {
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            env_logger::init();
-        });
     }
 
     /// Tests that `SuggestStore` is usable with UniFFI, which requires exposed
@@ -688,209 +996,153 @@ mod tests {
     fn ingest_suggestions() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "1234",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "5678",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?;
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record("data", "1234", json![los_pollos_amp()])
+                .with_icon(los_pollos_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")],
+        );
+        Ok(())
+    }
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
+    /// Tests ingesting suggestions into an empty database.
+    #[test]
+    fn ingest_empty_only() -> anyhow::Result<()> {
+        before_each();
 
-        store.ingest(SuggestIngestionConstraints::default())?;
+        let mut store = TestStore::new(MockRemoteSettingsClient::default().with_record(
+            "data",
+            "1234",
+            json![los_pollos_amp()],
+        ));
+        // suggestions_table_empty returns true before the ingestion is complete
+        assert!(store.read(|dao| dao.suggestions_table_empty())?);
+        // This ingestion should run, since the DB is empty
+        store.ingest(SuggestIngestionConstraints {
+            empty_only: true,
+            ..SuggestIngestionConstraints::all_providers()
+        });
+        // suggestions_table_empty returns false after the ingestion is complete
+        assert!(!store.read(|dao| dao.suggestions_table_empty())?);
 
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(15));
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Los Pollos Hermanos - Albuquerque",
-                        url: "https://www.lph-nm.biz",
-                        raw_url: "https://www.lph-nm.biz",
-                        icon: None,
-                        full_keyword: "los",
-                        block_id: 0,
-                        advertiser: "Los Pollos Hermanos",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "lo".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-
-            Ok(())
-        })?;
+        // This ingestion should not run since the DB is no longer empty
+        store.client_mut().update_record(
+            "data",
+            "1234",
+            json!([los_pollos_amp(), good_place_eats_amp()]),
+        );
+        store.ingest(SuggestIngestionConstraints {
+            empty_only: true,
+            ..SuggestIngestionConstraints::all_providers()
+        });
+        // "la" should not match the good place eats suggestion, since that should not have been
+        // ingested.
+        assert_eq!(store.fetch_suggestions(SuggestionQuery::amp("la")), vec![]);
 
         Ok(())
     }
 
     /// Tests ingesting suggestions with icons.
     #[test]
-    fn ingest_icons() -> anyhow::Result<()> {
+    fn ingest_amp_icons() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-2",
-            "type": "icon",
-            "last_modified": 20,
-            "attachment": {
-                "filename": "icon-2.png",
-                "mimetype": "image/png",
-                "location": "icon-2.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url"
-            }, {
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["pe", "pen", "penne", "penne for your thoughts"],
-                "title": "Penne for Your Thoughts",
-                "url": "https://penne.biz",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?
-        .with_icon("icon-2.png", "i-am-an-icon".as_bytes().into());
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "data",
+                    "1234",
+                    json!([los_pollos_amp(), good_place_eats_amp()]),
+                )
+                .with_icon(los_pollos_icon())
+                .with_icon(good_place_eats_icon()),
+        );
+        // This ingestion should run, since the DB is empty
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")),
+            vec![good_place_eats_suggestion("lasagna")]
+        );
 
-        store.ingest(SuggestIngestionConstraints::default())?;
+        Ok(())
+    }
 
-        store.dbs()?.reader.read(|dao| {
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                105,
-                                45,
-                                97,
-                                109,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.2,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "la".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Penne for Your Thoughts",
-                        url: "https://penne.biz",
-                        raw_url: "https://penne.biz",
-                        icon: Some(
-                            [
-                                105,
-                                45,
-                                97,
-                                109,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "penne",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "pe".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
+    #[test]
+    fn ingest_full_keywords() -> anyhow::Result<()> {
+        before_each();
 
-            Ok(())
-        })?;
+        let store = TestStore::new(MockRemoteSettingsClient::default()
+            .with_record("data", "1234", json!([
+                // AMP attachment with full keyword data
+                los_pollos_amp().merge(json!({
+                    "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
+                    "full_keywords": [
+                        // Full keyword for the first 4 keywords
+                        ("los pollos", 4),
+                        // Full keyword for the next 2 keywords
+                        ("los pollos hermanos (restaurant)", 2),
+                    ],
+                })),
+                // AMP attachment without full keyword data
+                good_place_eats_amp(),
+                // Wikipedia attachment with full keyword data.  We should ignore the full
+                // keyword data for Wikipedia suggestions
+                california_wiki(),
+                // california_wiki().merge(json!({
+                //     "keywords": ["cal", "cali", "california"],
+                //     "full_keywords": [("california institute of technology", 3)],
+                // })),
+            ]))
+            .with_record("amp-mobile-suggestions", "2468", json!([
+                // Amp mobile attachment with full keyword data
+                a1a_amp_mobile().merge(json!({
+                    "keywords": ["a1a", "ca", "car", "car wash"],
+                    "full_keywords": [
+                        ("A1A Car Wash", 1),
+                        ("car wash", 3),
+                    ],
+                })),
+            ]))
+            .with_icon(los_pollos_icon())
+            .with_icon(good_place_eats_icon())
+            .with_icon(california_icon())
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            // This keyword comes from the provided full_keywords list
+            vec![los_pollos_suggestion("los pollos")],
+        );
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")),
+            // Good place eats did not have full keywords, so this one is calculated with the
+            // keywords.rs code
+            vec![good_place_eats_suggestion("lasagna")],
+        );
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::wikipedia("cal")),
+            // Even though this had a full_keywords field, we should ignore it since it's a
+            // wikipedia suggestion and use the keywords.rs code instead
+            vec![california_suggestion("california")],
+        );
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp_mobile("a1a")),
+            // This keyword comes from the provided full_keywords list.
+            vec![a1a_suggestion("A1A Car Wash")],
+        );
 
         Ok(())
     }
@@ -901,65 +1153,17 @@ mod tests {
     fn ingest_one_suggestion_in_data_attachment() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!({
-                "id": 0,
-                 "advertiser": "Good Place Eats",
-                 "iab_category": "8 - Food & Drink",
-                 "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                 "title": "Lasagna Come Out Tomorrow",
-                 "url": "https://www.lasagna.restaurant",
-                 "icon": "2",
-                 "impression_url": "https://example.com/impression_url",
-                 "click_url": "https://example.com/click_url",
-                 "score": 0.3
-            }),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: None,
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "la".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-
-            Ok(())
-        })?;
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                // This record contains just one JSON object, rather than an array of them
+                .with_record("data", "1234", los_pollos_amp())
+                .with_icon(los_pollos_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")],
+        );
 
         Ok(())
     }
@@ -969,178 +1173,41 @@ mod tests {
     fn reingest_amp_suggestions() -> anyhow::Result<()> {
         before_each();
 
-        // Ingest suggestions from the initial snapshot.
-        let initial_snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "1",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }, {
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los p", "los pollos h"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?;
+        let mut store = TestStore::new(MockRemoteSettingsClient::default().with_record(
+            "data",
+            "1234",
+            json!([los_pollos_amp(), good_place_eats_amp()]),
+        ));
+        // Ingest once
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        // Update the snapshot with new suggestions: Los pollos has a new name and Good place eats
+        // is now serving Penne
+        store.client_mut().update_record(
+            "data",
+            "1234",
+            json!([
+                los_pollos_amp().merge(json!({
+                    "title": "Los Pollos Hermanos - Now Serving at 14 Locations!",
+                })),
+                good_place_eats_amp().merge(json!({
+                    "keywords": ["pe", "pen", "penne", "penne for your thoughts"],
+                    "title": "Penne for Your Thoughts",
+                    "url": "https://penne.biz",
+                }))
+            ]),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(initial_snapshot));
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")).as_slice(),
+            [ Suggestion::Amp { title, .. } ] if title == "Los Pollos Hermanos - Now Serving at 14 Locations!",
+        ));
 
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(15u64));
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: None,
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "la".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            Ok(())
-        })?;
-
-        // Update the snapshot with new suggestions: drop Lasagna, update Los
-        // Pollos, and add Penne.
-        *store.settings_client.snapshot.borrow_mut() = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 30,
-            "attachment": {
-                "filename": "data-1-1.json",
-                "mimetype": "application/json",
-                "location": "data-1-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["los ", "los pollos", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Now Serving at 14 Locations!",
-                "url": "https://www.lph-nm.biz",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }, {
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["pe", "pen", "penne", "penne for your thoughts"],
-                "title": "Penne for Your Thoughts",
-                "url": "https://penne.biz",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?;
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(30u64));
-            assert!(dao
-                .fetch_suggestions(&SuggestionQuery {
-                    keyword: "la".into(),
-                    providers: vec![SuggestionProvider::Amp],
-                    limit: None,
-                })?
-                .is_empty());
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Los Pollos Hermanos - Now Serving at 14 Locations!",
-                        url: "https://www.lph-nm.biz",
-                        raw_url: "https://www.lph-nm.biz",
-                        icon: None,
-                        full_keyword: "los pollos",
-                        block_id: 0,
-                        advertiser: "Los Pollos Hermanos",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "los ".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Penne for Your Thoughts",
-                        url: "https://penne.biz",
-                        raw_url: "https://penne.biz",
-                        icon: None,
-                        full_keyword: "penne",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "pe".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            Ok(())
-        })?;
+        assert_eq!(store.fetch_suggestions(SuggestionQuery::amp("la")), vec![]);
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amp("pe")).as_slice(),
+            [ Suggestion::Amp { title, url, .. } ] if title == "Penne for Your Thoughts" && url == "https://penne.biz"
+        ));
 
         Ok(())
     }
@@ -1150,201 +1217,53 @@ mod tests {
     fn reingest_icons() -> anyhow::Result<()> {
         before_each();
 
-        // Ingest suggestions and icons from the initial snapshot.
-        let initial_snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-2",
-            "type": "icon",
-            "last_modified": 20,
-            "attachment": {
-                "filename": "icon-2.png",
-                "mimetype": "image/png",
-                "location": "icon-2.png",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-3",
-            "type": "icon",
-            "last_modified": 25,
-            "attachment": {
-                "filename": "icon-3.png",
-                "mimetype": "image/png",
-                "location": "icon-3.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }, {
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los", "los pollos", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "3",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?
-        .with_icon("icon-2.png", "lasagna-icon".as_bytes().into())
-        .with_icon("icon-3.png", "pollos-icon".as_bytes().into());
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "data",
+                    "1234",
+                    json!([los_pollos_amp(), good_place_eats_amp()]),
+                )
+                .with_icon(los_pollos_icon())
+                .with_icon(good_place_eats_icon()),
+        );
+        // This ingestion should run, since the DB is empty
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(initial_snapshot));
+        // Reingest with updated icon data
+        //  - Los pollos gets new data and a new id
+        //  - Good place eats gets new data only
+        store
+            .client_mut()
+            .update_record(
+                "data",
+                "1234",
+                json!([
+                    los_pollos_amp().merge(json!({"icon": "1000"})),
+                    good_place_eats_amp()
+                ]),
+            )
+            .delete_icon(los_pollos_icon())
+            .add_icon(MockIcon {
+                id: "1000",
+                data: "new-los-pollos-icon",
+                ..los_pollos_icon()
+            })
+            .update_icon(MockIcon {
+                data: "new-good-place-eats-icon",
+                ..good_place_eats_icon()
+            });
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        store.ingest(SuggestIngestionConstraints::default())?;
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")).as_slice(),
+            [ Suggestion::Amp { icon, .. } ] if *icon == Some("new-los-pollos-icon".as_bytes().to_vec())
+        ));
 
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(25u64));
-            assert_eq!(
-                dao.conn
-                    .query_one::<i64>("SELECT count(*) FROM suggestions")?,
-                2
-            );
-            assert_eq!(dao.conn.query_one::<i64>("SELECT count(*) FROM icons")?, 2);
-            Ok(())
-        })?;
-
-        // Update the snapshot with new icons.
-        *store.settings_client.snapshot.borrow_mut() = Snapshot::with_records(json!([{
-            "id": "icon-2",
-            "type": "icon",
-            "last_modified": 30,
-            "attachment": {
-                "filename": "icon-2.png",
-                "mimetype": "image/png",
-                "location": "icon-2.png",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-3",
-            "type": "icon",
-            "last_modified": 35,
-            "attachment": {
-                "filename": "icon-3.png",
-                "mimetype": "image/png",
-                "location": "icon-3.png",
-                "hash": "",
-                "size": 0,
-            }
-        }]))?
-        .with_icon("icon-2.png", "new-lasagna-icon".as_bytes().into())
-        .with_icon("icon-3.png", "new-pollos-icon".as_bytes().into());
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(35u64));
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                110,
-                                101,
-                                119,
-                                45,
-                                108,
-                                97,
-                                115,
-                                97,
-                                103,
-                                110,
-                                97,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "la".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Los Pollos Hermanos - Albuquerque",
-                        url: "https://www.lph-nm.biz",
-                        raw_url: "https://www.lph-nm.biz",
-                        icon: Some(
-                            [
-                                110,
-                                101,
-                                119,
-                                45,
-                                112,
-                                111,
-                                108,
-                                108,
-                                111,
-                                115,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "los",
-                        block_id: 0,
-                        advertiser: "Los Pollos Hermanos",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "lo".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
-            Ok(())
-        })?;
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")).as_slice(),
+            [ Suggestion::Amp { icon, .. } ] if *icon == Some("new-good-place-eats-icon".as_bytes().to_vec())
+        ));
 
         Ok(())
     }
@@ -1354,383 +1273,102 @@ mod tests {
     fn reingest_amo_suggestions() -> anyhow::Result<()> {
         before_each();
 
-        // Ingest suggestions from the initial snapshot.
-        let initial_snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "amo-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-2",
-            "type": "amo-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-2.json",
-                "mimetype": "application/json",
-                "location": "data-2.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!({
-                "description": "First suggestion",
-                "url": "https://example.org/amo-suggestion-1",
-                "guid": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                "keywords": ["relay", "spam", "masking email", "alias"],
-                "title": "AMO suggestion",
-                "icon": "https://example.org/amo-suggestion-1/icon.png",
-                "rating": "4.9",
-                "number_of_ratings": 800,
-                "score": 0.25
-            }),
-        )?
-        .with_data(
-            "data-2.json",
-            json!([{
-                "description": "Second suggestion",
-                "url": "https://example.org/amo-suggestion-2",
-                "guid": "{6d24e3b8-1400-4d37-9440-c798f9b79b1a}",
-                "keywords": ["dark mode", "dark theme", "night mode"],
-                "title": "Another AMO suggestion",
-                "icon": "https://example.org/amo-suggestion-2/icon.png",
-                "rating": "4.6",
-                "number_of_ratings": 750,
-                "score": 0.25
-            }, {
-                "description": "Third suggestion",
-                "url": "https://example.org/amo-suggestion-3",
-                "guid": "{1e9d493b-0498-48bb-9b9a-8b45a44df146}",
-                "keywords": ["grammar", "spelling", "edit"],
-                "title": "Yet another AMO suggestion",
-                "icon": "https://example.org/amo-suggestion-3/icon.png",
-                "rating": "4.8",
-                "number_of_ratings": 900,
-                "score": 0.25
-            }]),
-        )?;
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record("amo-suggestions", "data-1", json!([relay_amo()]))
+                .with_record(
+                    "amo-suggestions",
+                    "data-2",
+                    json!([dark_mode_amo(), foxy_guestures_amo()]),
+                ),
+        );
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(initial_snapshot));
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(15u64));
-
-            expect![[r#"
-                [
-                    Amo {
-                        title: "AMO suggestion",
-                        url: "https://example.org/amo-suggestion-1",
-                        icon_url: "https://example.org/amo-suggestion-1/icon.png",
-                        description: "First suggestion",
-                        rating: Some(
-                            "4.9",
-                        ),
-                        number_of_ratings: 800,
-                        guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        score: 0.25,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "masking e".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            expect![[r#"
-                [
-                    Amo {
-                        title: "Another AMO suggestion",
-                        url: "https://example.org/amo-suggestion-2",
-                        icon_url: "https://example.org/amo-suggestion-2/icon.png",
-                        description: "Second suggestion",
-                        rating: Some(
-                            "4.6",
-                        ),
-                        number_of_ratings: 750,
-                        guid: "{6d24e3b8-1400-4d37-9440-c798f9b79b1a}",
-                        score: 0.25,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "night".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            Ok(())
-        })?;
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("masking e")),
+            vec![relay_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("night")),
+            vec![dark_mode_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("grammar")),
+            vec![foxy_guestures_suggestion()],
+        );
 
         // Update the snapshot with new suggestions: update the second, drop the
         // third, and add the fourth.
-        *store.settings_client.snapshot.borrow_mut() = Snapshot::with_records(json!([{
-            "id": "data-2",
-            "type": "amo-suggestions",
-            "last_modified": 30,
-            "attachment": {
-                "filename": "data-2-1.json",
-                "mimetype": "application/json",
-                "location": "data-2-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-2-1.json",
-            json!([{
-                "description": "Updated second suggestion",
-                "url": "https://example.org/amo-suggestion-2",
-                "guid": "{6d24e3b8-1400-4d37-9440-c798f9b79b1a}",
-                "keywords": ["dark mode", "night mode"],
-                "title": "Another AMO suggestion",
-                "icon": "https://example.org/amo-suggestion-2/icon.png",
-                "rating": "4.7",
-                "number_of_ratings": 775,
-                "score": 0.25
-            }, {
-                "description": "Fourth suggestion",
-                "url": "https://example.org/amo-suggestion-4",
-                "guid": "{1ea82ebd-a1ba-4f57-b8bb-3824ead837bd}",
-                "keywords": ["image search", "visual search"],
-                "title": "New AMO suggestion",
-                "icon": "https://example.org/amo-suggestion-4/icon.png",
-                "rating": "5.0",
-                "number_of_ratings": 100,
-                "score": 0.25
-            }]),
-        )?;
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta(LAST_INGEST_META_KEY)?, Some(30u64));
-
-            expect![[r#"
-                [
-                    Amo {
-                        title: "AMO suggestion",
-                        url: "https://example.org/amo-suggestion-1",
-                        icon_url: "https://example.org/amo-suggestion-1/icon.png",
-                        description: "First suggestion",
-                        rating: Some(
-                            "4.9",
-                        ),
-                        number_of_ratings: 800,
-                        guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        score: 0.25,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "masking e".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            expect![[r#"
-                []
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "dark t".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            expect![[r#"
-                [
-                    Amo {
-                        title: "Another AMO suggestion",
-                        url: "https://example.org/amo-suggestion-2",
-                        icon_url: "https://example.org/amo-suggestion-2/icon.png",
-                        description: "Updated second suggestion",
-                        rating: Some(
-                            "4.7",
-                        ),
-                        number_of_ratings: 775,
-                        guid: "{6d24e3b8-1400-4d37-9440-c798f9b79b1a}",
-                        score: 0.25,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "night".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            expect![[r#"
-                [
-                    Amo {
-                        title: "New AMO suggestion",
-                        url: "https://example.org/amo-suggestion-4",
-                        icon_url: "https://example.org/amo-suggestion-4/icon.png",
-                        description: "Fourth suggestion",
-                        rating: Some(
-                            "5.0",
-                        ),
-                        number_of_ratings: 100,
-                        guid: "{1ea82ebd-a1ba-4f57-b8bb-3824ead837bd}",
-                        score: 0.25,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "image search".into(),
-                providers: vec![SuggestionProvider::Amo],
-                limit: None,
-            })?);
-
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    /// Tests ingesting tombstones for previously-ingested suggestions and
-    /// icons.
-    #[test]
-    fn ingest_tombstones() -> anyhow::Result<()> {
-        before_each();
-
-        // Ingest suggestions and icons from the initial snapshot.
-        let initial_snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-2",
-            "type": "icon",
-            "last_modified": 20,
-            "attachment": {
-                "filename": "icon-2.png",
-                "mimetype": "image/png",
-                "location": "icon-2.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?
-        .with_icon("icon-2.png", "i-am-an-icon".as_bytes().into());
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(initial_snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(20));
-            assert_eq!(
-                dao.conn
-                    .query_one::<i64>("SELECT count(*) FROM suggestions")?,
-                1
+        store
+            .client_mut()
+            .update_record("amo-suggestions", "data-1", json!([relay_amo()]))
+            .update_record(
+                "amo-suggestions",
+                "data-2",
+                json!([
+                    dark_mode_amo().merge(json!({"title": "Updated second suggestion"})),
+                    new_tab_override_amo(),
+                ]),
             );
-            assert_eq!(dao.conn.query_one::<i64>("SELECT count(*) FROM icons")?, 1);
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-            Ok(())
-        })?;
-
-        // Replace the records with tombstones. Ingesting these should remove
-        // all their suggestions and icons.
-        *store.settings_client.snapshot.borrow_mut() = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "last_modified": 25,
-            "deleted": true,
-        }, {
-            "id": "icon-2",
-            "last_modified": 30,
-            "deleted": true,
-        }]))?;
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(30));
-            assert_eq!(
-                dao.conn
-                    .query_one::<i64>("SELECT count(*) FROM suggestions")?,
-                0
-            );
-            assert_eq!(dao.conn.query_one::<i64>("SELECT count(*) FROM icons")?, 0);
-
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    /// Tests ingesting suggestions with constraints.
-    #[test]
-    fn ingest_with_constraints() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([]))?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
         assert_eq!(
-            store.settings_client.last_get_records_option("_limit"),
-            None,
+            store.fetch_suggestions(SuggestionQuery::amo("masking e")),
+            vec![relay_suggestion()],
+        );
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amo("night")).as_slice(),
+            [Suggestion::Amo { title, .. } ] if title == "Updated second suggestion"
+        ));
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("grammar")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("image search")),
+            vec![new_tab_override_suggestion()],
         );
 
-        // 200 suggestions per record, so test with numbers around that
-        // boundary.
-        let table = [
-            (0, "1"),
-            (199, "1"),
-            (200, "1"),
-            (201, "2"),
-            (300, "2"),
-            (400, "2"),
-            (401, "3"),
-        ];
-        for (max_suggestions, expected_limit) in table {
-            store.ingest(SuggestIngestionConstraints {
-                max_suggestions: Some(max_suggestions),
-            })?;
-            let actual_limit = store
-                .settings_client
-                .last_get_records_option("_limit")
-                .ok_or_else(|| {
-                    anyhow!("Want limit = {} for {}", expected_limit, max_suggestions)
-                })?;
-            assert_eq!(
-                actual_limit, expected_limit,
-                "Want limit = {} for {}; got limit = {}",
-                expected_limit, max_suggestions, actual_limit
-            );
-        }
+        Ok(())
+    }
 
+    /// Tests ingestion when previously-ingested suggestions/icons have been deleted.
+    #[test]
+    fn ingest_with_deletions() -> anyhow::Result<()> {
+        before_each();
+
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record("data", "data-1", json!([los_pollos_amp()]))
+                .with_record("data", "data-2", json!([good_place_eats_amp()]))
+                .with_icon(los_pollos_icon())
+                .with_icon(good_place_eats_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")),
+            vec![good_place_eats_suggestion("lasagna")],
+        );
+        // Re-ingest without los-pollos and good place eat's icon.  The suggest store should
+        // recognize that they're missing and delete them.
+        store
+            .client_mut()
+            .delete_record("quicksuggest", "data-1")
+            .delete_icon(good_place_eats_icon());
+        store.ingest(SuggestIngestionConstraints::all_providers());
+
+        assert_eq!(store.fetch_suggestions(SuggestionQuery::amp("lo")), vec![]);
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")).as_slice(),
+            [
+                Suggestion::Amp { icon, icon_mimetype, .. }
+            ] if icon.is_none() && icon_mimetype.is_none(),
+        ));
         Ok(())
     }
 
@@ -1739,69 +1377,22 @@ mod tests {
     fn clear() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "2",
-                "impression_url": "https://example.com",
-                "click_url": "https://example.com",
-                "score": 0.3
-            }]),
-        )?;
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record("data", "data-1", json!([los_pollos_amp()]))
+                .with_record("data", "data-2", json!([good_place_eats_amp()]))
+                .with_icon(los_pollos_icon())
+                .with_icon(good_place_eats_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert!(store.count_rows("suggestions") > 0);
+        assert!(store.count_rows("keywords") > 0);
+        assert!(store.count_rows("icons") > 0);
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(15));
-            assert_eq!(
-                dao.conn
-                    .query_one::<i64>("SELECT count(*) FROM suggestions")?,
-                1
-            );
-            assert_eq!(
-                dao.conn.query_one::<i64>("SELECT count(*) FROM keywords")?,
-                6
-            );
-
-            Ok(())
-        })?;
-
-        store.clear()?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, None);
-            assert_eq!(
-                dao.conn
-                    .query_one::<i64>("SELECT count(*) FROM suggestions")?,
-                0
-            );
-            assert_eq!(
-                dao.conn.query_one::<i64>("SELECT count(*) FROM keywords")?,
-                0
-            );
-
-            Ok(())
-        })?;
+        store.inner.clear()?;
+        assert!(store.count_rows("suggestions") == 0);
+        assert!(store.count_rows("keywords") == 0);
+        assert!(store.count_rows("icons") == 0);
 
         Ok(())
     }
@@ -1811,2275 +1402,498 @@ mod tests {
     fn query() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "data",
+                    "data-1",
+                    json!([
+                        good_place_eats_amp(),
+                        california_wiki(),
+                        caltech_wiki(),
+                        multimatch_wiki(),
+                    ]),
+                )
+                .with_record(
+                    "amo-suggestions",
+                    "data-2",
+                    json!([relay_amo(), multimatch_amo(),]),
+                )
+                .with_record(
+                    "pocket-suggestions",
+                    "data-3",
+                    json!([burnout_pocket(), multimatch_pocket(),]),
+                )
+                .with_record("yelp-suggestions", "data-4", json!([ramen_yelp(),]))
+                .with_record("mdn-suggestions", "data-5", json!([array_mdn(),]))
+                .with_icon(good_place_eats_icon())
+                .with_icon(california_icon())
+                .with_icon(caltech_icon())
+                .with_icon(yelp_favicon())
+                .with_icon(multimatch_wiki_icon()),
+        );
 
-        }, {
-            "id": "data-2",
-            "type": "amo-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-2.json",
-                "mimetype": "application/json",
-                "location": "data-2.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-3",
-            "type": "pocket-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-3.json",
-                "mimetype": "application/json",
-                "location": "data-3.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-4",
-            "type": "yelp-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-4.json",
-                "mimetype": "application/json",
-                "location": "data-4.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-5",
-            "type": "mdn-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-5.json",
-                "mimetype": "application/json",
-                "location": "data-5.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-2",
-            "type": "icon",
-            "last_modified": 20,
-            "attachment": {
-                "filename": "icon-2.png",
-                "mimetype": "image/png",
-                "location": "icon-2.png",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-3",
-            "type": "icon",
-            "last_modified": 25,
-            "attachment": {
-                "filename": "icon-3.png",
-                "mimetype": "image/png",
-                "location": "icon-3.png",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-yelp-favicon",
-            "type": "icon",
-            "last_modified": 25,
-            "attachment": {
-                "filename": "yelp-favicon.svg",
-                "mimetype": "image/svg+xml",
-                "location": "yelp-favicon.svg",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }, {
-                "id": 0,
-                "advertiser": "Wikipedia",
-                "iab_category": "5 - Education",
-                "keywords": ["cal", "cali", "california"],
-                "title": "California",
-                "url": "https://wikipedia.org/California",
-                "icon": "3"
-            }, {
-                "id": 0,
-                "advertiser": "Wikipedia",
-                "iab_category": "5 - Education",
-                "keywords": ["cal", "cali", "california", "institute", "technology"],
-                "title": "California Institute of Technology",
-                "url": "https://wikipedia.org/California_Institute_of_Technology",
-                "icon": "3"
-            },{
-                "id": 0,
-                "advertiser": "Wikipedia",
-                "iab_category": "5 - Education",
-                "keywords": ["multimatch"],
-                "title": "Multimatch",
-                "url": "https://wikipedia.org/Multimatch",
-                "icon": "3"
-            }]),
-        )?
-            .with_data(
-                "data-2.json",
-                json!([
-                    {
-                        "description": "amo suggestion",
-                        "url": "https://addons.mozilla.org/en-US/firefox/addon/example",
-                        "guid": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        "keywords": ["relay", "spam", "masking email", "alias"],
-                        "title": "Firefox Relay",
-                        "icon": "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                        "rating": "4.9",
-                        "number_of_ratings": 888,
-                        "score": 0.25
-                    },
-                    {
-                        "description": "amo suggestion multi-match",
-                        "url": "https://addons.mozilla.org/en-US/firefox/addon/multimatch",
-                        "guid": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        "keywords": ["multimatch"],
-                        "title": "Firefox Multimatch",
-                        "icon": "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                        "rating": "4.9",
-                        "number_of_ratings": 888,
-                        "score": 0.25
-                    },
-                ]),
-        )?
-            .with_data(
-            "data-3.json",
-            json!([
-                {
-                    "description": "pocket suggestion",
-                    "url": "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                    "lowConfidenceKeywords": ["soft life", "workaholism", "toxic work culture", "work-life balance"],
-                    "highConfidenceKeywords": ["burnout women", "grind culture", "women burnout"],
-                    "title": "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                    "score": 0.25
-                },
-                {
-                    "description": "pocket suggestion multi-match",
-                    "url": "https://getpocket.com/collections/multimatch",
-                    "lowConfidenceKeywords": [],
-                    "highConfidenceKeywords": ["multimatch"],
-                    "title": "Multimatching",
-                    "score": 0.88
-                },
-            ]),
-        )?
-        .with_data(
-            "data-4.json",
-            json!({
-                "subjects": ["ramen", "spicy ramen", "spicy random ramen", "rats", "raven", "raccoon", "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789", "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789Z"],
-                "preModifiers": ["best", "super best", "same_modifier"],
-                "postModifiers": ["delivery", "super delivery", "same_modifier"],
-                "locationSigns": [
-                    { "keyword": "in", "needLocation": true },
-                    { "keyword": "near", "needLocation": true },
-                    { "keyword": "near by", "needLocation": false },
-                    { "keyword": "near me", "needLocation": false },
-                ],
-                "yelpModifiers": ["yelp", "yelp keyword"],
-                "icon": "yelp-favicon",
-                "score": 0.5
-            }),
-        )?
-        .with_data(
-            "data-5.json",
-            json!([
-                {
-                    "description": "Javascript Array",
-                    "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                    "keywords": ["array javascript", "javascript array", "wildcard"],
-                    "title": "Array",
-                    "score": 0.24
-                },
-            ]),
-        )?
-        .with_icon("icon-2.png", "i-am-an-icon".as_bytes().into())
-        .with_icon("icon-3.png", "also-an-icon".as_bytes().into())
-        .with_icon("yelp-favicon.svg", "yelp-icon".as_bytes().into());
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "empty keyword; all providers",
-                SuggestionQuery {
-                    keyword: String::new(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                        SuggestionProvider::Yelp,
-                        SuggestionProvider::Weather,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `la`; all providers",
-                SuggestionQuery {
-                    keyword: "la".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                        SuggestionProvider::Yelp,
-                        SuggestionProvider::Weather,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Amp {
-                            title: "Lasagna Come Out Tomorrow",
-                            url: "https://www.lasagna.restaurant",
-                            raw_url: "https://www.lasagna.restaurant",
-                            icon: Some(
-                                [
-                                    105,
-                                    45,
-                                    97,
-                                    109,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "lasagna",
-                            block_id: 0,
-                            advertiser: "Good Place Eats",
-                            iab_category: "8 - Food & Drink",
-                            impression_url: "https://example.com/impression_url",
-                            click_url: "https://example.com/click_url",
-                            raw_click_url: "https://example.com/click_url",
-                            score: 0.3,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "multimatch; all providers",
-                SuggestionQuery {
-                    keyword: "multimatch".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "Multimatching",
-                            url: "https://getpocket.com/collections/multimatch",
-                            score: 0.88,
-                            is_top_pick: true,
-                        },
-                        Amo {
-                            title: "Firefox Multimatch",
-                            url: "https://addons.mozilla.org/en-US/firefox/addon/multimatch",
-                            icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                            description: "amo suggestion multi-match",
-                            rating: Some(
-                                "4.9",
-                            ),
-                            number_of_ratings: 888,
-                            guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                            score: 0.25,
-                        },
-                        Wikipedia {
-                            title: "Multimatch",
-                            url: "https://wikipedia.org/Multimatch",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "multimatch",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "MultiMatch; all providers, mixed case",
-                SuggestionQuery {
-                    keyword: "MultiMatch".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "Multimatching",
-                            url: "https://getpocket.com/collections/multimatch",
-                            score: 0.88,
-                            is_top_pick: true,
-                        },
-                        Amo {
-                            title: "Firefox Multimatch",
-                            url: "https://addons.mozilla.org/en-US/firefox/addon/multimatch",
-                            icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                            description: "amo suggestion multi-match",
-                            rating: Some(
-                                "4.9",
-                            ),
-                            number_of_ratings: 888,
-                            guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                            score: 0.25,
-                        },
-                        Wikipedia {
-                            title: "Multimatch",
-                            url: "https://wikipedia.org/Multimatch",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "multimatch",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "multimatch; all providers, limit 2",
-                SuggestionQuery {
-                    keyword: "multimatch".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: Some(2),
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "Multimatching",
-                            url: "https://getpocket.com/collections/multimatch",
-                            score: 0.88,
-                            is_top_pick: true,
-                        },
-                        Amo {
-                            title: "Firefox Multimatch",
-                            url: "https://addons.mozilla.org/en-US/firefox/addon/multimatch",
-                            icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                            description: "amo suggestion multi-match",
-                            rating: Some(
-                                "4.9",
-                            ),
-                            number_of_ratings: 888,
-                            guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                            score: 0.25,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `la`; AMP only",
-                SuggestionQuery {
-                    keyword: "la".into(),
-                    providers: vec![SuggestionProvider::Amp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Amp {
-                            title: "Lasagna Come Out Tomorrow",
-                            url: "https://www.lasagna.restaurant",
-                            raw_url: "https://www.lasagna.restaurant",
-                            icon: Some(
-                                [
-                                    105,
-                                    45,
-                                    97,
-                                    109,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "lasagna",
-                            block_id: 0,
-                            advertiser: "Good Place Eats",
-                            iab_category: "8 - Food & Drink",
-                            impression_url: "https://example.com/impression_url",
-                            click_url: "https://example.com/click_url",
-                            raw_click_url: "https://example.com/click_url",
-                            score: 0.3,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `la`; Wikipedia, AMO, and Pocket",
-                SuggestionQuery {
-                    keyword: "la".into(),
-                    providers: vec![
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `la`; no providers",
-                SuggestionQuery {
-                    keyword: "la".into(),
-                    providers: vec![],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `cal`; AMP, AMO, and Pocket",
-                SuggestionQuery {
-                    keyword: "cal".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `cal`; Wikipedia only",
-                SuggestionQuery {
-                    keyword: "cal".into(),
-                    providers: vec![SuggestionProvider::Wikipedia],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Wikipedia {
-                            title: "California",
-                            url: "https://wikipedia.org/California",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "california",
-                        },
-                        Wikipedia {
-                            title: "California Institute of Technology",
-                            url: "https://wikipedia.org/California_Institute_of_Technology",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "california",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `cal`; Wikipedia with limit 1",
-                SuggestionQuery {
-                    keyword: "cal".into(),
-                    providers: vec![SuggestionProvider::Wikipedia],
-                    limit: Some(1),
-                },
-                expect![[r#"
-                    [
-                        Wikipedia {
-                            title: "California",
-                            url: "https://wikipedia.org/California",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "california",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `cal`; no providers",
-                SuggestionQuery {
-                    keyword: "cal".into(),
-                    providers: vec![],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `spam`; AMO only",
-                SuggestionQuery {
-                    keyword: "spam".into(),
-                    providers: vec![SuggestionProvider::Amo],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amo {
-                        title: "Firefox Relay",
-                        url: "https://addons.mozilla.org/en-US/firefox/addon/example",
-                        icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                        description: "amo suggestion",
-                        rating: Some(
-                            "4.9",
-                        ),
-                        number_of_ratings: 888,
-                        guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        score: 0.25,
-                    },
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("")),
+            vec![]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("la")),
+            vec![good_place_eats_suggestion("lasagna"),]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("multimatch")),
+            vec![
+                multimatch_pocket_suggestion(true),
+                multimatch_amo_suggestion(),
+                multimatch_wiki_suggestion(),
+            ]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("MultiMatch")),
+            vec![
+                multimatch_pocket_suggestion(true),
+                multimatch_amo_suggestion(),
+                multimatch_wiki_suggestion(),
+            ]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("multimatch").limit(2)),
+            vec![
+                multimatch_pocket_suggestion(true),
+                multimatch_amo_suggestion(),
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")),
+            vec![good_place_eats_suggestion("lasagna")],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers_except(
+                "la",
+                SuggestionProvider::Amp
+            )),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::with_providers("la", vec![])),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::with_providers(
+                "cal",
+                vec![
+                    SuggestionProvider::Amp,
+                    SuggestionProvider::Amo,
+                    SuggestionProvider::Pocket,
                 ]
-                "#]],
-            ),
-            (
-                "keyword = `masking`; AMO only",
-                SuggestionQuery {
-                    keyword: "masking".into(),
-                    providers: vec![SuggestionProvider::Amo],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amo {
-                        title: "Firefox Relay",
-                        url: "https://addons.mozilla.org/en-US/firefox/addon/example",
-                        icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                        description: "amo suggestion",
-                        rating: Some(
-                            "4.9",
-                        ),
-                        number_of_ratings: 888,
-                        guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        score: 0.25,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `masking e`; AMO only",
-                SuggestionQuery {
-                    keyword: "masking e".into(),
-                    providers: vec![SuggestionProvider::Amo],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amo {
-                        title: "Firefox Relay",
-                        url: "https://addons.mozilla.org/en-US/firefox/addon/example",
-                        icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                        description: "amo suggestion",
-                        rating: Some(
-                            "4.9",
-                        ),
-                        number_of_ratings: 888,
-                        guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                        score: 0.25,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `masking s`; AMO only",
-                SuggestionQuery {
-                    keyword: "masking s".into(),
-                    providers: vec![SuggestionProvider::Amo],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `soft`; AMP and Wikipedia",
-                SuggestionQuery {
-                    keyword: "soft".into(),
-                    providers: vec![SuggestionProvider::Amp, SuggestionProvider::Wikipedia],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `soft`; Pocket only",
-                SuggestionQuery {
-                    keyword: "soft".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Pocket {
-                        title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                        url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                        score: 0.25,
-                        is_top_pick: false,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `soft l`; Pocket only",
-                SuggestionQuery {
-                    keyword: "soft l".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Pocket {
-                        title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                        url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                        score: 0.25,
-                        is_top_pick: false,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `sof`; Pocket only",
-                SuggestionQuery {
-                    keyword: "sof".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = `burnout women`; Pocket only",
-                SuggestionQuery {
-                    keyword: "burnout women".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Pocket {
-                        title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                        url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                        score: 0.25,
-                        is_top_pick: true,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `burnout person`; Pocket only",
-                SuggestionQuery {
-                    keyword: "burnout person".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `best spicy ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best spicy ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=best+spicy+ramen+delivery&find_loc=tokyo",
-                            title: "best spicy ramen delivery in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `BeSt SpIcY rAmEn DeLiVeRy In ToKyO`; Yelp only",
-                SuggestionQuery {
-                    keyword: "BeSt SpIcY rAmEn DeLiVeRy In ToKyO".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=BeSt+SpIcY+rAmEn+DeLiVeRy&find_loc=ToKyO",
-                            title: "BeSt SpIcY rAmEn DeLiVeRy In ToKyO",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `best ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=best+ramen+delivery&find_loc=tokyo",
-                            title: "best ramen delivery in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `best invalid_ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best invalid_ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `best delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `super best ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "super best ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=super+best+ramen+delivery&find_loc=tokyo",
-                            title: "super best ramen delivery in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `invalid_best ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "invalid_best ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `ramen delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen+delivery&find_loc=tokyo",
-                            title: "ramen delivery in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen super delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen super delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen+super+delivery&find_loc=tokyo",
-                            title: "ramen super delivery in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen invalid_delivery in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen invalid_delivery in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `ramen in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo",
-                            title: "ramen in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen near tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen near tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo",
-                            title: "ramen near tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen invalid_in tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen invalid_in tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `ramen in San Francisco`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen in San Francisco".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen&find_loc=San+Francisco",
-                            title: "ramen in San Francisco",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen in`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen in".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen",
-                            title: "ramen in",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen near by`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen near by".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen+near+by",
-                            title: "ramen near by",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen near me`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen near me".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen+near+me",
-                            title: "ramen near me",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen near by tokyo`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen near by tokyo".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `ramen`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen",
-                            title: "ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = maximum chars; Yelp only",
-                SuggestionQuery {
-                    keyword: "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-                            title: "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = over chars; Yelp only",
-                SuggestionQuery {
-                    keyword: "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789Z".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `best delivery`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best delivery".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `same_modifier same_modifier`; Yelp only",
-                SuggestionQuery {
-                    keyword: "same_modifier same_modifier".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `same_modifier `; Yelp only",
-                SuggestionQuery {
-                    keyword: "same_modifier ".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `yelp ramen`; Yelp only",
-                SuggestionQuery {
-                    keyword: "yelp ramen".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen",
-                            title: "ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `yelp keyword ramen`; Yelp only",
-                SuggestionQuery {
-                    keyword: "yelp keyword ramen".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen",
-                            title: "ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen in tokyo yelp`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen in tokyo yelp".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo",
-                            title: "ramen in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `ramen in tokyo yelp keyword`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ramen in tokyo yelp keyword".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo",
-                            title: "ramen in tokyo",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: true,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `yelp ramen yelp`; Yelp only",
-                SuggestionQuery {
-                    keyword: "yelp ramen yelp".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=ramen",
-                            title: "ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `best yelp ramen`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best yelp ramen".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `Spicy R`; Yelp only",
-                SuggestionQuery {
-                    keyword: "Spicy R".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=Spicy+Ramen",
-                            title: "Spicy Ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: false,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `BeSt             Ramen`; Yelp only",
-                SuggestionQuery {
-                    keyword: "BeSt             Ramen".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=BeSt+Ramen",
-                            title: "BeSt Ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: true,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `BeSt             Spicy R`; Yelp only",
-                SuggestionQuery {
-                    keyword: "BeSt             Spicy R".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Yelp {
-                            url: "https://www.yelp.com/search?find_desc=BeSt+Spicy+Ramen",
-                            title: "BeSt Spicy Ramen",
-                            icon: Some(
-                                [
-                                    121,
-                                    101,
-                                    108,
-                                    112,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            score: 0.5,
-                            has_location_sign: false,
-                            subject_exact_match: false,
-                            location_param: "find_loc",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `BeSt             R`; Yelp only",
-                SuggestionQuery {
-                    keyword: "BeSt             R".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `r`; Yelp only",
-                SuggestionQuery {
-                    keyword: "r".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `ra`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ra".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Yelp {
-                        url: "https://www.yelp.com/search?find_desc=rats",
-                        title: "rats",
-                        icon: Some(
-                            [
-                                121,
-                                101,
-                                108,
-                                112,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        score: 0.5,
-                        has_location_sign: false,
-                        subject_exact_match: false,
-                        location_param: "find_loc",
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `ram`; Yelp only",
-                SuggestionQuery {
-                    keyword: "ram".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Yelp {
-                        url: "https://www.yelp.com/search?find_desc=ramen",
-                        title: "ramen",
-                        icon: Some(
-                            [
-                                121,
-                                101,
-                                108,
-                                112,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        score: 0.5,
-                        has_location_sign: false,
-                        subject_exact_match: false,
-                        location_param: "find_loc",
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `rac`; Yelp only",
-                SuggestionQuery {
-                    keyword: "rac".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Yelp {
-                        url: "https://www.yelp.com/search?find_desc=raccoon",
-                        title: "raccoon",
-                        icon: Some(
-                            [
-                                121,
-                                101,
-                                108,
-                                112,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        score: 0.5,
-                        has_location_sign: false,
-                        subject_exact_match: false,
-                        location_param: "find_loc",
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `best r`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best r".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                []
-                "#]],
-            ),
-            (
-                "keyword = `best ra`; Yelp only",
-                SuggestionQuery {
-                    keyword: "best ra".into(),
-                    providers: vec![SuggestionProvider::Yelp],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Yelp {
-                        url: "https://www.yelp.com/search?find_desc=best+rats",
-                        title: "best rats",
-                        icon: Some(
-                            [
-                                121,
-                                101,
-                                108,
-                                112,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        score: 0.5,
-                        has_location_sign: false,
-                        subject_exact_match: false,
-                        location_param: "find_loc",
-                    },
-                ]
-                "#]],
-            ),
-        ];
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
+            )),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::wikipedia("cal")),
+            vec![
+                california_suggestion("california"),
+                caltech_suggestion("california"),
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::wikipedia("cal").limit(1)),
+            vec![california_suggestion("california"),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::with_providers("cal", vec![])),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("spam")),
+            vec![relay_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("masking")),
+            vec![relay_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("masking e")),
+            vec![relay_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amo("masking s")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::with_providers(
+                "soft",
+                vec![SuggestionProvider::Amp, SuggestionProvider::Wikipedia]
+            )),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::pocket("soft")),
+            vec![burnout_suggestion(false),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::pocket("soft l")),
+            vec![burnout_suggestion(false),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::pocket("sof")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::pocket("burnout women")),
+            vec![burnout_suggestion(true),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::pocket("burnout person")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best spicy ramen delivery in tokyo")),
+            vec![ramen_suggestion(
+                "best spicy ramen delivery in tokyo",
+                "https://www.yelp.com/search?find_desc=best+spicy+ramen+delivery&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("BeSt SpIcY rAmEn DeLiVeRy In ToKyO")),
+            vec![ramen_suggestion(
+                "BeSt SpIcY rAmEn DeLiVeRy In ToKyO",
+                "https://www.yelp.com/search?find_desc=BeSt+SpIcY+rAmEn+DeLiVeRy&find_loc=ToKyO"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best ramen delivery in tokyo")),
+            vec![ramen_suggestion(
+                "best ramen delivery in tokyo",
+                "https://www.yelp.com/search?find_desc=best+ramen+delivery&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp(
+                "best invalid_ramen delivery in tokyo"
+            )),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best in tokyo")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("super best ramen in tokyo")),
+            vec![ramen_suggestion(
+                "super best ramen in tokyo",
+                "https://www.yelp.com/search?find_desc=super+best+ramen&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("invalid_best ramen in tokyo")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen delivery in tokyo")),
+            vec![ramen_suggestion(
+                "ramen delivery in tokyo",
+                "https://www.yelp.com/search?find_desc=ramen+delivery&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen super delivery in tokyo")),
+            vec![ramen_suggestion(
+                "ramen super delivery in tokyo",
+                "https://www.yelp.com/search?find_desc=ramen+super+delivery&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen invalid_delivery in tokyo")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen in tokyo")),
+            vec![ramen_suggestion(
+                "ramen in tokyo",
+                "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen near tokyo")),
+            vec![ramen_suggestion(
+                "ramen near tokyo",
+                "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen invalid_in tokyo")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen in San Francisco")),
+            vec![ramen_suggestion(
+                "ramen in San Francisco",
+                "https://www.yelp.com/search?find_desc=ramen&find_loc=San+Francisco"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen in")),
+            vec![ramen_suggestion(
+                "ramen in",
+                "https://www.yelp.com/search?find_desc=ramen"
+            ),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen near by")),
+            vec![ramen_suggestion(
+                "ramen near by",
+                "https://www.yelp.com/search?find_desc=ramen+near+by"
+            )
+            .has_location_sign(false),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen near me")),
+            vec![ramen_suggestion(
+                "ramen near me",
+                "https://www.yelp.com/search?find_desc=ramen+near+me"
+            )
+            .has_location_sign(false),],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen near by tokyo")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen")),
+            vec![
+                ramen_suggestion("ramen", "https://www.yelp.com/search?find_desc=ramen")
+                    .has_location_sign(false),
+            ],
+        );
+        // Test an extremely long yelp query
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp(
+                "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+            )),
+            vec![
+                ramen_suggestion(
+                    "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
+                    "https://www.yelp.com/search?find_desc=012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+                ).has_location_sign(false),
+            ],
+        );
+        // This query is over the limit and no suggestions should be returned
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp(
+                "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789Z"
+            )),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best delivery")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("same_modifier same_modifier")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("same_modifier ")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("yelp ramen")),
+            vec![
+                ramen_suggestion("ramen", "https://www.yelp.com/search?find_desc=ramen")
+                    .has_location_sign(false),
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("yelp keyword ramen")),
+            vec![
+                ramen_suggestion("ramen", "https://www.yelp.com/search?find_desc=ramen")
+                    .has_location_sign(false),
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen in tokyo yelp")),
+            vec![ramen_suggestion(
+                "ramen in tokyo",
+                "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo"
+            )],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen in tokyo yelp keyword")),
+            vec![ramen_suggestion(
+                "ramen in tokyo",
+                "https://www.yelp.com/search?find_desc=ramen&find_loc=tokyo"
+            )],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("yelp ramen yelp")),
+            vec![
+                ramen_suggestion("ramen", "https://www.yelp.com/search?find_desc=ramen")
+                    .has_location_sign(false)
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best yelp ramen")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("Spicy R")),
+            vec![ramen_suggestion(
+                "Spicy Ramen",
+                "https://www.yelp.com/search?find_desc=Spicy+Ramen"
+            )
+            .has_location_sign(false)
+            .subject_exact_match(false)],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("BeSt             Ramen")),
+            vec![ramen_suggestion(
+                "BeSt Ramen",
+                "https://www.yelp.com/search?find_desc=BeSt+Ramen"
+            )
+            .has_location_sign(false)],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("BeSt             Spicy R")),
+            vec![ramen_suggestion(
+                "BeSt Spicy Ramen",
+                "https://www.yelp.com/search?find_desc=BeSt+Spicy+Ramen"
+            )
+            .has_location_sign(false)
+            .subject_exact_match(false)],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("BeSt             R")),
+            vec![],
+        );
+        assert_eq!(store.fetch_suggestions(SuggestionQuery::yelp("r")), vec![],);
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ra")),
+            vec![
+                ramen_suggestion("rats", "https://www.yelp.com/search?find_desc=rats")
+                    .has_location_sign(false)
+                    .subject_exact_match(false)
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ram")),
+            vec![
+                ramen_suggestion("ramen", "https://www.yelp.com/search?find_desc=ramen")
+                    .has_location_sign(false)
+                    .subject_exact_match(false)
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("rac")),
+            vec![
+                ramen_suggestion("raccoon", "https://www.yelp.com/search?find_desc=raccoon")
+                    .has_location_sign(false)
+                    .subject_exact_match(false)
+            ],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best r")),
+            vec![],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best ra")),
+            vec![ramen_suggestion(
+                "best rats",
+                "https://www.yelp.com/search?find_desc=best+rats"
+            )
+            .has_location_sign(false)
+            .subject_exact_match(false)],
+        );
 
         Ok(())
     }
 
-    // Tests querying amp wikipedia
+    // Tests querying AMP / Wikipedia / Pocket
     #[test]
     fn query_with_multiple_providers_and_diff_scores() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-2",
-            "type": "pocket-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-2.json",
-                "mimetype": "application/json",
-                "location": "data-2.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-3",
-            "type": "icon",
-            "last_modified": 25,
-            "attachment": {
-                "filename": "icon-3.png",
-                "mimetype": "image/png",
-                "location": "icon-3.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow", "amp wiki match"],
-                "title": "Lasagna Come Out Tomorrow",
-                "url": "https://www.lasagna.restaurant",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }, {
-                "id": 0,
-                "advertiser": "Good Place Eats",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["pe", "pen", "penne", "penne for your thoughts", "amp wiki match"],
-                "title": "Penne for Your Thoughts",
-                "url": "https://penne.biz",
-                "icon": "2",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.1
-            }, {
-                "id": 0,
-                "advertiser": "Wikipedia",
-                "iab_category": "5 - Education",
-                "keywords": ["amp wiki match", "pocket wiki match"],
-                "title": "Multimatch",
-                "url": "https://wikipedia.org/Multimatch",
-                "icon": "3"
-            }]),
-        )?
-        .with_data(
-            "data-2.json",
-            json!([
-                {
-                    "description": "pocket suggestion",
-                    "url": "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                    "lowConfidenceKeywords": ["soft life", "workaholism", "toxic work culture", "work-life balance", "pocket wiki match"],
-                    "highConfidenceKeywords": ["burnout women", "grind culture", "women burnout"],
-                    "title": "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                    "score": 0.05
-                },
-                {
-                    "description": "pocket suggestion multi-match",
-                    "url": "https://getpocket.com/collections/multimatch",
-                    "lowConfidenceKeywords": [],
-                    "highConfidenceKeywords": ["pocket wiki match"],
-                    "title": "Pocket wiki match",
-                    "score": 0.88
-                },
-            ]),
-        )?
-        .with_icon("icon-3.png", "also-an-icon".as_bytes().into());
+        let store = TestStore::new(
+            // Create a data set where one keyword matches multiple suggestions from each provider
+            // where the scores are manually set.  We will test that the fetched suggestions are in
+            // the correct order.
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "data",
+                    "data-1",
+                    json!([
+                        los_pollos_amp().merge(json!({
+                            "keywords": ["amp wiki match"],
+                            "score": 0.3,
+                        })),
+                        good_place_eats_amp().merge(json!({
+                            "keywords": ["amp wiki match"],
+                            "score": 0.1,
+                        })),
+                        california_wiki().merge(json!({
+                            "keywords": ["amp wiki match", "pocket wiki match"],
+                        })),
+                    ]),
+                )
+                .with_record(
+                    "pocket-suggestions",
+                    "data-3",
+                    json!([
+                        burnout_pocket().merge(json!({
+                            "lowConfidenceKeywords": ["work-life balance", "pocket wiki match"],
+                            "score": 0.05,
+                        })),
+                        multimatch_pocket().merge(json!({
+                            "highConfidenceKeywords": ["pocket wiki match"],
+                            "score": 0.88,
+                        })),
+                    ]),
+                )
+                .with_icon(los_pollos_icon())
+                .with_icon(good_place_eats_icon())
+                .with_icon(california_icon()),
+        );
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "keyword = `amp wiki match`; all providers",
-                SuggestionQuery {
-                    keyword: "amp wiki match".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                        SuggestionProvider::Yelp,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Amp {
-                            title: "Lasagna Come Out Tomorrow",
-                            url: "https://www.lasagna.restaurant",
-                            raw_url: "https://www.lasagna.restaurant",
-                            icon: None,
-                            full_keyword: "amp wiki match",
-                            block_id: 0,
-                            advertiser: "Good Place Eats",
-                            iab_category: "8 - Food & Drink",
-                            impression_url: "https://example.com/impression_url",
-                            click_url: "https://example.com/click_url",
-                            raw_click_url: "https://example.com/click_url",
-                            score: 0.3,
-                        },
-                        Wikipedia {
-                            title: "Multimatch",
-                            url: "https://wikipedia.org/Multimatch",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "amp wiki match",
-                        },
-                        Amp {
-                            title: "Penne for Your Thoughts",
-                            url: "https://penne.biz",
-                            raw_url: "https://penne.biz",
-                            icon: None,
-                            full_keyword: "amp wiki match",
-                            block_id: 0,
-                            advertiser: "Good Place Eats",
-                            iab_category: "8 - Food & Drink",
-                            impression_url: "https://example.com/impression_url",
-                            click_url: "https://example.com/click_url",
-                            raw_click_url: "https://example.com/click_url",
-                            score: 0.1,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `amp wiki match`; all providers, limit 2",
-                SuggestionQuery {
-                    keyword: "amp wiki match".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                        SuggestionProvider::Yelp,
-                    ],
-                    limit: Some(2),
-                },
-                expect![[r#"
-                    [
-                        Amp {
-                            title: "Lasagna Come Out Tomorrow",
-                            url: "https://www.lasagna.restaurant",
-                            raw_url: "https://www.lasagna.restaurant",
-                            icon: None,
-                            full_keyword: "amp wiki match",
-                            block_id: 0,
-                            advertiser: "Good Place Eats",
-                            iab_category: "8 - Food & Drink",
-                            impression_url: "https://example.com/impression_url",
-                            click_url: "https://example.com/click_url",
-                            raw_click_url: "https://example.com/click_url",
-                            score: 0.3,
-                        },
-                        Wikipedia {
-                            title: "Multimatch",
-                            url: "https://wikipedia.org/Multimatch",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "amp wiki match",
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "pocket wiki match; all providers",
-                SuggestionQuery {
-                    keyword: "pocket wiki match".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "Pocket wiki match",
-                            url: "https://getpocket.com/collections/multimatch",
-                            score: 0.88,
-                            is_top_pick: true,
-                        },
-                        Wikipedia {
-                            title: "Multimatch",
-                            url: "https://wikipedia.org/Multimatch",
-                            icon: Some(
-                                [
-                                    97,
-                                    108,
-                                    115,
-                                    111,
-                                    45,
-                                    97,
-                                    110,
-                                    45,
-                                    105,
-                                    99,
-                                    111,
-                                    110,
-                                ],
-                            ),
-                            full_keyword: "pocket wiki match",
-                        },
-                        Pocket {
-                            title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                            url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                            score: 0.05,
-                            is_top_pick: false,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "pocket wiki match; all providers limit 1",
-                SuggestionQuery {
-                    keyword: "pocket wiki match".into(),
-                    providers: vec![
-                        SuggestionProvider::Amp,
-                        SuggestionProvider::Wikipedia,
-                        SuggestionProvider::Amo,
-                        SuggestionProvider::Pocket,
-                    ],
-                    limit: Some(1),
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "Pocket wiki match",
-                            url: "https://getpocket.com/collections/multimatch",
-                            score: 0.88,
-                            is_top_pick: true,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "work-life balance; duplicate providers",
-                SuggestionQuery {
-                    keyword: "work-life balance".into(),
-                    providers: vec![SuggestionProvider::Pocket, SuggestionProvider::Pocket],
-                    limit: Some(-1),
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                            url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                            score: 0.05,
-                            is_top_pick: false,
-                        },
-                    ]
-                "#]],
-            ),
-        ];
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
-
-        Ok(())
-    }
-
-    // Tests querying multiple suggestions with multiple keywords with same prefix keyword
-    #[test]
-    fn query_with_multiple_suggestions_with_same_prefix() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([{
-             "id": "data-1",
-             "type": "amo-suggestions",
-             "last_modified": 15,
-             "attachment": {
-                 "filename": "data-1.json",
-                 "mimetype": "application/json",
-                 "location": "data-1.json",
-                 "hash": "",
-                 "size": 0,
-             },
-         }, {
-             "id": "data-2",
-             "type": "pocket-suggestions",
-             "last_modified": 15,
-             "attachment": {
-                 "filename": "data-2.json",
-                 "mimetype": "application/json",
-                 "location": "data-2.json",
-                 "hash": "",
-                 "size": 0,
-             },
-         }, {
-             "id": "icon-3",
-             "type": "icon",
-             "last_modified": 25,
-             "attachment": {
-                 "filename": "icon-3.png",
-                 "mimetype": "image/png",
-                 "location": "icon-3.png",
-                 "hash": "",
-                 "size": 0,
-             },
-         }]))?
-         .with_data(
-             "data-1.json",
-             json!([
-                    {
-                    "description": "amo suggestion",
-                    "url": "https://addons.mozilla.org/en-US/firefox/addon/example",
-                    "guid": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                    "keywords": ["relay", "spam", "masking email", "masking emails", "masking accounts", "alias" ],
-                    "title": "Firefox Relay",
-                    "icon": "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                    "rating": "4.9",
-                    "number_of_ratings": 888,
-                    "score": 0.25
-                }
-            ]),
-         )?
-         .with_data(
-             "data-2.json",
-             json!([
-                 {
-                     "description": "pocket suggestion",
-                     "url": "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                     "lowConfidenceKeywords": ["soft life", "soft living", "soft work", "workaholism", "toxic work culture"],
-                     "highConfidenceKeywords": ["burnout women", "grind culture", "women burnout", "soft lives"],
-                     "title": "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                     "score": 0.05
-                 }
-             ]),
-         )?
-         .with_icon("icon-3.png", "also-an-icon".as_bytes().into());
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "keyword = `soft li`; pocket",
-                SuggestionQuery {
-                    keyword: "soft li".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                            url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                            score: 0.05,
-                            is_top_pick: false,
-                        },
-                    ]
-                 "#]],
-            ),
-            (
-                "keyword = `soft lives`; pocket",
-                SuggestionQuery {
-                    keyword: "soft lives".into(),
-                    providers: vec![SuggestionProvider::Pocket],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Pocket {
-                            title: "‘It’s Not Just Burnout:’ How Grind Culture Fails Women",
-                            url: "https://getpocket.com/collections/its-not-just-burnout-how-grind-culture-failed-women",
-                            score: 0.05,
-                            is_top_pick: true,
-                        },
-                    ]
-                 "#]],
-            ),
-            (
-                "keyword = `masking `; amo provider",
-                SuggestionQuery {
-                    keyword: "masking ".into(),
-                    providers: vec![SuggestionProvider::Amo],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Amo {
-                            title: "Firefox Relay",
-                            url: "https://addons.mozilla.org/en-US/firefox/addon/example",
-                            icon_url: "https://addons.mozilla.org/user-media/addon_icons/2633/2633704-64.png?modified=2c11a80b",
-                            description: "amo suggestion",
-                            rating: Some(
-                                "4.9",
-                            ),
-                            number_of_ratings: 888,
-                            guid: "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
-                            score: 0.25,
-                        },
-                    ]
-                 "#]],
-            ),
-        ];
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("amp wiki match")),
+            vec![
+                los_pollos_suggestion("amp wiki match").with_score(0.3),
+                // Wikipedia entries default to a 0.2 score
+                california_suggestion("amp wiki match"),
+                good_place_eats_suggestion("amp wiki match").with_score(0.1),
+            ]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("amp wiki match").limit(2)),
+            vec![
+                los_pollos_suggestion("amp wiki match").with_score(0.3),
+                california_suggestion("amp wiki match"),
+            ]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("pocket wiki match")),
+            vec![
+                multimatch_pocket_suggestion(true).with_score(0.88),
+                california_suggestion("pocket wiki match"),
+                burnout_suggestion(false).with_score(0.05),
+            ]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::all_providers("pocket wiki match").limit(1)),
+            vec![multimatch_pocket_suggestion(true).with_score(0.88),]
+        );
+        // test duplicate providers
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::with_providers(
+                "work-life balance",
+                vec![SuggestionProvider::Pocket, SuggestionProvider::Pocket],
+            )),
+            vec![burnout_suggestion(false).with_score(0.05),]
+        );
 
         Ok(())
     }
@@ -4089,242 +1903,29 @@ mod tests {
     fn query_with_amp_mobile_provider() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "amp-mobile-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "data-2",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-2.json",
-                "mimetype": "application/json",
-                "location": "data-2.json",
-                "hash": "",
-                "size": 0,
-            },
-        }, {
-            "id": "icon-3",
-            "type": "icon",
-            "last_modified": 25,
-            "attachment": {
-                "filename": "icon-3.png",
-                "mimetype": "image/png",
-                "location": "icon-3.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([
-               {
-                   "id": 0,
-                   "advertiser": "Good Place Eats",
-                   "iab_category": "8 - Food & Drink",
-                   "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                   "title": "Mobile - Lasagna Come Out Tomorrow",
-                   "url": "https://www.lasagna.restaurant",
-                   "icon": "3",
-                   "impression_url": "https://example.com/impression_url",
-                   "click_url": "https://example.com/click_url",
-                   "score": 0.3
-               }
-            ]),
-        )?
-        .with_data(
-            "data-2.json",
-            json!([
-              {
-                  "id": 0,
-                  "advertiser": "Good Place Eats",
-                  "iab_category": "8 - Food & Drink",
-                  "keywords": ["la", "las", "lasa", "lasagna", "lasagna come out tomorrow"],
-                  "title": "Desktop - Lasagna Come Out Tomorrow",
-                  "url": "https://www.lasagna.restaurant",
-                  "icon": "3",
-                  "impression_url": "https://example.com/impression_url",
-                  "click_url": "https://example.com/click_url",
-                  "score": 0.2
-              }
-            ]),
-        )?
-        .with_icon("icon-3.png", "also-an-icon".as_bytes().into());
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "keyword = `las`; Amp Mobile",
-                SuggestionQuery {
-                    keyword: "las".into(),
-                    providers: vec![SuggestionProvider::AmpMobile],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amp {
-                        title: "Mobile - Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                97,
-                                108,
-                                115,
-                                111,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `las`; Amp",
-                SuggestionQuery {
-                    keyword: "las".into(),
-                    providers: vec![SuggestionProvider::Amp],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amp {
-                        title: "Desktop - Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                97,
-                                108,
-                                115,
-                                111,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.2,
-                    },
-                ]
-                "#]],
-            ),
-            (
-                "keyword = `las `; amp and amp mobile",
-                SuggestionQuery {
-                    keyword: "las".into(),
-                    providers: vec![SuggestionProvider::Amp, SuggestionProvider::AmpMobile],
-                    limit: None,
-                },
-                expect![[r#"
-                [
-                    Amp {
-                        title: "Mobile - Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                97,
-                                108,
-                                115,
-                                111,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                    Amp {
-                        title: "Desktop - Lasagna Come Out Tomorrow",
-                        url: "https://www.lasagna.restaurant",
-                        raw_url: "https://www.lasagna.restaurant",
-                        icon: Some(
-                            [
-                                97,
-                                108,
-                                115,
-                                111,
-                                45,
-                                97,
-                                110,
-                                45,
-                                105,
-                                99,
-                                111,
-                                110,
-                            ],
-                        ),
-                        full_keyword: "lasagna",
-                        block_id: 0,
-                        advertiser: "Good Place Eats",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.2,
-                    },
-                ]
-                "#]],
-            ),
-        ];
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
-
+        // Use the exact same data for both the Amp and AmpMobile record
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "amp-mobile-suggestions",
+                    "amp-mobile-1",
+                    json!([good_place_eats_amp()]),
+                )
+                .with_record("data", "data-1", json!([good_place_eats_amp()]))
+                // This icon is shared by both records which is kind of weird and probably not how
+                // things would work in practice, but it's okay for the tests.
+                .with_icon(good_place_eats_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        // The query results should be exactly the same for both the Amp and AmpMobile data
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp_mobile("las")),
+            vec![good_place_eats_suggestion("lasagna")]
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("las")),
+            vec![good_place_eats_suggestion("lasagna")]
+        );
         Ok(())
     }
 
@@ -4334,38 +1935,20 @@ mod tests {
     fn ingest_malformed() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            // Data record without an attachment.
-            "id": "missing-data-attachment",
-            "type": "data",
-            "last_modified": 15,
-        }, {
-            // Icon record without an attachment.
-            "id": "missing-icon-attachment",
-            "type": "icon",
-            "last_modified": 30,
-        }, {
-            // Icon record with an ID that's not `icon-{id}`, so suggestions in
-            // the data attachment won't be able to reference it.
-            "id": "bad-icon-id",
-            "type": "icon",
-            "last_modified": 45,
-            "attachment": {
-                "filename": "icon-1.png",
-                "mimetype": "image/png",
-                "location": "icon-1.png",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_icon("icon-1.png", "i-am-an-icon".as_bytes().into());
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                // Amp/Wikipedia record without an attachment.
+                .with_record_but_no_attachment("data", "data-1")
+                // Icon record without an attachment.
+                .with_record_but_no_attachment("icon", "icon-1")
+                // Icon record with an ID that's not `icon-{id}`, so suggestions in
+                // the data attachment won't be able to reference it.
+                .with_record("icon", "bad-icon-id", json!("i-am-an-icon")),
+        );
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(45));
+        store.read(|dao| {
             assert_eq!(
                 dao.conn
                     .query_one::<i64>("SELECT count(*) FROM suggestions")?,
@@ -4379,345 +1962,76 @@ mod tests {
         Ok(())
     }
 
-    /// Tests unparsable Remote Settings records, which we don't know how to
-    /// ingest at all.
+    /// Tests that we only ingest providers that we're concerned with.
     #[test]
-    fn ingest_unparsable() -> anyhow::Result<()> {
+    fn ingest_constraints_provider() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "fancy-new-suggestions-1",
-            "type": "fancy-new-suggestions",
-            "last_modified": 15,
-        }, {
-            "id": "clippy-2",
-            "type": "clippy",
-            "last_modified": 30,
-        }]))?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(30));
-            expect![[r#"
-                Some(
-                    UnparsableRecords(
-                        {
-                            "clippy-2": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                            "fancy-new-suggestions-1": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                        },
-                    ),
-                )
-            "#]]
-            .assert_debug_eq(&dao.get_meta::<UnparsableRecords>(UNPARSABLE_RECORDS_META_KEY)?);
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn ingest_mixed_parsable_unparsable_records() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "fancy-new-suggestions-1",
-            "type": "fancy-new-suggestions",
-            "last_modified": 15,
-        },
-        {
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        },
-        {
-            "id": "clippy-2",
-            "type": "clippy",
-            "last_modified": 30,
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "5678",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3,
-            }]),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(30));
-            expect![[r#"
-                Some(
-                    UnparsableRecords(
-                        {
-                            "clippy-2": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                            "fancy-new-suggestions-1": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                        },
-                    ),
-                )
-            "#]]
-            .assert_debug_eq(&dao.get_meta::<UnparsableRecords>(UNPARSABLE_RECORDS_META_KEY)?);
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    /// Tests meta update field isn't updated for old unparsable Remote Settings
-    /// records.
-    #[test]
-    fn ingest_unparsable_and_meta_update_stays_the_same() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "fancy-new-suggestions-1",
-            "type": "fancy-new-suggestions",
-            "last_modified": 15,
-        }]))?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.dbs()?.writer.write(|dao| {
-            dao.put_meta(LAST_INGEST_META_KEY, 30)?;
-            Ok(())
-        })?;
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(30));
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn remove_known_records_out_of_meta_table() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "fancy-new-suggestions-1",
-            "type": "fancy-new-suggestions",
-            "last_modified": 15,
-        },
-        {
-            "id": "data-1",
-            "type": "data",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        },
-        {
-            "id": "clippy-2",
-            "type": "clippy",
-            "last_modified": 15,
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                "id": 0,
-                "advertiser": "Los Pollos Hermanos",
-                "iab_category": "8 - Food & Drink",
-                "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
-                "title": "Los Pollos Hermanos - Albuquerque",
-                "url": "https://www.lph-nm.biz",
-                "icon": "5678",
-                "impression_url": "https://example.com/impression_url",
-                "click_url": "https://example.com/click_url",
-                "score": 0.3
-            }]),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        let mut initial_data = UnparsableRecords::default();
-        initial_data
-            .0
-            .insert("data-1".to_string(), UnparsableRecord { schema_version: 1 });
-        initial_data.0.insert(
-            "clippy-2".to_string(),
-            UnparsableRecord { schema_version: 1 },
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record("data", "data-1", json!([los_pollos_amp()]))
+                .with_record("yelp-suggestions", "yelp-1", json!([ramen_yelp()]))
+                .with_icon(los_pollos_icon()),
         );
-        store.dbs()?.writer.write(|dao| {
-            dao.put_meta(UNPARSABLE_RECORDS_META_KEY, initial_data)?;
-            Ok(())
-        })?;
 
-        store.ingest(SuggestIngestionConstraints::default())?;
+        let constraints = SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Amp, SuggestionProvider::Pocket]),
+            ..SuggestIngestionConstraints::all_providers()
+        };
+        store.ingest(constraints);
 
-        store.dbs()?.reader.read(|dao| {
-            expect![[r#"
-                Some(
-                    UnparsableRecords(
-                        {
-                            "clippy-2": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                            "fancy-new-suggestions-1": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                        },
-                    ),
-                )
-            "#]]
-            .assert_debug_eq(&dao.get_meta::<UnparsableRecords>(UNPARSABLE_RECORDS_META_KEY)?);
-            Ok(())
-        })?;
+        // This should have been ingested
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")]
+        );
+        // This should not have been ingested, since it wasn't in the providers list
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::yelp("best ramen")),
+            vec![]
+        );
 
         Ok(())
     }
 
-    /// Tests that records with invalid attachments are ignored and marked as unparsable.
+    /// Tests that records with invalid attachments are ignored
     #[test]
     fn skip_over_invalid_records() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([
-            {
-                "id": "invalid-attachment",
-                "type": "data",
-                "last_modified": 15,
-                "attachment": {
-                    "filename": "data-2.json",
-                    "mimetype": "application/json",
-                    "location": "data-2.json",
-                    "hash": "",
-                    "size": 0,
-                },
-            },
-            {
-                "id": "valid-record",
-                "type": "data",
-                "last_modified": 15,
-                "attachment": {
-                    "filename": "data-1.json",
-                    "mimetype": "application/json",
-                    "location": "data-1.json",
-                    "hash": "",
-                    "size": 0,
-                },
-            },
-        ]))?
-        .with_data(
-            "data-1.json",
-            json!([{
-                    "id": 0,
-                    "advertiser": "Los Pollos Hermanos",
-                    "iab_category": "8 - Food & Drink",
-                    "keywords": ["lo", "los", "los p", "los pollos", "los pollos h", "los pollos hermanos"],
-                    "title": "Los Pollos Hermanos - Albuquerque",
-                    "url": "https://www.lph-nm.biz",
-                    "icon": "5678",
-                    "impression_url": "https://example.com/impression_url",
-                    "click_url": "https://example.com/click_url",
-                    "score": 0.3
-            }]),
-        )?
-        // This attachment is missing the `keywords` field and is invalid
-        .with_data(
-            "data-2.json",
-            json!([{
-                    "id": 1,
-                    "advertiser": "Los Pollos Hermanos",
-                    "iab_category": "8 - Food & Drink",
-                    "title": "Los Pollos Hermanos - Albuquerque",
-                    "url": "https://www.lph-nm.biz",
-                    "icon": "5678",
-                    "impression_url": "https://example.com/impression_url",
-                    "click_url": "https://example.com/click_url",
-                    "score": 0.3
-            }]),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        // Test that the invalid record marked as unparsable
-        store.dbs()?.reader.read(|dao| {
-            expect![[r#"
-                Some(
-                    UnparsableRecords(
-                        {
-                            "invalid-attachment": UnparsableRecord {
-                                schema_version: 14,
-                            },
-                        },
-                    ),
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                // valid record
+                .with_record("data", "data-1", json!([good_place_eats_amp()]))
+                // This attachment is missing the `title` field and is invalid
+                .with_record(
+                    "data",
+                    "data-2",
+                    json!([{
+                            "id": 1,
+                            "advertiser": "Los Pollos Hermanos",
+                            "iab_category": "8 - Food & Drink",
+                            "keywords": ["lo", "los", "los pollos"],
+                            "url": "https://www.lph-nm.biz",
+                            "icon": "5678",
+                            "impression_url": "https://example.com/impression_url",
+                            "click_url": "https://example.com/click_url",
+                            "score": 0.3
+                    }]),
                 )
-            "#]]
-            .assert_debug_eq(&dao.get_meta::<UnparsableRecords>(UNPARSABLE_RECORDS_META_KEY)?);
-            Ok(())
-        })?;
+                .with_icon(good_place_eats_icon()),
+        );
+
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
         // Test that the valid record was read
-        store.dbs()?.reader.read(|dao| {
-            assert_eq!(dao.get_meta::<u64>(LAST_INGEST_META_KEY)?, Some(15));
-            expect![[r#"
-                [
-                    Amp {
-                        title: "Los Pollos Hermanos - Albuquerque",
-                        url: "https://www.lph-nm.biz",
-                        raw_url: "https://www.lph-nm.biz",
-                        icon: None,
-                        full_keyword: "los",
-                        block_id: 0,
-                        advertiser: "Los Pollos Hermanos",
-                        iab_category: "8 - Food & Drink",
-                        impression_url: "https://example.com/impression_url",
-                        click_url: "https://example.com/click_url",
-                        raw_click_url: "https://example.com/click_url",
-                        score: 0.3,
-                    },
-                ]
-            "#]]
-            .assert_debug_eq(&dao.fetch_suggestions(&SuggestionQuery {
-                keyword: "lo".into(),
-                providers: vec![SuggestionProvider::Amp],
-                limit: None,
-            })?);
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("la")),
+            vec![good_place_eats_suggestion("lasagna")]
+        );
+        // Test that the invalid record was skipped
+        assert_eq!(store.fetch_suggestions(SuggestionQuery::amp("lo")), vec![]);
 
-            Ok(())
-        })?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn unparsable_record_serialized_correctly() -> anyhow::Result<()> {
-        let unparseable_record = UnparsableRecord { schema_version: 1 };
-        assert_eq!(serde_json::to_value(unparseable_record)?, json!({ "v": 1 }),);
         Ok(())
     }
 
@@ -4725,129 +2039,37 @@ mod tests {
     fn query_mdn() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "mdn-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([
-                {
-                    "description": "Javascript Array",
-                    "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                    "keywords": ["array javascript", "javascript array", "wildcard"],
-                    "title": "Array",
-                    "score": 0.24
-                },
-            ]),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "keyword = prefix; MDN only",
-                SuggestionQuery {
-                    keyword: "array".into(),
-                    providers: vec![SuggestionProvider::Mdn],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Mdn {
-                            title: "Array",
-                            url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                            description: "Javascript Array",
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = prefix + partial suffix; MDN only",
-                SuggestionQuery {
-                    keyword: "array java".into(),
-                    providers: vec![SuggestionProvider::Mdn],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Mdn {
-                            title: "Array",
-                            url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                            description: "Javascript Array",
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = prefix + entire suffix; MDN only",
-                SuggestionQuery {
-                    keyword: "javascript array".into(),
-                    providers: vec![SuggestionProvider::Mdn],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Mdn {
-                            title: "Array",
-                            url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                            description: "Javascript Array",
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = `partial prefix word`; MDN only",
-                SuggestionQuery {
-                    keyword: "wild".into(),
-                    providers: vec![SuggestionProvider::Mdn],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = single word; MDN only",
-                SuggestionQuery {
-                    keyword: "wildcard".into(),
-                    providers: vec![SuggestionProvider::Mdn],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Mdn {
-                            title: "Array",
-                            url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array",
-                            description: "Javascript Array",
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-        ];
-
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
-
+        let store = TestStore::new(MockRemoteSettingsClient::default().with_record(
+            "mdn-suggestions",
+            "mdn-1",
+            json!([array_mdn()]),
+        ));
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        // prefix
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::mdn("array")),
+            vec![array_suggestion(),]
+        );
+        // prefix + partial suffix
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::mdn("array java")),
+            vec![array_suggestion(),]
+        );
+        // prefix + entire suffix
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::mdn("javascript array")),
+            vec![array_suggestion(),]
+        );
+        // partial prefix word
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::mdn("wild")),
+            vec![]
+        );
+        // single word
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::mdn("wildcard")),
+            vec![array_suggestion()]
+        );
         Ok(())
     }
 
@@ -4855,348 +2077,18 @@ mod tests {
     fn query_no_yelp_icon_data() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "yelp-suggestions",
-            "last_modified": 15,
-            "attachment": {
-                "filename": "data-1.json",
-                "mimetype": "application/json",
-                "location": "data-1.json",
-                "hash": "",
-                "size": 0,
-            },
-        }]))?
-        .with_data(
-            "data-1.json",
-            json!([
-                {
-                    "subjects": ["ramen"],
-                    "preModifiers": [],
-                    "postModifiers": [],
-                    "locationSigns": [],
-                    "yelpModifiers": [],
-                    "icon": "yelp-favicon",
-                    "score": 0.5
-                },
-            ]),
-        )?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [(
-            "keyword = ramen; Yelp only",
-            SuggestionQuery {
-                keyword: "ramen".into(),
-                providers: vec![SuggestionProvider::Yelp],
-                limit: None,
-            },
-            expect![[r#"
-                [
-                    Yelp {
-                        url: "https://www.yelp.com/search?find_desc=ramen",
-                        title: "ramen",
-                        icon: None,
-                        score: 0.5,
-                        has_location_sign: false,
-                        subject_exact_match: true,
-                        location_param: "find_loc",
-                    },
-                ]
-            "#]],
-        )];
-
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn weather() -> anyhow::Result<()> {
-        before_each();
-
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "weather",
-            "last_modified": 15,
-            "weather": {
-                "min_keyword_length": 3,
-                "keywords": ["ab", "xyz", "weather"],
-                "score": "0.24"
-            }
-        }]))?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        let table = [
-            (
-                "keyword = 'ab'; Weather only, no match since query is too short",
-                SuggestionQuery {
-                    keyword: "ab".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xab'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "xab".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'abx'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "abx".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xy'; Weather only, no match since query is too short",
-                SuggestionQuery {
-                    keyword: "xy".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xyz'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "xyz".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'xxyz'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "xxyz".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xyzx'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "xyzx".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'we'; Weather only, no match since query is too short",
-                SuggestionQuery {
-                    keyword: "we".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'wea'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "wea".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'weat'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "weat".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'weath'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "weath".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'weathe'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "weathe".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'weather'; Weather only, match",
-                SuggestionQuery {
-                    keyword: "weather".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'weatherx'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "weatherx".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xweather'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "xweather".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = 'xwea'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "xwea".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = '   weather  '; Weather only, match",
-                SuggestionQuery {
-                    keyword: "   weather  ".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    [
-                        Weather {
-                            score: 0.24,
-                        },
-                    ]
-                "#]],
-            ),
-            (
-                "keyword = 'x   weather  '; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "x   weather  ".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-            (
-                "keyword = '   weather  x'; Weather only, no matching keyword",
-                SuggestionQuery {
-                    keyword: "   weather  x".into(),
-                    providers: vec![SuggestionProvider::Weather],
-                    limit: None,
-                },
-                expect![[r#"
-                    []
-                "#]],
-            ),
-        ];
-
-        for (what, query, expect) in table {
-            expect.assert_debug_eq(
-                &store
-                    .query(query)
-                    .with_context(|| format!("Couldn't query store for {}", what))?,
-            );
-        }
-
-        expect![[r#"
-            Some(
-                Weather {
-                    min_keyword_length: 3,
-                },
-            )
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_provider_config(SuggestionProvider::Weather)
-                .with_context(|| "Couldn't fetch provider config")?,
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default().with_record(
+                "yelp-suggestions",
+                "yelp-1",
+                json!([ramen_yelp()]),
+            ), // Note: yelp_favicon() is missing
         );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::yelp("ramen")).as_slice(),
+            [Suggestion::Yelp { icon, icon_mimetype, .. }] if icon.is_none() && icon_mimetype.is_none()
+        ));
 
         Ok(())
     }
@@ -5205,27 +2097,21 @@ mod tests {
     fn fetch_global_config() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "configuration",
-            "last_modified": 15,
-            "configuration": {
-                "show_less_frequently_cap": 3,
-            }
-        }]))?;
-
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        expect![[r#"
+        let store = TestStore::new(MockRemoteSettingsClient::default().with_inline_record(
+            "configuration",
+            "configuration-1",
+            json!({
+                "configuration": {
+                    "show_less_frequently_cap": 3,
+                },
+            }),
+        ));
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_global_config(),
             SuggestGlobalConfig {
                 show_less_frequently_cap: 3,
             }
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_global_config()
-                .with_context(|| "fetch_global_config failed")?,
         );
 
         Ok(())
@@ -5235,19 +2121,13 @@ mod tests {
     fn fetch_global_config_default() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([]))?;
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        expect![[r#"
+        let store = TestStore::new(MockRemoteSettingsClient::default());
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_global_config(),
             SuggestGlobalConfig {
                 show_less_frequently_cap: 0,
             }
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_global_config()
-                .with_context(|| "fetch_global_config failed")?,
         );
 
         Ok(())
@@ -5257,26 +2137,12 @@ mod tests {
     fn fetch_provider_config_none() -> anyhow::Result<()> {
         before_each();
 
-        let snapshot = Snapshot::with_records(json!([]))?;
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.ingest(SuggestIngestionConstraints::default())?;
-
-        expect![[r#"
+        let store = TestStore::new(MockRemoteSettingsClient::default());
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(store.fetch_provider_config(SuggestionProvider::Amp), None);
+        assert_eq!(
+            store.fetch_provider_config(SuggestionProvider::Weather),
             None
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_provider_config(SuggestionProvider::Amp)
-                .with_context(|| "fetch_provider_config failed for Amp")?,
-        );
-
-        expect![[r#"
-            None
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_provider_config(SuggestionProvider::Weather)
-                .with_context(|| "fetch_provider_config failed for Weather")?,
         );
 
         Ok(())
@@ -5286,29 +2152,893 @@ mod tests {
     fn fetch_provider_config_other() -> anyhow::Result<()> {
         before_each();
 
-        // Add some weather config.
-        let snapshot = Snapshot::with_records(json!([{
-            "id": "data-1",
-            "type": "weather",
-            "last_modified": 15,
-            "weather": {
+        let store = TestStore::new(MockRemoteSettingsClient::default().with_record(
+            "weather",
+            "weather-1",
+            json!({
                 "min_keyword_length": 3,
-                "keywords": ["weather"],
-                "score": "0.24"
-            }
-        }]))?;
+                "score": 0.24,
+                "max_keyword_length": 1,
+                "max_keyword_word_count": 1,
+                "keywords": []
+            }),
+        ));
+        store.ingest(SuggestIngestionConstraints::all_providers());
 
-        let store = unique_test_store(SnapshotSettingsClient::with_snapshot(snapshot));
-        store.ingest(SuggestIngestionConstraints::default())?;
+        // Sanity-check that the weather config was ingested.
+        assert_eq!(
+            store.fetch_provider_config(SuggestionProvider::Weather),
+            Some(SuggestProviderConfig::Weather {
+                min_keyword_length: 3,
+                score: 0.24,
+            })
+        );
 
         // Getting the config for a different provider should return None.
-        expect![[r#"
-            None
-        "#]]
-        .assert_debug_eq(
-            &store
-                .fetch_provider_config(SuggestionProvider::Amp)
-                .with_context(|| "fetch_provider_config failed for Amp")?,
+        assert_eq!(store.fetch_provider_config(SuggestionProvider::Amp), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_dismissed_suggestions() -> anyhow::Result<()> {
+        before_each();
+
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "data",
+                    "data-1",
+                    json!([
+                        good_place_eats_amp().merge(json!({"keywords": ["cats"]})),
+                        california_wiki().merge(json!({"keywords": ["cats"]})),
+                    ]),
+                )
+                .with_record(
+                    "amo-suggestions",
+                    "amo-1",
+                    json!([relay_amo().merge(json!({"keywords": ["cats"]})),]),
+                )
+                .with_record(
+                    "pocket-suggestions",
+                    "pocket-1",
+                    json!([burnout_pocket().merge(json!({
+                        "lowConfidenceKeywords": ["cats"],
+                    }))]),
+                )
+                .with_record(
+                    "mdn-suggestions",
+                    "mdn-1",
+                    json!([array_mdn().merge(json!({"keywords": ["cats"]})),]),
+                )
+                .with_record(
+                    "amp-mobile-suggestions",
+                    "amp-mobile-1",
+                    json!([a1a_amp_mobile().merge(json!({"keywords": ["cats"]})),]),
+                )
+                .with_icon(good_place_eats_icon())
+                .with_icon(caltech_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+
+        // A query for cats should return all suggestions
+        let query = SuggestionQuery::all_providers("cats");
+        let results = store.fetch_suggestions(query.clone());
+        assert_eq!(results.len(), 6);
+
+        for result in results {
+            store
+                .inner
+                .dismiss_suggestion(result.raw_url().unwrap().to_string())?;
+        }
+
+        // After dismissing the suggestions, the next query shouldn't return them
+        assert_eq!(store.fetch_suggestions(query.clone()).len(), 0);
+
+        // Clearing the dismissals should cause them to be returned again
+        store.inner.clear_dismissed_suggestions()?;
+        assert_eq!(store.fetch_suggestions(query.clone()).len(), 6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_fakespot() -> anyhow::Result<()> {
+        before_each();
+
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "fakespot-suggestions",
+                    "fakespot-1",
+                    json!([snowglobe_fakespot(), simpsons_fakespot()]),
+                )
+                .with_icon(fakespot_amazon_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("globe")),
+            vec![snowglobe_suggestion().with_fakespot_product_type_bonus(0.5)],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simpsons")),
+            vec![simpsons_suggestion()],
+        );
+        // The snowglobe suggestion should come before the simpsons one, since `snow` is a partial
+        // match on the product_type field.
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("snow")),
+            vec![
+                snowglobe_suggestion().with_fakespot_product_type_bonus(0.5),
+                simpsons_suggestion(),
+            ],
+        );
+        // Test FTS by using a query where the keywords are separated in the source text
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simpsons snow")),
+            vec![simpsons_suggestion()],
+        );
+        // Special characters should be stripped out
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simpsons + snow")),
+            vec![simpsons_suggestion()],
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn fakespot_keywords() -> anyhow::Result<()> {
+        before_each();
+
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "fakespot-suggestions",
+                    "fakespot-1",
+                    json!([
+                        // Snow normally returns the snowglobe first.  Test using the keyword field
+                        // to force the simpsons result first.
+                        snowglobe_fakespot(),
+                        simpsons_fakespot().merge(json!({"keywords": "snow"})),
+                    ]),
+                )
+                .with_icon(fakespot_amazon_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("snow")),
+            vec![
+                simpsons_suggestion().with_fakespot_keyword_bonus(),
+                snowglobe_suggestion().with_fakespot_product_type_bonus(0.5),
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fakespot_prefix_matching() -> anyhow::Result<()> {
+        before_each();
+
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "fakespot-suggestions",
+                    "fakespot-1",
+                    json!([snowglobe_fakespot(), simpsons_fakespot()]),
+                )
+                .with_icon(fakespot_amazon_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simp")),
+            vec![simpsons_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simps")),
+            vec![simpsons_suggestion()],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simpson")),
+            vec![simpsons_suggestion()],
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn fakespot_updates_and_deletes() -> anyhow::Result<()> {
+        before_each();
+
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_record(
+                    "fakespot-suggestions",
+                    "fakespot-1",
+                    json!([snowglobe_fakespot(), simpsons_fakespot()]),
+                )
+                .with_icon(fakespot_amazon_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+
+        // Update the snapshot so that:
+        //   - The Simpsons entry is deleted
+        //   - Snow globes now use sea glass instead of glitter
+        store.client_mut().update_record(
+            "fakespot-suggestions",
+            "fakespot-1",
+            json!([
+                snowglobe_fakespot().merge(json!({"title": "Make Your Own Sea Glass Snow Globes"}))
+            ]),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("glitter")),
+            vec![],
+        );
+        assert!(matches!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("sea glass")).as_slice(),
+            [
+                Suggestion::Fakespot { title, .. }
+            ]
+            if title == "Make Your Own Sea Glass Snow Globes"
+        ));
+
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("simpsons")),
+            vec![],
+        );
+
+        Ok(())
+    }
+
+    /// Test the pathological case where we ingest records with the same id, but from different
+    /// collections
+    #[test]
+    fn same_record_id_different_collections() -> anyhow::Result<()> {
+        before_each();
+
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                // This record is in the fakespot-suggest-products collection
+                .with_record(
+                    "fakespot-suggestions",
+                    "fakespot-1",
+                    json!([snowglobe_fakespot()]),
+                )
+                // This record is in the quicksuggest collection, but it has a fakespot record ID
+                // for some reason.
+                .with_record("data", "fakespot-1", json![los_pollos_amp()])
+                .with_icon(los_pollos_icon())
+                .with_icon(fakespot_amazon_icon()),
+        );
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::fakespot("globe")),
+            vec![snowglobe_suggestion().with_fakespot_product_type_bonus(0.5)],
+        );
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::amp("lo")),
+            vec![los_pollos_suggestion("los")],
+        );
+        // Test deleting one of the records
+        store
+            .client_mut()
+            .delete_record("quicksuggest", "fakespot-1")
+            .delete_icon(los_pollos_icon());
+        store.ingest(SuggestIngestionConstraints::all_providers());
+        // FIXME(Bug 1912283): this setup currently deletes both suggestions, since
+        // `drop_suggestions` only checks against record ID.
+        //
+        // assert_eq!(
+        //     store.fetch_suggestions(SuggestionQuery::fakespot("globe")),
+        //     vec![snowglobe_suggestion()],
+        // );
+        // assert_eq!(
+        //     store.fetch_suggestions(SuggestionQuery::amp("lo")),
+        //     vec![],
+        // );
+
+        // However, we can test that the ingested records table has the correct entries
+
+        let record_keys = store
+            .read(|dao| dao.get_ingested_records())
+            .unwrap()
+            .into_iter()
+            .map(|r| format!("{}:{}", r.collection, r.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            record_keys
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "quicksuggest:icon-fakespot-amazon",
+                "fakespot-suggest-products:fakespot-1"
+            ]),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exposure_basic() -> anyhow::Result<()> {
+        before_each();
+
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-0",
+                    Some(json!({
+                        "suggestion_type": "aaa",
+                    })),
+                    Some(json!({
+                        "keywords": [
+                            "aaa keyword",
+                            "both keyword",
+                            ["common prefix", [" aaa"]],
+                            ["choco", ["bo", "late"]],
+                            ["dup", ["licate 1", "licate 2"]],
+                        ],
+                    })),
+                )
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-1",
+                    Some(json!({
+                        "suggestion_type": "bbb",
+                    })),
+                    Some(json!({
+                        "keywords": [
+                            "bbb keyword",
+                            "both keyword",
+                            ["common prefix", [" bbb"]],
+                        ],
+                    })),
+                ),
+        );
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string(), "bbb".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        let no_matches = vec!["aaa", "both", "common prefi", "choc", "chocolate extra"];
+        for query in &no_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "bbb"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "zzz"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz"])),
+                vec![],
+            );
+        }
+
+        let aaa_only_matches = vec![
+            "aaa keyword",
+            "common prefix a",
+            "common prefix aa",
+            "common prefix aaa",
+            "choco",
+            "chocob",
+            "chocobo",
+            "chocol",
+            "chocolate",
+            "dup",
+            "dupl",
+            "duplicate",
+            "duplicate ",
+            "duplicate 1",
+            "duplicate 2",
+        ];
+        for query in &aaa_only_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb", "aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "zzz"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz", "aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz"])),
+                vec![],
+            );
+        }
+
+        let bbb_only_matches = vec![
+            "bbb keyword",
+            "common prefix b",
+            "common prefix bb",
+            "common prefix bbb",
+        ];
+        for query in &bbb_only_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb", "aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb", "zzz"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz", "bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz"])),
+                vec![],
+            );
+        }
+
+        let both_matches = vec!["both keyword", "common prefix", "common prefix "];
+        for query in &both_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "bbb"])),
+                vec![
+                    Suggestion::Exposure {
+                        suggestion_type: "aaa".into(),
+                        score: 1.0,
+                    },
+                    Suggestion::Exposure {
+                        suggestion_type: "bbb".into(),
+                        score: 1.0,
+                    },
+                ],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb", "aaa"])),
+                vec![
+                    Suggestion::Exposure {
+                        suggestion_type: "aaa".into(),
+                        score: 1.0,
+                    },
+                    Suggestion::Exposure {
+                        suggestion_type: "bbb".into(),
+                        score: 1.0,
+                    },
+                ],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "zzz"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz", "aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["bbb", "zzz"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz", "bbb"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "bbb".into(),
+                    score: 1.0,
+                }],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa", "zzz", "bbb"])),
+                vec![
+                    Suggestion::Exposure {
+                        suggestion_type: "aaa".into(),
+                        score: 1.0,
+                    },
+                    Suggestion::Exposure {
+                        suggestion_type: "bbb".into(),
+                        score: 1.0,
+                    },
+                ],
+            );
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["zzz"])),
+                vec![],
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn exposure_spread_across_multiple_records() -> anyhow::Result<()> {
+        before_each();
+
+        let mut store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-0",
+                    Some(json!({
+                        "suggestion_type": "aaa",
+                    })),
+                    Some(json!({
+                        "keywords": [
+                            "record 0 keyword",
+                            ["sug", ["gest"]],
+                        ],
+                    })),
+                )
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-1",
+                    Some(json!({
+                        "suggestion_type": "aaa",
+                    })),
+                    Some(json!({
+                        "keywords": [
+                            "record 1 keyword",
+                            ["sug", ["arplum"]],
+                        ],
+                    })),
+                ),
+        );
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        let matches = vec![
+            "record 0 keyword",
+            "sug",
+            "sugg",
+            "sugge",
+            "sugges",
+            "suggest",
+            "record 1 keyword",
+            "suga",
+            "sugar",
+            "sugarp",
+            "sugarpl",
+            "sugarplu",
+            "sugarplum",
+        ];
+        for query in &matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+        }
+
+        // Delete the first record.
+        store
+            .client_mut()
+            .delete_record(Collection::Quicksuggest.name(), "exposure-0");
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        // Keywords from the second record should still return the suggestion.
+        let record_1_matches = vec![
+            "record 1 keyword",
+            "sug",
+            "suga",
+            "sugar",
+            "sugarp",
+            "sugarpl",
+            "sugarplu",
+            "sugarplum",
+        ];
+        for query in &record_1_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["aaa"])),
+                vec![Suggestion::Exposure {
+                    suggestion_type: "aaa".into(),
+                    score: 1.0,
+                }],
+            );
+        }
+
+        // Keywords from the first record should not return the suggestion.
+        let record_0_matches = vec!["record 0 keyword", "sugg", "sugge", "sugges", "suggest"];
+        for query in &record_0_matches {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, &["exposure-test"])),
+                vec![]
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn exposure_ingest() -> anyhow::Result<()> {
+        before_each();
+
+        // Create suggestions with types "aaa" and "bbb".
+        let store = TestStore::new(
+            MockRemoteSettingsClient::default()
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-0",
+                    Some(json!({
+                        "suggestion_type": "aaa",
+                    })),
+                    Some(json!({
+                        "keywords": ["aaa keyword", "both keyword"],
+                    })),
+                )
+                .with_full_record(
+                    "exposure-suggestions",
+                    "exposure-1",
+                    Some(json!({
+                        "suggestion_type": "bbb",
+                    })),
+                    Some(json!({
+                        "keywords": ["bbb keyword", "both keyword"],
+                    })),
+                ),
+        );
+
+        // Ingest but don't pass in any provider constraints. The records will
+        // be ingested but their attachments won't be, so fetches shouldn't
+        // return any suggestions.
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: None,
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        let ingest_1_queries = [
+            ("aaa keyword", vec!["aaa"]),
+            ("aaa keyword", vec!["bbb"]),
+            ("aaa keyword", vec!["aaa", "bbb"]),
+            ("bbb keyword", vec!["aaa"]),
+            ("bbb keyword", vec!["bbb"]),
+            ("bbb keyword", vec!["aaa", "bbb"]),
+            ("both keyword", vec!["aaa"]),
+            ("both keyword", vec!["bbb"]),
+            ("both keyword", vec!["aaa", "bbb"]),
+        ];
+        for (query, types) in &ingest_1_queries {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, types)),
+                vec![],
+            );
+        }
+
+        // Ingest only the "bbb" suggestion. The "bbb" attachment should be
+        // ingested, so "bbb" fetches should return the "bbb" suggestion.
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["bbb".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        let ingest_2_queries = [
+            ("aaa keyword", vec!["aaa"], vec![]),
+            ("aaa keyword", vec!["bbb"], vec![]),
+            ("aaa keyword", vec!["aaa", "bbb"], vec![]),
+            ("bbb keyword", vec!["aaa"], vec![]),
+            ("bbb keyword", vec!["bbb"], vec!["bbb"]),
+            ("bbb keyword", vec!["aaa", "bbb"], vec!["bbb"]),
+            ("both keyword", vec!["aaa"], vec![]),
+            ("both keyword", vec!["bbb"], vec!["bbb"]),
+            ("both keyword", vec!["aaa", "bbb"], vec!["bbb"]),
+        ];
+        for (query, types, expected_types) in &ingest_2_queries {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, types)),
+                expected_types
+                    .iter()
+                    .map(|t| Suggestion::Exposure {
+                        suggestion_type: t.to_string(),
+                        score: 1.0,
+                    })
+                    .collect::<Vec<Suggestion>>(),
+            );
+        }
+
+        // Now ingest the "aaa" suggestion.
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        let ingest_3_queries = [
+            ("aaa keyword", vec!["aaa"], vec!["aaa"]),
+            ("aaa keyword", vec!["bbb"], vec![]),
+            ("aaa keyword", vec!["aaa", "bbb"], vec!["aaa"]),
+            ("bbb keyword", vec!["aaa"], vec![]),
+            ("bbb keyword", vec!["bbb"], vec!["bbb"]),
+            ("bbb keyword", vec!["aaa", "bbb"], vec!["bbb"]),
+            ("both keyword", vec!["aaa"], vec!["aaa"]),
+            ("both keyword", vec!["bbb"], vec!["bbb"]),
+            ("both keyword", vec!["aaa", "bbb"], vec!["aaa", "bbb"]),
+        ];
+        for (query, types, expected_types) in &ingest_3_queries {
+            assert_eq!(
+                store.fetch_suggestions(SuggestionQuery::exposure(query, types)),
+                expected_types
+                    .iter()
+                    .map(|t| Suggestion::Exposure {
+                        suggestion_type: t.to_string(),
+                        score: 1.0,
+                    })
+                    .collect::<Vec<Suggestion>>(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn exposure_ingest_new_record() -> anyhow::Result<()> {
+        before_each();
+
+        // Create an exposure suggestion and ingest it.
+        let mut store = TestStore::new(MockRemoteSettingsClient::default().with_full_record(
+            "exposure-suggestions",
+            "exposure-0",
+            Some(json!({
+                "suggestion_type": "aaa",
+            })),
+            Some(json!({
+                "keywords": ["old keyword"],
+            })),
+        ));
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        // Add a new record of the same exposure type.
+        store.client_mut().add_full_record(
+            "exposure-suggestions",
+            "exposure-1",
+            Some(json!({
+                "suggestion_type": "aaa",
+            })),
+            Some(json!({
+                "keywords": ["new keyword"],
+            })),
+        );
+
+        // Ingest, but don't ingest the exposure type. The store will download
+        // the new record but shouldn't ingest its attachment.
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: None,
+            ..SuggestIngestionConstraints::all_providers()
+        });
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::exposure("new keyword", &["aaa"])),
+            vec![],
+        );
+
+        // Ingest again with the exposure type. The new record will be
+        // unchanged, but the store should now ingest its attachment.
+        store.ingest(SuggestIngestionConstraints {
+            providers: Some(vec![SuggestionProvider::Exposure]),
+            provider_constraints: Some(SuggestionProviderConstraints {
+                exposure_suggestion_types: Some(vec!["aaa".to_string()]),
+            }),
+            ..SuggestIngestionConstraints::all_providers()
+        });
+
+        // The keyword in the new attachment should match the suggestion,
+        // confirming that the new record's attachment was ingested.
+        assert_eq!(
+            store.fetch_suggestions(SuggestionQuery::exposure("new keyword", &["aaa"])),
+            vec![Suggestion::Exposure {
+                suggestion_type: "aaa".to_string(),
+                score: 1.0,
+            }]
         );
 
         Ok(())

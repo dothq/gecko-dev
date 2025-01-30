@@ -2,11 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const lazy = {};
-ChromeUtils.defineESModuleGetters(lazy, {
-  FeatureGate: "resource://featuregates/FeatureGate.sys.mjs",
-});
-
 /** An individual feature gate that can be re-used for more advanced usage. */
 export class FeatureGateImplementation {
   // Note that the following comment is *not* a jsdoc. Making it a jsdoc would
@@ -44,6 +39,14 @@ export class FeatureGateImplementation {
    */
   get id() {
     return this._definition.id;
+  }
+
+  /**
+   * A Fluent string ID that will resolve to some text to identify this feature's group to users.
+   * @type string
+   */
+  get group() {
+    return this._definition.group;
   }
 
   /**
@@ -104,32 +107,6 @@ export class FeatureGateImplementation {
     return this._definition.defaultValue;
   }
 
-  /** The default value before any targeting evaluation. */
-  get defaultValueOriginalValue() {
-    // This will probably be overwritten by the loader, but if not provide a default.
-    return (
-      this._definition.defaultValueOriginalValue || {
-        default: this._definition.defaultValue,
-      }
-    );
-  }
-
-  /**
-   * Check what the default value of this feature gate would be on another
-   * browser with different facts, such as on another platform.
-   *
-   * @param {Map} extraFacts
-   *   A `Map` of hypothetical facts to consider, such as {'windows': true} to
-   *   check what the value of this feature would be on Windows.
-   */
-  defaultValueWith(extraFacts) {
-    return lazy.FeatureGate.evaluateTargetedValue(
-      this.defaultValueOriginalValue,
-      extraFacts,
-      { mergeFactsWithDefault: true }
-    );
-  }
-
   /**
    * If this feature should be exposed to users in an advanced settings panel
    * for this build of Firefox.
@@ -138,32 +115,6 @@ export class FeatureGateImplementation {
    */
   get isPublic() {
     return this._definition.isPublic;
-  }
-
-  /** The isPublic before any targeting evaluation. */
-  get isPublicOriginalValue() {
-    // This will probably be overwritten by the loader, but if not provide a default.
-    return (
-      this._definition.isPublicOriginalValue || {
-        default: this._definition.isPublic,
-      }
-    );
-  }
-
-  /**
-   * Check if this feature is available on another browser with different
-   * facts, such as on another platform.
-   *
-   * @param {Map} extraFacts
-   *   A `Map` of hypothetical facts to consider, such as {'windows': true} to
-   *   check if this feature would be available on Windows.
-   */
-  isPublicWith(extraFacts) {
-    return lazy.FeatureGate.evaluateTargetedValue(
-      this.isPublicOriginalValue,
-      extraFacts,
-      { mergeFactsWithDefault: true }
-    );
   }
 
   /**

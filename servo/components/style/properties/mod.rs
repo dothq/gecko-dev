@@ -17,12 +17,6 @@ pub use self::generated::*;
 #[deny(missing_docs)]
 pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/properties.rs"));
-
-    #[cfg(feature = "gecko")]
-    #[allow(unsafe_code, missing_docs)]
-    pub mod gecko {
-        include!(concat!(env!("OUT_DIR"), "/gecko_properties.rs"));
-    }
 }
 
 use crate::custom_properties::{self, ComputedCustomProperties};
@@ -31,6 +25,7 @@ use crate::gecko_bindings::structs::{nsCSSPropertyID, AnimatedPropertyID, RefPtr
 use crate::logical_geometry::WritingMode;
 use crate::parser::ParserContext;
 use crate::str::CssString;
+use crate::stylesheets::CssRuleType;
 use crate::stylesheets::Origin;
 use crate::stylist::Stylist;
 use crate::values::{computed, serialize_atom_name};
@@ -72,8 +67,6 @@ bitflags! {
 
         /// This property can be animated on the compositor.
         const CAN_ANIMATE_ON_COMPOSITOR = 0;
-        /// This shorthand property is accessible from getComputedStyle.
-        const SHORTHAND_IN_GETCS = 0;
         /// See data.py's documentation about the affects_flags.
         const AFFECTS_LAYOUT = 0;
         #[allow(missing_docs)]
@@ -159,8 +152,10 @@ pub struct VariableDeclaration {
 /// wide-keyword.
 #[derive(Clone, PartialEq, ToCss, ToShmem)]
 pub enum CustomDeclarationValue {
-    /// A value.
-    Value(Arc<custom_properties::SpecifiedValue>),
+    /// An unparsed value.
+    Unparsed(Arc<custom_properties::SpecifiedValue>),
+    /// An already-parsed value.
+    Parsed(Arc<crate::properties_and_values::value::SpecifiedValue>),
     /// A wide keyword.
     CSSWideKeyword(CSSWideKeyword),
 }
@@ -191,7 +186,9 @@ impl fmt::Debug for PropertyDeclaration {
 }
 
 /// A longhand or shorthand property.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ToComputedValue, ToResolvedValue, ToShmem, MallocSizeOf)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, ToComputedValue, ToResolvedValue, ToShmem, MallocSizeOf,
+)]
 #[repr(C)]
 pub struct NonCustomPropertyId(u16);
 
@@ -492,8 +489,8 @@ impl PropertyId {
 
     fn allowed_in(&self, context: &ParserContext) -> bool {
         let id = match self.non_custom_id() {
-            // Custom properties are allowed everywhere
-            None => return true,
+            // Custom properties are allowed everywhere, except `position-try`.
+            None => return !context.nesting_context.rule_types.contains(CssRuleType::PositionTry),
             Some(id) => id,
         };
         id.allowed_in(context)
@@ -696,6 +693,71 @@ impl ShorthandId {
     }
 }
 
+fn parse_non_custom_property_declaration_value_into<'i>(
+    declarations: &mut SourcePropertyDeclaration,
+    context: &ParserContext,
+    input: &mut Parser<'i, '_>,
+    start: &cssparser::ParserState,
+    parse_entirely_into: impl FnOnce(
+        &mut SourcePropertyDeclaration,
+        &mut Parser<'i, '_>,
+    ) -> Result<(), ParseError<'i>>,
+    parsed_wide_keyword: impl FnOnce(&mut SourcePropertyDeclaration, CSSWideKeyword),
+    parsed_custom: impl FnOnce(&mut SourcePropertyDeclaration, custom_properties::VariableValue),
+) -> Result<(), ParseError<'i>> {
+    let mut starts_with_curly_block = false;
+    if let Ok(token) = input.next() {
+        match token {
+            cssparser::Token::Ident(ref ident) => match CSSWideKeyword::from_ident(ident) {
+                Ok(wk) => {
+                    if input.expect_exhausted().is_ok() {
+                        return Ok(parsed_wide_keyword(declarations, wk));
+                    }
+                },
+                Err(()) => {},
+            },
+            cssparser::Token::CurlyBracketBlock => {
+                starts_with_curly_block = true;
+            },
+            _ => {},
+        }
+    };
+
+    input.reset(&start);
+    input.look_for_var_or_env_functions();
+    let err = match parse_entirely_into(declarations, input) {
+        Ok(()) => {
+            input.seen_var_or_env_functions();
+            return Ok(());
+        },
+        Err(e) => e,
+    };
+
+    // Look for var(), env() and top-level curly blocks after the error.
+    let start_pos = start.position();
+    let mut at_start = start_pos == input.position();
+    let mut invalid = false;
+    while let Ok(token) = input.next() {
+        if matches!(token, cssparser::Token::CurlyBracketBlock) {
+            if !starts_with_curly_block || !at_start {
+                invalid = true;
+                break;
+            }
+        } else if starts_with_curly_block {
+            invalid = true;
+            break;
+        }
+        at_start = false;
+    }
+    if !input.seen_var_or_env_functions() || invalid {
+        return Err(err);
+    }
+    input.reset(start);
+    let value = custom_properties::VariableValue::parse(input, &context.url_data)?;
+    parsed_custom(declarations, value);
+    Ok(())
+}
+
 impl PropertyDeclaration {
     fn with_variables_from_shorthand(&self, shorthand: ShorthandId) -> Option<&str> {
         match *self {
@@ -785,7 +847,7 @@ impl PropertyDeclaration {
             PropertyId::Custom(property_name) => {
                 let value = match input.try_parse(CSSWideKeyword::parse) {
                     Ok(keyword) => CustomDeclarationValue::CSSWideKeyword(keyword),
-                    Err(()) => CustomDeclarationValue::Value(Arc::new(
+                    Err(()) => CustomDeclarationValue::Unparsed(Arc::new(
                         custom_properties::VariableValue::parse(input, &context.url_data)?,
                     )),
                 };
@@ -799,76 +861,69 @@ impl PropertyDeclaration {
         };
         match non_custom_id.longhand_or_shorthand() {
             Ok(longhand_id) => {
-                let declaration = input
-                    .try_parse(CSSWideKeyword::parse)
-                    .map(|keyword| PropertyDeclaration::css_wide_keyword(longhand_id, keyword))
-                    .or_else(|()| {
-                        input.look_for_var_or_env_functions();
-                        input.parse_entirely(|input| longhand_id.parse_value(context, input))
-                    })
-                    .or_else(|err| {
-                        while let Ok(_) = input.next() {} // Look for var() after the error.
-                        if !input.seen_var_or_env_functions() {
-                            return Err(err);
-                        }
-                        input.reset(&start);
-                        let variable_value =
-                            custom_properties::VariableValue::parse(input, &context.url_data)?;
-                        Ok(PropertyDeclaration::WithVariables(VariableDeclaration {
+                parse_non_custom_property_declaration_value_into(
+                    declarations,
+                    context,
+                    input,
+                    &start,
+                    |declarations, input| {
+                        let decl = input
+                            .parse_entirely(|input| longhand_id.parse_value(context, input))?;
+                        declarations.push(decl);
+                        Ok(())
+                    },
+                    |declarations, wk| {
+                        declarations.push(PropertyDeclaration::css_wide_keyword(longhand_id, wk));
+                    },
+                    |declarations, variable_value| {
+                        declarations.push(PropertyDeclaration::WithVariables(VariableDeclaration {
                             id: longhand_id,
                             value: Arc::new(UnparsedValue {
                                 variable_value,
                                 from_shorthand: None,
                             }),
                         }))
-                    })?;
-                declarations.push(declaration)
+                    },
+                )?;
             },
             Err(shorthand_id) => {
-                if let Ok(keyword) = input.try_parse(CSSWideKeyword::parse) {
-                    if shorthand_id == ShorthandId::All {
-                        declarations.all_shorthand = AllShorthand::CSSWideKeyword(keyword)
-                    } else {
-                        for longhand in shorthand_id.longhands() {
-                            declarations
-                                .push(PropertyDeclaration::css_wide_keyword(longhand, keyword));
+                parse_non_custom_property_declaration_value_into(
+                    declarations,
+                    context,
+                    input,
+                    &start,
+                    // Not using parse_entirely here: each ShorthandId::parse_into function needs
+                    // to do so *before* pushing to `declarations`.
+                    |declarations, input| shorthand_id.parse_into(declarations, context, input),
+                    |declarations, wk| {
+                        if shorthand_id == ShorthandId::All {
+                            declarations.all_shorthand = AllShorthand::CSSWideKeyword(wk)
+                        } else {
+                            for longhand in shorthand_id.longhands() {
+                                declarations
+                                    .push(PropertyDeclaration::css_wide_keyword(longhand, wk));
+                            }
                         }
-                    }
-                } else {
-                    input.look_for_var_or_env_functions();
-                    // Not using parse_entirely here: each
-                    // ${shorthand.ident}::parse_into function needs to do so
-                    // *before* pushing to `declarations`.
-                    shorthand_id
-                        .parse_into(declarations, context, input)
-                        .or_else(|err| {
-                            while let Ok(_) = input.next() {} // Look for var() after the error.
-                            if !input.seen_var_or_env_functions() {
-                                return Err(err);
+                    },
+                    |declarations, variable_value| {
+                        let unparsed = Arc::new(UnparsedValue {
+                            variable_value,
+                            from_shorthand: Some(shorthand_id),
+                        });
+                        if shorthand_id == ShorthandId::All {
+                            declarations.all_shorthand = AllShorthand::WithVariables(unparsed)
+                        } else {
+                            for id in shorthand_id.longhands() {
+                                declarations.push(PropertyDeclaration::WithVariables(
+                                    VariableDeclaration {
+                                        id,
+                                        value: unparsed.clone(),
+                                    },
+                                ))
                             }
-
-                            input.reset(&start);
-                            let variable_value =
-                                custom_properties::VariableValue::parse(input, &context.url_data)?;
-                            let unparsed = Arc::new(UnparsedValue {
-                                variable_value,
-                                from_shorthand: Some(shorthand_id),
-                            });
-                            if shorthand_id == ShorthandId::All {
-                                declarations.all_shorthand = AllShorthand::WithVariables(unparsed)
-                            } else {
-                                for id in shorthand_id.longhands() {
-                                    declarations.push(PropertyDeclaration::WithVariables(
-                                        VariableDeclaration {
-                                            id,
-                                            value: unparsed.clone(),
-                                        },
-                                    ))
-                                }
-                            }
-                            Ok(())
-                        })?;
-                }
+                        }
+                    },
+                )?;
             },
         }
         if let Some(use_counters) = context.use_counters {
@@ -1040,7 +1095,7 @@ impl<'a> PropertyDeclarationId<'a> {
     pub fn is_discrete_animatable(&self) -> bool {
         match self {
             Self::Longhand(longhand) => longhand.is_discrete_animatable(),
-            // TODO(bug 1846516): Refine this?
+            // TODO(bug 1885995): Refine this.
             Self::Custom(_) => true,
         }
     }
@@ -1057,14 +1112,12 @@ impl<'a> PropertyDeclarationId<'a> {
     }
 
     /// Convert a `PropertyDeclarationId` into an `AnimatedPropertyID`
-    /// Note that the rust AnimatedPropertyID doesn't implement Drop, so owned controls whether the
-    /// custom name should be addrefed or not.
     ///
-    /// FIXME(emilio, bug 1870107): This is a bit error-prone. We should consider using cbindgen to
-    /// generate the property id representation or so.
+    /// FIXME(emilio, bug 1870107): We should consider using cbindgen to generate the property id
+    /// representation or so.
     #[cfg(feature = "gecko")]
     #[inline]
-    pub fn to_gecko_animated_property_id(&self, owned: bool) -> AnimatedPropertyID {
+    pub fn to_gecko_animated_property_id(&self) -> AnimatedPropertyID {
         match self {
             Self::Longhand(id) => AnimatedPropertyID {
                 mID: id.to_nscsspropertyid(),
@@ -1075,11 +1128,7 @@ impl<'a> PropertyDeclarationId<'a> {
                     mID: nsCSSPropertyID::eCSSPropertyExtra_variable,
                     mCustomName: RefPtr::null(),
                 };
-                property_id.mCustomName.mRawPtr = if owned {
-                    (*name).clone().into_addrefed()
-                } else {
-                    name.as_ptr()
-                };
+                property_id.mCustomName.mRawPtr = (*name).clone().into_addrefed();
                 property_id
             },
         }
@@ -1440,17 +1489,18 @@ impl UnparsedValue {
         let key = (shorthand, longhand_id);
         match shorthand_cache.get(&key) {
             Some(decl) => Cow::Borrowed(decl),
-            None => {
-                // FIXME: We should always have the key here but it seems
-                // sometimes we don't, see bug 1696409.
-                #[cfg(feature = "gecko")]
-                {
-                    if crate::gecko_bindings::structs::GECKO_IS_NIGHTLY {
-                        panic!("Expected {:?} to be in the cache but it was not!", key);
-                    }
-                }
-                invalid_at_computed_value_time()
-            },
+            // NOTE: Under normal circumstances we should always have a value, but when prefs
+            // change we might hit this case. Consider something like `animation-timeline`, which
+            // is a conditionally-enabled longhand of `animation`:
+            //
+            // If we have a sheet with `animation: var(--foo)`, and the `animation-timeline` pref
+            // enabled, then that expands to an `animation-timeline` declaration at parse time.
+            //
+            // If the user disables the pref and, some time later, we get here wanting to compute
+            // `animation-timeline`, parse_into won't generate any declaration for it anymore, so
+            // we haven't inserted in the cache. Computing to invalid / initial seems like the most
+            // sensible thing to do here.
+            None => invalid_at_computed_value_time(),
         }
     }
 }

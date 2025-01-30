@@ -2,7 +2,7 @@
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "gtest/gtest.h"
 #include "mozilla/gtest/nsUserCharacteristics.h"
@@ -35,7 +35,8 @@ TEST(ResistFingerprinting, UserCharacteristics_Simple)
 
 TEST(ResistFingerprinting, UserCharacteristics_Complex)
 {
-  nsUserCharacteristics::PopulateData(true);
+  nsUserCharacteristics::PopulateDataAndEventuallySubmit(
+      /* aUpdatePref = */ false, /* aTesting = */ true);
 
   bool submitted = false;
   mozilla::glean_pings::UserCharacteristics.TestBeforeNextSubmit(
@@ -102,7 +103,8 @@ TEST(ResistFingerprinting, UserCharacteristics_ClearPref)
                 .value()
                 .get());
       });
-  nsUserCharacteristics::PopulateData(true);
+  nsUserCharacteristics::PopulateDataAndEventuallySubmit(
+      /* aUpdatePref = */ false, /* aTesting = */ true);
   nsUserCharacteristics::SubmitPing();
 
   auto original_value =
@@ -135,9 +137,54 @@ TEST(ResistFingerprinting, UserCharacteristics_ClearPref)
         Preferences::GetCString(kUUIDPref, uuidValue);
         ASSERT_STRNE("", uuidValue.get());
       });
-  nsUserCharacteristics::PopulateData(true);
+  nsUserCharacteristics::PopulateDataAndEventuallySubmit(
+      /* aUpdatePref = */ false, /* aTesting = */ true);
   nsUserCharacteristics::SubmitPing();
 
   Preferences::SetBool("datareporting.healthreport.uploadEnabled",
                        original_value);
+}
+
+const auto* const kLastVersionPref =
+    "toolkit.telemetry.user_characteristics_ping.last_version_sent";
+const auto* const kCurrentVersionPref =
+    "toolkit.telemetry.user_characteristics_ping.current_version";
+const auto* const kOptOutPref =
+    "toolkit.telemetry.user_characteristics_ping.opt-out";
+const auto* const kSendOncePref =
+    "toolkit.telemetry.user_characteristics_ping.send-once";
+
+TEST(ResistFingerprinting, UserCharacteristics_ShouldSubmit)
+{
+  // Test nsUserCharacteristics::ShouldSubmit()
+
+  // Make sure kCurrentVersionPref > kLastVersionPref and kCurrentVersionPref !=
+  // 0
+  Preferences::SetInt(kCurrentVersionPref, 1);
+  Preferences::SetInt(kLastVersionPref, 0);
+
+  // Verify ShouldSubmit returns true when kCurrentVersionPref >
+  // kLastVersionPref
+  ASSERT_TRUE(nsUserCharacteristics::ShouldSubmit());
+
+  // Verify opting-out works
+  Preferences::SetBool(kOptOutPref, true);
+  ASSERT_FALSE(nsUserCharacteristics::ShouldSubmit());
+
+  Preferences::SetBool(kOptOutPref, false);
+  ASSERT_TRUE(nsUserCharacteristics::ShouldSubmit());
+
+  // Verify ShouldSubmit returns false when kCurrentVersionPref = 0
+  Preferences::SetInt(kCurrentVersionPref, 0);
+  ASSERT_FALSE(nsUserCharacteristics::ShouldSubmit());
+
+  // Verify sending a ping once regardless of version works
+  Preferences::SetBool(kSendOncePref, true);
+  ASSERT_TRUE(nsUserCharacteristics::ShouldSubmit());
+  Preferences::SetInt(kCurrentVersionPref, 1);
+
+  // Verify precedence
+  Preferences::SetBool(kOptOutPref, true);
+  ASSERT_FALSE(nsUserCharacteristics::ShouldSubmit());
+  Preferences::SetBool(kOptOutPref, false);
 }

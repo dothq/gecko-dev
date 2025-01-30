@@ -69,7 +69,7 @@ class FakeAudioTrack : public ProcessedMediaTrack {
 
   void Destroy() override {
     MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(!mMainThreadDestroyed);
+    MOZ_RELEASE_ASSERT(!mMainThreadDestroyed);
     mMainThreadDestroyed = true;
     mTimer->Cancel();
     mTimer = nullptr;
@@ -79,14 +79,14 @@ class FakeAudioTrack : public ProcessedMediaTrack {
 
   void AddListener(MediaTrackListener* aListener) override {
     MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(!mListener);
+    MOZ_RELEASE_ASSERT(!mListener);
     mListener = aListener;
   }
 
   RefPtr<GenericPromise> RemoveListener(
       MediaTrackListener* aListener) override {
     MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(mListener == aListener);
+    MOZ_RELEASE_ASSERT(mListener == aListener);
     mListener = nullptr;
     return GenericPromise::CreateAndResolve(true, __func__);
   }
@@ -450,7 +450,7 @@ class MediaPipelineTest : public ::testing::Test {
             AbstractThread::MainThread(), CreateAudioStateConfig(),
             already_AddRefed(
                 webrtc::CreateBuiltinAudioDecoderFactory().release()),
-            WrapUnique(new webrtc::NoTrialsConfig()))),
+            WrapUnique(new webrtc::MozTrialsConfig()))),
         p1_(shared_state_),
         p2_(shared_state_) {}
 

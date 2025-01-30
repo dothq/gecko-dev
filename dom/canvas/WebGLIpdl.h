@@ -14,8 +14,9 @@
 #include "mozilla/ipc/IPDLParamTraits.h"
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/layers/LayersSurfaces.h"
-#include "TiedFields.h"
-#include "TupleUtils.h"
+#include "mozilla/ParamTraits_IsEnumCase.h"
+#include "mozilla/ParamTraits_STL.h"
+#include "mozilla/ParamTraits_TiedFields.h"
 #include "WebGLTypes.h"
 
 namespace mozilla {
@@ -245,34 +246,18 @@ struct ParamTraits<mozilla::dom::PredefinedColorSpace> final
           mozilla::dom::PredefinedColorSpace> {};
 
 // -
-// ParamTraits_TiedFields
+// ParamTraits_IsEnumCase
 
-template <class T>
-struct ParamTraits_TiedFields {
-  static_assert(mozilla::AssertTiedFieldsAreExhaustive<T>());
+#define USE_IS_ENUM_CASE(T) \
+  template <>               \
+  struct ParamTraits<T> : public ParamTraits_IsEnumCase<T> {};
 
-  static void Write(MessageWriter* const writer, const T& in) {
-    const auto& fields = mozilla::TiedFields(in);
-    mozilla::MapTuple(fields, [&](const auto& field) {
-      WriteParam(writer, field);
-      return true;  // ignored
-    });
-  }
+USE_IS_ENUM_CASE(mozilla::webgl::OptionalRenderableFormatBits)
 
-  static bool Read(MessageReader* const reader, T* const out) {
-    const auto& fields = mozilla::TiedFields(*out);
-    bool ok = true;
-    mozilla::MapTuple(fields, [&](auto& field) {
-      if (ok) {
-        ok &= ReadParam(reader, &field);
-      }
-      return true;  // ignored
-    });
-    return ok;
-  }
-};
+#undef USE_IS_ENUM_CASE
 
 // -
+// ParamTraits_TiedFields
 
 template <>
 struct ParamTraits<mozilla::webgl::InitContextDesc> final
@@ -521,45 +506,6 @@ struct ParamTraits<mozilla::webgl::ShaderPrecisionFormat> final {
 
 // -
 
-template <typename U, size_t N>
-struct ParamTraits<std::array<U, N>> final {
-  using T = std::array<U, N>;
-
-  static void Write(MessageWriter* const writer, const T& in) {
-    for (const auto& v : in) {
-      WriteParam(writer, v);
-    }
-  }
-
-  static bool Read(MessageReader* const reader, T* const out) {
-    for (auto& v : *out) {
-      if (!ReadParam(reader, &v)) return false;
-    }
-    return true;
-  }
-};
-
-template <typename U, size_t N>
-struct ParamTraits<U[N]> final {
-  using T = U[N];
-  static constexpr size_t kByteSize = sizeof(U) * N;
-
-  static_assert(std::is_trivial<U>::value);
-
-  static void Write(MessageWriter* const writer, const T& in) {
-    writer->WriteBytes(in, kByteSize);
-  }
-
-  static bool Read(MessageReader* const reader, T* const out) {
-    if (!reader->HasBytesAvailable(kByteSize)) {
-      return false;
-    }
-    return reader->ReadBytesInto(*out, kByteSize);
-  }
-};
-
-// -
-
 template <>
 struct ParamTraits<mozilla::webgl::GetUniformData> final {
   using T = mozilla::webgl::GetUniformData;
@@ -608,35 +554,6 @@ struct ParamTraits<mozilla::avec3<U>> final {
            ReadParam(reader, &out->z);
   }
 };
-
-// -
-
-template <class TT>
-struct ParamTraits_IsEnumCase {
-  using T = TT;
-
-  static void Write(IPC::MessageWriter* const writer, const T& in) {
-    MOZ_RELEASE_ASSERT(IsEnumCase(in));
-    WriteParam(writer, mozilla::UnderlyingValue(in));
-  }
-
-  static bool Read(IPC::MessageReader* const reader, T* const out) {
-    std::underlying_type_t<T> rawVal;
-    if (!ReadParam(reader, &rawVal)) return false;
-    *out = static_cast<T>(rawVal);
-    return IsEnumCase(*out);
-  }
-};
-
-// -
-
-#define USE_IS_ENUM_CASE(T) \
-  template <>               \
-  struct ParamTraits<T> : public ParamTraits_IsEnumCase<T> {};
-
-USE_IS_ENUM_CASE(mozilla::webgl::OptionalRenderableFormatBits)
-
-#undef USE_IS_ENUM_CASE
 
 }  // namespace IPC
 

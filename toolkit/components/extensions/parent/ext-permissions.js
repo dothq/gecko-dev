@@ -6,6 +6,7 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   ExtensionPermissions: "resource://gre/modules/ExtensionPermissions.sys.mjs",
+  Schemas: "resource://gre/modules/Schemas.sys.mjs",
 });
 
 var { ExtensionError } = ExtensionUtils;
@@ -16,10 +17,19 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "extensions.webextOptionalPermissionPrompts"
 );
 
+ChromeUtils.defineLazyGetter(this, "OPTIONAL_ONLY_PERMISSIONS", () => {
+  // Schemas.getPermissionNames() depends on API schemas to have been loaded.
+  // This is always the case here - extension APIs can only be called when an
+  // extension has started. And as part of startup, extension schemas are
+  // always parsed, via extension.loadManifest at:
+  // https://searchfox.org/mozilla-central/rev/2deb9bcf801f9de83d4f30c890d442072b9b6595/toolkit/components/extensions/Extension.sys.mjs#2094
+  return new Set(Schemas.getPermissionNames(["OptionalOnlyPermission"]));
+});
+
 function normalizePermissions(perms) {
   perms = { ...perms };
   perms.permissions = perms.permissions.filter(
-    perm => !perm.startsWith("internal:")
+    perm => !perm.startsWith("internal:") && perm !== "<all_urls>"
   );
   return perms;
 }
@@ -85,6 +95,14 @@ this.permissions = class extends ExtensionAPIPersistent {
                 `Cannot request permission ${perm} since it was not declared in optional_permissions`
               );
             }
+            if (
+              OPTIONAL_ONLY_PERMISSIONS.has(perm) &&
+              (permissions.length > 1 || origins.length)
+            ) {
+              throw new ExtensionError(
+                `Cannot request permission ${perm} with another permission`
+              );
+            }
           }
 
           let optionalOrigins = context.extension.optionalOrigins;
@@ -112,7 +130,7 @@ this.permissions = class extends ExtensionAPIPersistent {
             }
 
             let browser = context.pendingEventBrowser || context.xulBrowser;
-            let allow = await new Promise(resolve => {
+            let allowPromise = new Promise(resolve => {
               let subject = {
                 wrappedJSObject: {
                   browser,
@@ -128,7 +146,13 @@ this.permissions = class extends ExtensionAPIPersistent {
                 "webextension-optional-permission-prompt"
               );
             });
-            if (!allow) {
+            if (context.isBackgroundContext) {
+              extension.emit("background-script-idle-waituntil", {
+                promise: allowPromise,
+                reason: "permissions_request",
+              });
+            }
+            if (!(await allowPromise)) {
               return false;
             }
           }

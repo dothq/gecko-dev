@@ -2,27 +2,37 @@
 * AUTO-GENERATED - DO NOT EDIT. Source: https://github.com/gpuweb/cts
 **/export const description = `
 This test dedicatedly tests validation of GPUFragmentState of createRenderPipeline.
+
+TODO(#3363): Make this into a MaxLimitTest and increase kMaxColorAttachments.
 `;import { makeTestGroup } from '../../../../common/framework/test_group.js';
-import { range } from '../../../../common/util/util.js';
+import { assert, range } from '../../../../common/util/util.js';
 import {
+  getDefaultLimits,
+  IsDualSourceBlendingFactor,
   kBlendFactors,
-  kBlendOperations,
-  kMaxColorAttachmentsToTest } from
+  kBlendOperations } from
 '../../../capability_info.js';
+import { GPUConst } from '../../../constants.js';
 import {
-  kTextureFormats,
+  kAllTextureFormats,
   kRenderableColorTextureFormats,
   kTextureFormatInfo,
-  computeBytesPerSampleFromFormats } from
+  computeBytesPerSampleFromFormats,
+  kColorTextureFormats } from
 '../../../format_info.js';
 import {
   getFragmentShaderCodeWithOutput,
   getPlainTypeInfo,
-  kDefaultFragmentShaderCode } from
+  kDefaultFragmentShaderCode,
+  kDefaultVertexShaderCode } from
 '../../../util/shader.js';
 import { kTexelRepresentationInfo } from '../../../util/texture/texel_data.js';
 
 import { CreateRenderPipelineValidationTest } from './common.js';
+
+// MAINTENANCE_TODO: This should be changed to kMaxColorAttachmentsToTest
+// when this is made a MaxLimitTest (see above).
+const kMaxColorAttachments = getDefaultLimits('core').maxColorAttachments.default;
 
 export const g = makeTestGroup(CreateRenderPipelineValidationTest);
 
@@ -49,9 +59,60 @@ fn((t) => {
   t.doCreateRenderPipelineTest(isAsync, false, badDescriptor);
 });
 
+g.test('targets_format_is_color_format').
+desc(
+  `Tests that color target state format must be a color format, regardless of how the
+    fragment shader writes to it.`
+).
+params((u) =>
+u
+// Test all non-color texture formats, plus 'rgba8unorm' as a control case.
+.combine('format', kAllTextureFormats).
+filter(({ format }) => {
+  return format === 'rgba8unorm' || !kTextureFormatInfo[format].color;
+}).
+combine('isAsync', [false, true]).
+beginSubcases().
+combine('fragOutType', ['f32', 'u32', 'i32'])
+).
+beforeAllSubcases((t) => {
+  const { format } = t.params;
+  const info = kTextureFormatInfo[format];
+  t.skipIfTextureFormatNotSupported(t.params.format);
+  t.selectDeviceOrSkipTestCase(info.feature);
+}).
+fn((t) => {
+  const { isAsync, format, fragOutType } = t.params;
+
+  const fragmentShaderCode = getFragmentShaderCodeWithOutput([
+  { values, plainType: fragOutType, componentCount: 4 }]
+  );
+
+  const success = format === 'rgba8unorm' && fragOutType === 'f32';
+  t.doCreateRenderPipelineTest(isAsync, success, {
+    vertex: {
+      module: t.device.createShaderModule({ code: kDefaultVertexShaderCode }),
+      entryPoint: 'main'
+    },
+    fragment: {
+      module: t.device.createShaderModule({ code: fragmentShaderCode }),
+      entryPoint: 'main',
+      targets: [{ format }]
+    },
+    layout: 'auto'
+  });
+});
+
 g.test('targets_format_renderable').
-desc(`Tests that color target state format must have RENDER_ATTACHMENT capability.`).
-params((u) => u.combine('isAsync', [false, true]).combine('format', kTextureFormats)).
+desc(
+  `Tests that color target state format must have RENDER_ATTACHMENT capability
+    (tests only color formats).`
+).
+params((u) =>
+u //
+.combine('isAsync', [false, true]).
+combine('format', kColorTextureFormats)
+).
 beforeAllSubcases((t) => {
   const { format } = t.params;
   const info = kTextureFormatInfo[format];
@@ -114,7 +175,7 @@ combine('format', kRenderableColorTextureFormats).
 beginSubcases().
 combine(
   'attachmentCount',
-  range(kMaxColorAttachmentsToTest, (i) => i + 1)
+  range(kMaxColorAttachments, (i) => i + 1)
 ).
 combine('isAsync', [false, true])
 ).
@@ -158,22 +219,10 @@ combineWithParams([
 // become 4 and 4+4+8+16+1 > 32. Re-ordering this so the R8Unorm's are at the end, however
 // is allowed: 4+8+16+1+1 < 32.
 {
-  formats: [
-  'r8unorm',
-  'r32float',
-  'rgba8unorm',
-  'rgba32float',
-  'r8unorm']
-
+  formats: ['r8unorm', 'r32float', 'rgba8unorm', 'rgba32float', 'r8unorm']
 },
 {
-  formats: [
-  'r32float',
-  'rgba8unorm',
-  'rgba32float',
-  'r8unorm',
-  'r8unorm']
-
+  formats: ['r32float', 'rgba8unorm', 'rgba32float', 'r8unorm', 'r8unorm']
 }]
 ).
 beginSubcases().
@@ -203,8 +252,7 @@ g.test('targets_format_filterable').
 desc(
   `
   Tests that color target state format must be filterable if blend is not undefined.
-
-  TODO: info.colorRender.blend now directly says whether the format is blendable. Use that.`
+  `
 ).
 params((u) =>
 u.
@@ -232,7 +280,9 @@ fn((t) => {
 
   });
 
-  t.doCreateRenderPipelineTest(isAsync, !hasBlend || info.color.type === 'float', descriptor);
+  const supportsBlend = info.colorRender?.blend;
+  assert(supportsBlend !== undefined);
+  t.doCreateRenderPipelineTest(isAsync, !hasBlend || supportsBlend, descriptor);
 });
 
 g.test('targets_blend').
@@ -247,11 +297,17 @@ params((u) =>
 u.
 combine('isAsync', [false, true]).
 combine('component', ['color', 'alpha']).
-beginSubcases().
 combine('srcFactor', kBlendFactors).
 combine('dstFactor', kBlendFactors).
+beginSubcases().
 combine('operation', kBlendOperations)
 ).
+beforeAllSubcases((t) => {
+  const { srcFactor, dstFactor } = t.params;
+  if (IsDualSourceBlendingFactor(srcFactor) || IsDualSourceBlendingFactor(dstFactor)) {
+    t.selectDeviceOrSkipTestCase('dual-source-blending');
+  }
+}).
 fn((t) => {
   const { isAsync, component, srcFactor, dstFactor, operation } = t.params;
 
@@ -266,6 +322,13 @@ fn((t) => {
     operation
   };
   const format = 'rgba8unorm';
+  const useDualSourceBlending =
+  IsDualSourceBlendingFactor(srcFactor) || IsDualSourceBlendingFactor(dstFactor);
+  const fragmentShaderCode = getFragmentShaderCodeWithOutput(
+    [{ values, plainType: 'f32', componentCount: 4 }],
+    null,
+    useDualSourceBlending
+  );
 
   const descriptor = t.getDescriptor({
     targets: [
@@ -275,8 +338,9 @@ fn((t) => {
         color: component === 'color' ? blendComponentToTest : defaultBlendComponent,
         alpha: component === 'alpha' ? blendComponentToTest : defaultBlendComponent
       }
-    }]
+    }],
 
+    fragmentShaderCode
   });
 
   if (operation === 'min' || operation === 'max') {
@@ -365,16 +429,16 @@ fn((t) => {
 
 g.test('pipeline_output_targets,blend').
 desc(
-  `On top of requirements from pipeline_output_targets, when blending is enabled and alpha channel is read indicated by any blend factor, an extra requirement is added:
-  - fragment output must be vec4.
+  `On top of requirements from pipeline_output_targets, when blending is enabled and alpha channel
+    is read indicated by any color blend factor, an extra requirement is added:
+      - fragment output must be vec4.
   `
 ).
 params((u) =>
 u.
 combine('isAsync', [false, true]).
 combine('format', ['r8unorm', 'rg8unorm', 'rgba8unorm', 'bgra8unorm']).
-combine('componentCount', [1, 2, 3, 4]).
-beginSubcases()
+combine('componentCount', [1, 2, 3, 4])
 // The default srcFactor and dstFactor are 'one' and 'zero'. Override just one at a time.
 .combineWithParams([
 ...u.combine('colorSrcFactor', kBlendFactors),
@@ -384,9 +448,21 @@ beginSubcases()
 )
 ).
 beforeAllSubcases((t) => {
-  const { format } = t.params;
+  const { format, colorSrcFactor, colorDstFactor, alphaSrcFactor, alphaDstFactor } = t.params;
+
   const info = kTextureFormatInfo[format];
-  t.selectDeviceOrSkipTestCase(info.feature);
+  const requiredFeatures = [info.feature];
+
+  if (
+  IsDualSourceBlendingFactor(colorSrcFactor) ||
+  IsDualSourceBlendingFactor(colorDstFactor) ||
+  IsDualSourceBlendingFactor(alphaSrcFactor) ||
+  IsDualSourceBlendingFactor(alphaDstFactor))
+  {
+    requiredFeatures.push('dual-source-blending');
+  }
+
+  t.selectDeviceOrSkipTestCase(requiredFeatures);
 }).
 fn((t) => {
   const sampleType = 'float';
@@ -401,6 +477,12 @@ fn((t) => {
   } = t.params;
   const info = kTextureFormatInfo[format];
 
+  const useDualSourceBlending =
+  IsDualSourceBlendingFactor(colorSrcFactor) ||
+  IsDualSourceBlendingFactor(colorDstFactor) ||
+  IsDualSourceBlendingFactor(alphaSrcFactor) ||
+  IsDualSourceBlendingFactor(alphaDstFactor);
+
   const descriptor = t.getDescriptor({
     targets: [
     {
@@ -411,17 +493,147 @@ fn((t) => {
       }
     }],
 
-    fragmentShaderCode: getFragmentShaderCodeWithOutput([
-    { values, plainType: getPlainTypeInfo(sampleType), componentCount }]
+    fragmentShaderCode: getFragmentShaderCodeWithOutput(
+      [{ values, plainType: getPlainTypeInfo(sampleType), componentCount }],
+      null,
+      useDualSourceBlending
     )
   });
 
   const colorBlendReadsSrcAlpha =
-  colorSrcFactor?.includes('src-alpha') || colorDstFactor?.includes('src-alpha');
+  colorSrcFactor?.includes('src-alpha') ||
+  colorDstFactor?.includes('src-alpha') ||
+  colorSrcFactor?.includes('src1-alpha') ||
+  colorDstFactor?.includes('src1-alpha');
   const meetsExtraBlendingRequirement = !colorBlendReadsSrcAlpha || componentCount === 4;
   const _success =
   info.color.type === sampleType &&
   componentCount >= kTexelRepresentationInfo[format].componentOrder.length &&
   meetsExtraBlendingRequirement;
+  t.doCreateRenderPipelineTest(isAsync, _success, descriptor);
+});
+
+const kDualSourceBlendingFactors = [
+'src1',
+'one-minus-src1',
+'src1-alpha',
+'one-minus-src1-alpha'];
+
+
+g.test('dual_source_blending,color_target_count').
+desc(
+  `Test that when the blend factor of color attachment 0 uses src1 (the second input of the
+   corresponding blending unit), there must be exactly one color target.
+`
+).
+beforeAllSubcases((t) => t.selectDeviceOrSkipTestCase('dual-source-blending')).
+params((u) =>
+u.
+combine('blendFactor', kDualSourceBlendingFactors).
+combine('colorTargetsCount', [1, 2]).
+combine('maskOutNonZeroIndexColorTargets', [true, false]).
+beginSubcases().
+combine('component', ['color', 'alpha'])
+).
+fn((t) => {
+  const { blendFactor, colorTargetsCount, maskOutNonZeroIndexColorTargets, component } = t.params;
+
+  const defaultBlendComponent = {
+    srcFactor: 'src-alpha',
+    dstFactor: 'dst-alpha',
+    operation: 'add'
+  };
+  const testBlendComponent = {
+    srcFactor: blendFactor,
+    dstFactor: blendFactor,
+    operation: 'add'
+  };
+
+  assert(colorTargetsCount >= 1);
+  const colorTargetStates = new Array(colorTargetsCount);
+  colorTargetStates[0] = {
+    format: 'rgba8unorm',
+    blend: {
+      color: component === 'color' ? testBlendComponent : defaultBlendComponent,
+      alpha: component === 'alpha' ? testBlendComponent : defaultBlendComponent
+    }
+  };
+
+  for (let i = 1; i < colorTargetsCount; ++i) {
+    colorTargetStates[i] = {
+      format: 'rgba8unorm',
+      blend: {
+        color: defaultBlendComponent,
+        alpha: defaultBlendComponent
+      },
+      writeMask: maskOutNonZeroIndexColorTargets ? 0 : GPUConst.ColorWrite.ALL
+    };
+  }
+
+  const descriptor = t.getDescriptor({
+    targets: colorTargetStates,
+    fragmentShaderCode: getFragmentShaderCodeWithOutput(
+      [{ values, plainType: 'f32', componentCount: 4 }],
+      null,
+      true
+    )
+  });
+
+  const isAsync = false;
+  const _success = colorTargetsCount === 1;
+  t.doCreateRenderPipelineTest(isAsync, _success, descriptor);
+});
+
+g.test('dual_source_blending,use_blend_src').
+desc(
+  `Test that when the blend factor of color attachment 0 uses src1, dual source blending must be
+    used in the fragment shader, whether the corresponding color write mask is 0 or not. In
+    contrast, when dual source blending is used in the fragment shader, we don't require blend
+    factor must use src1 (the second input of the corresponding blending unit).
+`
+).
+beforeAllSubcases((t) => t.selectDeviceOrSkipTestCase('dual-source-blending')).
+params((u) =>
+u.
+combine('blendFactor', kBlendFactors).
+combine('useBlendSrc1', [true, false]).
+combine('writeMask', [0, GPUConst.ColorWrite.ALL]).
+beginSubcases().
+combine('component', ['color', 'alpha'])
+).
+fn((t) => {
+  const { blendFactor, useBlendSrc1, writeMask, component } = t.params;
+
+  const defaultBlendComponent = {
+    srcFactor: 'src-alpha',
+    dstFactor: 'dst-alpha',
+    operation: 'add'
+  };
+  const testBlendComponent = {
+    srcFactor: blendFactor,
+    dstFactor: blendFactor,
+    operation: 'add'
+  };
+
+  const descriptor = t.getDescriptor({
+    targets: [
+    {
+      format: 'rgba8unorm',
+      blend: {
+        color: component === 'color' ? testBlendComponent : defaultBlendComponent,
+        alpha: component === 'alpha' ? testBlendComponent : defaultBlendComponent
+      },
+      writeMask
+    }],
+
+    fragmentShaderCode: getFragmentShaderCodeWithOutput(
+      [{ values, plainType: 'f32', componentCount: 4 }],
+      null,
+      useBlendSrc1
+    )
+  });
+
+  const _success = !IsDualSourceBlendingFactor(blendFactor) || useBlendSrc1;
+  const isAsync = false;
   t.doCreateRenderPipelineTest(isAsync, _success, descriptor);
 });

@@ -6,7 +6,11 @@
 
 const ResourceCommand = require("resource://devtools/shared/commands/resource/resource-command.js");
 
-module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
+module.exports = async function ({
+  targetCommand,
+  targetFront,
+  onAvailableArray,
+}) {
   const isBrowserToolbox =
     targetCommand.descriptorFront.isBrowserProcessDescriptor;
   const isNonTopLevelFrameTarget =
@@ -18,11 +22,6 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
     // debugged via content-process targets.
     return;
   }
-
-  // Wait for the thread actor to be attached, otherwise getFront(thread) will throw for worker targets
-  // This is because worker target are still kind of descriptors and are only resolved into real target
-  // after being attached. And the thread actor ID is only retrieved and available after being attached.
-  await targetFront.onThreadAttached;
 
   if (targetFront.isDestroyed()) {
     return;
@@ -45,14 +44,12 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
       return;
     }
 
-    onAvailable([
-      {
-        resourceType: ResourceCommand.TYPES.THREAD_STATE,
-        state: "paused",
-        why,
-        frame: packet.frame,
-      },
-    ]);
+    const resource = {
+      state: "paused",
+      why,
+      frame: packet.frame,
+    };
+    onAvailableArray([[ResourceCommand.TYPES.THREAD_STATE, [resource]]]);
   };
   threadFront.on("paused", onPausedPacket);
 
@@ -65,12 +62,8 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
       return;
     }
 
-    onAvailable([
-      {
-        resourceType: ResourceCommand.TYPES.THREAD_STATE,
-        state: "resumed",
-      },
-    ]);
+    const resource = { state: "resumed" };
+    onAvailableArray([[ResourceCommand.TYPES.THREAD_STATE, [resource]]]);
   });
 
   // Notify about already paused thread

@@ -14,7 +14,6 @@
 #include "mozilla/IntegerRange.h"
 #include "mozilla/Span.h"
 
-using mozilla::ArrayLength;
 using mozilla::AsChars;
 using mozilla::DecodeOneUtf8CodePoint;
 using mozilla::EnumSet;
@@ -23,12 +22,6 @@ using mozilla::IsAscii;
 using mozilla::IsUtf8;
 using mozilla::Span;
 using mozilla::Utf8Unit;
-
-// Disable the C++ 2a warning. See bug #1509926
-#if defined(__clang__) && (__clang_major__ >= 6)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wc++2a-compat"
-#endif
 
 static void TestUtf8Unit() {
   Utf8Unit c('A');
@@ -250,27 +243,26 @@ static void ExpectBadCodePoint(const Char (&aCharN)[N],
 static void TestIsUtf8() {
   // Note we include the U+0000 NULL in this one -- and that's fine.
   static const char asciiBytes[] = u8"How about a nice game of chess?";
-  MOZ_RELEASE_ASSERT(IsUtf8(Span(asciiBytes, ArrayLength(asciiBytes))));
+  MOZ_RELEASE_ASSERT(IsUtf8(Span(asciiBytes, std::size(asciiBytes))));
 
   static const char endNonAsciiBytes[] = u8"Life is like a 🌯";
   MOZ_RELEASE_ASSERT(
-      IsUtf8(Span(endNonAsciiBytes, ArrayLength(endNonAsciiBytes) - 1)));
+      IsUtf8(Span(endNonAsciiBytes, std::size(endNonAsciiBytes) - 1)));
 
   static const unsigned char badLeading[] = {0x80};
-  MOZ_RELEASE_ASSERT(
-      !IsUtf8(AsChars(Span(badLeading, ArrayLength(badLeading)))));
+  MOZ_RELEASE_ASSERT(!IsUtf8(AsChars(Span(badLeading, std::size(badLeading)))));
 
   // Byte-counts
 
   // 1
   static const char oneBytes[] = u8"A";  // U+0041 LATIN CAPITAL LETTER A
-  constexpr size_t oneBytesLen = ArrayLength(oneBytes);
+  constexpr size_t oneBytesLen = std::size(oneBytes);
   static_assert(oneBytesLen == 2, "U+0041 plus nul");
   MOZ_RELEASE_ASSERT(IsUtf8(Span(oneBytes, oneBytesLen)));
 
   // 2
   static const char twoBytes[] = u8"؆";  // U+0606 ARABIC-INDIC CUBE ROOT
-  constexpr size_t twoBytesLen = ArrayLength(twoBytes);
+  constexpr size_t twoBytesLen = std::size(twoBytes);
   static_assert(twoBytesLen == 3, "U+0606 in two bytes plus nul");
   MOZ_RELEASE_ASSERT(IsUtf8(Span(twoBytes, twoBytesLen)));
 
@@ -278,7 +270,7 @@ static void TestIsUtf8() {
 
   // 3
   static const char threeBytes[] = u8"᨞";  // U+1A1E BUGINESE PALLAWA
-  constexpr size_t threeBytesLen = ArrayLength(threeBytes);
+  constexpr size_t threeBytesLen = std::size(threeBytes);
   static_assert(threeBytesLen == 4, "U+1A1E in three bytes plus nul");
   MOZ_RELEASE_ASSERT(IsUtf8(Span(threeBytes, threeBytesLen)));
 
@@ -287,7 +279,7 @@ static void TestIsUtf8() {
   // 4
   static const char fourBytes[] =
       u8"🁡";  // U+1F061 DOMINO TILE HORIZONTAL-06-06
-  constexpr size_t fourBytesLen = ArrayLength(fourBytes);
+  constexpr size_t fourBytesLen = std::size(fourBytes);
   static_assert(fourBytesLen == 5, "U+1F061 in four bytes plus nul");
   MOZ_RELEASE_ASSERT(IsUtf8(Span(fourBytes, fourBytesLen)));
 
@@ -295,7 +287,7 @@ static void TestIsUtf8() {
 
   // Max code point
   static const char maxCodePoint[] = u8"􏿿";  // U+10FFFF
-  constexpr size_t maxCodePointLen = ArrayLength(maxCodePoint);
+  constexpr size_t maxCodePointLen = std::size(maxCodePoint);
   static_assert(maxCodePointLen == 5, "U+10FFFF in four bytes plus nul");
   MOZ_RELEASE_ASSERT(IsUtf8(Span(maxCodePoint, maxCodePointLen)));
 
@@ -304,7 +296,7 @@ static void TestIsUtf8() {
   // One past max code point
   static const unsigned char onePastMaxCodePoint[] = {0xF4, 0x90, 0x80, 0x80,
                                                       0x0};
-  constexpr size_t onePastMaxCodePointLen = ArrayLength(onePastMaxCodePoint);
+  constexpr size_t onePastMaxCodePointLen = std::size(onePastMaxCodePoint);
   MOZ_RELEASE_ASSERT(
       !IsUtf8(AsChars(Span(onePastMaxCodePoint, onePastMaxCodePointLen))));
 
@@ -317,21 +309,21 @@ static void TestIsUtf8() {
 
   static const unsigned char justBeforeSurrogates[] = {0xED, 0x9F, 0xBF, 0x0};
   constexpr size_t justBeforeSurrogatesLen =
-      ArrayLength(justBeforeSurrogates) - 1;
+      std::size(justBeforeSurrogates) - 1;
   MOZ_RELEASE_ASSERT(
       IsUtf8(AsChars(Span(justBeforeSurrogates, justBeforeSurrogatesLen))));
 
   ExpectValidCodePoint(justBeforeSurrogates, 0xD7FF);
 
   static const unsigned char leastSurrogate[] = {0xED, 0xA0, 0x80, 0x0};
-  constexpr size_t leastSurrogateLen = ArrayLength(leastSurrogate) - 1;
+  constexpr size_t leastSurrogateLen = std::size(leastSurrogate) - 1;
   MOZ_RELEASE_ASSERT(!IsUtf8(AsChars(Span(leastSurrogate, leastSurrogateLen))));
 
   ExpectBadCodePoint(leastSurrogate, 0xD800, 3);
 
   static const unsigned char arbitraryHighSurrogate[] = {0xED, 0xA2, 0x87, 0x0};
   constexpr size_t arbitraryHighSurrogateLen =
-      ArrayLength(arbitraryHighSurrogate) - 1;
+      std::size(arbitraryHighSurrogate) - 1;
   MOZ_RELEASE_ASSERT(!IsUtf8(
       AsChars(Span(arbitraryHighSurrogate, arbitraryHighSurrogateLen))));
 
@@ -339,22 +331,21 @@ static void TestIsUtf8() {
 
   static const unsigned char arbitraryLowSurrogate[] = {0xED, 0xB7, 0xAF, 0x0};
   constexpr size_t arbitraryLowSurrogateLen =
-      ArrayLength(arbitraryLowSurrogate) - 1;
+      std::size(arbitraryLowSurrogate) - 1;
   MOZ_RELEASE_ASSERT(
       !IsUtf8(AsChars(Span(arbitraryLowSurrogate, arbitraryLowSurrogateLen))));
 
   ExpectBadCodePoint(arbitraryLowSurrogate, 0xDDEF, 3);
 
   static const unsigned char greatestSurrogate[] = {0xED, 0xBF, 0xBF, 0x0};
-  constexpr size_t greatestSurrogateLen = ArrayLength(greatestSurrogate) - 1;
+  constexpr size_t greatestSurrogateLen = std::size(greatestSurrogate) - 1;
   MOZ_RELEASE_ASSERT(
       !IsUtf8(AsChars(Span(greatestSurrogate, greatestSurrogateLen))));
 
   ExpectBadCodePoint(greatestSurrogate, 0xDFFF, 3);
 
   static const unsigned char justAfterSurrogates[] = {0xEE, 0x80, 0x80, 0x0};
-  constexpr size_t justAfterSurrogatesLen =
-      ArrayLength(justAfterSurrogates) - 1;
+  constexpr size_t justAfterSurrogatesLen = std::size(justAfterSurrogates) - 1;
   MOZ_RELEASE_ASSERT(
       IsUtf8(AsChars(Span(justAfterSurrogates, justAfterSurrogatesLen))));
 
@@ -749,7 +740,3 @@ int main() {
   TestDecodeOneUtf8CodePoint();
   return 0;
 }
-
-#if defined(__clang__) && (__clang_major__ >= 6)
-#  pragma clang diagnostic pop
-#endif

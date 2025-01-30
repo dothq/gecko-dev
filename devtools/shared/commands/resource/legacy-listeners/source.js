@@ -23,7 +23,11 @@ const ResourceCommand = require("resource://devtools/shared/commands/resource/re
  * - isBlackBoxed {Boolean}: Specifying whether the source actor's 'black-boxed' flag is set.
  * - extensionName {null|String}: If the source comes from an add-on, the add-on name.
  */
-module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
+module.exports = async function ({
+  targetCommand,
+  targetFront,
+  onAvailableArray,
+}) {
   const isBrowserToolbox =
     targetCommand.descriptorFront.isBrowserProcessDescriptor;
   const isNonTopLevelFrameTarget =
@@ -37,6 +41,7 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
   }
 
   const threadFront = await targetFront.getFront("thread");
+  await threadFront.attach({});
 
   // Use a list of all notified SourceFront as we don't have a newSource event for all sources
   // but we sometime get sources notified both via newSource event *and* sources() method...
@@ -50,9 +55,7 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
       return;
     }
     sourcesActorIDCache.add(source.actor);
-    // source is a SourceActor's form, add the resourceType attribute on it
-    source.resourceType = ResourceCommand.TYPES.SOURCE;
-    onAvailable([source]);
+    onAvailableArray([[ResourceCommand.TYPES.SOURCE, [source]]]);
   });
 
   // Forward already existing sources
@@ -81,8 +84,6 @@ module.exports = async function ({ targetCommand, targetFront, onAvailable }) {
   });
   for (const source of sources) {
     sourcesActorIDCache.add(source.actor);
-    // source is a SourceActor's form, add the resourceType attribute on it
-    source.resourceType = ResourceCommand.TYPES.SOURCE;
   }
-  onAvailable(sources);
+  onAvailableArray([[ResourceCommand.TYPES.SOURCE, sources]]);
 };

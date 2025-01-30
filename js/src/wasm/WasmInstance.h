@@ -25,8 +25,8 @@
 #include <functional>
 
 #include "gc/Barrier.h"
-#include "gc/Zone.h"
-#include "js/Stack.h"  // JS::NativeStackLimit
+#include "js/shadow/Zone.h"  // for BarrierState
+#include "js/Stack.h"        // JS::NativeStackLimit
 #include "js/TypeDecls.h"
 #include "vm/SharedMem.h"
 #include "wasm/WasmExprType.h"  // for ResultType
@@ -50,10 +50,10 @@ class StoreBuffer;
 
 namespace wasm {
 
-using mozilla::Atomic;
-
+struct FuncDefInstanceData;
 class FuncImport;
 struct FuncImportInstanceData;
+struct FuncExportInstanceData;
 struct MemoryDesc;
 struct MemoryInstanceData;
 class GlobalDesc;
@@ -62,6 +62,7 @@ struct TableInstanceData;
 struct TagDesc;
 struct TagInstanceData;
 struct TypeDefInstanceData;
+struct CallRefMetrics;
 class WasmFrameIter;
 
 // Instance represents a wasm instance and provides all the support for runtime
@@ -93,9 +94,9 @@ class alignas(16) Instance {
   // See "Linear memory addresses and bounds checking" in WasmMemory.cpp.
   uintptr_t memory0BoundsCheckLimit_;
 
-  // Null or a pointer to a per-process builtin thunk that will invoke the Debug
+  // Null or a pointer to a per-module builtin stub that will invoke the Debug
   // Trap Handler.
-  void* debugTrapHandler_;
+  void* debugStub_;
 
   // The containing JS::Realm.
   JS::Realm* realm_;
@@ -117,10 +118,14 @@ class alignas(16) Instance {
   // Usually equal to cx->stackLimitForJitCode(JS::StackForUntrustedScript),
   // but can be racily set to trigger immediate trap as an opportunity to
   // CheckForInterrupt without an additional branch.
-  Atomic<JS::NativeStackLimit, mozilla::Relaxed> stackLimit_;
+  mozilla::Atomic<JS::NativeStackLimit, mozilla::Relaxed> stackLimit_;
 
   // Set to 1 when wasm should call CheckForInterrupt.
-  Atomic<uint32_t, mozilla::Relaxed> interrupt_;
+  mozilla::Atomic<uint32_t, mozilla::Relaxed> interrupt_;
+
+  // Boolean value set to true when instance code is executed on a suspendable
+  // stack. Aligned to int32_t to be used on JIT code.
+  int32_t onSuspendableStack_;
 
   // The address of the realm()->zone()->needsIncrementalBarrier(). This is
   // specific to this instance and not a process wide field, and so it cannot
@@ -191,6 +196,11 @@ class alignas(16) Instance {
   // worthwhile.
   uint32_t* debugFilter_;
 
+  // A pointer to an array of metrics for all the call_ref's in this instance.
+  // This is only used with lazy tiering for collecting speculative inlining
+  // information.
+  CallRefMetrics* callRefMetrics_;
+
   // The exclusive maximum index of a global that has been initialized so far.
   uint32_t maxInitializedGlobalsIndexPlus1_;
 
@@ -204,15 +214,25 @@ class alignas(16) Instance {
   const void* addressOfGCZealModeBits_;
 #endif
 
+  // Pointer to a per-module builtin stub that will request tier-up for the
+  // wasm function that calls it.
+  void* requestTierUpStub_ = nullptr;
+
+  // Pointer to a per-module builtin stub that does the OOL component of a
+  // call-ref metrics update.
+  void* updateCallRefMetricsStub_ = nullptr;
+
   // The data must be the last field.  Globals for the module start here
   // and are inline in this structure.  16-byte alignment is required for SIMD
   // data.
   MOZ_ALIGNED_DECL(16, char data_);
 
   // Internal helpers:
+  FuncDefInstanceData* funcDefInstanceData(uint32_t funcIndex) const;
   TypeDefInstanceData* typeDefInstanceData(uint32_t typeIndex) const;
   const void* addressOfGlobalCell(const GlobalDesc& globalDesc) const;
-  FuncImportInstanceData& funcImportInstanceData(const FuncImport& fi);
+  FuncImportInstanceData& funcImportInstanceData(uint32_t funcIndex);
+  FuncExportInstanceData& funcExportInstanceData(uint32_t funcExportIndex);
   MemoryInstanceData& memoryInstanceData(uint32_t memoryIndex) const;
   TableInstanceData& tableInstanceData(uint32_t tableIndex) const;
   TagInstanceData& tagInstanceData(uint32_t tagIndex) const;
@@ -251,6 +271,9 @@ class alignas(16) Instance {
   // takes |highestByteVisitedInPrevFrame|, which is the address of the
   // highest byte scanned in the frame below this one on the stack, and in
   // turn it returns the address of the highest byte scanned in this frame.
+  //
+  // The method does not assert RootMarkingPhase since it can be used to trace
+  // suspended stacks.
   uintptr_t traceFrame(JSTracer* trc, const wasm::WasmFrameIter& wfi,
                        uint8_t* nextPC,
                        uintptr_t highestByteVisitedInPrevFrame);
@@ -262,8 +285,14 @@ class alignas(16) Instance {
   static constexpr size_t offsetOfMemory0BoundsCheckLimit() {
     return offsetof(Instance, memory0BoundsCheckLimit_);
   }
-  static constexpr size_t offsetOfDebugTrapHandler() {
-    return offsetof(Instance, debugTrapHandler_);
+  static constexpr size_t offsetOfDebugStub() {
+    return offsetof(Instance, debugStub_);
+  }
+  static constexpr size_t offsetOfRequestTierUpStub() {
+    return offsetof(Instance, requestTierUpStub_);
+  }
+  static constexpr size_t offsetOfUpdateCallRefMetricsStub() {
+    return offsetof(Instance, updateCallRefMetricsStub_);
   }
 
   static constexpr size_t offsetOfRealm() { return offsetof(Instance, realm_); }
@@ -282,6 +311,9 @@ class alignas(16) Instance {
   }
   static constexpr size_t offsetOfInterrupt() {
     return offsetof(Instance, interrupt_);
+  }
+  static constexpr size_t offsetOfOnSuspendableStack() {
+    return offsetof(Instance, onSuspendableStack_);
   }
   static constexpr size_t offsetOfAddressOfNeedsIncrementalBarrier() {
     return offsetof(Instance, addressOfNeedsIncrementalBarrier_);
@@ -307,6 +339,9 @@ class alignas(16) Instance {
   static constexpr size_t offsetOfDebugFilter() {
     return offsetof(Instance, debugFilter_);
   }
+  static constexpr size_t offsetOfCallRefMetrics() {
+    return offsetof(Instance, callRefMetrics_);
+  }
   static constexpr size_t offsetOfData() { return offsetof(Instance, data_); }
   static constexpr size_t offsetInData(size_t offset) {
     return offsetOfData() + offset;
@@ -321,8 +356,12 @@ class alignas(16) Instance {
 #endif
 
   JSContext* cx() const { return cx_; }
-  void* debugTrapHandler() const { return debugTrapHandler_; }
-  void setDebugTrapHandler(void* newHandler) { debugTrapHandler_ = newHandler; }
+  void* debugStub() const { return debugStub_; }
+  void setDebugStub(void* newStub) { debugStub_ = newStub; }
+  void setRequestTierUpStub(void* newStub) { requestTierUpStub_ = newStub; }
+  void setUpdateCallRefMetricsStub(void* newStub) {
+    updateCallRefMetricsStub_ = newStub;
+  }
   JS::Realm* realm() const { return realm_; }
   bool debugEnabled() const { return !!maybeDebug_; }
   DebugState& debug() { return *maybeDebug_; }
@@ -342,14 +381,20 @@ class alignas(16) Instance {
   bool isInterrupted() const;
   void resetInterrupt(JSContext* cx);
 
+  void setTemporaryStackLimit(JS::NativeStackLimit limit);
+  void resetTemporaryStackLimit(JSContext* cx);
+
+  int32_t computeInitialHotnessCounter(uint32_t funcIndex);
+  void resetHotnessCounter(uint32_t funcIndex);
+  int32_t readHotnessCounter(uint32_t funcIndex) const;
+  void submitCallRefHints(uint32_t funcIndex);
+
   bool debugFilter(uint32_t funcIndex) const;
   void setDebugFilter(uint32_t funcIndex, bool value);
 
   const Code& code() const { return *code_; }
-  inline const CodeTier& code(Tier t) const;
-  inline uint8_t* codeBase(Tier t) const;
-  inline const MetadataTier& metadata(Tier t) const;
-  inline const Metadata& metadata() const;
+  inline const CodeMetadata& codeMeta() const;
+  inline const CodeMetadataForAsmJS* codeMetaForAsmJS() const;
   inline bool isAsmJS() const;
 
   // This method returns a pointer to the GC object that owns this Instance.
@@ -360,11 +405,16 @@ class alignas(16) Instance {
   WasmInstanceObject* object() const;
   WasmInstanceObject* objectUnbarriered() const;
 
+  // Get or create the exported function wrapper for a function index.
+
+  [[nodiscard]] bool getExportedFunction(JSContext* cx, uint32_t funcIndex,
+                                         MutableHandleFunction result);
+
   // Execute the given export given the JS call arguments, storing the return
   // value in args.rval.
 
   [[nodiscard]] bool callExport(JSContext* cx, uint32_t funcIndex,
-                                CallArgs args,
+                                const CallArgs& args,
                                 CoercionLevel level = CoercionLevel::Spec);
 
   // Exception handling support
@@ -437,7 +487,9 @@ class alignas(16) Instance {
 
   // about:memory reporting:
 
-  void addSizeOfMisc(MallocSizeOf mallocSizeOf, SeenSet<Metadata>* seenMetadata,
+  void addSizeOfMisc(mozilla::MallocSizeOf mallocSizeOf,
+                     SeenSet<CodeMetadata>* seenCodeMeta,
+                     SeenSet<CodeMetadataForAsmJS>* seenCodeMetaForAsmJS,
                      SeenSet<Code>* seenCode, SeenSet<Table>* seenTables,
                      size_t* code, size_t* data) const;
 
@@ -501,11 +553,11 @@ class alignas(16) Instance {
                                 uint64_t byteLen, uint8_t* memBase);
   static int32_t memDiscardShared_m64(Instance* instance, uint64_t byteOffset,
                                       uint64_t byteLen, uint8_t* memBase);
-  static void* tableGet(Instance* instance, uint32_t index,
+  static void* tableGet(Instance* instance, uint32_t address,
                         uint32_t tableIndex);
   static uint32_t tableGrow(Instance* instance, void* initValue, uint32_t delta,
                             uint32_t tableIndex);
-  static int32_t tableSet(Instance* instance, uint32_t index, void* value,
+  static int32_t tableSet(Instance* instance, uint32_t address, void* value,
                           uint32_t tableIndex);
   static uint32_t tableSize(Instance* instance, uint32_t tableIndex);
   static int32_t tableInit(Instance* instance, uint32_t dstOffset,
@@ -555,7 +607,6 @@ class alignas(16) Instance {
                             uint32_t segIndex);
   static int32_t arrayInitData(Instance* instance, void* array, uint32_t index,
                                uint32_t segByteOffset, uint32_t numElements,
-                               TypeDefInstanceData* typeDefData,
                                uint32_t segIndex);
   static int32_t arrayInitElem(Instance* instance, void* array, uint32_t index,
                                uint32_t segOffset, uint32_t numElements,
@@ -571,11 +622,11 @@ class alignas(16) Instance {
   static int32_t intrI8VecMul(Instance* instance, uint32_t dest, uint32_t src1,
                               uint32_t src2, uint32_t len, uint8_t* memBase);
 
+#ifdef ENABLE_WASM_JS_STRING_BUILTINS
   static int32_t stringTest(Instance* instance, void* stringArg);
   static void* stringCast(Instance* instance, void* stringArg);
   static void* stringFromCharCodeArray(Instance* instance, void* arrayArg,
-                                       uint32_t arrayStart,
-                                       uint32_t arrayCount);
+                                       uint32_t arrayStart, uint32_t arrayEnd);
   static int32_t stringIntoCharCodeArray(Instance* instance, void* stringArg,
                                          void* arrayArg, uint32_t arrayStart);
   static void* stringFromCharCode(Instance* instance, uint32_t charCode);
@@ -588,15 +639,17 @@ class alignas(16) Instance {
   static void* stringConcat(Instance* instance, void* firstStringArg,
                             void* secondStringArg);
   static void* stringSubstring(Instance* instance, void* stringArg,
-                               int32_t startIndex, int32_t endIndex);
+                               uint32_t startIndex, uint32_t endIndex);
   static int32_t stringEquals(Instance* instance, void* firstStringArg,
                               void* secondStringArg);
   static int32_t stringCompare(Instance* instance, void* firstStringArg,
                                void* secondStringArg);
+#endif  // ENABLE_WASM_JS_STRING_BUILTINS
 };
 
 bool ResultsToJSValue(JSContext* cx, ResultType type, void* registerResultLoc,
-                      Maybe<char*> stackResultsLoc, MutableHandleValue rval,
+                      mozilla::Maybe<char*> stackResultsLoc,
+                      MutableHandleValue rval,
                       CoercionLevel level = CoercionLevel::Spec);
 
 // Report an error to `cx` and mark it as a 'trap' so that it cannot be caught

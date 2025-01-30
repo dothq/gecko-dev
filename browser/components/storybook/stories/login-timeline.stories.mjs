@@ -4,7 +4,6 @@
 
 import { html } from "lit.all.mjs";
 // Imported for side-effects.
-// eslint-disable-next-line import/no-unassigned-import
 import "../../aboutlogins/content/components/login-timeline.mjs";
 
 export default {
@@ -14,8 +13,9 @@ export default {
 
 window.MozXULElement.insertFTLIfNeeded("browser/aboutLogins.ftl");
 
-const Template = ({ historyItems }) =>
-  html` <login-timeline .history=${historyItems}></login-timeline> `;
+const Template = ({ historyItems }) => html`
+  <login-timeline .history=${historyItems}></login-timeline>
+`;
 
 const ACTION_ID_CREATED = "login-item-timeline-action-created";
 const ACTION_ID_UPDATED = "login-item-timeline-action-updated";

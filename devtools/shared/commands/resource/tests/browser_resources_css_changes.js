@@ -11,9 +11,8 @@ add_task(async function () {
     "data:text/html,<body style='color: lime;'>CSS Changes</body>"
   );
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const { client, resourceCommand, targetCommand } =
+    await initResourceCommand(tab);
 
   // CSS_CHANGE watcher doesn't record modification made before watching,
   // so we have to start watching before doing any DOM mutation.
@@ -39,6 +38,12 @@ add_task(async function () {
   await resourceCommand.watchResources([resourceCommand.TYPES.CSS_CHANGE], {
     onAvailable: resources => availableResources.push(...resources),
   });
+
+  // There is no guarantee that the CSS change will be already available when calling watchResources,
+  // so wait for it to be received.
+  info("Wait for CSS change to be received");
+  await waitFor(() => availableResources.length == 1);
+
   assertResource(
     availableResources[0],
     { index: 0, property: "color", value: "black" },

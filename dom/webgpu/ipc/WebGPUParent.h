@@ -48,12 +48,11 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
   explicit WebGPUParent();
 
   ipc::IPCResult RecvInstanceRequestAdapter(
-      const dom::GPURequestAdapterOptions& aOptions,
-      const nsTArray<RawId>& aTargetIds,
+      const dom::GPURequestAdapterOptions& aOptions, RawId aAdapterId,
       InstanceRequestAdapterResolver&& resolver);
   ipc::IPCResult RecvAdapterRequestDevice(
       RawId aAdapterId, const ipc::ByteBuf& aByteBuf, RawId aDeviceId,
-      AdapterRequestDeviceResolver&& resolver);
+      RawId aQueueId, AdapterRequestDeviceResolver&& resolver);
   ipc::IPCResult RecvAdapterDrop(RawId aAdapterId);
   ipc::IPCResult RecvDeviceDestroy(RawId aDeviceId);
   ipc::IPCResult RecvDeviceDrop(RawId aDeviceId);
@@ -70,6 +69,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
   ipc::IPCResult RecvTextureDrop(RawId aTextureId);
   ipc::IPCResult RecvTextureViewDrop(RawId aTextureViewId);
   ipc::IPCResult RecvSamplerDrop(RawId aSamplerId);
+  ipc::IPCResult RecvQuerySetDrop(RawId aQuerySetId);
   ipc::IPCResult RecvCommandEncoderFinish(
       RawId aEncoderId, RawId aDeviceId,
       const dom::GPUCommandBufferDescriptor& aDesc);
@@ -152,6 +152,8 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
 
   bool UseExternalTextureForSwapChain(ffi::WGPUSwapChainId aSwapChainId);
 
+  void DisableExternalTextureForSwapChain(ffi::WGPUSwapChainId aSwapChainId);
+
   bool EnsureExternalTextureForSwapChain(ffi::WGPUSwapChainId aSwapChainId,
                                          ffi::WGPUDeviceId aDeviceId,
                                          ffi::WGPUTextureId aTextureId,
@@ -176,9 +178,11 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
     return ForwardError(Some(aDeviceId), aError);
   }
 
+  ffi::WGPUGlobal* GetContext() const { return mContext.get(); }
+
  private:
-  static void MapCallback(ffi::WGPUBufferMapAsyncStatus aStatus,
-                          uint8_t* aUserData);
+  static void MapCallback(uint8_t* aUserData,
+                          ffi::WGPUBufferMapAsyncStatus aStatus);
   static void DeviceLostCallback(uint8_t* aUserData, uint8_t aReason,
                                  const char* aMessage);
   void DeallocBufferShmem(RawId aBufferId);
@@ -224,16 +228,6 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
 
   // Shared handle of wgpu device's fence.
   std::unordered_map<RawId, RefPtr<gfx::FileHandleWrapper>> mDeviceFenceHandles;
-
-  // Store DeviceLostRequest structs for each device as unique_ptrs mapped
-  // to their device ids. We keep these unique_ptrs alive as long as the
-  // device is alive.
-  struct DeviceLostRequest {
-    WeakPtr<WebGPUParent> mParent;
-    RawId mDeviceId;
-  };
-  std::unordered_map<RawId, std::unique_ptr<DeviceLostRequest>>
-      mDeviceLostRequests;
 };
 
 }  // namespace webgpu

@@ -120,6 +120,7 @@ struct WorkerLoadInfoData {
   Maybe<ServiceWorkerDescriptor> mServiceWorkerDescriptor;
   Maybe<ServiceWorkerRegistrationDescriptor>
       mServiceWorkerRegistrationDescriptor;
+  Maybe<ClientInfo> mSourceInfo;
 
   Maybe<ServiceWorkerDescriptor> mParentController;
 
@@ -147,7 +148,7 @@ struct WorkerLoadInfoData {
   bool mShouldResistFingerprinting;
   Maybe<RFPTarget> mOverriddenFingerprintingSettings;
   OriginAttributes mOriginAttributes;
-  bool mIsThirdPartyContextToTopWindow;
+  bool mIsThirdPartyContext;
 
   enum {
     eNotSet,

@@ -13,52 +13,19 @@ function setup() {
 }
 setup();
 
-/**
- * Checks for updates and makes sure that the update process does not proceed
- * beyond the downloading stage.
- */
-async function downloadUpdate() {
-  let patches = getRemotePatchString({});
-  let updateString = getRemoteUpdateString({}, patches);
-  gResponseBody = getRemoteUpdatesXMLString(updateString);
-
-  let { updates } = await waitForUpdateCheck(true);
-
-  initMockIncrementalDownload();
-  gIncrementalDownloadErrorType = 3;
-
-  let downloadRestrictionHitPromise = new Promise(resolve => {
-    let downloadRestrictionHitListener = (subject, topic) => {
-      Services.obs.removeObserver(downloadRestrictionHitListener, topic);
-      resolve();
-    };
-    Services.obs.addObserver(
-      downloadRestrictionHitListener,
-      "update-download-restriction-hit"
-    );
-  });
-
-  let bestUpdate = gAUS.selectUpdate(updates);
-  let success = await gAUS.downloadUpdate(bestUpdate, false);
-  Assert.ok(success, "Update download should have started");
-  return downloadRestrictionHitPromise;
-}
-
 add_task(async function onlyDownloadUpdatesThisSession() {
   gAUS.onlyDownloadUpdatesThisSession = true;
 
-  await downloadUpdate();
+  await downloadUpdate({ expectDownloadRestriction: true });
 
   Assert.ok(
-    !gUpdateManager.readyUpdate,
+    !(await gUpdateManager.getReadyUpdate()),
     "There should not be a ready update. The update should still be downloading"
   );
-  Assert.ok(
-    !!gUpdateManager.downloadingUpdate,
-    "A downloading update should exist"
-  );
+  const downloadingUpdate = await gUpdateManager.getDownloadingUpdate();
+  Assert.ok(!!downloadingUpdate, "A downloading update should exist");
   Assert.equal(
-    gUpdateManager.downloadingUpdate.state,
+    downloadingUpdate.state,
     STATE_DOWNLOADING,
     "The downloading update should still be in the downloading state"
   );

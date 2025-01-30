@@ -9,9 +9,11 @@
 
 #include "2D.h"
 #include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkFontTypes.h"
 #include "skia/include/core/SkPathEffect.h"
 #include "skia/include/core/SkPathTypes.h"
 #include "skia/include/core/SkShader.h"
+#include "skia/include/core/SkTileMode.h"
 #include "skia/include/effects/SkDashPathEffect.h"
 #include "mozilla/Assertions.h"
 #include <cmath>
@@ -35,10 +37,10 @@ static inline SkColorType GfxFormatToSkiaColorType(SurfaceFormat format) {
     case SurfaceFormat::R8G8B8A8:
       return kRGBA_8888_SkColorType;
     case SurfaceFormat::A8R8G8B8:
-      MOZ_DIAGNOSTIC_ASSERT(false, "A8R8G8B8 unsupported by Skia");
+      MOZ_DIAGNOSTIC_CRASH("A8R8G8B8 unsupported by Skia");
       return kRGBA_8888_SkColorType;
     default:
-      MOZ_DIAGNOSTIC_ASSERT(false, "Unknown surface format");
+      MOZ_DIAGNOSTIC_CRASH("Unknown surface format");
       return kRGBA_8888_SkColorType;
   }
 }
@@ -271,6 +273,13 @@ static inline Point SkPointToPoint(const SkPoint& aPoint) {
 static inline Rect SkRectToRect(const SkRect& aRect) {
   return Rect(SkScalarToFloat(aRect.x()), SkScalarToFloat(aRect.y()),
               SkScalarToFloat(aRect.width()), SkScalarToFloat(aRect.height()));
+}
+
+static inline RectDouble SkRectToRectDouble(const SkRect& aRect) {
+  double x = SkScalarToDouble(aRect.x());
+  double y = SkScalarToDouble(aRect.y());
+  return RectDouble(x, y, SkScalarToDouble(aRect.right()) - x,
+                    SkScalarToDouble(aRect.bottom()) - y);
 }
 
 static inline SkTileMode ExtendModeToTileMode(ExtendMode aMode, Axis aAxis) {

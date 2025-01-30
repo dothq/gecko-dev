@@ -25,11 +25,6 @@
  *
  */
 
-#ifdef __clang__
-#define adceqs adcseq
-#define ldmnedb ldmdbne
-#endif
-
 /* Prevent the stack from becoming executable */
 #if defined(__linux__) && defined(__ELF__)
 .section .note.GNU-stack,"",%progbits
@@ -44,6 +39,8 @@
 
 #include "pixman-arm-asm.h"
 #include "pixman-arm-simd-asm.h"
+
+	pixman_syntax_unified
 
 /* A head macro should do all processing which results in an output of up to
  * 16 bytes, as far as the final load instruction. The corresponding tail macro
@@ -127,7 +124,7 @@ generate_composite_function \
 
 .macro src_n_0565_init
         ldrh    SRC, [sp, #ARGS_STACK_OFFSET]
-        orr     SRC, SRC, lsl #16
+        orr     SRC, SRC, SRC, lsl #16
         mov     STRIDE_S, SRC
         mov     MASK, SRC
         mov     STRIDE_M, SRC
@@ -135,8 +132,8 @@ generate_composite_function \
 
 .macro src_n_8_init
         ldrb    SRC, [sp, #ARGS_STACK_OFFSET]
-        orr     SRC, SRC, lsl #8
-        orr     SRC, SRC, lsl #16
+        orr     SRC, SRC, SRC, lsl #8
+        orr     SRC, SRC, SRC, lsl #16
         mov     STRIDE_S, SRC
         mov     MASK, SRC
         mov     STRIDE_M, SRC
@@ -823,13 +820,13 @@ generate_composite_function \
 .macro over_white_8888_8888_ca_1pixel_tail
         mvn     TMP0, WK1
         teq     WK1, WK1, asr #32
-        bne     01f
-        bcc     03f
+        bne     1f
+        bcc     3f
         mov     WK3, WK1
-        b       02f
-01:     over_white_8888_8888_ca_combine WK1, WK3
-02:     pixst   , 4, 3, DST
-03:
+        b       2f
+1:      over_white_8888_8888_ca_combine WK1, WK3
+2:      pixst   , 4, 3, DST
+3:
 .endm
 
 .macro over_white_8888_8888_ca_2pixels_head
@@ -840,21 +837,21 @@ generate_composite_function \
         pixld   , 8, 3, DST
         mvn     TMP0, WK1
         teq     WK1, WK1, asr #32
-        bne     01f
+        bne     1f
         movcs   WK3, WK1
-        bcs     02f
+        bcs     2f
         teq     WK2, #0
-        beq     05f
-        b       02f
-01:     over_white_8888_8888_ca_combine WK1, WK3
-02:     mvn     TMP0, WK2
+        beq     5f
+        b       2f
+1:      over_white_8888_8888_ca_combine WK1, WK3
+2:      mvn     TMP0, WK2
         teq     WK2, WK2, asr #32
-        bne     03f
+        bne     3f
         movcs   WK4, WK2
-        b       04f
-03:     over_white_8888_8888_ca_combine WK2, WK4
-04:     pixst   , 8, 3, DST
-05:
+        b       4f
+3:      over_white_8888_8888_ca_combine WK2, WK4
+4:      pixst   , 8, 3, DST
+5:
 .endm
 
 .macro over_white_8888_8888_ca_process_head  cond, numbytes, firstreg, unaligned_src, unaligned_mask, preload
@@ -1025,7 +1022,7 @@ pixman_asm_function pixman_composite_over_n_8888_8888_ca_asm_armv6
         cmp     ip, #-1
         beq     pixman_composite_over_white_8888_8888_ca_asm_armv6
         /* else drop through... */
- pixman_end_asm_function
+pixman_end_asm_function
 generate_composite_function \
     pixman_composite_over_n_8888_8888_ca_asm_armv6_helper, 0, 32, 32 \
     FLAG_DST_READWRITE | FLAG_BRANCH_OVER | FLAG_PROCESS_CORRUPTS_PSR | FLAG_PROCESS_DOES_STORE | FLAG_SPILL_LINE_VARS | FLAG_PROCESS_CORRUPTS_SCRATCH | FLAG_PROCESS_CORRUPTS_WK0 \
@@ -1070,9 +1067,9 @@ generate_composite_function \
   .if \offset != 0
         ldrb    ORIG_W, [SRC, #\offset]
   .endif
-        beq     01f
+        beq     1f
         teq     STRIDE_M, #0xFF
-        beq     02f
+        beq     2f
  .endif
         uxtb16  SCRATCH, \d                 /* rb_dest */
         uxtb16  \d, \d, ror #8               /* ag_dest */
@@ -1082,13 +1079,13 @@ generate_composite_function \
         uxtab16 \d, \d, \d, ror #8
         mov     SCRATCH, SCRATCH, ror #8
         sel     \d, SCRATCH, \d
-        b       02f
+        b       2f
  .if \offset == 0
 48:     /* Last mov d,#0 of the set - used as part of shortcut for
          * source values all 0 */
  .endif
-01:     mov     \d, #0
-02:
+1:      mov     \d, #0
+2:
 .endm
 
 .macro in_reverse_8888_8888_tail  numbytes, reg1, reg2, reg3, reg4
@@ -1098,13 +1095,13 @@ generate_composite_function \
  .elseif \numbytes == 8
         teq     ORIG_W, WK\()\reg1
         teqeq   ORIG_W, ORIG_W, asr #32  /* all 0 or all -1? */
-        ldmnedb DST, {WK\()\reg1-WK\()\reg2}
+        ldmdbne DST, {WK\()\reg1-WK\()\reg2}
  .else
         teq     ORIG_W, WK\()\reg1
         teqeq   ORIG_W, WK\()\reg2
         teqeq   ORIG_W, WK\()\reg3
         teqeq   ORIG_W, ORIG_W, asr #32  /* all 0 or all -1? */
-        ldmnedb DST, {WK\()\reg1-WK\()\reg4}
+        ldmdbne DST, {WK\()\reg1-WK\()\reg4}
  .endif
         cmnne   DST, #0   /* clear C if NE */
         bcs     49f       /* no writes to dest if source all -1 */

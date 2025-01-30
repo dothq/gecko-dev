@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <dwrite.h>
+#include <float.h>
 #include "2D.h"
 #include "Logging.h"
 #include "ImageScaling.h"
@@ -957,12 +958,9 @@ class StreamingGeometrySink : public ID2D1SimplifiedGeometrySink {
                       ToPoint(aSegments[i].point3));
     }
   }
-  STDMETHOD(Close)() { /* Should never be called! */
-    return S_OK;
-  }
+  STDMETHOD(Close)() { /* Should never be called! */ return S_OK; }
   STDMETHOD_(void, SetSegmentFlags)
-  (D2D1_PATH_SEGMENT aFlags) { /* Should never be called! */
-  }
+  (D2D1_PATH_SEGMENT aFlags) { /* Should never be called! */ }
 
   STDMETHOD_(void, EndFigure)(D2D1_FIGURE_END aEnd) {
     AutoRestoreFP resetFloatingPoint;

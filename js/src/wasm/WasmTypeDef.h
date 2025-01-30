@@ -35,9 +35,6 @@
 namespace js {
 namespace wasm {
 
-using mozilla::CheckedInt32;
-using mozilla::MallocSizeOf;
-
 class RecGroup;
 
 //=========================================================================
@@ -130,8 +127,7 @@ class FuncType {
   ValType result(unsigned i) const { return results_[i]; }
   const ValTypeVector& results() const { return results_; }
 
-  void initImmediateTypeId(bool gcEnabled, bool isFinal,
-                           const TypeDef* superTypeDef,
+  void initImmediateTypeId(bool isFinal, const TypeDef* superTypeDef,
                            uint32_t recGroupLength);
   bool hasImmediateTypeId() const {
     return immediateTypeId_ != NO_IMMEDIATE_TYPE_ID;
@@ -148,31 +144,31 @@ class FuncType {
   HashNumber hash(const RecGroup* recGroup) const {
     HashNumber hn = 0;
     for (const ValType& vt : args_) {
-      hn = mozilla::AddToHash(hn, vt.forMatch(recGroup).hash());
+      hn = mozilla::AddToHash(hn, vt.forIsoEquals(recGroup).hash());
     }
     for (const ValType& vt : results_) {
-      hn = mozilla::AddToHash(hn, vt.forMatch(recGroup).hash());
+      hn = mozilla::AddToHash(hn, vt.forIsoEquals(recGroup).hash());
     }
     return hn;
   }
 
-  // Matches two function types for isorecursive equality. See
-  // "Matching type definitions" in WasmValType.h for more background.
-  static bool matches(const RecGroup* lhsRecGroup, const FuncType& lhs,
-                      const RecGroup* rhsRecGroup, const FuncType& rhs) {
+  // Compares two function types for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const RecGroup* lhsRecGroup, const FuncType& lhs,
+                        const RecGroup* rhsRecGroup, const FuncType& rhs) {
     if (lhs.args_.length() != rhs.args_.length() ||
         lhs.results_.length() != rhs.results_.length()) {
       return false;
     }
     for (uint32_t i = 0; i < lhs.args_.length(); i++) {
-      if (lhs.args_[i].forMatch(lhsRecGroup) !=
-          rhs.args_[i].forMatch(rhsRecGroup)) {
+      if (lhs.args_[i].forIsoEquals(lhsRecGroup) !=
+          rhs.args_[i].forIsoEquals(rhsRecGroup)) {
         return false;
       }
     }
     for (uint32_t i = 0; i < lhs.results_.length(); i++) {
-      if (lhs.results_[i].forMatch(lhsRecGroup) !=
-          rhs.results_[i].forMatch(rhsRecGroup)) {
+      if (lhs.results_[i].forIsoEquals(lhsRecGroup) !=
+          rhs.results_[i].forIsoEquals(rhsRecGroup)) {
         return false;
       }
     }
@@ -253,24 +249,36 @@ class FuncType {
 
 // The Module owns a dense array of StructType values that represent the
 // structure types that the module knows about.  It is created from the sparse
-// array of types in the ModuleEnvironment when the Module is created.
+// array of types in the ModuleMetadata when the Module is created.
 
-struct StructField {
+struct FieldType {
   StorageType type;
-  uint32_t offset;
   bool isMutable;
+
+  FieldType() : isMutable(false) {}
+  FieldType(StorageType type, bool isMutable)
+      : type(type), isMutable(isMutable) {}
 
   HashNumber hash(const RecGroup* recGroup) const {
     HashNumber hn = 0;
-    hn = mozilla::AddToHash(hn, type.forMatch(recGroup).hash());
+    hn = mozilla::AddToHash(hn, type.forIsoEquals(recGroup).hash());
     hn = mozilla::AddToHash(hn, HashNumber(isMutable));
     return hn;
   }
 
+  // Compares two field types for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const RecGroup* lhsRecGroup, const FieldType& lhs,
+                        const RecGroup* rhsRecGroup, const FieldType& rhs) {
+    return lhs.isMutable == rhs.isMutable &&
+           lhs.type.forIsoEquals(lhsRecGroup) ==
+               rhs.type.forIsoEquals(rhsRecGroup);
+  }
+
   // Checks if two struct fields are compatible in a given subtyping
   // relationship.
-  static bool canBeSubTypeOf(const StructField& subType,
-                             const StructField& superType) {
+  static bool canBeSubTypeOf(const FieldType& subType,
+                             const FieldType& superType) {
     // Mutable fields are invariant w.r.t. field types
     if (subType.isMutable && superType.isMutable) {
       return subType.type == superType.type;
@@ -285,67 +293,65 @@ struct StructField {
   }
 };
 
-using StructFieldVector = Vector<StructField, 0, SystemAllocPolicy>;
+using FieldTypeVector = Vector<FieldType, 0, SystemAllocPolicy>;
 
+using FieldOffsetVector = Vector<uint32_t, 2, SystemAllocPolicy>;
 using InlineTraceOffsetVector = Vector<uint32_t, 2, SystemAllocPolicy>;
 using OutlineTraceOffsetVector = Vector<uint32_t, 0, SystemAllocPolicy>;
 
 class StructType {
  public:
-  StructFieldVector fields_;  // Field type, offset, and mutability
-  uint32_t size_;             // The size of the type in bytes.
+  // Vector of the fields in this struct
+  FieldTypeVector fields_;
+  // The total size of this struct in bytes
+  uint32_t size_;
+  // The offset for every struct field
+  FieldOffsetVector fieldOffsets_;
+  // The offsets of fields that must be traced in the inline portion of wasm
+  // struct object.
   InlineTraceOffsetVector inlineTraceOffsets_;
+  // The offsets of fields that must be traced in the outline portion of wasm
+  // struct object.
   OutlineTraceOffsetVector outlineTraceOffsets_;
+  // Whether this struct only contains defaultable fields.
+  bool isDefaultable_;
 
  public:
-  StructType() : size_(0) {}
+  StructType() : size_(0), isDefaultable_(false) {}
 
-  explicit StructType(StructFieldVector&& fields)
+  explicit StructType(FieldTypeVector&& fields)
       : fields_(std::move(fields)), size_(0) {}
 
   StructType(StructType&&) = default;
   StructType& operator=(StructType&&) = default;
 
-  [[nodiscard]] bool clone(const StructType& src) {
-    if (!fields_.appendAll(src.fields_)) {
-      return false;
-    }
-    size_ = src.size_;
-    return true;
-  }
-
   [[nodiscard]] bool init();
 
-  bool isDefaultable() const {
-    for (auto& field : fields_) {
-      if (!field.type.isDefaultable()) {
-        return false;
-      }
-    }
-    return true;
+  bool isDefaultable() const { return isDefaultable_; }
+
+  uint32_t fieldOffset(uint32_t fieldIndex) const {
+    return fieldOffsets_[fieldIndex];
   }
 
   HashNumber hash(const RecGroup* recGroup) const {
     HashNumber hn = 0;
-    for (const StructField& field : fields_) {
+    for (const FieldType& field : fields_) {
       hn = mozilla::AddToHash(hn, field.hash(recGroup));
     }
     return hn;
   }
 
-  // Matches two struct types for isorecursive equality. See
-  // "Matching type definitions" in WasmValType.h for more background.
-  static bool matches(const RecGroup* lhsRecGroup, const StructType& lhs,
-                      const RecGroup* rhsRecGroup, const StructType& rhs) {
+  // Compares two struct types for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const RecGroup* lhsRecGroup, const StructType& lhs,
+                        const RecGroup* rhsRecGroup, const StructType& rhs) {
     if (lhs.fields_.length() != rhs.fields_.length()) {
       return false;
     }
     for (uint32_t i = 0; i < lhs.fields_.length(); i++) {
-      const StructField& lhsField = lhs.fields_[i];
-      const StructField& rhsField = rhs.fields_[i];
-      if (lhsField.isMutable != rhsField.isMutable ||
-          lhsField.type.forMatch(lhsRecGroup) !=
-              rhsField.type.forMatch(rhsRecGroup)) {
+      const FieldType& lhsField = lhs.fields_[i];
+      const FieldType& rhsField = rhs.fields_[i];
+      if (!FieldType::isoEquals(lhsRecGroup, lhsField, rhsRecGroup, rhsField)) {
         return false;
       }
     }
@@ -363,13 +369,15 @@ class StructType {
 
     // Every field that is in both superType and subType must be compatible
     for (uint32_t i = 0; i < superType.fields_.length(); i++) {
-      if (!StructField::canBeSubTypeOf(subType.fields_[i],
-                                       superType.fields_[i])) {
+      if (!FieldType::canBeSubTypeOf(subType.fields_[i],
+                                     superType.fields_[i])) {
         return false;
       }
     }
     return true;
   }
+
+  static bool createImmutable(const ValTypeVector& types, StructType* struct_);
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   WASM_DECLARE_FRIEND_SERIALIZE(StructType);
@@ -394,16 +402,16 @@ using StructTypeVector = Vector<StructType, 0, SystemAllocPolicy>;
 // Given that, it follows from (3) that all fields fall completely within
 // either the inline or outline areas; no field crosses the boundary.
 class StructLayout {
-  CheckedInt32 sizeSoFar = 0;
+  mozilla::CheckedInt32 sizeSoFar = 0;
   uint32_t structAlignment = 1;
 
  public:
   // The field adders return the offset of the the field.
-  CheckedInt32 addField(StorageType type);
+  mozilla::CheckedInt32 addField(StorageType type);
 
   // The close method rounds up the structure size to the appropriate
   // alignment and returns that size.
-  CheckedInt32 close();
+  mozilla::CheckedInt32 close();
 };
 
 //=========================================================================
@@ -412,14 +420,12 @@ class StructLayout {
 class ArrayType {
  public:
   // The kind of value stored in this array
-  StorageType elementType_;
-  // Whether this array is mutable or not
-  bool isMutable_;
+  FieldType fieldType_;
 
  public:
-  ArrayType() : isMutable_(false) {}
+  ArrayType() = default;
   ArrayType(StorageType elementType, bool isMutable)
-      : elementType_(elementType), isMutable_(isMutable) {}
+      : fieldType_(FieldType(elementType, isMutable)) {}
 
   ArrayType(const ArrayType&) = default;
   ArrayType& operator=(const ArrayType&) = default;
@@ -427,45 +433,26 @@ class ArrayType {
   ArrayType(ArrayType&&) = default;
   ArrayType& operator=(ArrayType&&) = default;
 
-  [[nodiscard]] bool clone(const ArrayType& src) {
-    elementType_ = src.elementType_;
-    isMutable_ = src.isMutable_;
-    return true;
-  }
-
-  bool isDefaultable() const { return elementType_.isDefaultable(); }
+  StorageType elementType() const { return fieldType_.type; }
+  bool isMutable() const { return fieldType_.isMutable; }
+  bool isDefaultable() const { return elementType().isDefaultable(); }
 
   HashNumber hash(const RecGroup* recGroup) const {
-    HashNumber hn = 0;
-    hn = mozilla::AddToHash(hn, elementType_.forMatch(recGroup).hash());
-    hn = mozilla::AddToHash(hn, HashNumber(isMutable_));
-    return hn;
+    return fieldType_.hash(recGroup);
   }
 
-  // Matches two array types for isorecursive equality. See
-  // "Matching type definitions" in WasmValType.h for more background.
-  static bool matches(const RecGroup* lhsRecGroup, const ArrayType& lhs,
-                      const RecGroup* rhsRecGroup, const ArrayType& rhs) {
-    return lhs.isMutable_ == rhs.isMutable_ &&
-           lhs.elementType_.forMatch(lhsRecGroup) ==
-               rhs.elementType_.forMatch(rhsRecGroup);
+  // Compares two array types for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const RecGroup* lhsRecGroup, const ArrayType& lhs,
+                        const RecGroup* rhsRecGroup, const ArrayType& rhs) {
+    return FieldType::isoEquals(lhsRecGroup, lhs.fieldType_, rhsRecGroup,
+                                rhs.fieldType_);
   }
 
   // Checks if two arrays are compatible in a given subtyping relationship.
   static bool canBeSubTypeOf(const ArrayType& subType,
                              const ArrayType& superType) {
-    // Mutable fields are invariant w.r.t. field types
-    if (subType.isMutable_ && superType.isMutable_) {
-      return subType.elementType_ == superType.elementType_;
-    }
-
-    // Immutable fields are covariant w.r.t. field types
-    if (!subType.isMutable_ && !superType.isMutable_) {
-      return StorageType::isSubTypeOf(subType.elementType_,
-                                      superType.elementType_);
-    }
-
-    return true;
+    return FieldType::canBeSubTypeOf(subType.fieldType_, superType.fieldType_);
   }
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -713,6 +700,8 @@ class TypeDef {
 
   bool isArrayType() const { return kind_ == TypeDefKind::Array; }
 
+  bool isGcType() const { return isStructType() || isArrayType(); }
+
   const FuncType& funcType() const {
     MOZ_ASSERT(isFuncType());
     return funcType_;
@@ -743,14 +732,15 @@ class TypeDef {
     return arrayType_;
   }
 
-  // Get a value that can be used for matching type definitions across
+  // Get a value that can be used for comparing type definitions across
   // different recursion groups.
-  static inline uintptr_t forMatch(const TypeDef* typeDef,
-                                   const RecGroup* recGroup);
+  static inline uintptr_t forIsoEquals(const TypeDef* typeDef,
+                                       const RecGroup* recGroup);
 
   HashNumber hash() const {
     HashNumber hn = HashNumber(kind_);
-    hn = mozilla::AddToHash(hn, TypeDef::forMatch(superTypeDef_, &recGroup()));
+    hn = mozilla::AddToHash(hn,
+                            TypeDef::forIsoEquals(superTypeDef_, &recGroup()));
     hn = mozilla::AddToHash(hn, isFinal_);
     switch (kind_) {
       case TypeDefKind::Func:
@@ -768,29 +758,29 @@ class TypeDef {
     return hn;
   }
 
-  // Matches two type definitions for isorecursive equality. See
-  // "Matching type definitions" in WasmValType.h for more background.
-  static bool matches(const TypeDef& lhs, const TypeDef& rhs) {
+  // Compares two type definitions for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const TypeDef& lhs, const TypeDef& rhs) {
     if (lhs.kind_ != rhs.kind_) {
       return false;
     }
     if (lhs.isFinal_ != rhs.isFinal_) {
       return false;
     }
-    if (TypeDef::forMatch(lhs.superTypeDef_, &lhs.recGroup()) !=
-        TypeDef::forMatch(rhs.superTypeDef_, &rhs.recGroup())) {
+    if (TypeDef::forIsoEquals(lhs.superTypeDef_, &lhs.recGroup()) !=
+        TypeDef::forIsoEquals(rhs.superTypeDef_, &rhs.recGroup())) {
       return false;
     }
     switch (lhs.kind_) {
       case TypeDefKind::Func:
-        return FuncType::matches(&lhs.recGroup(), lhs.funcType_,
-                                 &rhs.recGroup(), rhs.funcType_);
+        return FuncType::isoEquals(&lhs.recGroup(), lhs.funcType_,
+                                   &rhs.recGroup(), rhs.funcType_);
       case TypeDefKind::Struct:
-        return StructType::matches(&lhs.recGroup(), lhs.structType_,
-                                   &rhs.recGroup(), rhs.structType_);
+        return StructType::isoEquals(&lhs.recGroup(), lhs.structType_,
+                                     &rhs.recGroup(), rhs.structType_);
       case TypeDefKind::Array:
-        return ArrayType::matches(&lhs.recGroup(), lhs.arrayType_,
-                                  &rhs.recGroup(), rhs.arrayType_);
+        return ArrayType::isoEquals(&lhs.recGroup(), lhs.arrayType_,
+                                    &rhs.recGroup(), rhs.arrayType_);
       case TypeDefKind::None:
         MOZ_CRASH("can't match TypeDefKind::None");
     }
@@ -840,11 +830,12 @@ class TypeDef {
       return true;
     }
     const SuperTypeVector* subSTV = subTypeDef->superTypeVector();
+    const SuperTypeVector* superSTV = superTypeDef->superTypeVector();
 
-    // During construction of a recursion group, the super type vector may not
+    // During construction of a recursion group, the super type vectors may not
     // have been computed yet, in which case we need to fall back to a linear
     // search.
-    if (!subSTV) {
+    if (!subSTV || !superSTV) {
       while (subTypeDef) {
         if (subTypeDef == superTypeDef) {
           return true;
@@ -854,8 +845,12 @@ class TypeDef {
       return false;
     }
 
-    // The supertype vector does exist.  So check it points back here.
+    // The supertype vectors do exist. Check that they point to the right
+    // places.
+    MOZ_ASSERT(subSTV);
+    MOZ_ASSERT(superSTV);
     MOZ_ASSERT(subSTV->typeDef() == subTypeDef);
+    MOZ_ASSERT(superSTV->typeDef() == superTypeDef);
 
     // We need to check if `superTypeDef` is one of `subTypeDef`s super types
     // by checking in `subTypeDef`s super type vector. We can use the static
@@ -866,15 +861,14 @@ class TypeDef {
       return false;
     }
 
-    const SuperTypeVector* superSTV = superTypeDef->superTypeVector();
-    MOZ_ASSERT(superSTV);
-    MOZ_ASSERT(superSTV->typeDef() == superTypeDef);
-
     return subSTV->type(subTypingDepth) == superSTV;
   }
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   WASM_DECLARE_FRIEND_SERIALIZE(TypeDef);
+
+  inline void AddRef() const;
+  inline void Release() const;
 };
 
 using SharedTypeDef = RefPtr<const TypeDef>;
@@ -924,6 +918,10 @@ class RecGroup : public AtomicRefCounted<RecGroup> {
   // Compute the size in bytes of a recursion group with the specified amount
   // of types.
   static constexpr size_t sizeOfRecGroup(uint32_t numTypes) {
+    // TypeDef can find containing RecGroup using only a 32-bit offset
+    static_assert(offsetof(RecGroup, types_) + sizeof(TypeDef) * MaxTypes <=
+                  UINT32_MAX);
+    // We will not overflow in our calculation here
     static_assert(MaxTypes <= SIZE_MAX / sizeof(TypeDef));
     return sizeof(RecGroup) + sizeof(TypeDef) * numTypes;
   }
@@ -933,6 +931,9 @@ class RecGroup : public AtomicRefCounted<RecGroup> {
   // type definitions are initialized so that strong references to external
   // recursion groups are taken.
   static RefPtr<RecGroup> allocate(uint32_t numTypes) {
+    // Validation must ensure this
+    MOZ_RELEASE_ASSERT(numTypes <= MaxTypes);
+
     // Allocate the recursion group with the correct size
     RecGroup* recGroup = (RecGroup*)js_malloc(sizeOfRecGroup(numTypes));
     if (!recGroup) {
@@ -1006,7 +1007,7 @@ class RecGroup : public AtomicRefCounted<RecGroup> {
         }
         case TypeDefKind::Array: {
           const ArrayType& arrayType = typeDef.arrayType();
-          visitStorageType(arrayType.elementType_);
+          visitStorageType(arrayType.elementType());
           break;
         }
         case TypeDefKind::None: {
@@ -1062,6 +1063,16 @@ class RecGroup : public AtomicRefCounted<RecGroup> {
     return (uint32_t)groupTypeIndex;
   }
 
+  bool hasGcType() const {
+    for (uint32_t groupTypeIndex = 0; groupTypeIndex < numTypes();
+         groupTypeIndex++) {
+      if (type(groupTypeIndex).isGcType()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   HashNumber hash() const {
     HashNumber hn = 0;
     for (uint32_t i = 0; i < numTypes(); i++) {
@@ -1070,14 +1081,14 @@ class RecGroup : public AtomicRefCounted<RecGroup> {
     return hn;
   }
 
-  // Matches two recursion groups for isorecursive equality. See
-  // "Matching type definitions" in WasmValType.h for more background.
-  static bool matches(const RecGroup& lhs, const RecGroup& rhs) {
+  // Compares two recursion groups for isorecursive equality. See
+  // "Comparing type definitions" in WasmValType.h for more background.
+  static bool isoEquals(const RecGroup& lhs, const RecGroup& rhs) {
     if (lhs.numTypes() != rhs.numTypes()) {
       return false;
     }
     for (uint32_t i = 0; i < lhs.numTypes(); i++) {
-      if (!TypeDef::matches(lhs.type(i), rhs.type(i))) {
+      if (!TypeDef::isoEquals(lhs.type(i), rhs.type(i))) {
         return false;
       }
     }
@@ -1099,7 +1110,6 @@ using SharedRecGroupVector = Vector<SharedRecGroup, 0, SystemAllocPolicy>;
 // A type context holds the recursion groups and corresponding type definitions
 // defined in a module.
 class TypeContext : public AtomicRefCounted<TypeContext> {
-  FeatureArgs features_;
   // The pending recursion group that is currently being constructed
   MutableRecGroup pendingRecGroup_;
   // An in-order list of all the recursion groups defined in this module
@@ -1114,10 +1124,9 @@ class TypeContext : public AtomicRefCounted<TypeContext> {
 
  public:
   TypeContext() = default;
-  explicit TypeContext(const FeatureArgs& features) : features_(features) {}
   ~TypeContext();
 
-  size_t sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const {
+  size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
     return types_.sizeOfExcludingThis(mallocSizeOf) +
            moduleIndices_.shallowSizeOfExcludingThis(mallocSizeOf);
   }
@@ -1200,8 +1209,7 @@ class TypeContext : public AtomicRefCounted<TypeContext> {
     return true;
   }
 
-  // Finish creation of a recursion group after type definitions have been
-  // initialized. This must be paired with `startGroup`.
+  // Add a pre-existing recursion group to this type context.
   [[nodiscard]] bool addRecGroup(SharedRecGroup recGroup) {
     // We must not have a pending group
     MOZ_ASSERT(!pendingRecGroup_);
@@ -1248,6 +1256,15 @@ class TypeContext : public AtomicRefCounted<TypeContext> {
 
   const SharedRecGroupVector& groups() const { return recGroups_; }
 
+  bool hasGcType() const {
+    for (const SharedRecGroup& recGroup : groups()) {
+      if (recGroup->hasGcType()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Map from type definition to index
 
   uint32_t indexOf(const TypeDef& typeDef) const {
@@ -1290,8 +1307,8 @@ class TypeHandle {
 // misc
 
 /* static */
-inline uintptr_t TypeDef::forMatch(const TypeDef* typeDef,
-                                   const RecGroup* recGroup) {
+inline uintptr_t TypeDef::forIsoEquals(const TypeDef* typeDef,
+                                       const RecGroup* recGroup) {
   // TypeDef is aligned sufficiently to allow a tag to distinguish a local type
   // reference (index) from a non-local type reference (pointer).
   static_assert(alignof(TypeDef) > 1);
@@ -1299,7 +1316,10 @@ inline uintptr_t TypeDef::forMatch(const TypeDef* typeDef,
 
   // Return a tagged index for local type references
   if (typeDef && &typeDef->recGroup() == recGroup) {
-    return uintptr_t(recGroup->indexOf(typeDef)) | 0x1;
+    // recGroup->indexOf result is expected to be not greater than MaxTypes,
+    // and shall fit in 32-bit pointer without loss.
+    static_assert(MaxTypes <= 0x7FFFFFFF);
+    return (uintptr_t(recGroup->indexOf(typeDef)) << 1) | 0x1;
   }
 
   // Return an untagged pointer for non-local type references
@@ -1307,11 +1327,11 @@ inline uintptr_t TypeDef::forMatch(const TypeDef* typeDef,
 }
 
 /* static */
-inline MatchTypeCode MatchTypeCode::forMatch(PackedTypeCode ptc,
-                                             const RecGroup* recGroup) {
-  MatchTypeCode mtc = {};
+inline IsoEqualsTypeCode IsoEqualsTypeCode::forIsoEquals(
+    PackedTypeCode ptc, const RecGroup* recGroup) {
+  IsoEqualsTypeCode mtc = {};
   mtc.typeCode = PackedRepr(ptc.typeCode());
-  mtc.typeRef = TypeDef::forMatch(ptc.typeDef(), recGroup);
+  mtc.typeRef = TypeDef::forIsoEquals(ptc.typeDef(), recGroup);
   mtc.nullable = ptc.isNullable();
   return mtc;
 }
@@ -1335,14 +1355,17 @@ void RefType::AddRef() const {
   if (!isTypeRef()) {
     return;
   }
-  typeDef()->recGroup().AddRef();
+  typeDef()->AddRef();
 }
 void RefType::Release() const {
   if (!isTypeRef()) {
     return;
   }
-  typeDef()->recGroup().Release();
+  typeDef()->Release();
 }
+
+void TypeDef::AddRef() const { recGroup().AddRef(); }
+void TypeDef::Release() const { recGroup().Release(); }
 
 inline RefTypeHierarchy RefType::hierarchy() const {
   switch (kind()) {
@@ -1353,6 +1376,7 @@ inline RefTypeHierarchy RefType::hierarchy() const {
     case RefType::NoExtern:
       return RefTypeHierarchy::Extern;
     case RefType::Exn:
+    case RefType::NoExn:
       return RefTypeHierarchy::Exn;
     case RefType::Any:
     case RefType::None:
@@ -1471,6 +1495,11 @@ inline bool RefType::isSubTypeOf(RefType subType, RefType superType) {
 
   // None is the bottom type of the any hierarchy
   if (subType.isNone() && superType.hierarchy() == RefTypeHierarchy::Any) {
+    return true;
+  }
+
+  // No exn is the bottom type of the exn hierarchy
+  if (subType.isNoExn() && superType.hierarchy() == RefTypeHierarchy::Exn) {
     return true;
   }
 

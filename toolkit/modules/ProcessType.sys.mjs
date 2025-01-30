@@ -14,6 +14,7 @@ export const ProcessType = Object.freeze({
     rdd: "process-type-rdd",
     socket: "process-type-socket",
     utility: "process-type-utility",
+    forkServer: "process-type-forkserver",
 
     // Utility with actor names
     utility_audioDecoder_Generic:
@@ -29,6 +30,7 @@ export const ProcessType = Object.freeze({
     // Keys defined in dom/ipc/RemoteType.h
     extension: "process-type-extension",
     file: "process-type-file",
+    inference: "process-type-inference",
     prealloc: "process-type-prealloc",
     privilegedabout: "process-type-privilegedabout",
     privilegedmozilla: "process-type-privilegedmozilla",

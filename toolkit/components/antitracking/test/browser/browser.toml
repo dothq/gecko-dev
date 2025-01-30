@@ -1,11 +1,13 @@
 [DEFAULT]
-skip-if = ["os == 'linux' && (asan || tsan)"] # bug 1662229 - task exception
+skip-if = [
+  "os == 'linux' && os_version == '18.04' && asan", # bug 1662229 - task exception
+  "os == 'linux' && os_version == '18.04' && tsan", # bug 1662229 - task exception
+  "debug", # bug 1884982 - takes 20+ minutes to run on debug
+]
 prefs = [
   "dom.storage_access.prompt.testing=true", # Disable the Storage Access API prompts for all of the tests in this directory
   "dom.storage_access.prompt.testing.allow=true",
-  "dom.testing.sync-content-blocking-notifications=true",
   "dom.storage_access.frame_only=true", # Enable frame-only Storage Access API for all of the tests in this directory
-  "privacy.restrict3rdpartystorage.heuristic.window_open=true", # Enable the window.open() heuristics globally in this directory
   "privacy.restrict3rdpartystorage.heuristic.opened_window_after_interaction=true",
   "network.cookie.sameSite.laxByDefault=false", # Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
   "dom.security.https_first=false", # Disable https-first because of explicit http/https testing
@@ -39,6 +41,7 @@ support-files = [
   "empty-altsvc.js^headers^",
   "empty.html",
   "file_iframe_document_open.html",
+  "file_iframe_document_open_partitioned.html",
   "file_localStorage.html",
   "popup.html",
   "redirect.sjs",
@@ -104,9 +107,21 @@ skip-if = ["os == 'mac' && !debug"] # Bug 1503778, 1577362
 
 ["browser_localStorageEvents.js"]
 
+["browser_nimbus_3pcb.js"]
+
+["browser_nimbus_etp_features.js"]
+
+["browser_nimbus_thirdPartyTrackerCookieBlocking.js"]
+
 ["browser_onBeforeRequestNotificationForTrackingResources.js"]
 
 ["browser_onModifyRequestNotificationForTrackingResources.js"]
+
+["browser_partitionedABA.js"]
+
+["browser_partitionedABnavigatestToAA.js"]
+
+["browser_partitionedBlobSubresources.js"]
 
 ["browser_partitionedClearSiteDataHeader.js"]
 support-files = ["clearSiteData.sjs"]
@@ -117,6 +132,12 @@ support-files = ["clearSiteData.sjs"]
 support-files = ["cookies.sjs"]
 
 ["browser_partitionedDOMCache.js"]
+
+["browser_partitionedDedicatedWorker.js"]
+support-files = [
+  "cookies.sjs",
+  "dedicatedWorker.js",
+]
 
 ["browser_partitionedIndexedDB.js"]
 
@@ -162,6 +183,8 @@ skip-if = [
 ["browser_referrerDefaultPolicy.js"]
 support-files = ["referrer.sjs"]
 
+["browser_sameSiteTrackerBlocking.js"]
+
 ["browser_script.js"]
 support-files = ["tracker.js"]
 
@@ -194,7 +217,7 @@ support-files = [
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.request.html",
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.script.js",
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.sharedworker.js",
-  "!/browser/components/originattributes/test/browser/file_thirdPartyChild.video.ogv",
+  "!/browser/components/originattributes/test/browser/file_thirdPartyChild.video.webm",
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.worker.fetch.html",
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.worker.js",
   "!/browser/components/originattributes/test/browser/file_thirdPartyChild.worker.request.html",
@@ -210,7 +233,7 @@ support-files = [
   "file_saveAsImage.sjs",
   "file_saveAsVideo.sjs",
   "file_saveAsPageInfo.html",
-  "file_video.ogv",
+  "file_video.webm",
 ]
 
 ["browser_staticPartition_tls_session.js"]
@@ -218,6 +241,8 @@ support-files = [
 ["browser_staticPartition_websocket.js"]
 skip-if = ["os == 'mac' && verify"] # Bug 1721210
 support-files = ["file_ws_handshake_delay_wsh.py"]
+
+["browser_storageAccessAutograntFromFedCM.js"]
 
 ["browser_storageAccessAutograntRequiresUserInteraction.js"]
 
@@ -316,6 +341,10 @@ tags = "remote-settings"
 skip-if = ["os == 'linux' && asan"]  # Bug 1713909 - new Fission platform triage
 support-files = ["file_stripping.html"]
 
+["browser_urlQueryStringStrippingWithEncoding.js"]
+skip-if = ["os == 'linux' && asan"]
+support-files = ["file_stripping.html"]
+
 ["browser_urlQueryStringStripping_allowList.js"]
 support-files = ["file_stripping.html"]
 
@@ -334,6 +363,8 @@ support-files = ["file_stripping.html"]
 ["browser_urlQueryStrippingListService.js"]
 
 ["browser_userInteraction.js"]
+
+["browser_viewsource_localhost_request.js"]
 
 ["browser_workerPropagation.js"]
 support-files = ["workerIframe.html"]

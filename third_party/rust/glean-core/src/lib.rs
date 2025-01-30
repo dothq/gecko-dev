@@ -17,7 +17,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,11 +24,11 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::unbounded;
-use log::{self, LevelFilter};
+use log::LevelFilter;
 use once_cell::sync::{Lazy, OnceCell};
 use uuid::Uuid;
 
-use metrics::MetricsEnabledConfig;
+use metrics::RemoteSettingsConfig;
 
 mod common_metric_data;
 mod core;
@@ -64,14 +63,17 @@ pub use crate::error::{Error, ErrorKind, Result};
 pub use crate::error_recording::{test_get_num_recorded_errors, ErrorType};
 pub use crate::histogram::HistogramType;
 pub use crate::metrics::labeled::{
-    AllowLabeled, LabeledBoolean, LabeledCounter, LabeledMetric, LabeledString,
+    AllowLabeled, LabeledBoolean, LabeledCounter, LabeledCustomDistribution,
+    LabeledMemoryDistribution, LabeledMetric, LabeledMetricData, LabeledQuantity, LabeledString,
+    LabeledTimingDistribution,
 };
 pub use crate::metrics::{
     BooleanMetric, CounterMetric, CustomDistributionMetric, Datetime, DatetimeMetric,
-    DenominatorMetric, DistributionData, EventMetric, MemoryDistributionMetric, MemoryUnit,
-    NumeratorMetric, PingType, QuantityMetric, Rate, RateMetric, RecordedEvent, RecordedExperiment,
-    StringListMetric, StringMetric, TextMetric, TimeUnit, TimerId, TimespanMetric,
-    TimingDistributionMetric, UrlMetric, UuidMetric,
+    DenominatorMetric, DistributionData, EventMetric, LocalCustomDistribution,
+    LocalMemoryDistribution, LocalTimingDistribution, MemoryDistributionMetric, MemoryUnit,
+    NumeratorMetric, ObjectMetric, PingType, QuantityMetric, Rate, RateMetric, RecordedEvent,
+    RecordedExperiment, StringListMetric, StringMetric, TextMetric, TimeUnit, TimerId,
+    TimespanMetric, TimingDistributionMetric, UrlMetric, UuidMetric,
 };
 pub use crate::upload::{PingRequest, PingUploadTask, UploadResult, UploadTaskAction};
 
@@ -97,6 +99,7 @@ static PRE_INIT_SOURCE_TAGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Keep track of pings registered before Glean is initialized.
 static PRE_INIT_PING_REGISTRATION: Mutex<Vec<metrics::PingType>> = Mutex::new(Vec::new());
+static PRE_INIT_PING_ENABLED: Mutex<Vec<(metrics::PingType, bool)>> = Mutex::new(Vec::new());
 
 /// Global singleton of the handles of the glean.init threads.
 /// For joining. For tests.
@@ -130,12 +133,23 @@ pub struct InternalConfiguration {
     pub log_level: Option<LevelFilter>,
     /// The rate at which pings may be uploaded before they are throttled.
     pub rate_limit: Option<PingRateLimit>,
-    /// (Experimental) Whether to add a wallclock timestamp to all events.
+    /// Whether to add a wallclock timestamp to all events.
     pub enable_event_timestamps: bool,
     /// An experimentation identifier derived by the application to be sent with all pings, it should
     /// be noted that this has an underlying StringMetric and so should conform to the limitations that
     /// StringMetric places on length, etc.
     pub experimentation_id: Option<String>,
+    /// Whether to enable internal pings. Default: true
+    pub enable_internal_pings: bool,
+    /// A ping schedule map.
+    /// Maps a ping name to a list of pings to schedule along with it.
+    /// Only used if the ping's own ping schedule list is empty.
+    pub ping_schedule: HashMap<String, Vec<String>>,
+
+    /// Write count threshold when to auto-flush. `0` disables it.
+    pub ping_lifetime_threshold: u64,
+    /// After what time to auto-flush. 0 disables it.
+    pub ping_lifetime_max_time: u64,
 }
 
 /// How to specify the rate at which pings may be uploaded before they are throttled.
@@ -305,7 +319,7 @@ pub trait OnGleanEvents: Send {
 }
 
 /// A callback handler that receives the base identifier of recorded events
-/// The identifier is in the format: <category>.<name>
+/// The identifier is in the format: `<category>.<name>`
 pub trait GleanEventListener: Send {
     /// Called when an event is recorded, indicating the id of the event
     fn on_event_recorded(&self, id: String);
@@ -427,6 +441,10 @@ fn initialize_inner(
                 let pings = PRE_INIT_PING_REGISTRATION.lock().unwrap();
                 for ping in pings.iter() {
                     glean.register_ping_type(ping);
+                }
+                let pings = PRE_INIT_PING_ENABLED.lock().unwrap();
+                for (ping, enabled) in pings.iter() {
+                    glean.set_ping_enabled(ping, *enabled);
                 }
 
                 // If this is the first time ever the Glean SDK runs, make sure to set
@@ -688,11 +706,13 @@ pub fn shutdown() {
     });
 }
 
-/// Asks the database to persist ping-lifetime data to disk. Probably expensive to call.
+/// Asks the database to persist ping-lifetime data to disk.
+///
+/// Probably expensive to call.
 /// Only has effect when Glean is configured with `delay_ping_lifetime_io: true`.
 /// If Glean hasn't been initialized this will dispatch and return Ok(()),
 /// otherwise it will block until the persist is done and return its Result.
-pub fn persist_ping_lifetime_data() {
+pub fn glean_persist_ping_lifetime_data() {
     // This is async, we can't get the Error back to the caller.
     crate::launch_with_glean(|glean| {
         let _ = glean.persist_ping_lifetime_data();
@@ -804,7 +824,10 @@ pub extern "C" fn glean_enable_logging() {
     }
 }
 
-/// Sets whether upload is enabled or not.
+/// **DEPRECATED** Sets whether upload is enabled or not.
+///
+/// **DEPRECATION NOTICE**:
+/// This API is deprecated. Use `set_collection_enabled` instead.
 pub fn glean_set_upload_enabled(enabled: bool) {
     if !was_initialize_called() {
         return;
@@ -837,6 +860,28 @@ pub fn glean_set_upload_enabled(enabled: bool) {
     })
 }
 
+/// Sets whether collection is enabled or not.
+///
+/// This replaces `set_upload_enabled`.
+pub fn glean_set_collection_enabled(enabled: bool) {
+    glean_set_upload_enabled(enabled)
+}
+
+/// Enable or disable a ping.
+///
+/// Disabling a ping causes all data for that ping to be removed from storage
+/// and all pending pings of that type to be deleted.
+pub fn set_ping_enabled(ping: &PingType, enabled: bool) {
+    let ping = ping.clone();
+    if was_initialize_called() {
+        crate::launch_with_glean_mut(move |glean| glean.set_ping_enabled(&ping, enabled));
+    } else {
+        let m = &PRE_INIT_PING_ENABLED;
+        let mut lock = m.lock().unwrap();
+        lock.push((ping, enabled));
+    }
+}
+
 /// Register a new [`PingType`](PingType).
 pub(crate) fn register_ping_type(ping: &PingType) {
     // If this happens after Glean.initialize is called (and returns),
@@ -857,6 +902,22 @@ pub(crate) fn register_ping_type(ping: &PingType) {
         let mut lock = m.lock().unwrap();
         lock.push(ping.clone());
     }
+}
+
+/// Gets a list of currently registered ping names.
+///
+/// # Returns
+///
+/// The list of ping names that are currently registered.
+pub fn glean_get_registered_ping_names() -> Vec<String> {
+    block_on_dispatcher();
+    core::with_glean(|glean| {
+        glean
+            .get_registered_ping_names()
+            .iter()
+            .map(|ping| ping.to_string())
+            .collect()
+    })
 }
 
 /// Indicate that an experiment is running.  Glean will then add an
@@ -909,17 +970,17 @@ pub fn glean_test_get_experimentation_id() -> Option<String> {
 /// Sets a remote configuration to override metrics' default enabled/disabled
 /// state
 ///
-/// See [`core::Glean::set_metrics_enabled_config`].
-pub fn glean_set_metrics_enabled_config(json: String) {
+/// See [`core::Glean::apply_server_knobs_config`].
+pub fn glean_apply_server_knobs_config(json: String) {
     // An empty config means it is not set,
     // so we avoid logging an error about it.
     if json.is_empty() {
         return;
     }
 
-    match MetricsEnabledConfig::try_from(json) {
+    match RemoteSettingsConfig::try_from(json) {
         Ok(cfg) => launch_with_glean(|glean| {
-            glean.set_metrics_enabled_config(cfg);
+            glean.apply_server_knobs_config(cfg);
         }),
         Err(e) => {
             log::error!("Error setting metrics feature config: {:?}", e);
@@ -955,6 +1016,16 @@ pub fn glean_set_debug_view_tag(tag: String) -> bool {
         // we don't validate the tag, thus this function always returns true.
         true
     }
+}
+
+/// Gets the currently set debug view tag.
+///
+/// # Returns
+///
+/// Return the value for the debug view tag or [`None`] if it hasn't been set.
+pub fn glean_get_debug_view_tag() -> Option<String> {
+    block_on_dispatcher();
+    core::with_glean(|glean| glean.debug_view_tag().map(|tag| tag.to_string()))
 }
 
 /// Sets source tags.
@@ -1001,6 +1072,16 @@ pub fn glean_set_log_pings(value: bool) {
     } else {
         PRE_INIT_LOG_PINGS.store(value, Ordering::SeqCst);
     }
+}
+
+/// Gets the current log pings value.
+///
+/// # Returns
+///
+/// Return the value for the log pings debug option.
+pub fn glean_get_log_pings() -> bool {
+    block_on_dispatcher();
+    core::with_glean(|glean| glean.log_pings())
 }
 
 /// Performs the collection/cleanup operations required by becoming active.
@@ -1124,8 +1205,14 @@ pub fn glean_test_destroy_glean(clear_stores: bool, data_path: Option<String>) {
 
         // Only useful if Glean initialization finished successfully
         // and set up the storage.
-        let has_storage =
-            core::with_opt_glean(|glean| glean.storage_opt().is_some()).unwrap_or(false);
+        let has_storage = core::with_opt_glean(|glean| {
+            // We need to flush the ping lifetime data before a full shutdown.
+            glean
+                .storage_opt()
+                .map(|storage| storage.persist_ping_lifetime_data())
+                .is_some()
+        })
+        .unwrap_or(false);
         if has_storage {
             uploader_shutdown();
         }
@@ -1211,6 +1298,8 @@ pub fn glean_enable_logging_to_fd(_fd: u64) {
 }
 
 #[allow(missing_docs)]
+// uniffi-generated code should not be checked.
+#[allow(clippy::all)]
 mod ffi {
     use super::*;
     uniffi::include_scaffolding!("glean");
@@ -1226,6 +1315,20 @@ mod ffi {
 
         fn from_custom(obj: Self) -> Self::Builtin {
             obj.into_owned()
+        }
+    }
+
+    type JsonValue = serde_json::Value;
+
+    impl UniffiCustomTypeConverter for JsonValue {
+        type Builtin = String;
+
+        fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
+            Ok(serde_json::from_str(&val)?)
+        }
+
+        fn from_custom(obj: Self) -> Self::Builtin {
+            serde_json::to_string(&obj).unwrap()
         }
     }
 }

@@ -18,16 +18,20 @@ DEFINES["WEBRTC_MOZILLA_BUILD"] = True
 DEFINES["WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS"] = "0"
 DEFINES["WEBRTC_STRICT_FIELD_TRIALS"] = "0"
 
-FINAL_LIBRARY = "webrtc"
+FINAL_LIBRARY = "xul"
 
 
 LOCAL_INCLUDES += [
     "!/ipc/ipdl/_ipdlheaders",
     "!/third_party/libwebrtc/gen",
     "/ipc/chromium/src",
+    "/third_party/abseil-cpp/",
     "/third_party/libwebrtc/",
-    "/third_party/libwebrtc/third_party/abseil-cpp/",
     "/tools/profiler/public"
+]
+
+UNIFIED_SOURCES += [
+    "/third_party/libwebrtc/media/base/rid_description.cc"
 ]
 
 if not CONFIG["MOZ_DEBUG"]:
@@ -127,6 +131,10 @@ if CONFIG["TARGET_CPU"] == "aarch64":
 
 if CONFIG["TARGET_CPU"] == "arm":
 
+    CXXFLAGS += [
+        "-mfpu=neon"
+    ]
+
     DEFINES["WEBRTC_ARCH_ARM"] = True
     DEFINES["WEBRTC_ARCH_ARM_V7"] = True
     DEFINES["WEBRTC_HAS_NEON"] = True
@@ -179,6 +187,12 @@ if CONFIG["OS_TARGET"] == "Android" and CONFIG["TARGET_CPU"] == "arm":
         "unwind"
     ]
 
+if CONFIG["OS_TARGET"] == "Android" and CONFIG["TARGET_CPU"] == "x86":
+
+    CXXFLAGS += [
+        "-msse2"
+    ]
+
 if CONFIG["OS_TARGET"] == "Linux" and CONFIG["TARGET_CPU"] == "aarch64":
 
     DEFINES["_GNU_SOURCE"] = True
@@ -188,6 +202,10 @@ if CONFIG["OS_TARGET"] == "Linux" and CONFIG["TARGET_CPU"] == "arm":
     DEFINES["_GNU_SOURCE"] = True
 
 if CONFIG["OS_TARGET"] == "Linux" and CONFIG["TARGET_CPU"] == "x86":
+
+    CXXFLAGS += [
+        "-msse2"
+    ]
 
     DEFINES["_GNU_SOURCE"] = True
 

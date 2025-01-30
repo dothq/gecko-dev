@@ -161,8 +161,8 @@ class nsMathMLmtrFrame final : public nsTableRowFrame {
 
   // overloaded nsTableRowFrame methods
 
-  virtual nsresult AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
-                                    int32_t aModType) override;
+  nsresult AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
+                            int32_t aModType) override;
 
   void AppendFrames(ChildListID aListID, nsFrameList&& aFrameList) override {
     nsTableRowFrame::AppendFrames(aListID, std::move(aFrameList));
@@ -222,7 +222,8 @@ class nsMathMLmtdFrame final : public nsTableCellFrame {
                       mozilla::nsDisplayListBuilder* aBuilder,
                       const mozilla::nsDisplayListSet& aLists) override;
 
-  LogicalMargin GetBorderWidth(WritingMode aWM) const override;
+  mozilla::LogicalMargin GetBorderWidth(
+      mozilla::WritingMode aWM) const override;
 
   nsMargin GetBorderOverflow() override;
 

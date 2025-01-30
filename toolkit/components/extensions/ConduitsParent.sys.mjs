@@ -29,6 +29,7 @@
  * @property {string} [url]
  * @property {number} [frameId]
  * @property {string} [workerScriptURL]
+ * @property {number} [workerDescriptorId]
  * @property {string} [extensionId]
  * @property {string} [envType]
  * @property {string} [instanceId]
@@ -299,17 +300,19 @@ export class BroadcastConduit extends BaseConduit {
     if (method === "RunListener" && arg.path.startsWith("webRequest.")) {
       return actor.batch(method, { target, arg, query, sender });
     }
-    return super._send(method, query, actor, { target, arg, query, sender });
+    return super._doSend(method, query, actor, { target, arg, query, sender });
   }
 
   /**
    * Broadcasts a method call to all conduits of kind that satisfy filtering by
-   * kind-specific properties from arg, returns an array of response promises.
+   * kind-specific properties from arg. If arg.query is true, these broadcasts
+   * are all queries and this returns an array of response promises. Otherwise,
+   * they are not, and undefined is returned.
    *
    * @param {string} method
    * @param {BroadcastKind} kind
    * @param {object} arg
-   * @returns {Promise<any[]> | Promise<Response>}
+   * @returns {undefined | Promise<any[]> | Promise<Response>}
    */
   _cast(method, kind, arg) {
     let filters = {
@@ -339,11 +342,13 @@ export class BroadcastConduit extends BaseConduit {
     };
 
     let targets = Array.from(Hub.remotes.values()).filter(filters[kind]);
-    let promises = targets.map(c => this._send(method, true, c.id, arg));
-
-    return arg.firstResponse
-      ? this._raceResponses(promises)
-      : Promise.allSettled(promises);
+    let promises = targets.map(c => this._send(method, !!arg.query, c.id, arg));
+    if (arg.query) {
+      return arg.firstResponse
+        ? this._raceResponses(promises)
+        : Promise.allSettled(promises);
+    }
+    return undefined;
   }
 
   /**
@@ -482,6 +487,5 @@ export class ConduitsParent extends JSWindowActorParent {
  */
 export class ProcessConduitsParent extends JSProcessActorParent {
   receiveMessage = ConduitsParent.prototype.receiveMessage;
-  willDestroy = ConduitsParent.prototype.willDestroy;
   didDestroy = ConduitsParent.prototype.didDestroy;
 }

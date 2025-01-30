@@ -7,18 +7,14 @@
 // element's `open` property to go back to being `false` if forced to true
 // synchronously in response to keydown.
 async function focusButtonAndPressKeyWithDelay(key, elem, modifiers) {
-  let focused = BrowserTestUtils.waitForEvent(elem, "focus", true);
   elem.setAttribute("tabindex", "-1");
   elem.focus();
-  elem.removeAttribute("tabindex");
-  await focused;
 
   EventUtils.synthesizeKey(key, { type: "keydown", modifiers });
   await new Promise(executeSoon);
   EventUtils.synthesizeKey(key, { type: "keyup", modifiers });
-  let blurred = BrowserTestUtils.waitForEvent(elem, "blur", true);
+  elem.removeAttribute("tabindex");
   elem.blur();
-  await blurred;
 }
 
 // This test verifies that pressing enter while a page action is focused
@@ -54,11 +50,13 @@ add_task(async function testKeyBrowserAction() {
   await extension.startup();
   await extension.awaitMessage("ready");
 
-  let elem = getBrowserActionWidget(extension).forWindow(window).node;
+  let button = getBrowserActionWidget(extension)
+    .forWindow(window)
+    .node.querySelector(".unified-extensions-item-action-button");
 
   await promiseAnimationFrame(window);
   await showBrowserAction(extension, window);
-  await focusButtonAndPressKeyWithDelay(" ", elem.firstElementChild, {});
+  await focusButtonAndPressKeyWithDelay(" ", button, {});
 
   extension.sendMessage("checkCounter");
   let counter = await extension.awaitMessage("counter");

@@ -43,16 +43,14 @@ constexpr int kDefaultSamplingFrequencyInHz = 48000;
 // and `pc_dependencies` if they are omitted. Also setup required
 // dependencies, that won't be specially provided by factory and will be just
 // transferred to peer connection creation code.
-void SetMandatoryEntities(InjectableComponents* components,
-                          TimeController& time_controller) {
+void SetMandatoryEntities(InjectableComponents* components) {
   RTC_DCHECK(components->pcf_dependencies);
   RTC_DCHECK(components->pc_dependencies);
 
   // Setup required peer connection factory dependencies.
   if (components->pcf_dependencies->event_log_factory == nullptr) {
     components->pcf_dependencies->event_log_factory =
-        std::make_unique<RtcEventLogFactory>(
-            time_controller.GetTaskQueueFactory());
+        std::make_unique<RtcEventLogFactory>();
   }
   if (!components->pcf_dependencies->trials) {
     components->pcf_dependencies->trials =
@@ -62,7 +60,7 @@ void SetMandatoryEntities(InjectableComponents* components,
 
 // Returns mapping from stream label to optional spatial index.
 // If we have stream label "Foo" and mapping contains
-// 1. `absl::nullopt` means all simulcast/SVC streams are required
+// 1. `std::nullopt` means all simulcast/SVC streams are required
 // 2. Concrete value means that particular simulcast/SVC stream have to be
 //    analyzed.
 EmulatedSFUConfigMap CalculateRequiredSpatialIndexPerStream(
@@ -82,7 +80,7 @@ EmulatedSFUConfigMap CalculateRequiredSpatialIndexPerStream(
 }
 
 std::unique_ptr<TestAudioDeviceModule::Renderer> CreateAudioRenderer(
-    const absl::optional<RemotePeerAudioConfig>& config) {
+    const std::optional<RemotePeerAudioConfig>& config) {
   if (!config) {
     // Return default renderer because we always require some renderer.
     return TestAudioDeviceModule::CreateDiscardRenderer(
@@ -97,7 +95,7 @@ std::unique_ptr<TestAudioDeviceModule::Renderer> CreateAudioRenderer(
 }
 
 std::unique_ptr<TestAudioDeviceModule::Capturer> CreateAudioCapturer(
-    const absl::optional<AudioConfig>& audio_config) {
+    const std::optional<AudioConfig>& audio_config) {
   if (!audio_config) {
     // If we have no audio config we still need to provide some audio device.
     // In such case use generated capturer. Despite of we provided audio here,
@@ -115,9 +113,9 @@ std::unique_ptr<TestAudioDeviceModule::Capturer> CreateAudioCapturer(
 }
 
 rtc::scoped_refptr<AudioDeviceModule> CreateAudioDeviceModule(
-    absl::optional<AudioConfig> audio_config,
-    absl::optional<RemotePeerAudioConfig> remote_audio_config,
-    absl::optional<EchoEmulationConfig> echo_emulation_config,
+    std::optional<AudioConfig> audio_config,
+    std::optional<RemotePeerAudioConfig> remote_audio_config,
+    std::optional<EchoEmulationConfig> echo_emulation_config,
     TaskQueueFactory* task_queue_factory) {
   std::unique_ptr<TestAudioDeviceModule::Renderer> renderer =
       CreateAudioRenderer(remote_audio_config);
@@ -261,10 +259,10 @@ PeerConnectionDependencies CreatePCDependencies(
 
 }  // namespace
 
-absl::optional<RemotePeerAudioConfig> RemotePeerAudioConfig::Create(
-    absl::optional<AudioConfig> config) {
+std::optional<RemotePeerAudioConfig> RemotePeerAudioConfig::Create(
+    std::optional<AudioConfig> config) {
   if (!config) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return RemotePeerAudioConfig(config.value());
 }
@@ -272,8 +270,8 @@ absl::optional<RemotePeerAudioConfig> RemotePeerAudioConfig::Create(
 std::unique_ptr<TestPeer> TestPeerFactory::CreateTestPeer(
     std::unique_ptr<PeerConfigurer> configurer,
     std::unique_ptr<MockPeerConnectionObserver> observer,
-    absl::optional<RemotePeerAudioConfig> remote_audio_config,
-    absl::optional<EchoEmulationConfig> echo_emulation_config) {
+    std::optional<RemotePeerAudioConfig> remote_audio_config,
+    std::optional<EchoEmulationConfig> echo_emulation_config) {
   std::unique_ptr<InjectableComponents> components =
       configurer->ReleaseComponents();
   std::unique_ptr<Params> params = configurer->ReleaseParams();
@@ -286,7 +284,7 @@ std::unique_ptr<TestPeer> TestPeerFactory::CreateTestPeer(
   RTC_DCHECK(configurable_params);
   RTC_DCHECK_EQ(configurable_params->video_configs.size(),
                 video_sources.size());
-  SetMandatoryEntities(components.get(), time_controller_);
+  SetMandatoryEntities(components.get());
   params->rtc_configuration.sdp_semantics = SdpSemantics::kUnifiedPlan;
 
   // Create peer connection factory.
@@ -329,6 +327,7 @@ std::unique_ptr<TestPeer> TestPeerFactory::CreateTestPeer(
       components->worker_thread, components->network_thread);
   rtc::scoped_refptr<PeerConnectionFactoryInterface> peer_connection_factory =
       CreateModularPeerConnectionFactory(std::move(pcf_deps));
+  peer_connection_factory->SetOptions(params->peer_connection_factory_options);
 
   // Create peer connection.
   PeerConnectionDependencies pc_deps =

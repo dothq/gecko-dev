@@ -10,8 +10,8 @@ origin:
 
   url: https://github.com/QuantStack/xsimd
 
-  release: ce58d62666c315140eb54042498d93114edbaa68 (2024-02-27T16:05:37Z).
-  revision: ce58d62666c315140eb54042498d93114edbaa68
+  release: 9cb09c4065a9cee34a425a3f48fbb6d823f1ff16 (2024-11-24T18:40:03Z).
+  revision: 9cb09c4065a9cee34a425a3f48fbb6d823f1ff16
 
   license: BSD-3-Clause
 

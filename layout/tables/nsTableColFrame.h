@@ -86,10 +86,10 @@ class nsTableColFrame final : public nsSplittableFrame {
   /** convenience method, calls into cellmap */
   int32_t Count() const;
 
-  BCPixelSize GetIStartBorderWidth() const { return mIStartBorderWidth; }
-  BCPixelSize GetIEndBorderWidth() const { return mIEndBorderWidth; }
-  void SetIStartBorderWidth(BCPixelSize aWidth) { mIStartBorderWidth = aWidth; }
-  void SetIEndBorderWidth(BCPixelSize aWidth) { mIEndBorderWidth = aWidth; }
+  nscoord GetIStartBorderWidth() const { return mIStartBorderWidth; }
+  nscoord GetIEndBorderWidth() const { return mIEndBorderWidth; }
+  void SetIStartBorderWidth(nscoord aWidth) { mIStartBorderWidth = aWidth; }
+  void SetIEndBorderWidth(nscoord aWidth) { mIEndBorderWidth = aWidth; }
 
 #ifdef DEBUG
   void Dump(int32_t aIndent);
@@ -154,8 +154,12 @@ class nsTableColFrame final : public nsSplittableFrame {
       aPrefCoord = aMinCoord;  // NOTE: modifying argument
     }
 
-    if (aMinCoord > mMinCoord) mMinCoord = aMinCoord;
-    if (aPrefCoord > mPrefCoord) mPrefCoord = aPrefCoord;
+    if (aMinCoord > mMinCoord) {
+      mMinCoord = aMinCoord;
+    }
+    if (aPrefCoord > mPrefCoord) {
+      mPrefCoord = aPrefCoord;
+    }
 
     NS_ASSERTION(mMinCoord <= mPrefCoord, "min larger than pref");
   }
@@ -166,7 +170,9 @@ class nsTableColFrame final : public nsSplittableFrame {
    * column-spanning cell.
    */
   void AddPrefPercent(float aPrefPercent) {
-    if (aPrefPercent > mPrefPercent) mPrefPercent = aPrefPercent;
+    if (aPrefPercent > mPrefPercent) {
+      mPrefPercent = aPrefPercent;
+    }
   }
 
   /**
@@ -204,8 +210,12 @@ class nsTableColFrame final : public nsSplittableFrame {
       aSpanPrefCoord = aSpanMinCoord;  // NOTE: modifying argument
     }
 
-    if (aSpanMinCoord > mSpanMinCoord) mSpanMinCoord = aSpanMinCoord;
-    if (aSpanPrefCoord > mSpanPrefCoord) mSpanPrefCoord = aSpanPrefCoord;
+    if (aSpanMinCoord > mSpanMinCoord) {
+      mSpanMinCoord = aSpanMinCoord;
+    }
+    if (aSpanPrefCoord > mSpanPrefCoord) {
+      mSpanPrefCoord = aSpanPrefCoord;
+    }
 
     NS_ASSERTION(mSpanMinCoord <= mSpanPrefCoord, "min larger than pref");
   }
@@ -215,8 +225,9 @@ class nsTableColFrame final : public nsSplittableFrame {
    * temporary variables.
    */
   void AddSpanPrefPercent(float aSpanPrefPercent) {
-    if (aSpanPrefPercent > mSpanPrefPercent)
+    if (aSpanPrefPercent > mSpanPrefPercent) {
       mSpanPrefPercent = aSpanPrefPercent;
+    }
   }
 
   /*
@@ -233,7 +244,9 @@ class nsTableColFrame final : public nsSplittableFrame {
   // starting at the first column, until they reach 100%).
   void AdjustPrefPercent(float* aTableTotalPercent) {
     float allowed = 1.0f - *aTableTotalPercent;
-    if (mPrefPercent > allowed) mPrefPercent = allowed;
+    if (mPrefPercent > allowed) {
+      mPrefPercent = allowed;
+    }
     *aTableTotalPercent += mPrefPercent;
   }
 
@@ -272,9 +285,9 @@ class nsTableColFrame final : public nsSplittableFrame {
   // colgroup
   uint32_t mColIndex;
 
-  // border width in pixels of the inner half of the border only
-  BCPixelSize mIStartBorderWidth;
-  BCPixelSize mIEndBorderWidth;
+  // border widths of the inner half of the border only
+  nscoord mIStartBorderWidth;
+  nscoord mIEndBorderWidth;
 
   bool mHasSpecifiedCoord;
 };

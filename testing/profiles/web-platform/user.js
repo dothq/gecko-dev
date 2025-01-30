@@ -8,8 +8,6 @@
 user_pref("browser.newtabpage.enabled", false);
 // Don't restore the last open set of tabs if the browser has crashed
 user_pref("browser.sessionstore.resume_from_crash", false);
-//  Disable session restore infobar.
-user_pref("browser.startup.couldRestoreSession.count", -1);
 // Don't show the Bookmarks Toolbar on any tab (the above pref that
 // disables the New Tab Page ends up showing the toolbar on about:blank).
 user_pref("browser.toolbars.bookmarks.visibility", "never");
@@ -68,14 +66,10 @@ user_pref("nglayout.initialpaint.unsuppress_with_no_background", true);
 user_pref("media.block-autoplay-until-in-foreground", false);
 // Force a light color scheme unless explicitly overridden by pref.
 user_pref("layout.css.prefers-color-scheme.content-override", 1);
-// Force OffscreenCanvas support
-user_pref("gfx.offscreencanvas.enabled", true);
 // A lot of tests use the Reporting API for observing things
 user_pref("dom.reporting.enabled", true);
 // Enable WebDriver BiDi experimental commands and events during tests.
 user_pref("remote.experimental.enabled", true);
-// Disable always partitioning storage with the Storage Access API
-user_pref("privacy.partition.always_partition_third_party_non_cookie_storage", false);
 // Disable OCSP checks in WPT (webtransport triggers these occasionally)
 user_pref("security.OCSP.enabled", 0);
 // Disable download of intermediate certificates.
@@ -96,3 +90,7 @@ user_pref("security.webauthn.enable_conditional_mediation", true);
 user_pref("network.captive-portal-service.enabled", false);
 // Enable http2 websockets support
 user_pref("network.http.http2.websockets", true);
+// Turn off update
+user_pref("app.update.disabledForTesting", true);
+// Use dummy server for geolocation
+user_pref("geo.provider.network.url", "https://web-platform.test:8444/_mozilla/geolocation-API/dummy.py");

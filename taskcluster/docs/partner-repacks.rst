@@ -40,7 +40,7 @@ release. They're both true for Firefox betas >= b8 and releases, but otherwise d
 logic. It's usually looked up during the release promotion action task, using the Github
 GraphQL API in the `get_partner_config_by_url()
 <python/taskgraph.util.html#taskgraph.util.partners.get_partner_config_by_url>`_ function, with the
-url defined in `taskcluster/ci/config.yml <https://searchfox
+url defined in `taskcluster/config.yml <https://searchfox
 .org/mozilla-release/search?q=regexp%3A^partner+path%3Aconfig.yml&redirect=true>`_.
 
 ``release_partner_build_number`` is an integer used to create unique upload paths in the firefox
@@ -150,9 +150,9 @@ There is one task per platform in this step, calling out to `scripts/desktop_par
 The actual repacking is done by `python/mozrelease/mozrelease/partner_repack.py
 <https://hg.mozilla.org/mozilla-central/file/default/python/mozrelease/mozrelease/partner_repack.py>`_.
 
-It takes as input the build-signing and l10n-signing artifacts, which are all zip/tar.gz/tar.bz2
+It takes as input the build-signing and l10n-signing artifacts, which are all zip/tar.gz/tar.xz
 archives, simplifying the repack process by avoiding dmg and exe. Windows produces ``target.zip``
-& ``setup.exe``, Mac is ``target.tar.gz``, Linux is the final product ``target.tar.bz2``
+& ``setup.exe``, Mac is ``target.tar.gz``, Linux is the final product ``target.tar.xz``
 (beetmover handles pretty naming as usual).
 
 Signing

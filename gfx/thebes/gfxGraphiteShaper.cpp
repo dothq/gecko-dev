@@ -188,8 +188,8 @@ bool gfxGraphiteShaper::ShapeText(DrawTarget* aDrawTarget,
 
   gfxFontEntry* entry = mFont->GetFontEntry();
   uint32_t grLang = 0;
-  if (style->languageOverride) {
-    grLang = MakeGraphiteLangTag(style->languageOverride);
+  if (style->languageOverride._0) {
+    grLang = MakeGraphiteLangTag(style->languageOverride._0);
   } else if (entry->mLanguageOverride) {
     grLang = MakeGraphiteLangTag(entry->mLanguageOverride);
   } else if (aLanguage) {
@@ -487,7 +487,7 @@ uint32_t gfxGraphiteShaper::GetGraphiteTagForLang(const nsCString& aLang) {
 
   if (!sLanguageTags) {
     // store the registered IANA tags in a hash for convenient validation
-    sLanguageTags = new nsTHashSet<uint32_t>(ArrayLength(sLanguageTagList));
+    sLanguageTags = new nsTHashSet<uint32_t>(std::size(sLanguageTagList));
     for (const uint32_t* tag = sLanguageTagList; *tag != 0; ++tag) {
       sLanguageTags->Insert(*tag);
     }

@@ -4,13 +4,19 @@
 Texture Usages Validation Tests on All Kinds of WebGPU Subresource Usage Scopes.
 `;import { makeTestGroup } from '../../../../../common/framework/test_group.js';
 import { unreachable } from '../../../../../common/util/util.js';
+import { kTextureUsages } from '../../../../capability_info.js';
 import { ValidationTest } from '../../validation_test.js';
+import {
+
+  kTextureBindingTypes,
+  IsReadOnlyTextureBindingType } from
+'../texture/in_render_common.spec.js';
 
 class F extends ValidationTest {
   createBindGroupLayoutForTest(
   textureUsage,
   sampleType,
-  visibility = GPUShaderStage['FRAGMENT'])
+  visibility = GPUShaderStage.FRAGMENT)
   {
     const bindGroupLayoutEntry = {
       binding: 0,
@@ -18,13 +24,27 @@ class F extends ValidationTest {
     };
 
     switch (textureUsage) {
-      case 'texture':
+      case 'sampled-texture':
         bindGroupLayoutEntry.texture = { viewDimension: '2d-array', sampleType };
         break;
-      case 'storage':
+      case 'readonly-storage-texture':
+        bindGroupLayoutEntry.storageTexture = {
+          access: 'read-only',
+          format: 'r32float',
+          viewDimension: '2d-array'
+        };
+        break;
+      case 'writeonly-storage-texture':
         bindGroupLayoutEntry.storageTexture = {
           access: 'write-only',
-          format: 'rgba8unorm',
+          format: 'r32float',
+          viewDimension: '2d-array'
+        };
+        break;
+      case 'readwrite-storage-texture':
+        bindGroupLayoutEntry.storageTexture = {
+          access: 'read-write',
+          format: 'r32float',
           viewDimension: '2d-array'
         };
         break;
@@ -41,7 +61,7 @@ class F extends ValidationTest {
   textureView,
   textureUsage,
   sampleType,
-  visibility = GPUShaderStage['FRAGMENT'])
+  visibility = GPUShaderStage.FRAGMENT)
   {
     return this.device.createBindGroup({
       layout: this.createBindGroupLayoutForTest(textureUsage, sampleType, visibility),
@@ -64,20 +84,22 @@ desc(
 ).
 params((u) =>
 u.
-combineWithParams([
-{ useDifferentTextureAsTexture2: true, baseLayer2: 0, view2Binding: 'texture' },
-{ useDifferentTextureAsTexture2: false, baseLayer2: 0, view2Binding: 'texture' },
-{ useDifferentTextureAsTexture2: false, baseLayer2: 1, view2Binding: 'texture' },
-{ useDifferentTextureAsTexture2: false, baseLayer2: 0, view2Binding: 'storage' },
-{ useDifferentTextureAsTexture2: false, baseLayer2: 1, view2Binding: 'storage' }]
+combine('useDifferentTextureAsTexture2', [true, false]).
+combine('baseLayer2', [0, 1]).
+combine('view1Binding', kTextureBindingTypes).
+combine('view2Binding', kTextureBindingTypes)
 ).
-combine('hasConflict', [true, false])
-).
+beforeAllSubcases((t) => {
+  t.skipIf(
+    t.isCompatibility,
+    'texture views used in bindgroups must consist of the entire array in compatibility mode. textureView0 does not fit.'
+  );
+}).
 fn((t) => {
-  const { useDifferentTextureAsTexture2, baseLayer2, view2Binding, hasConflict } = t.params;
+  const { useDifferentTextureAsTexture2, baseLayer2, view1Binding, view2Binding } = t.params;
 
-  const texture0 = t.device.createTexture({
-    format: 'rgba8unorm',
+  const texture0 = t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
     size: [kTextureSize, kTextureSize, kTextureLayers]
   });
@@ -87,19 +109,12 @@ fn((t) => {
     baseArrayLayer: 0,
     arrayLayerCount: 1
   });
-  const bindGroup0 = t.createBindGroupForTest(textureView0, view2Binding, 'float');
-
-  // In one renderPassEncoder it is an error to set both bindGroup0 and bindGroup1.
-  const view1Binding = hasConflict ?
-  view2Binding === 'texture' ?
-  'storage' :
-  'texture' :
-  view2Binding;
-  const bindGroup1 = t.createBindGroupForTest(textureView0, view1Binding, 'float');
+  const bindGroup0 = t.createBindGroupForTest(textureView0, view1Binding, 'unfilterable-float');
+  const bindGroup1 = t.createBindGroupForTest(textureView0, view2Binding, 'unfilterable-float');
 
   const texture2 = useDifferentTextureAsTexture2 ?
-  t.device.createTexture({
-    format: 'rgba8unorm',
+  t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
     size: [kTextureSize, kTextureSize, kTextureLayers]
   }) :
@@ -110,10 +125,14 @@ fn((t) => {
     arrayLayerCount: kTextureLayers - baseLayer2
   });
   // There should be no conflict between bindGroup0 and validBindGroup2.
-  const validBindGroup2 = t.createBindGroupForTest(textureView2, view2Binding, 'float');
+  const validBindGroup2 = t.createBindGroupForTest(
+    textureView2,
+    view2Binding,
+    'unfilterable-float'
+  );
 
-  const colorTexture = t.device.createTexture({
-    format: 'rgba8unorm',
+  const unusedColorTexture = t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
     size: [kTextureSize, kTextureSize, 1]
   });
@@ -121,7 +140,7 @@ fn((t) => {
   const renderPassEncoder = encoder.beginRenderPass({
     colorAttachments: [
     {
-      view: colorTexture.createView(),
+      view: unusedColorTexture.createView(),
       loadOp: 'load',
       storeOp: 'store'
     }]
@@ -132,9 +151,12 @@ fn((t) => {
   renderPassEncoder.setBindGroup(1, validBindGroup2);
   renderPassEncoder.end();
 
+  const noConflict =
+  IsReadOnlyTextureBindingType(view1Binding) && IsReadOnlyTextureBindingType(view2Binding) ||
+  view1Binding === view2Binding;
   t.expectValidationError(() => {
     encoder.finish();
-  }, hasConflict);
+  }, !noConflict);
 });
 
 g.test('subresources,set_bind_group_on_same_index_depth_stencil_texture').
@@ -151,10 +173,13 @@ combine('depthStencilReadOnly', [true, false])
 ).
 fn((t) => {
   const { bindAspect, depthStencilReadOnly } = t.params;
-  const depthStencilTexture = t.device.createTexture({
+  const depthStencilTexture = t.createTextureTracked({
     format: 'depth24plus-stencil8',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    size: [kTextureSize, kTextureSize, 1]
+    size: [kTextureSize, kTextureSize, 1],
+    ...(t.isCompatibility && {
+      textureBindingViewDimension: '2d-array'
+    })
   });
 
   const conflictedToNonReadOnlyAttachmentBindGroup = t.createBindGroupForTest(
@@ -162,21 +187,24 @@ fn((t) => {
       dimension: '2d-array',
       aspect: bindAspect
     }),
-    'texture',
+    'sampled-texture',
     bindAspect === 'depth-only' ? 'depth' : 'uint'
   );
 
-  const colorTexture = t.device.createTexture({
-    format: 'rgba8unorm',
+  const colorTexture = t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
-    size: [kTextureSize, kTextureSize, 1]
+    size: [kTextureSize, kTextureSize, 1],
+    ...(t.isCompatibility && {
+      textureBindingViewDimension: '2d-array'
+    })
   });
   const validBindGroup = t.createBindGroupForTest(
     colorTexture.createView({
       dimension: '2d-array'
     }),
-    'texture',
-    'float'
+    'sampled-texture',
+    'unfilterable-float'
   );
 
   const encoder = t.device.createCommandEncoder();
@@ -204,12 +232,30 @@ desc(
   used in the same render or compute pass encoder, its list of internal usages within one usage
   scope can only be a compatible usage list.`
 ).
-params((u) => u.combine('inRenderPass', [true, false]).combine('hasConflict', [true, false])).
+params((u) =>
+u.
+combine('inRenderPass', [true, false]).
+combine('textureUsage0', kTextureBindingTypes).
+combine('textureUsage1', kTextureBindingTypes)
+).
+beforeAllSubcases((t) => {
+  t.skipIf(
+    t.isCompatibility,
+    'texture views used in bindgroups must consist of the entire array in compatibility mode. textureView0 does not fit.'
+  );
+}).
 fn((t) => {
-  const { inRenderPass, hasConflict } = t.params;
+  const { inRenderPass, textureUsage0, textureUsage1 } = t.params;
 
-  const texture0 = t.device.createTexture({
-    format: 'rgba8unorm',
+  if (
+  textureUsage0 === 'readwrite-storage-texture' ||
+  textureUsage1 === 'readwrite-storage-texture')
+  {
+    t.skipIfLanguageFeatureNotSupported('readonly_and_readwrite_storage_textures');
+  }
+
+  const texture0 = t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
     size: [kTextureSize, kTextureSize, kTextureLayers]
   });
@@ -221,40 +267,85 @@ fn((t) => {
   });
   const visibility = inRenderPass ? GPUShaderStage.FRAGMENT : GPUShaderStage.COMPUTE;
   // bindGroup0 is used by the pipelines, and bindGroup1 is not used by the pipelines.
-  const textureUsage0 = inRenderPass ? 'texture' : 'storage';
-  const textureUsage1 = hasConflict ? inRenderPass ? 'storage' : 'texture' : textureUsage0;
-  const bindGroup0 = t.createBindGroupForTest(textureView0, textureUsage0, 'float', visibility);
-  const bindGroup1 = t.createBindGroupForTest(textureView0, textureUsage1, 'float', visibility);
+  const bindGroup0 = t.createBindGroupForTest(
+    textureView0,
+    textureUsage0,
+    'unfilterable-float',
+    visibility
+  );
+  const bindGroup1 = t.createBindGroupForTest(
+    textureView0,
+    textureUsage1,
+    'unfilterable-float',
+    visibility
+  );
 
   const encoder = t.device.createCommandEncoder();
-  const colorTexture = t.device.createTexture({
-    format: 'rgba8unorm',
+  const colorTexture = t.createTextureTracked({
+    format: 'r32float',
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
     size: [kTextureSize, kTextureSize, 1]
   });
-  const pipelineLayout = t.device.createPipelineLayout({
-    bindGroupLayouts: [t.createBindGroupLayoutForTest(textureUsage0, 'float', visibility)]
-  });
   if (inRenderPass) {
+    let fragmentShader = '';
+    switch (textureUsage0) {
+      case 'sampled-texture':
+        fragmentShader = `
+          @group(0) @binding(0) var texture0 : texture_2d_array<f32>;
+          @fragment fn main()
+            -> @location(0) vec4<f32> {
+              return textureLoad(texture0, vec2<i32>(), 0, 0);
+          }
+          `;
+        break;
+      case `readonly-storage-texture`:
+        fragmentShader = `
+          @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, read>;
+          @fragment fn main()
+            -> @location(0) vec4<f32> {
+              return textureLoad(texture0, vec2<i32>(), 0);
+          }
+          `;
+        break;
+      case `writeonly-storage-texture`:
+        fragmentShader = `
+            @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, write>;
+            @fragment fn main()
+              -> @location(0) vec4<f32> {
+                textureStore(texture0, vec2i(), 0, vec4f(1, 0, 0, 1));
+                return vec4f(0, 0, 0, 1);
+            }
+            `;
+        break;
+      case `readwrite-storage-texture`:
+        fragmentShader = `
+            @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, read_write>;
+            @fragment fn main()
+              -> @location(0) vec4<f32> {
+                let color = textureLoad(texture0, vec2i(), 0);
+                textureStore(texture0, vec2i(), 0, vec4f(1, 0, 0, 1));
+                return color;
+            }
+            `;
+        break;
+    }
+
     const renderPipeline = t.device.createRenderPipeline({
-      layout: pipelineLayout,
+      layout: t.device.createPipelineLayout({
+        bindGroupLayouts: [
+        t.createBindGroupLayoutForTest(textureUsage0, 'unfilterable-float', visibility)]
+
+      }),
       vertex: {
         module: t.device.createShaderModule({
           code: t.getNoOpShaderCode('VERTEX')
-        }),
-        entryPoint: 'main'
+        })
       },
       fragment: {
         module: t.device.createShaderModule({
-          code: `
-              @group(0) @binding(0) var texture0 : texture_2d_array<f32>;
-              @fragment fn main()
-                -> @location(0) vec4<f32> {
-                  return textureLoad(texture0, vec2<i32>(), 0, 0);
-              }`
+          code: fragmentShader
         }),
-        entryPoint: 'main',
-        targets: [{ format: 'rgba8unorm' }]
+        targets: [{ format: 'r32float' }]
       }
     });
 
@@ -273,29 +364,97 @@ fn((t) => {
     renderPassEncoder.draw(1);
     renderPassEncoder.end();
   } else {
+    let computeShader = '';
+    switch (textureUsage0) {
+      case 'sampled-texture':
+        computeShader = `
+          @group(0) @binding(0) var texture0 : texture_2d_array<f32>;
+          @group(1) @binding(0) var writableStorage : texture_storage_2d_array<r32float, write>;
+          @compute @workgroup_size(1) fn main() {
+              let value = textureLoad(texture0, vec2i(), 0, 0);
+              textureStore(writableStorage, vec2i(), 0, value);
+          }
+          `;
+        break;
+      case `readonly-storage-texture`:
+        computeShader = `
+          @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, read>;
+          @group(1) @binding(0) var writableStorage : texture_storage_2d_array<r32float, write>;
+          @compute @workgroup_size(1) fn main() {
+              let value = textureLoad(texture0, vec2<i32>(), 0);
+              textureStore(writableStorage, vec2i(), 0, value);
+          }
+          `;
+        break;
+      case `writeonly-storage-texture`:
+        computeShader = `
+            @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, write>;
+            @group(1) @binding(0) var writableStorage : texture_storage_2d_array<r32float, write>;
+            @compute @workgroup_size(1) fn main() {
+                textureStore(texture0, vec2i(), 0, vec4f(1, 0, 0, 1));
+                textureStore(writableStorage, vec2i(), 0, vec4f(1, 0, 0, 1));
+            }
+            `;
+        break;
+      case `readwrite-storage-texture`:
+        computeShader = `
+            @group(0) @binding(0) var texture0 : texture_storage_2d_array<r32float, read_write>;
+            @group(1) @binding(0) var writableStorage : texture_storage_2d_array<r32float, write>;
+            @compute @workgroup_size(1) fn main() {
+                let color = textureLoad(texture0, vec2i(), 0);
+                textureStore(texture0, vec2i(), 0, vec4f(1, 0, 0, 1));
+                textureStore(writableStorage, vec2i(), 0, color);
+            }
+            `;
+        break;
+    }
+
+    const pipelineLayout = t.device.createPipelineLayout({
+      bindGroupLayouts: [
+      t.createBindGroupLayoutForTest(textureUsage0, 'unfilterable-float', visibility),
+      t.createBindGroupLayoutForTest(
+        'writeonly-storage-texture',
+        'unfilterable-float',
+        visibility
+      )]
+
+    });
     const computePipeline = t.device.createComputePipeline({
       layout: pipelineLayout,
       compute: {
         module: t.device.createShaderModule({
-          code: `
-            @group(0) @binding(0) var texture0 : texture_storage_2d_array<rgba8unorm, write>;
-            @compute @workgroup_size(1)
-            fn main() {
-              textureStore(texture0, vec2<i32>(), 0, vec4<f32>());
-            }`
-        }),
-        entryPoint: 'main'
+          code: computeShader
+        })
       }
     });
+
+    const writableStorageTexture = t.createTextureTracked({
+      format: 'r32float',
+      usage: GPUTextureUsage.STORAGE_BINDING,
+      size: [kTextureSize, kTextureSize, 1]
+    });
+    const writableStorageTextureView = writableStorageTexture.createView({
+      dimension: '2d-array',
+      baseArrayLayer: 0,
+      arrayLayerCount: 1
+    });
+    const writableStorageTextureBindGroup = t.createBindGroupForTest(
+      writableStorageTextureView,
+      'writeonly-storage-texture',
+      'unfilterable-float',
+      visibility
+    );
+
     const computePassEncoder = encoder.beginComputePass();
     computePassEncoder.setBindGroup(0, bindGroup0);
-    computePassEncoder.setBindGroup(1, bindGroup1);
+    computePassEncoder.setBindGroup(1, writableStorageTextureBindGroup);
+    computePassEncoder.setBindGroup(2, bindGroup1);
     computePassEncoder.setPipeline(computePipeline);
     computePassEncoder.dispatchWorkgroups(1);
     computePassEncoder.end();
   }
 
-  // In WebGPU SPEC (Chapter 3.4.5, Synchronization):
+  // In WebGPU SPEC (https://gpuweb.github.io/gpuweb/#programming-model-synchronization):
   // This specification defines the following usage scopes:
   // - In a compute pass, each dispatch command (dispatchWorkgroups() or
   //   dispatchWorkgroupsIndirect()) is one usage scope. A subresource is "used" in the usage
@@ -306,7 +465,11 @@ fn((t) => {
   //   referenced by any (state-setting or non-state-setting) command. For example, in
   //   setBindGroup(index, bindGroup, dynamicOffsets), every subresource in bindGroup is "used" in
   //   the render pass’s usage scope.
-  const success = !inRenderPass || !hasConflict;
+  const success =
+  !inRenderPass ||
+  IsReadOnlyTextureBindingType(textureUsage0) &&
+  IsReadOnlyTextureBindingType(textureUsage1) ||
+  textureUsage0 === textureUsage1;
   t.expectValidationError(() => {
     encoder.finish();
   }, !success);
@@ -324,16 +487,14 @@ u.
 combine('usage0', [
 'copy-src',
 'copy-dst',
-'texture',
-'storage',
-'color-attachment']
+'color-attachment',
+...kTextureBindingTypes]
 ).
 combine('usage1', [
 'copy-src',
 'copy-dst',
-'texture',
-'storage',
-'color-attachment']
+'color-attachment',
+...kTextureBindingTypes]
 ).
 filter(
   ({ usage0, usage1 }) =>
@@ -346,15 +507,18 @@ filter(
 fn((t) => {
   const { usage0, usage1 } = t.params;
 
-  const texture = t.device.createTexture({
-    format: 'rgba8unorm',
+  const texture = t.createTextureTracked({
+    format: 'r32float',
     usage:
     GPUTextureUsage.COPY_SRC |
     GPUTextureUsage.COPY_DST |
     GPUTextureUsage.TEXTURE_BINDING |
     GPUTextureUsage.STORAGE_BINDING |
     GPUTextureUsage.RENDER_ATTACHMENT,
-    size: [kTextureSize, kTextureSize, 1]
+    size: [kTextureSize, kTextureSize, 1],
+    ...(t.isCompatibility && {
+      textureBindingViewDimension: '2d-array'
+    })
   });
 
   const UseTextureOnCommandEncoder = (
@@ -386,10 +550,12 @@ fn((t) => {
           renderPassEncoder.end();
           break;
         }
-      case 'texture':
-      case 'storage':{
-          const colorTexture = t.device.createTexture({
-            format: 'rgba8unorm',
+      case 'sampled-texture':
+      case 'readonly-storage-texture':
+      case 'writeonly-storage-texture':
+      case 'readwrite-storage-texture':{
+          const colorTexture = t.createTextureTracked({
+            format: 'r32float',
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
             size: [kTextureSize, kTextureSize, 1]
           });
@@ -403,7 +569,7 @@ fn((t) => {
               dimension: '2d-array'
             }),
             usage,
-            'float'
+            'unfilterable-float'
           );
           renderPassEncoder.setBindGroup(0, bindGroup);
           renderPassEncoder.end();
@@ -417,4 +583,80 @@ fn((t) => {
   t.expectValidationError(() => {
     encoder.finish();
   }, false);
+});
+
+g.test('subresources,texture_view_usages').
+desc(
+  `
+  Test that the usages of the texture view are used to validate compatibility in command encoding
+  instead of the usages of the base texture.`
+).
+params((u) =>
+u.
+combine('bindingType', ['color-attachment', ...kTextureBindingTypes]).
+combine('viewUsage', [0, ...kTextureUsages])
+).
+fn((t) => {
+  const { bindingType, viewUsage } = t.params;
+
+  const texture = t.createTextureTracked({
+    format: 'r32float',
+    usage:
+    GPUTextureUsage.COPY_SRC |
+    GPUTextureUsage.COPY_DST |
+    GPUTextureUsage.TEXTURE_BINDING |
+    GPUTextureUsage.STORAGE_BINDING |
+    GPUTextureUsage.RENDER_ATTACHMENT,
+    size: [kTextureSize, kTextureSize, 1],
+    ...(t.isCompatibility && {
+      textureBindingViewDimension: '2d-array'
+    })
+  });
+
+  switch (bindingType) {
+    case 'color-attachment':{
+        const encoder = t.device.createCommandEncoder();
+        const renderPassEncoder = encoder.beginRenderPass({
+          colorAttachments: [
+          { view: texture.createView({ usage: viewUsage }), loadOp: 'load', storeOp: 'store' }]
+
+        });
+        renderPassEncoder.end();
+
+        const success = viewUsage === 0 || (viewUsage & GPUTextureUsage.RENDER_ATTACHMENT) !== 0;
+
+        t.expectValidationError(() => {
+          encoder.finish();
+        }, !success);
+        break;
+      }
+    case 'sampled-texture':
+    case 'readonly-storage-texture':
+    case 'writeonly-storage-texture':
+    case 'readwrite-storage-texture':
+      {
+        let success = true;
+        if (viewUsage !== 0) {
+          if (bindingType === 'sampled-texture') {
+            if ((viewUsage & GPUTextureUsage.TEXTURE_BINDING) === 0) success = false;
+          } else {
+            if ((viewUsage & GPUTextureUsage.STORAGE_BINDING) === 0) success = false;
+          }
+        }
+
+        t.expectValidationError(() => {
+          t.createBindGroupForTest(
+            texture.createView({
+              dimension: '2d-array',
+              usage: viewUsage
+            }),
+            bindingType,
+            'unfilterable-float'
+          );
+        }, !success);
+      }
+      break;
+    default:
+      unreachable();
+  }
 });

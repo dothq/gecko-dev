@@ -81,6 +81,10 @@ enum class DeclarationKind : uint8_t {
   Var,
   Let,
   Const,
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+  Using,
+  AwaitUsing,
+#endif
   Class,  // Handled as same as `let` after parsing.
   Import,
   BodyLevelFunction,
@@ -121,6 +125,12 @@ static inline BindingKind DeclarationKindToBindingKind(DeclarationKind kind) {
 
     case DeclarationKind::Const:
       return BindingKind::Const;
+
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    case DeclarationKind::AwaitUsing:
+    case DeclarationKind::Using:
+      return BindingKind::Using;
+#endif
 
     case DeclarationKind::Import:
       return BindingKind::Import;
@@ -177,7 +187,17 @@ class DeclaredNameInfo {
         kind_(kind),
         closedOver_(bool(closedOver)),
         privateNameKind_(PrivateNameKind::None),
-        placement_(FieldPlacement::Unspecified) {}
+        placement_(FieldPlacement::Unspecified) {
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+    // TODO: present we are brute forcing our way to
+    // enforce creating an environment object whenever we encounter
+    // a using declaration. This is temporary for prototyping
+    // this must be optimized. (Bug 1899502)
+    if (kind == DeclarationKind::Using || kind == DeclarationKind::AwaitUsing) {
+      closedOver_ = true;
+    }
+#endif
+  }
 
   // Needed for InlineMap.
   DeclaredNameInfo() = default;

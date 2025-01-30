@@ -9,15 +9,20 @@
   justify-content: space-between;
 }
 
-dialog:not([subdialog]) .editAddressForm {
-  margin-inline: calc(var(--grid-column-row-gap) / -2);
-}
-
 .editAddressForm .container {
   /* !important is needed to override preferences.css's generic label rule. */
   margin-top: var(--grid-column-row-gap) !important;
   margin-inline: calc(var(--grid-column-row-gap) / 2);
   flex-grow: 1;
+
+  &.new-line {
+    flex: 0 1 100%;
+  }
+
+  input, textarea, select {
+    width: 100%;
+    margin: 0;
+  }
 }
 
 #country-container {
@@ -27,12 +32,6 @@ dialog:not([subdialog]) .editAddressForm {
   flex-grow: 0;
   /* Country names can be longer than 50% which ruins the symmetry in the grid. */
   max-width: calc(50% - var(--grid-column-row-gap));
-}
-
-#name-container,
-#street-address-container {
-  /* Name and street address are always full-width */
-  flex: 0 1 100%;
 }
 
 #street-address {
@@ -50,11 +49,7 @@ dialog:not([subdialog]) .editAddressForm {
   flex: 1;
 }
 
-dialog:not([subdialog]) #country-warning-message {
-  display: none;
-}
-
-moz-button-group{
+moz-button-group {
   margin-inline: 4px;
   margin-block-end: 4px;
 }

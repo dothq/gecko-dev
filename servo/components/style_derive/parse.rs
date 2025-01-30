@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use crate::to_css::{CssBitflagAttrs, CssVariantAttrs};
-use derive_common::cg;
+use crate::cg;
 use proc_macro2::{Span, TokenStream};
 use quote::TokenStreamExt;
 use syn::{self, DeriveInput, Ident, Path};
@@ -14,6 +14,7 @@ use synstructure::{Structure, VariantInfo};
 pub struct ParseVariantAttrs {
     pub aliases: Option<String>,
     pub condition: Option<Path>,
+    pub parse_fn: Option<Path>,
 }
 
 #[derive(Default, FromField)]
@@ -88,7 +89,6 @@ fn parse_bitflags(bitflags: &CssBitflagAttrs) -> TokenStream {
 
 fn parse_non_keyword_variant(
     where_clause: &mut Option<syn::WhereClause>,
-    name: &syn::Ident,
     variant: &VariantInfo,
     variant_attrs: &CssVariantAttrs,
     parse_attrs: &ParseVariantAttrs,
@@ -103,12 +103,12 @@ fn parse_non_keyword_variant(
         1,
         "We only support deriving parse for simple variants"
     );
-    let variant_name = &variant.ast().ident;
     let binding_ast = &bindings[0].ast();
     let ty = &binding_ast.ty;
 
     if let Some(ref bitflags) = variant_attrs.bitflags {
         assert!(skip_try, "Should be the only variant");
+        assert!(parse_attrs.parse_fn.is_none(), "should not be needed");
         assert!(
             parse_attrs.condition.is_none(),
             "Should be the only variant"
@@ -118,19 +118,32 @@ fn parse_non_keyword_variant(
     }
 
     let field_attrs = cg::parse_field_attrs::<ParseFieldAttrs>(binding_ast);
+
     if field_attrs.field_bound {
         cg::add_predicate(where_clause, parse_quote!(#ty: crate::parser::Parse));
     }
 
-    let mut parse = if skip_try {
+    let mut parse = if let Some(ref parse_fn) = parse_attrs.parse_fn {
+        quote! { #parse_fn(context, input) }
+    } else {
+        quote! { <#ty as crate::parser::Parse>::parse(context, input) }
+    };
+
+    let variant_name = &variant.ast().ident;
+    let variant_name = match variant.prefix {
+        Some(p) => quote! { #p::#variant_name },
+        None => quote! { #variant_name },
+    };
+
+    parse = if skip_try {
         quote! {
-            let v = <#ty as crate::parser::Parse>::parse(context, input)?;
-            return Ok(#name::#variant_name(v));
+            let v = #parse?;
+            return Ok(#variant_name(v));
         }
     } else {
         quote! {
-            if let Ok(v) = input.try(|i| <#ty as crate::parser::Parse>::parse(context, i)) {
-                return Ok(#name::#variant_name(v));
+            if let Ok(v) = input.try(|input| #parse) {
+                return Ok(#variant_name(v));
             }
         }
     };
@@ -188,6 +201,8 @@ pub fn derive(mut input: DeriveInput) -> TokenStream {
             continue;
         }
 
+        assert!(parse_attrs.parse_fn.is_none());
+
         let identifier = cg::to_css_identifier(
             &css_variant_attrs
                 .keyword
@@ -231,7 +246,6 @@ pub fn derive(mut input: DeriveInput) -> TokenStream {
         let skip_try = !has_keywords && i == non_keywords.len() - 1;
         let parse_variant = parse_non_keyword_variant(
             &mut where_clause,
-            name,
             variant,
             css_attrs,
             parse_attrs,

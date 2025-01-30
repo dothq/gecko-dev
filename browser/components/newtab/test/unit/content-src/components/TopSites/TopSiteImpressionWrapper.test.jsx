@@ -2,7 +2,7 @@ import {
   TopSiteImpressionWrapper,
   INTERSECTION_RATIO,
 } from "content-src/components/TopSites/TopSiteImpressionWrapper";
-import { actionTypes as at } from "common/Actions.sys.mjs";
+import { actionTypes as at } from "common/Actions.mjs";
 import React from "react";
 import { shallow } from "enzyme";
 
@@ -135,6 +135,7 @@ describe("<TopSiteImpressionWrapper>", () => {
     );
   });
   it("should unobserve the intersection observer when the wrapper is removed", () => {
+    // eslint-disable-next-line no-shadow
     const IntersectionObserver =
       buildIntersectionObserver(ZeroIntersectEntries);
     const spy = sinon.spy(IntersectionObserver.prototype, "unobserve");

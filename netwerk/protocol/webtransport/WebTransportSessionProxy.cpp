@@ -27,6 +27,7 @@ namespace mozilla::net {
 LazyLogModule webTransportLog("nsWebTransport");
 
 NS_IMPL_ISUPPORTS(WebTransportSessionProxy, WebTransportSessionEventListener,
+                  WebTransportSessionEventListenerInternal,
                   WebTransportConnectionSettings, nsIWebTransport,
                   nsIRedirectResultListener, nsIStreamListener,
                   nsIChannelEventSink, nsIInterfaceRequestor);
@@ -256,7 +257,7 @@ void WebTransportSessionProxy::CloseSessionInternalLocked() {
   CloseSessionInternal();
 }
 
-void WebTransportSessionProxy::CloseSessionInternal() {
+void WebTransportSessionProxy::CloseSessionInternal() MOZ_REQUIRES(mMutex) {
   if (!OnSocketThread()) {
     mMutex.AssertCurrentThreadOwns();
     RefPtr<WebTransportSessionProxy> self(this);
@@ -961,7 +962,7 @@ void WebTransportSessionProxy::CallOnSessionClosedLocked() {
   CallOnSessionClosed();
 }
 
-void WebTransportSessionProxy::CallOnSessionClosed() {
+void WebTransportSessionProxy::CallOnSessionClosed() MOZ_REQUIRES(mMutex) {
   mMutex.AssertCurrentThreadOwns();
 
   if (!mTarget->IsOnCurrentThread()) {
@@ -1077,15 +1078,6 @@ void WebTransportSessionProxy::NotifyDatagramReceived(
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(mTarget->IsOnCurrentThread());
 
-    if (!mStopRequestCalled) {
-      CopyableTArray<uint8_t> copied(aData);
-      mPendingEvents.AppendElement(
-          [self = RefPtr{this}, data = std::move(copied)]() mutable {
-            self->NotifyDatagramReceived(std::move(data));
-          });
-      return;
-    }
-
     if (mState != WebTransportSessionProxyState::ACTIVE || !mListener) {
       return;
     }
@@ -1101,6 +1093,15 @@ NS_IMETHODIMP WebTransportSessionProxy::OnDatagramReceivedInternal(
 
   {
     MutexAutoLock lock(mMutex);
+    if (!mStopRequestCalled) {
+      CopyableTArray<uint8_t> copied(aData);
+      mPendingEvents.AppendElement(
+          [self = RefPtr{this}, data = std::move(copied)]() mutable {
+            self->OnDatagramReceivedInternal(std::move(data));
+          });
+      return NS_OK;
+    }
+
     if (!mTarget->IsOnCurrentThread()) {
       return mTarget->Dispatch(NS_NewRunnableFunction(
           "WebTransportSessionProxy::OnDatagramReceived",

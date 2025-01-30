@@ -49,6 +49,9 @@ Var ExtensionRecommender
 Var PageName
 Var PreventRebootRequired
 Var RegisterDefaultAgent
+; Will be the registry hive that we are going to write things like class keys
+; into. This will generally be HKLM if running with elevation, otherwise HKCU.
+Var RegHive
 
 ; Telemetry ping fields
 Var SetAsDefault
@@ -335,7 +338,7 @@ Section "-InstallStartCleanup"
     Delete "$INSTDIR\installation_telemetry.json"
   ${EndIf}
 
-  ; Explictly remove empty webapprt dir in case it exists (bug 757978).
+  ; Explicitly remove empty webapprt dir in case it exists (bug 757978).
   RmDir "$INSTDIR\webapprt\components"
   RmDir "$INSTDIR\webapprt"
 
@@ -425,11 +428,11 @@ Section "-Application" APP_IDX
   ClearErrors
   WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
   ${If} ${Errors}
-    StrCpy $TmpVal "HKCU" ; used primarily for logging
+    StrCpy $RegHive "HKCU"
   ${Else}
     SetShellVarContext all  ; Set SHCTX to HKLM
     DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
-    StrCpy $TmpVal "HKLM" ; used primarily for logging
+    StrCpy $RegHive "HKLM"
     ${RegCleanMain} "Software\Mozilla"
     ${RegCleanUninstall}
     ${UpdateProtocolHandlers}
@@ -474,27 +477,8 @@ Section "-Application" APP_IDX
   ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                  "${AppRegName} URL" "true"
 
-  ; Create protocol registry keys for FirefoxBridge extensions - only if not already set
-  SetShellVarContext current  ; Set SHCTX to HKCU
-  !define FIREFOX_PROTOCOL "firefox-bridge"
-  ClearErrors
-  ReadRegStr $0 SHCTX "Software\Classes\${FIREFOX_PROTOCOL}" ""
-  ${If} $0 == ""
-    ${AddDisabledDDEHandlerValues} "${FIREFOX_PROTOCOL}" "$2" "$8,${IDI_APPICON_ZERO_BASED}" \
-                                   "Firefox Bridge Protocol" "true"
-  ${EndIf}
-
-  !define FIREFOX_PRIVATE_PROTOCOL "firefox-private-bridge"
-  ClearErrors
-  ReadRegStr $0 SHCTX "Software\Classes\${FIREFOX_PRIVATE_PROTOCOL}" ""
-  ${If} $0 == ""
-    ${AddDisabledDDEHandlerValues} "${FIREFOX_PRIVATE_PROTOCOL}" "$\"$8$\" -osint -private-window $\"%1$\"" \
-                                   "$8,${IDI_PBICON_PB_EXE_ZERO_BASED}" "Firefox Private Bridge Protocol" "true"
-  ${EndIf}
-  SetShellVarContext all  ; Set SHCTX to HKLM
-
   ; The keys below can be set in HKCU if needed.
-  ${If} $TmpVal == "HKLM"
+  ${If} $RegHive == "HKLM"
     ; Set the Start Menu Internet and Registered App HKLM registry keys.
     ${SetStartMenuInternet} "HKLM"
     ${FixShellIconHandler} "HKLM"
@@ -515,7 +499,7 @@ Section "-Application" APP_IDX
     Pop $R0
     ${If} $R0 == "true"
     ; Only proceed if we have HKLM write access
-    ${AndIf} $TmpVal == "HKLM"
+    ${AndIf} $RegHive == "HKLM"
       ; The user is an admin, so we should default to installing the service.
       StrCpy $InstallMaintenanceService "1"
     ${Else}
@@ -536,15 +520,15 @@ Section "-Application" APP_IDX
   ; These need special handling on uninstall since they may be overwritten by
   ; an install into a different location.
   StrCpy $0 "Software\Microsoft\Windows\CurrentVersion\App Paths\${FileMainEXE}"
-  ${WriteRegStr2} $TmpVal "$0" "" "$INSTDIR\${FileMainEXE}" 0
-  ${WriteRegStr2} $TmpVal "$0" "Path" "$INSTDIR" 0
+  ${WriteRegStr2} $RegHive "$0" "" "$INSTDIR\${FileMainEXE}" 0
+  ${WriteRegStr2} $RegHive "$0" "Path" "$INSTDIR" 0
 
   StrCpy $0 "Software\Microsoft\MediaPlayer\ShimInclusionList\$R9"
-  ${CreateRegKey} "$TmpVal" "$0" 0
+  ${CreateRegKey} "$RegHive" "$0" 0
   StrCpy $0 "Software\Microsoft\MediaPlayer\ShimInclusionList\plugin-container.exe"
-  ${CreateRegKey} "$TmpVal" "$0" 0
+  ${CreateRegKey} "$RegHive" "$0" 0
 
-  ${If} $TmpVal == "HKLM"
+  ${If} $RegHive == "HKLM"
     ; Set the permitted LSP Categories
     ${SetAppLSPCategories} ${LSP_CATEGORIES}
   ${EndIf}
@@ -559,7 +543,7 @@ Section "-Application" APP_IDX
   WriteRegDWORD HKCU ${MOZ_LAUNCHER_SUBKEY} "$INSTDIR\${FileMainEXE}|Telemetry" 1
 !endif
 
-  ${WriteToastNotificationRegistration} $TmpVal
+  ${WriteToastNotificationRegistration} $RegHive
 
   ; Create shortcuts
   ${LogHeader} "Adding Shortcuts"
@@ -583,7 +567,7 @@ Section "-Application" APP_IDX
   Call FixShortcutAppModelIDs
   ; If the current context is all also perform Win7 taskbar and start menu link
   ; maintenance for the current user context.
-  ${If} $TmpVal == "HKLM"
+  ${If} $RegHive == "HKLM"
     SetShellVarContext current  ; Set SHCTX to HKCU
     Call FixShortcutAppModelIDs
     SetShellVarContext all  ; Set SHCTX to HKLM
@@ -624,6 +608,7 @@ Section "-Application" APP_IDX
     ${Else}
       CreateShortCut "$SMPROGRAMS\${BrandShortName}.lnk" "$INSTDIR\${FileMainEXE}"
       ${If} ${FileExists} "$SMPROGRAMS\${BrandShortName}.lnk"
+        ShellLink::SetShortCutDescription "$SMPROGRAMS\${BrandShortName}.lnk" "$(BRIEF_APP_DESC)"
         ShellLink::SetShortCutWorkingDirectory "$SMPROGRAMS\${BrandShortName}.lnk" \
                                                "$INSTDIR"
         ${If} "$AppUserModelID" != ""
@@ -652,9 +637,9 @@ Section "-Application" APP_IDX
   ${TouchStartMenuShortcut}
   SetShellVarContext current
   ${TouchStartMenuShortcut}
-  ${If} $TmpVal == "HKLM"
+  ${If} $RegHive == "HKLM"
     SetShellVarContext all
-  ${ElseIf} $TmpVal == "HKCU"
+  ${ElseIf} $RegHive == "HKCU"
     SetShellVarContext current
   ${EndIf}
 
@@ -671,6 +656,7 @@ Section "-Application" APP_IDX
     ${Else}
       CreateShortCut "$DESKTOP\${BrandShortName}.lnk" "$INSTDIR\${FileMainEXE}"
       ${If} ${FileExists} "$DESKTOP\${BrandShortName}.lnk"
+        ShellLink::SetShortCutDescription "$DESKTOP\${BrandShortName}.lnk" "$(BRIEF_APP_DESC)"
         ShellLink::SetShortCutWorkingDirectory "$DESKTOP\${BrandShortName}.lnk" \
                                                "$INSTDIR"
         ${If} "$AppUserModelID" != ""
@@ -721,7 +707,7 @@ Section "-Application" APP_IDX
 !endif
 
 !ifdef MOZ_MAINTENANCE_SERVICE
-  ${If} $TmpVal == "HKLM"
+  ${If} $RegHive == "HKLM"
     ; Add the registry keys for allowed certificates.
     ${AddMaintCertKeys}
   ${EndIf}
@@ -1046,6 +1032,13 @@ Function SendPing
     ReadINIStr $0 "$1" "Global" "version"
     nsJSON::Set /tree ping "Data" "distribution_version" /value '"$0"'
   ${EndIf}
+
+  ReadRegDWORD $0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "UBR"
+  ${If} ${Errors}
+    StrCpy $0 "-1" ; Assign -1 if an error occured during registry read
+  ${EndIf}
+  
+  nsJSON::Set /tree ping "Data" "windows_ubr" /value '$0'
 
   ${GetParameters} $0
   ${GetOptions} $0 "/LaunchedFromMSI" $0

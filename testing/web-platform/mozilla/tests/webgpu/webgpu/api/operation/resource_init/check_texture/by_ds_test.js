@@ -4,6 +4,7 @@
 import { virtualMipSize } from '../../../../util/texture/base.js';
 
 
+
 function makeFullscreenVertexModule(device) {
   return device.createShaderModule({
     code: `
@@ -119,7 +120,7 @@ subresourceRange) =>
       viewDescriptor.baseMipLevel
     );
 
-    const renderTexture = t.device.createTexture({
+    const renderTexture = t.createTextureTracked({
       size: [width, height, 1],
       format: 'r8unorm',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
@@ -129,7 +130,7 @@ subresourceRange) =>
     let resolveTexture = undefined;
     let resolveTarget = undefined;
     if (params.sampleCount > 1) {
-      resolveTexture = t.device.createTexture({
+      resolveTexture = t.createTextureTracked({
         size: [width, height, 1],
         format: 'r8unorm',
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
@@ -152,10 +153,10 @@ subresourceRange) =>
 
       depthStencilAttachment: {
         view: texture.createView(viewDescriptor),
-        depthStoreOp: formatInfo.depth ? 'store' : undefined,
         depthLoadOp: formatInfo.depth ? 'load' : undefined,
-        stencilStoreOp: formatInfo.stencil ? 'store' : undefined,
-        stencilLoadOp: formatInfo.stencil ? 'load' : undefined
+        depthStoreOp: formatInfo.depth ? 'store' : undefined,
+        stencilLoadOp: formatInfo.stencil ? 'load' : undefined,
+        stencilStoreOp: formatInfo.stencil ? 'store' : undefined
       }
     });
 

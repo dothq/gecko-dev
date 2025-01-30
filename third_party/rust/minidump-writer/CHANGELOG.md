@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+## [0.10.1] - 2024-09-20
+### Fixed
+- [PR#129](https://github.com/rust-minidump/minidump-writer/pull/129) added checking of additions to ensure invalid memory offsets are gracefully handled.
+- [PR#135](https://github.com/rust-minidump/minidump-writer/pull/135) resolved [#134](https://github.com/rust-minidump/minidump-writer/issues/134) by attempting to read the executables build id from the mapped file if it could not be retrieved from process memory.
+- [PR#136](https://github.com/rust-minidump/minidump-writer/pull/136) changed to an older type to avoid requiring a semi-recent rust version.
+
+## [0.10.0] - 2024-08-20
+### Changed
+- [PR#118](https://github.com/rust-minidump/minidump-writer/pull/118) resolved [#72](https://github.com/rust-minidump/minidump-writer/issues/72) by adding support for reading process memory via `process_vm_readv` and `/proc/{pid}/mem`, in addition to the original `PTRACE_PEEKDATA`. This gives significant performance benefits as memory can now be read in blocks of arbitrary size instead of word-by-word with ptrace.
+- [PR#128](https://github.com/rust-minidump/minidump-writer/pull/128) and [PR#133](https://github.com/rust-minidump/minidump-writer/pull/133) updated the lockfile.
+
+### Fixed
+- [PR#127](https://github.com/rust-minidump/minidump-writer/pull/127) resolved [#27](https://github.com/rust-minidump/minidump-writer/issues/27) by allowing programs to pass the needed auxv information, still falling back to reading `/proc/{pid}/auxv` to fill missing information, and being more permissive by still writing a dump if some or all of the auxv information could not be retrieved successfully rather than completely failing to write the minidump.
+- [PR#131](https://github.com/rust-minidump/minidump-writer/pull/131) resolved [#124](https://github.com/rust-minidump/minidump-writer/issues/124) by reinjecting non-`SIGSTOP` signals after `ptrace::attach` so that the thread would be in the correct state after `ptrace::detach`.
+
+## [0.9.0] - 2024-07-20
+### Fixed
+- [PR#117](https://github.com/rust-minidump/minidump-writer/pull/117) resolved [#79](https://github.com/rust-minidump/minidump-writer/issues/79) by enabling reading of a module's build id and soname directly from the mapped process rather than relying on file reading, though that is still used as a fallback.
+
+### Changed
+- [PR#126](https://github.com/rust-minidump/minidump-writer/pull/126) updated `minidump-common` -> 0.22.
+
+## [0.8.9] - 2024-04-01
+### Fixed
+- [PR#110](https://github.com/rust-minidump/minidump-writer/pull/110) changed it so that `SIGCONT` is sent regardless if the process was not able to be `SIGSTOP`ed quickly enough.
+- [PR#113](https://github.com/rust-minidump/minidump-writer/pull/113) fixed a segfault(!) on linux if it was compiled with rustc 1.77.0 in release mode.
+
+## [0.8.8] - 2024-03-21
+### Fixed
+- [PR#108](https://github.com/rust-minidump/minidump-writer/pull/108) resolved [#28](https://github.com/rust-minidump/minidump-writer/issues/28) by sending a `SIGSTOP` to the process that is about to be dumped to (hopefully) increase the robustness of the dumping process by reducing the chance of errors, particularly with regard to threads. This is done as a best effort, and will perform the old behavior if the process has not stopped within a timeout (by default 100ms), which can be overriden by the user.
+
+## [0.8.7] - 2024-03-04
+### Changed
+- [PR#106](https://github.com/rust-minidump/minidump-writer/pull/106) bumped `minidump-common`, `minidump`, `minidump-processor`, and `minidump-unwind` -> 0.21.
+
+## [0.8.6] - 2024-02-26
+### Changed
+- [PR#104](https://github.com/rust-minidump/minidump-writer/pull/104) slightly tweaked .so version parsing in the case of more "exotic" versions such as `libdbus-1.so.3.34.2rc5`. Previously this was parsed as `3.34.25` but would cause ambiguity if there was ever an _actual_ .25 patch/age in the future. Now, the last version is parsed as 1-2 numbers, ignoring non-digit characters if the last component has them. If 2 numbers are parsed, the last number is now placed in [VS_FIXEDFILEINFO::product_version_lo](https://docs.rs/minidump-common/latest/minidump_common/format/struct.VS_FIXEDFILEINFO.html#structfield.product_version_lo) so that it is distinct from the patch/age component placed in [VS_FIXEDFILEINFO::product_version_hi](https://docs.rs/minidump-common/latest/minidump_common/format/struct.VS_FIXEDFILEINFO.html#structfield.product_version_hi).
+
+## [0.8.5] - 2024-02-23
+### Added
+- [PR#103](https://github.com/rust-minidump/minidump-writer/pull/103) added `.so` file versions as additional metadata to minidumps, resolving [this Mozilla bug](https://bugzilla.mozilla.org/show_bug.cgi?id=1847098). There is no true standard for .so file versions, so this is a best effort to pull what version information we can from the .so filename. The version components are `major.minor.release` similarly to semver, where `major` -> [VS_FIXEDFILEINFO::file_version_hi](https://docs.rs/minidump-common/latest/minidump_common/format/struct.VS_FIXEDFILEINFO.html#structfield.file_version_hi), `major` -> [VS_FIXEDFILEINFO::file_version_lo](https://docs.rs/minidump-common/latest/minidump_common/format/struct.VS_FIXEDFILEINFO.html#structfield.file_version_lo),  and `release` -> [VS_FIXEDFILEINFO::product_version_hi](https://docs.rs/minidump-common/latest/minidump_common/format/struct.VS_FIXEDFILEINFO.html#structfield.product_version_hi)
+  - `libmozsandbox.so` -> `0.0.0`
+  - `libstdc++.so.6.0.32` -> `6.0.32`
+  - `libcairo-gobject.so.2.11800.0` -> `2.11800.0`
+  - `libm.so.6` -> `6.0.0`
+  - `libabsl_time_zone.so.20220623.0.0` -> `20220623.0.0`
+  - `libdbus-1.so.3.34.2rc5` -> `3.34.25`
+
+## [0.8.4] - 2024-02-15
+### Changed
+- [PR#97](https://github.com/rust-minidump/minidump-writer/pull/97) bumped `goblin` -> 0.8.
+- [PR#99](https://github.com/rust-minidump/minidump-writer/pull/99) bumped `minidump-common` -> 0.20, `scroll` -> 0.12, `memmap2` -> 0.9.
+
 ## [0.8.3] - 2023-11-07
 ### Added
 - [PR#94](https://github.com/rust-minidump/minidump-writer/pull/94) added support for writing [file information](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/ns-minidumpapiset-minidump_handle_descriptor) for every file open in the process the dump is being performed for into the [`MINIDUMP_HANDLE_DATA_STREAM`](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/ns-minidumpapiset-minidump_handle_data_stream) stream.
@@ -103,7 +157,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release, including basic support for `x86_64-unknown-linux-gnu/musl` and `x86_64-pc-windows-msvc`
 
 <!-- next-url -->
-[Unreleased]: https://github.com/rust-minidump/minidump-writer/compare/0.8.3...HEAD
+[Unreleased]: https://github.com/rust-minidump/minidump-writer/compare/0.10.1...HEAD
+[0.10.1]: https://github.com/rust-minidump/minidump-writer/compare/0.10.0...0.10.1
+[0.10.0]: https://github.com/rust-minidump/minidump-writer/compare/0.9.0...0.10.0
+[0.9.0]: https://github.com/rust-minidump/minidump-writer/compare/0.8.9...0.9.0
+[0.8.9]: https://github.com/rust-minidump/minidump-writer/compare/0.8.8...0.8.9
+[0.8.8]: https://github.com/rust-minidump/minidump-writer/compare/0.8.7...0.8.8
+[0.8.7]: https://github.com/rust-minidump/minidump-writer/compare/0.8.6...0.8.7
+[0.8.6]: https://github.com/rust-minidump/minidump-writer/compare/0.8.5...0.8.6
+[0.8.5]: https://github.com/rust-minidump/minidump-writer/compare/0.8.4...0.8.5
+[0.8.4]: https://github.com/rust-minidump/minidump-writer/compare/0.8.3...0.8.4
 [0.8.3]: https://github.com/rust-minidump/minidump-writer/compare/0.8.2...0.8.3
 [0.8.2]: https://github.com/rust-minidump/minidump-writer/compare/0.8.1...0.8.2
 [0.8.1]: https://github.com/rust-minidump/minidump-writer/compare/0.8.0...0.8.1

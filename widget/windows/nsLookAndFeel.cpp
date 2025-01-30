@@ -36,6 +36,17 @@ static int32_t GetSystemParam(long flag, int32_t def) {
   return ::SystemParametersInfo(flag, 0, &value, 0) ? value : def;
 }
 
+static int32_t GetTooltipOffsetVertical() {
+  static constexpr DWORD kDefaultCursorSize = 32;
+  const DWORD cursorSize =
+      GetSystemParam(MOZ_SPI_CURSORSIZE, kDefaultCursorSize);
+  if (cursorSize == kDefaultCursorSize) {
+    return LookAndFeel::kDefaultTooltipOffset;
+  }
+  return std::ceilf(float(LookAndFeel::kDefaultTooltipOffset) *
+                    float(cursorSize) / float(kDefaultCursorSize));
+}
+
 static bool SystemWantsDarkTheme() {
   if (nsUXThemeData::IsHighContrastOn()) {
     return LookAndFeel::IsDarkColor(
@@ -92,6 +103,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
 
   auto IsHighlightColor = [&] {
     switch (aID) {
+      case ColorID::MozButtonhoverface:
+      case ColorID::MozButtonactivetext:
+        return nsUXThemeData::IsHighContrastOn();
       case ColorID::MozMenuhover:
         return !UseNonNativeMenuColors(aScheme);
       case ColorID::Highlight:
@@ -109,6 +123,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
 
   auto IsHighlightTextColor = [&] {
     switch (aID) {
+      case ColorID::MozButtonhovertext:
+      case ColorID::MozButtonactiveface:
+        return nsUXThemeData::IsHighContrastOn();
       case ColorID::MozMenubarhovertext:
         if (UseNonNativeMenuColors(aScheme)) {
           return false;
@@ -300,7 +317,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
       break;
     case ColorID::Threedlightshadow:
     case ColorID::Buttonborder:
-    case ColorID::MozDisabledfield:
     case ColorID::MozSidebarborder:
       idx = COLOR_3DLIGHT;
       break;
@@ -316,14 +332,22 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::Windowtext:
       idx = COLOR_WINDOWTEXT;
       break;
+    case ColorID::MozDisabledfield:
+      idx = nsUXThemeData::IsHighContrastOn() ? COLOR_BTNFACE : COLOR_3DLIGHT;
+      break;
+    case ColorID::Field:
+      idx = nsUXThemeData::IsHighContrastOn() ? COLOR_BTNFACE : COLOR_WINDOW;
+      break;
+    case ColorID::Fieldtext:
+      idx =
+          nsUXThemeData::IsHighContrastOn() ? COLOR_BTNTEXT : COLOR_WINDOWTEXT;
+      break;
     case ColorID::MozEventreerow:
     case ColorID::MozOddtreerow:
-    case ColorID::Field:
     case ColorID::MozSidebar:
     case ColorID::MozCombobox:
       idx = COLOR_WINDOW;
       break;
-    case ColorID::Fieldtext:
     case ColorID::MozSidebartext:
     case ColorID::MozComboboxtext:
       idx = COLOR_WINDOWTEXT;
@@ -353,6 +377,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::Marktext:
     case ColorID::Mark:
     case ColorID::SpellCheckerUnderline:
+    case ColorID::MozAutofillBackground:
+    case ColorID::TargetTextBackground:
+    case ColorID::TargetTextForeground:
       aColor = GetStandinForNativeColor(aID, aScheme);
       return NS_OK;
     default:
@@ -392,12 +419,8 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       aResult = std::ceil(float(timeout) / (2.0f * float(blinkTime)));
       break;
     }
-
     case IntID::CaretWidth:
       aResult = 1;
-      break;
-    case IntID::ShowCaretDuringSelection:
-      aResult = 0;
       break;
     case IntID::SelectTextfieldsOnKeyFocus:
       // Select textfield content when focused by kbd
@@ -446,9 +469,12 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::TreeScrollLinesMax:
       aResult = 3;
       break;
-    case IntID::WindowsAccentColorInTitlebar: {
+    case IntID::WindowsAccentColorInTitlebar:
       aResult = mTitlebarColors.mUseAccent;
-    } break;
+      break;
+    case IntID::WindowsMica:
+      aResult = WinUtils::MicaEnabled();
+      break;
     case IntID::AlertNotificationOrigin:
       aResult = 0;
       {
@@ -523,6 +549,9 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::ContextMenuOffsetHorizontal:
       aResult = 2;
       break;
+    case IntID::TooltipOffsetVertical:
+      aResult = GetTooltipOffsetVertical();
+      break;
     case IntID::SystemUsesDarkTheme:
       aResult = SystemWantsDarkTheme();
       break;
@@ -569,6 +598,21 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       BOOL enable = TRUE;
       ::SystemParametersInfoW(SPI_GETMOUSEVANISH, 0, &enable, 0);
       aResult = enable;
+      break;
+    }
+    case IntID::PointingDeviceKinds: {
+      LookAndFeel::PointingDeviceKinds result =
+          LookAndFeel::PointingDeviceKinds::None;
+      if (WinUtils::SystemHasMouse()) {
+        result |= LookAndFeel::PointingDeviceKinds::Mouse;
+      }
+      if (WinUtils::SystemHasTouch()) {
+        result |= LookAndFeel::PointingDeviceKinds::Touch;
+      }
+      if (WinUtils::SystemHasPen()) {
+        result |= LookAndFeel::PointingDeviceKinds::Pen;
+      }
+      aResult = static_cast<int32_t>(result);
       break;
     }
     default:
@@ -809,6 +853,12 @@ auto nsLookAndFeel::ComputeTitlebarColors() -> TitlebarColors {
   result.mAccentInactive = dwmKey.GetValueAsDword(u"AccentColorInactive"_ns);
   result.mAccentInactiveText = GetAccentColorText(result.mAccentInactive);
 
+  if (WinUtils::MicaEnabled()) {
+    // Use transparent titlebar backgrounds when using mica.
+    result.mActiveDark.mBg = result.mActiveLight.mBg =
+        result.mInactiveDark.mBg = result.mInactiveLight.mBg = NS_TRANSPARENT;
+  }
+
   // The ColorPrevalence value is set to 1 when the "Show color on title bar"
   // setting in the Color section of Window's Personalization settings is
   // turned on.
@@ -850,6 +900,16 @@ auto nsLookAndFeel::ComputeTitlebarColors() -> TitlebarColors {
     result.mInactiveLight.mFg = result.mInactiveDark.mFg = *result.mAccentText;
   }
   return result;
+}
+
+nsresult nsLookAndFeel::GetKeyboardLayoutImpl(nsACString& aLayout) {
+  char layout[KL_NAMELENGTH];
+  if (!::GetKeyboardLayoutNameA(layout)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  aLayout.Assign(layout);
+
+  return NS_OK;
 }
 
 void nsLookAndFeel::EnsureInit() {

@@ -2,8 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { html } from "chrome://global/content/vendor/lit.all.mjs";
+import { html, when } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
+// eslint-disable-next-line import/no-unassigned-import
+import "chrome://global/content/elements/moz-support-link.mjs";
 
 /**
  * A grouping of navigation buttons that is displayed at the page level,
@@ -18,7 +20,7 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 export default class MozPageNav extends MozLitElement {
   static properties = {
     currentView: { type: String },
-    heading: { type: String },
+    heading: { type: String, fluent: true },
   };
 
   static queries = {
@@ -29,6 +31,14 @@ export default class MozPageNav extends MozLitElement {
 
   get pageNavButtons() {
     return this.primaryNavGroupSlot
+      .assignedNodes()
+      .filter(
+        node => node?.localName === "moz-page-nav-button" && !node.hidden
+      );
+  }
+
+  get secondaryNavButtons() {
+    return this.secondaryNavGroupSlot
       .assignedNodes()
       .filter(
         node => node?.localName === "moz-page-nav-button" && !node.hidden
@@ -69,6 +79,14 @@ export default class MozPageNav extends MozLitElement {
     }
   }
 
+  onSecondaryNavChange(event) {
+    let secondaryNavElements = event.target.assignedElements();
+    this.hasSecondaryNav = !!secondaryNavElements.length;
+    secondaryNavElements?.forEach(el => {
+      el.classList.add("secondary-nav-item");
+    });
+  }
+
   render() {
     return html`
       <link
@@ -76,7 +94,10 @@ export default class MozPageNav extends MozLitElement {
         href="chrome://global/content/elements/moz-page-nav.css"
       />
       <nav>
-        <h1 class="page-nav-header" id="page-nav-header">${this.heading}</h1>
+        <div class="page-nav-header-wrapper">
+          <div class="logo"></div>
+          <h1 class="page-nav-header" id="page-nav-header">${this.heading}</h1>
+        </div>
         <div
           class="primary-nav-group"
           role="tablist"
@@ -88,8 +109,12 @@ export default class MozPageNav extends MozLitElement {
             @keydown=${this.handleFocus}
           ></slot>
         </div>
+        ${when(this.hasSecondaryNav, () => html`<hr />`)}
         <div id="secondary-nav-group" role="group">
-          <slot name="secondary-nav" @keydown=${this.handleFocus}></slot>
+          <slot
+            name="secondary-nav"
+            @slotchange=${this.onSecondaryNavChange}
+          ></slot>
         </div>
       </nav>
     `;
@@ -114,16 +139,18 @@ customElements.define("moz-page-nav", MozPageNav);
  * A navigation button intended to change the selected view within a page.
  *
  * @tagname moz-page-nav-button
+ * @property {string} href - (optional) The url for an external link if not a support page URL
  * @property {string} iconSrc - The chrome:// url for the icon used for the button.
- * @property {string} l10nId - The fluent ID for the button's text
  * @property {boolean} selected - Whether or not the button is currently selected.
+ * @property {string} supportPage - (optional) The short name for the support page a secondary link should launch to
  * @slot [default] - Used to append the l10n string to the button.
  */
 export class MozPageNavButton extends MozLitElement {
   static properties = {
     iconSrc: { type: String },
-    l10nId: { type: String },
+    href: { type: String },
     selected: { type: Boolean },
+    supportPage: { type: String, attribute: "support-page" },
   };
 
   connectedCallback() {
@@ -133,6 +160,7 @@ export class MozPageNavButton extends MozLitElement {
 
   static queries = {
     buttonEl: "button",
+    linkEl: "a",
   };
 
   get view() {
@@ -148,12 +176,15 @@ export class MozPageNavButton extends MozLitElement {
     );
   }
 
-  render() {
+  itemTemplate() {
+    if (this.href || this.supportPage) {
+      return this.linkTemplate();
+    }
+    return this.buttonTemplate();
+  }
+
+  buttonTemplate() {
     return html`
-      <link
-        rel="stylesheet"
-        href="chrome://global/content/elements/moz-page-nav-button.css"
-      />
       <button
         aria-selected=${this.selected}
         tabindex=${this.selected ? 0 : -1}
@@ -161,9 +192,50 @@ export class MozPageNavButton extends MozLitElement {
         ?selected=${this.selected}
         @click=${this.activate}
       >
-        <img class="page-nav-icon" src=${this.iconSrc} />
-        <slot></slot>
+        ${this.innerContentTemplate()}
       </button>
+    `;
+  }
+
+  linkTemplate() {
+    if (this.supportPage) {
+      return html`
+        <a
+          is="moz-support-link"
+          class="moz-page-nav-link"
+          support-page=${this.supportPage}
+        >
+          ${this.innerContentTemplate()}
+        </a>
+      `;
+    }
+    return html`
+      <a href=${this.href} class="moz-page-nav-link" target="_blank">
+        ${this.innerContentTemplate()}
+      </a>
+    `;
+  }
+
+  innerContentTemplate() {
+    return html`
+      ${this.iconSrc
+        ? html`<img
+            class="page-nav-icon"
+            src=${this.iconSrc}
+            role="presentation"
+          />`
+        : ""}
+      <slot></slot>
+    `;
+  }
+
+  render() {
+    return html`
+      <link
+        rel="stylesheet"
+        href="chrome://global/content/elements/moz-page-nav-button.css"
+      />
+      ${this.itemTemplate()}
     `;
   }
 }

@@ -41,7 +41,7 @@ doesn't only contain trivial geometry, it can also store another
 [stacking_contexts]: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Positioning/Understanding_z_index/The_stacking_context
 */
 
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::unreadable_literal, clippy::new_without_default, clippy::too_many_arguments))]
+#![allow(clippy::unreadable_literal, clippy::new_without_default, clippy::too_many_arguments)]
 
 
 // Cribbed from the |matches| crate, for simplicity.
@@ -101,11 +101,13 @@ mod gpu_types;
 mod hit_test;
 mod internal_types;
 mod lru_cache;
+mod pattern;
 mod picture;
 mod picture_graph;
 mod prepare;
 mod prim_store;
 mod print_tree;
+mod quad;
 mod render_backend;
 mod render_target;
 mod render_task_graph;
@@ -130,6 +132,8 @@ mod image_tiling;
 mod image_source;
 mod rectangle_occlusion;
 mod picture_textures;
+mod frame_allocator;
+mod bump_allocator;
 
 ///
 pub mod intern;
@@ -162,6 +166,7 @@ pub extern crate api;
 extern crate webrender_build;
 
 #[doc(hidden)]
+pub use crate::composite::{LayerCompositor, CompositorInputConfig, CompositorSurfaceUsage};
 pub use crate::composite::{CompositorConfig, Compositor, CompositorCapabilities, CompositorSurfaceTransform};
 pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, PartialPresentCompositor};
 pub use crate::composite::{MappableCompositor, MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility};
@@ -175,7 +180,7 @@ pub use crate::renderer::{
     RendererStats, Shaders, SharedShaders, ShaderPrecacheFlags,
     MAX_VERTEX_TEXTURE_WIDTH,
 };
-pub use crate::renderer::init::{WebRenderOptions, create_webrender_instance, AsyncPropertySampler, SceneBuilderHooks, ONE_TIME_USAGE_HINT};
+pub use crate::renderer::init::{WebRenderOptions, create_webrender_instance, AsyncPropertySampler, SceneBuilderHooks, RenderBackendHooks, ONE_TIME_USAGE_HINT};
 pub use crate::hit_test::SharedHitTester;
 pub use crate::internal_types::FastHashMap;
 pub use crate::screen_capture::{AsyncScreenshotHandle, RecordedFrameHandle};
@@ -189,6 +194,7 @@ pub use crate::intern::ItemUid;
 pub use crate::render_api::*;
 pub use crate::tile_cache::{PictureCacheDebugInfo, DirtyTileDebugInfo, TileDebugInfo, SliceDebugInfo};
 pub use glyph_rasterizer;
+pub use bump_allocator::ChunkPool;
 
 #[cfg(feature = "sw_compositor")]
 pub use crate::compositor::sw_compositor;

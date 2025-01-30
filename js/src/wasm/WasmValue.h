@@ -19,6 +19,8 @@
 #ifndef wasm_val_h
 #define wasm_val_h
 
+#include <string.h>
+
 #include "js/Class.h"  // JSClassOps, ClassSpec
 #include "vm/JSObject.h"
 #include "vm/NativeObject.h"  // NativeObject
@@ -55,12 +57,7 @@ struct V128 {
   }
 
   bool operator==(const V128& rhs) const {
-    for (size_t i = 0; i < sizeof(bytes); i++) {
-      if (bytes[i] != rhs.bytes[i]) {
-        return false;
-      }
-    }
-    return true;
+    return memcmp(bytes, rhs.bytes, sizeof(bytes)) == 0;
   }
 
   bool operator!=(const V128& rhs) const { return !(*this == rhs); }
@@ -224,9 +221,9 @@ class LitVal {
   Cell& cell() { return cell_; }
   const Cell& cell() const { return cell_; }
 
-  // Updates the type of the LitVal. Does not check that the type is valid for the
-  // actual value, so make sure the type is definitely correct via validation or
-  // something.
+  // Updates the type of the LitVal. Does not check that the type is valid for
+  // the actual value, so make sure the type is definitely correct via
+  // validation or something.
   void unsafeSetType(ValType type) { type_ = type; }
 
   uint32_t i32() const {
@@ -350,60 +347,17 @@ using ValVectorN = GCVector<Val, N, SystemAllocPolicy>;
 template <int N>
 using RootedValVectorN = Rooted<ValVectorN<N>>;
 
-// Check a value against the given reference type.  If the targetType
-// is RefType::Extern then the test always passes, but the value may be boxed.
-// If the test passes then the value is stored either in fnval (for
-// RefType::Func) or in refval (for other types); this split is not strictly
-// necessary but is convenient for the users of this function.
-//
-// This can return false if the type check fails, or if a boxing into AnyRef
-// throws an OOM.
+// Check if a JS value matches against a given reference type.
+// Returns true and gives the corresponding wasm::AnyRef value for the JS value
+// if the type check succeeds. Returns false and sets an error if the type
+// check fails, or boxing the wasm::AnyRef failed due to an OOM.
 [[nodiscard]] extern bool CheckRefType(JSContext* cx, RefType targetType,
-                                       HandleValue v,
-                                       MutableHandleFunction fnval,
-                                       MutableHandleAnyRef refval);
+                                       HandleValue v, MutableHandleAnyRef vp);
+// The same as above, but discards the resulting wasm::AnyRef. This may still
+// fail due to an OOM.
+[[nodiscard]] extern bool CheckRefType(JSContext* cx, RefType targetType,
+                                       HandleValue v);
 
-// The same as above for when the target type is 'funcref'.
-[[nodiscard]] extern bool CheckFuncRefValue(JSContext* cx, HandleValue v,
-                                            MutableHandleFunction fun);
-
-// The same as above for when the target type is 'anyref'.
-[[nodiscard]] extern bool CheckAnyRefValue(JSContext* cx, HandleValue v,
-                                           MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'nullexternref'.
-[[nodiscard]] extern bool CheckNullExternRefValue(JSContext* cx, HandleValue v,
-                                                  MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'nullfuncref'.
-[[nodiscard]] extern bool CheckNullFuncRefValue(JSContext* cx, HandleValue v,
-                                                MutableHandleFunction fun);
-
-// The same as above for when the target type is 'nullref'.
-[[nodiscard]] extern bool CheckNullRefValue(JSContext* cx, HandleValue v,
-                                            MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'eqref'.
-[[nodiscard]] extern bool CheckEqRefValue(JSContext* cx, HandleValue v,
-                                          MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'i31ref'.
-[[nodiscard]] extern bool CheckI31RefValue(JSContext* cx, HandleValue v,
-                                           MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'structref'.
-[[nodiscard]] extern bool CheckStructRefValue(JSContext* cx, HandleValue v,
-                                              MutableHandleAnyRef vp);
-
-// The same as above for when the target type is 'arrayref'.
-[[nodiscard]] extern bool CheckArrayRefValue(JSContext* cx, HandleValue v,
-                                             MutableHandleAnyRef vp);
-
-// The same as above for when the target type is '(ref T)'.
-[[nodiscard]] extern bool CheckTypeRefValue(JSContext* cx,
-                                            const TypeDef* typeDef,
-                                            HandleValue v,
-                                            MutableHandleAnyRef vp);
 class NoDebug;
 class DebugCodegenVal;
 

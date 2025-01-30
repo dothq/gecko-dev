@@ -308,13 +308,15 @@ xpcAccessible::GetAttributes(nsIPersistentProperties** aAttributes) {
   NS_ENSURE_ARG_POINTER(aAttributes);
   *aAttributes = nullptr;
 
-  if (!IntlGeneric()) {
+  Accessible* acc = IntlGeneric();
+  if (!acc) {
     return NS_ERROR_FAILURE;
   }
 
   RefPtr<nsPersistentProperties> props = new nsPersistentProperties();
 
-  RefPtr<AccAttributes> attributes = IntlGeneric()->Attributes();
+  RefPtr<AccAttributes> attributes = acc->Attributes();
+  nsAccUtils::SetAccGroupAttrs(attributes, acc);
 
   nsAutoString unused;
   for (auto iter : *attributes) {
@@ -636,7 +638,8 @@ xpcAccessible::ScrollToPoint(uint32_t aCoordinateType, int32_t aX, int32_t aY) {
 
 NS_IMETHODIMP
 xpcAccessible::Announce(const nsAString& aAnnouncement, uint16_t aPriority) {
-  if (RemoteAccessible* proxy = IntlGeneric()->AsRemote()) {
+  RemoteAccessible* proxy = IntlGeneric()->AsRemote();
+  if (proxy) {
 #if defined(XP_WIN)
     return NS_ERROR_NOT_IMPLEMENTED;
 #else

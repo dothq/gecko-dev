@@ -116,6 +116,11 @@ function displayDns(data) {
   new_cont.setAttribute("id", "dns_content");
 
   for (let i = 0; i < data.entries.length; i++) {
+    // TODO: Will be supported in bug 1889387.
+    if (data.entries[i].type != Ci.nsIDNSService.RESOLVE_TYPE_DEFAULT) {
+      continue;
+    }
+
     let row = document.createElement("tr");
     row.appendChild(col(data.entries[i].hostname));
     row.appendChild(col(data.entries[i].family));
@@ -269,6 +274,11 @@ function init() {
     if (e.target && e.target.parentNode == menu) {
       show(e.target);
     }
+  });
+
+  let clearHTTPCache = document.getElementById("clearHTTPCache");
+  clearHTTPCache.addEventListener("click", async function () {
+    Services.cache2.clear();
   });
 
   let dnsLookupButton = document.getElementById("dnsLookupButton");

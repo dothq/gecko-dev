@@ -521,6 +521,11 @@ Result<Usage, QMResult> FileSystemDatabaseManagerVersion001::GetFileUsage(
   return totalFiles;
 }
 
+Result<quota::UsageInfo, QMResult>
+FileSystemDatabaseManagerVersion001::GetUsage() const {
+  return FileSystemDatabaseManager::GetUsage(mConnection, mClientMetadata);
+}
+
 nsresult FileSystemDatabaseManagerVersion001::UpdateUsage(
     const FileId& aFileId) {
   // We don't track directories or non-existent files.
@@ -1233,7 +1238,7 @@ void FileSystemDatabaseManagerVersion001::DecreaseCachedQuotaUsage(
 }
 
 nsresult FileSystemDatabaseManagerVersion001::UpdateCachedQuotaUsage(
-    const FileId& aFileId, Usage aOldUsage, Usage aNewUsage) {
+    const FileId& aFileId, Usage aOldUsage, Usage aNewUsage) const {
   quota::QuotaManager* quotaManager = quota::QuotaManager::Get();
   MOZ_ASSERT(quotaManager);
 

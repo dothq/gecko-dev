@@ -14,8 +14,12 @@ interface nsIEnterprisePolicies : nsISupports
   const short FAILED        = 2;
 
   readonly attribute short status;
+  // We only consider a build to be enterprise when certain conditions are
+  // met. This value is set between profile-do-change and addons-startup,
+  // so it should be usable from most places.
+  readonly attribute boolean isEnterprise;
 
-  bool isAllowed(in ACString feature);
+  boolean isAllowed(in ACString feature);
 
   /**
    * Get the active policies that have been successfully parsed.
@@ -56,7 +60,7 @@ interface nsIEnterprisePolicies : nsISupports
    *
    * @returns A boolean - true of the addon may be installed.
    */
-  bool mayInstallAddon(in jsval addon);
+  boolean mayInstallAddon(in jsval addon);
 
   /**
    * Uses install_sources to determine if an addon can be installed
@@ -64,7 +68,7 @@ interface nsIEnterprisePolicies : nsISupports
    *
    * @returns A boolean - true of the addon may be installed.
    */
-  bool allowedInstallSource(in nsIURI uri);
+  boolean allowedInstallSource(in nsIURI uri);
   /**
    * Uses ExemptDomainFileTypePairsFromFileTypeDownloadWarnings to determine
    * if a given file extension is exempted from executable behavior and
@@ -72,5 +76,5 @@ interface nsIEnterprisePolicies : nsISupports
    *
    * @returns A boolean - true if the extension should be exempt.
    */
-  bool isExemptExecutableExtension(in ACString url, in ACString extension);
+  boolean isExemptExecutableExtension(in ACString url, in ACString extension);
 };

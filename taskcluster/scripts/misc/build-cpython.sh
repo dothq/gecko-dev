@@ -35,7 +35,7 @@ case `uname -s` in
                 macosx_version_min=10.12
                 ;;
         esac
-        macosx_sdk=14.2
+        macosx_sdk=14.4
         # NOTE: both CFLAGS and CPPFLAGS need to be set here, otherwise
         # configure step fails.
         sysroot_flags="-isysroot ${MOZ_FETCHES_DIR}/MacOSX${macosx_sdk}.sdk -mmacosx-version-min=${macosx_version_min}"
@@ -67,7 +67,7 @@ work_dir=`pwd`
 tardir=python
 
 cd `mktemp -d`
-${python_src}/configure --prefix=/${tardir} --enable-optimizations ${configure_flags_extra} || { exit_status=$? && cat config.log && exit $exit_status ; }
+${python_src}/configure --prefix=/${tardir} --enable-optimizations --with-lto ${configure_flags_extra} || { exit_status=$? && cat config.log && exit $exit_status ; }
 
 export MAKEFLAGS=-j`nproc`
 make
@@ -105,11 +105,11 @@ case `uname -s` in
         ${work_dir}/python/bin/python3 -m pip install certifi==2024.2.2
         ;;
     Linux)
-        cp /usr/lib/x86_64-linux-gnu/libffi.so.* ${work_dir}/python/lib/
-        cp /usr/lib/x86_64-linux-gnu/libssl.so.* ${work_dir}/python/lib/
-        cp /usr/lib/x86_64-linux-gnu/libcrypto.so.* ${work_dir}/python/lib/
-        cp /lib/x86_64-linux-gnu/libncursesw.so.* ${work_dir}/python/lib/
-        cp /lib/x86_64-linux-gnu/libtinfo.so.* ${work_dir}/python/lib/
+        cp /usr/lib/$(uname -m)-linux-gnu/libffi.so.* ${work_dir}/python/lib/
+        cp /usr/lib/$(uname -m)-linux-gnu/libssl.so.* ${work_dir}/python/lib/
+        cp /usr/lib/$(uname -m)-linux-gnu/libcrypto.so.* ${work_dir}/python/lib/
+        cp /lib/$(uname -m)-linux-gnu/libncursesw.so.* ${work_dir}/python/lib/
+        cp /lib/$(uname -m)-linux-gnu/libtinfo.so.* ${work_dir}/python/lib/
         ;;
 esac
 

@@ -6,7 +6,7 @@ use crate::context::QuirksMode;
 use crate::error_reporting::{ContextualParseError, ParseErrorReporter};
 use crate::media_queries::{Device, MediaList};
 use crate::parser::ParserContext;
-use crate::shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked};
+use crate::shared_lock::{DeepCloneWithLock, Locked};
 use crate::shared_lock::{SharedRwLock, SharedRwLockReadGuard};
 use crate::stylesheets::loader::StylesheetLoader;
 use crate::stylesheets::rule_parser::{State, TopLevelRuleParser};
@@ -23,6 +23,8 @@ use parking_lot::RwLock;
 use servo_arc::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use style_traits::ParsingMode;
+
+use super::scope_rule::ImplicitScopeRoot;
 
 /// This structure holds the user-agent and user stylesheets.
 pub struct UserAgentStylesheets {
@@ -162,13 +164,12 @@ impl DeepCloneWithLock for StylesheetContents {
         &self,
         lock: &SharedRwLock,
         guard: &SharedRwLockReadGuard,
-        params: &DeepCloneParams,
     ) -> Self {
         // Make a deep clone of the rules, using the new lock.
         let rules = self
             .rules
             .read_with(guard)
-            .deep_clone_with_lock(lock, guard, params);
+            .deep_clone_with_lock(lock, guard);
 
         Self {
             rules: Arc::new(lock.wrap(rules)),
@@ -249,6 +250,9 @@ pub trait StylesheetInDocument: ::std::fmt::Debug {
     ) -> EffectiveRulesIterator<'a, 'b> {
         self.iter_rules::<EffectiveRules>(device, guard)
     }
+
+    /// Return the implicit scope root for this stylesheet, if one exists.
+    fn implicit_scope_root(&self) -> Option<ImplicitScopeRoot>;
 }
 
 impl StylesheetInDocument for Stylesheet {
@@ -263,6 +267,10 @@ impl StylesheetInDocument for Stylesheet {
     #[inline]
     fn contents(&self) -> &StylesheetContents {
         &self.contents
+    }
+
+    fn implicit_scope_root(&self) -> Option<ImplicitScopeRoot> {
+        None
     }
 }
 
@@ -292,6 +300,10 @@ impl StylesheetInDocument for DocumentStyleSheet {
     #[inline]
     fn contents(&self) -> &StylesheetContents {
         self.0.contents()
+    }
+
+    fn implicit_scope_root(&self) -> Option<ImplicitScopeRoot> {
+        None
     }
 }
 
@@ -333,9 +345,17 @@ impl SanitizationKind {
             // TODO(emilio): Perhaps Layer should not be always sanitized? But
             // we sanitize @media and co, so this seems safer for now.
             CssRule::LayerStatement(..) |
-            CssRule::LayerBlock(..) => false,
+            CssRule::LayerBlock(..) |
+            // TODO(dshin): Same comment as Layer applies - shouldn't give away
+            // something like display size - erring on the side of "safe" for now.
+            CssRule::Scope(..) |
+            CssRule::StartingStyle(..) => false,
 
-            CssRule::FontFace(..) | CssRule::Namespace(..) | CssRule::Style(..) => true,
+            CssRule::FontFace(..) |
+            CssRule::Namespace(..) |
+            CssRule::Style(..) |
+            CssRule::NestedDeclarations(..) |
+            CssRule::PositionTry(..) => true,
 
             CssRule::Keyframes(..) |
             CssRule::Page(..) |
@@ -444,6 +464,8 @@ impl Stylesheet {
             insert_rule_context: None,
             allow_import_rules,
             declaration_parser_state: Default::default(),
+            first_declaration_block: Default::default(),
+            wants_first_declaration_block: false,
             error_reporting_state: Default::default(),
             rules: Vec::new(),
         };
@@ -550,11 +572,7 @@ impl Clone for Stylesheet {
         // Make a deep clone of the media, using the new lock.
         let media = self.media.read_with(&guard).clone();
         let media = Arc::new(lock.wrap(media));
-        let contents = Arc::new(self.contents.deep_clone_with_lock(
-            &lock,
-            &guard,
-            &DeepCloneParams,
-        ));
+        let contents = Arc::new(self.contents.deep_clone_with_lock(&lock, &guard));
 
         Stylesheet {
             contents,

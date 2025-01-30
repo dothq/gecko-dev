@@ -10,6 +10,7 @@
 #include "jit/InlineScriptTree.h"
 #include "jit/IonOptimizationLevels.h"
 #include "jit/JitSpewer.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 
@@ -45,6 +46,10 @@ MIRGenerator::MIRGenerator(CompileRealm* realm,
 bool MIRGenerator::licmEnabled() const {
   return optimizationInfo().licmEnabled() && !disableLICM_ &&
          !outerInfo().hadLICMInvalidation();
+}
+
+bool MIRGenerator::branchHintingEnabled() const {
+  return outerInfo().branchHintingEnabled();
 }
 
 mozilla::GenericErrorResult<AbortReason> MIRGenerator::abort(AbortReason r) {

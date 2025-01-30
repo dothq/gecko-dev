@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <variant>
 #include "Colorspaces.h"
 #include "GLConsts.h"
 #include "GLContextTypes.h"
@@ -22,6 +23,7 @@
 #include "mozilla/ipc/IPCTypes.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/gfx/MatrixFwd.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/Types.h"
@@ -60,8 +62,7 @@ class SurfaceDescriptorBuffer;
 
 #ifdef XP_WIN
 class D3D11ShareHandleImage;
-class D3D11TextureIMFSampleImage;
-class D3D11YCbCrImage;
+class D3D11ZeroCopyTextureImage;
 class SurfaceDescriptorD3D10;
 class SurfaceDescriptorDXGIYCbCr;
 #endif
@@ -123,9 +124,12 @@ Mat3 SubRectMat3(float x, float y, float w, float h);
 Mat3 SubRectMat3(const gfx::IntRect& subrect, const gfx::IntSize& size);
 Mat3 SubRectMat3(const gfx::IntRect& bigSubrect, const gfx::IntSize& smallSize,
                  const gfx::IntSize& divisors);
+Mat3 MatrixToMat3(const gfx::Matrix& aMatrix);
 
 class DrawBlitProg final {
   const GLBlitHelper& mParent;
+
+ public:
   const GLuint mProg;
   const GLint mLoc_uDestMatrix;
   const GLint mLoc_uTexMatrix0;
@@ -154,7 +158,6 @@ class DrawBlitProg final {
     gfx::IntSize
         destSize;  // Always needed for (at least) setting the viewport.
     Maybe<gfx::IntRect> destRect;
-    Maybe<uint32_t> texUnitForColorLut;
   };
   struct YUVArgs final {
     Mat3 texMatrix1;
@@ -166,15 +169,14 @@ class DrawBlitProg final {
 
 class ScopedSaveMultiTex final {
   GLContext& mGL;
-  const std::vector<uint8_t> mTexUnits;
+  const size_t mTexUnits;
   const GLenum mTexTarget;
   const GLuint mOldTexUnit;
   GLuint mOldTexSampler[3];
   GLuint mOldTex[3];
 
  public:
-  ScopedSaveMultiTex(GLContext* gl, const std::vector<uint8_t>& texUnits,
-                     GLenum texTarget);
+  ScopedSaveMultiTex(GLContext* gl, size_t texUnits, GLenum texTarget);
   ~ScopedSaveMultiTex();
 };
 
@@ -185,7 +187,8 @@ class GLBlitHelper final {
   friend class GLContext;
 
   GLContext* const mGL;
-  mutable std::map<DrawBlitProg::Key, const DrawBlitProg*> mDrawBlitProgs;
+  mutable std::map<DrawBlitProg::Key, std::unique_ptr<const DrawBlitProg>>
+      mDrawBlitProgs;
 
   GLuint mQuadVAO = 0;
   GLuint mQuadVBO = 0;
@@ -197,16 +200,22 @@ class GLBlitHelper final {
   gfx::IntSize mYuvUploads_UVSize = {0, 0};
 
  public:
-  struct ColorLutKey {
-    color::ColorspaceDesc src;
-    color::ColorspaceDesc dst;
+  static std::optional<color::ColorProfileDesc> ToColorProfileDesc(
+      gfx::ColorSpace2);
+
+  struct ColorLutKey : DeriveCmpOpMembers<ColorLutKey> {
+    std::variant<gfx::ColorSpace2, gfx::YUVRangedColorSpace> src;
+    gfx::ColorSpace2 dst;
 
     auto Members() const { return std::tie(src, dst); }
-    INLINE_AUTO_MAPPABLE(ColorLutKey)
+
+    MOZ_MIXIN_DERIVE_CMP_OPS_BY_MEMBERS(ColorLutKey)
+
+    struct Hasher : mozilla::StdHashMembers<ColorLutKey> {};
   };
 
  private:
-  mutable std::unordered_map<ColorLutKey, std::weak_ptr<gl::Texture>,
+  mutable std::unordered_map<ColorLutKey, std::shared_ptr<gl::Texture>,
                              ColorLutKey::Hasher>
       mColorLutTexMap;
 
@@ -219,10 +228,11 @@ class GLBlitHelper final {
   ID3D11Device* GetD3D11() const;
 #endif
 
-  const DrawBlitProg* GetDrawBlitProg(const DrawBlitProg::Key& key) const;
+  const DrawBlitProg& GetDrawBlitProg(const DrawBlitProg::Key& key) const;
 
  private:
-  const DrawBlitProg* CreateDrawBlitProg(const DrawBlitProg::Key& key) const;
+  std::unique_ptr<const DrawBlitProg> CreateDrawBlitProg(
+      const DrawBlitProg::Key& key) const;
 
  public:
   bool BlitPlanarYCbCr(const layers::PlanarYCbCrData&,
@@ -288,9 +298,7 @@ class GLBlitHelper final {
   // GLBlitHelperD3D.cpp:
   bool BlitImage(layers::D3D11ShareHandleImage* srcImage,
                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
-  bool BlitImage(layers::D3D11TextureIMFSampleImage* srcImage,
-                 const gfx::IntSize& destSize, OriginPos destOrigin) const;
-  bool BlitImage(layers::D3D11YCbCrImage* srcImage,
+  bool BlitImage(layers::D3D11ZeroCopyTextureImage* srcImage,
                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
 
   bool BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
@@ -326,7 +334,8 @@ extern const char* const kFragSample_ThreePlane;
 extern const char* const kFragConvert_None;
 extern const char* const kFragConvert_BGR;
 extern const char* const kFragConvert_ColorMatrix;
-extern const char* const kFragConvert_ColorLut;
+extern const char* const kFragConvert_ColorLut3d;
+extern const char* const kFragConvert_ColorLut2d;
 
 extern const char* const kFragMixin_AlphaMultColors;
 extern const char* const kFragMixin_AlphaClampColors;

@@ -48,17 +48,17 @@ class FetchServicePromises final {
   RefPtr<FetchServiceResponseEndPromise> GetResponseEndPromise();
 
   void ResolveResponseAvailablePromise(FetchServiceResponse&& aResponse,
-                                       const char* aMethodName);
+                                       StaticString aMethodName);
   void RejectResponseAvailablePromise(const CopyableErrorResult&& aError,
-                                      const char* aMethodName);
+                                      StaticString aMethodName);
   void ResolveResponseTimingPromise(ResponseTiming&& aTiming,
-                                    const char* aMethodName);
+                                    StaticString aMethodName);
   void RejectResponseTimingPromise(const CopyableErrorResult&& aError,
-                                   const char* aMethodName);
+                                   StaticString aMethodName);
   void ResolveResponseEndPromise(ResponseEndArgs&& aArgs,
-                                 const char* aMethodName);
+                                 StaticString aMethodName);
   void RejectResponseEndPromise(const CopyableErrorResult&& aError,
-                                const char* aMethodName);
+                                StaticString aMethodName);
 
  private:
   ~FetchServicePromises() = default;
@@ -84,11 +84,13 @@ class FetchService final : public nsIObserver {
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
 
+  // Used for ServiceWorkerNavigationPreload
   struct NavigationPreloadArgs {
     SafeRefPtr<InternalRequest> mRequest;
     nsCOMPtr<nsIChannel> mChannel;
   };
 
+  // Used for content process worker thread fetch()
   struct WorkerFetchArgs {
     SafeRefPtr<InternalRequest> mRequest;
     mozilla::ipc::PrincipalInfo mPrincipalInfo;
@@ -101,13 +103,39 @@ class FetchService final : public nsIObserver {
     uint64_t mAssociatedBrowsingContextID;
     nsCOMPtr<nsISerialEventTarget> mEventTarget;
     nsID mActorID;
+    bool mIsThirdPartyContext;
+    MozPromiseRequestHolder<FetchServiceResponseEndPromise>
+        mResponseEndPromiseHolder;
+    RefPtr<GenericPromise::Private> mFetchParentPromise;
+  };
+
+  // Used for content process main thread fetch()
+  // Currently this is just used for keepalive request
+  // This would be further used for sending all main thread fetch requests
+  // through PFetch
+  // See Bug 1897129.
+  struct MainThreadFetchArgs {
+    SafeRefPtr<InternalRequest> mRequest;
+    mozilla::ipc::PrincipalInfo mPrincipalInfo;
+    Maybe<net::CookieJarSettingsArgs> mCookieJarSettings;
+    bool mNeedOnDataAvailable;
+    nsCOMPtr<nsICSPEventListener> mCSPEventListener;
+    uint64_t mAssociatedBrowsingContextID;
+    nsCOMPtr<nsISerialEventTarget> mEventTarget;
+    nsID mActorID;
   };
 
   struct UnknownArgs {};
 
-  using FetchArgs =
-      Variant<NavigationPreloadArgs, WorkerFetchArgs, UnknownArgs>;
+  using FetchArgs = Variant<NavigationPreloadArgs, WorkerFetchArgs,
+                            MainThreadFetchArgs, UnknownArgs>;
 
+  enum class FetchArgsType {
+    NavigationPreload,
+    WorkerFetch,
+    MainThreadFetch,
+    Unknown,
+  };
   static already_AddRefed<FetchService> GetInstance();
 
   static RefPtr<FetchServicePromises> NetworkErrorResponse(
@@ -119,7 +147,11 @@ class FetchService final : public nsIObserver {
   // The created FetchInstance is saved in mFetchInstanceTable
   RefPtr<FetchServicePromises> Fetch(FetchArgs&& aArgs);
 
-  void CancelFetch(const RefPtr<FetchServicePromises>&& aPromises);
+  void CancelFetch(const RefPtr<FetchServicePromises>&& aPromises,
+                   bool aForceAbort);
+
+  MozPromiseRequestHolder<FetchServiceResponseEndPromise>&
+  GetResponseEndPromiseHolder(const RefPtr<FetchServicePromises>& aPromises);
 
  private:
   /**
@@ -141,10 +173,17 @@ class FetchService final : public nsIObserver {
     nsresult Initialize(FetchArgs&& aArgs);
 
     const FetchArgs& Args() { return mArgs; }
+    MozPromiseRequestHolder<FetchServiceResponseEndPromise>&
+    GetResponseEndPromiseHolder() {
+      MOZ_ASSERT(mArgs.is<WorkerFetchArgs>());
+      return mArgs.as<WorkerFetchArgs>().mResponseEndPromiseHolder;
+    }
 
     RefPtr<FetchServicePromises> Fetch();
 
-    void Cancel();
+    void Cancel(bool aForceAbort);
+
+    bool IsLocalHostFetch() const;
 
     /* FetchDriverObserver interface */
     void OnResponseEnd(FetchDriverObserver::EndReason aReason,
@@ -159,6 +198,8 @@ class FetchService final : public nsIObserver {
 
    private:
     ~FetchInstance() = default;
+    nsCOMPtr<nsISerialEventTarget> GetBackgroundEventTarget();
+    nsID GetActorID();
 
     SafeRefPtr<InternalRequest> mRequest;
     nsCOMPtr<nsIPrincipal> mPrincipal;
@@ -169,7 +210,8 @@ class FetchService final : public nsIObserver {
     RefPtr<FetchDriver> mFetchDriver;
     SafeRefPtr<InternalResponse> mResponse;
     RefPtr<FetchServicePromises> mPromises;
-    bool mIsWorkerFetch{false};
+    FetchArgsType mArgsType;
+    Atomic<bool, Relaxed> mActorDying{false};
   };
 
   ~FetchService();
@@ -177,11 +219,30 @@ class FetchService final : public nsIObserver {
   nsresult RegisterNetworkObserver();
   nsresult UnregisterNetworkObserver();
 
+  // Update pending keepalive fetch requests count
+  void IncrementKeepAliveRequestCount(const nsACString& aOrigin);
+  void DecrementKeepAliveRequestCount(const nsACString& aOrigin);
+
+  // Check if the number of pending keepalive fetch requests exceeds the
+  // configured limit
+  // We limit the number of pending keepalive requests on two levels:
+  // 1. per origin - controlled by pref
+  // dom.fetchKeepalive.request_limit_per_origin)
+  // 2. per browser instance - controlled by pref
+  // dom.fetchKeepalive.total_request_limit
+  bool DoesExceedsKeepaliveResourceLimits(const nsACString& aOrigin);
+
   // This is a container to manage the generated fetches.
   nsTHashMap<nsRefPtrHashKey<FetchServicePromises>, RefPtr<FetchInstance> >
       mFetchInstanceTable;
   bool mObservingNetwork{false};
   bool mOffline{false};
+
+  // map to key origin to number of pending keepalive fetch requests
+  nsTHashMap<nsCStringHashKey, uint32_t> mPendingKeepAliveRequestsPerOrigin;
+
+  // total pending keepalive fetch requests per browser instance
+  uint32_t mTotalKeepAliveRequests{0};
 };
 
 }  // namespace mozilla::dom

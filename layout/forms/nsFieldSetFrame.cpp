@@ -15,6 +15,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/webrender/WebRenderAPI.h"
+#include "mozilla/ScrollContainerFrame.h"
 #include "nsBlockFrame.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSFrameConstructor.h"
@@ -22,7 +23,6 @@
 #include "nsDisplayList.h"
 #include "nsGkAtoms.h"
 #include "nsIFrameInlines.h"
-#include "nsIScrollableFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleConsts.h"
 
@@ -58,7 +58,7 @@ nsRect nsFieldSetFrame::VisualBorderRectRelativeToSelf() const {
     auto legendMargin = legend->GetLogicalUsedMargin(wm);
     nscoord legendStartMargin = legendMargin.BStart(wm);
     nscoord legendEndMargin = legendMargin.BEnd(wm);
-    nscoord border = GetUsedBorder().Side(wm.PhysicalSide(eLogicalSideBStart));
+    nscoord border = GetUsedBorder().Side(wm.PhysicalSide(LogicalSide::BStart));
     // Calculate the offset from the border area block-axis start edge needed to
     // center-align our border with the legend's border-box (in the block-axis).
     nscoord off = (legendStartMargin + legendSize / 2) - border / 2;
@@ -107,7 +107,8 @@ class nsDisplayFieldSetBorder final : public nsPaintedDisplayItem {
       : nsPaintedDisplayItem(aBuilder, aFrame) {
     MOZ_COUNT_CTOR(nsDisplayFieldSetBorder);
   }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayFieldSetBorder)
+
+  MOZ_COUNTED_DTOR_FINAL(nsDisplayFieldSetBorder)
 
   void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
   bool CreateWebRenderCommands(
@@ -321,8 +322,8 @@ ImgDrawResult nsFieldSetFrame::PaintBorder(nsDisplayListBuilder* aBuilder,
   return result;
 }
 
-nscoord nsFieldSetFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
-                                           IntrinsicISizeType aType) {
+nscoord nsFieldSetFrame::IntrinsicISize(const IntrinsicSizeInput& aInput,
+                                        IntrinsicISizeType aType) {
   // Both inner and legend are children, and if the fieldset is
   // size-contained they should not contribute to the intrinsic size.
   if (Maybe<nscoord> containISize = ContainIntrinsicISize()) {
@@ -332,7 +333,7 @@ nscoord nsFieldSetFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
   nscoord legendWidth = 0;
   if (nsIFrame* legend = GetLegend()) {
     legendWidth =
-        nsLayoutUtils::IntrinsicForContainer(aRenderingContext, legend, aType);
+        nsLayoutUtils::IntrinsicForContainer(aInput.mContext, legend, aType);
   }
 
   nscoord contentWidth = 0;
@@ -341,26 +342,11 @@ nscoord nsFieldSetFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
     // outer instead, and the padding computed for the inner is wrong
     // for percentage padding.
     contentWidth = nsLayoutUtils::IntrinsicForContainer(
-        aRenderingContext, inner, aType, nsLayoutUtils::IGNORE_PADDING);
+        aInput.mContext, inner, aType, aInput.mPercentageBasisForChildren,
+        nsLayoutUtils::IGNORE_PADDING);
   }
 
   return std::max(legendWidth, contentWidth);
-}
-
-nscoord nsFieldSetFrame::GetMinISize(gfxContext* aRenderingContext) {
-  nscoord result = 0;
-  DISPLAY_MIN_INLINE_SIZE(this, result);
-
-  result = GetIntrinsicISize(aRenderingContext, IntrinsicISizeType::MinISize);
-  return result;
-}
-
-nscoord nsFieldSetFrame::GetPrefISize(gfxContext* aRenderingContext) {
-  nscoord result = 0;
-  DISPLAY_PREF_INLINE_SIZE(this, result);
-
-  result = GetIntrinsicISize(aRenderingContext, IntrinsicISizeType::PrefISize);
-  return result;
 }
 
 /* virtual */
@@ -372,7 +358,6 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
 
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsFieldSetFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_WARNING_ASSERTION(aReflowInput.ComputedISize() != NS_UNCONSTRAINEDSIZE,
                        "Should have a precomputed inline-size!");
@@ -865,7 +850,7 @@ Maybe<nscoord> nsFieldSetFrame::GetNaturalBaselineBOffset(
   return Some(*result + BSize(aWM) - (innerBStart + inner->BSize(aWM)));
 }
 
-nsIScrollableFrame* nsFieldSetFrame::GetScrollTargetFrame() const {
+ScrollContainerFrame* nsFieldSetFrame::GetScrollTargetFrame() const {
   return do_QueryFrame(GetInner());
 }
 

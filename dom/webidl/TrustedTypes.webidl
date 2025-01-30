@@ -5,6 +5,7 @@
  *
  * The origin of this IDL file is
  * <https://w3c.github.io/trusted-types/dist/spec/>.
+ * It is augmented with Gecko-specific annotations.
  */
 
 [Exposed=(Window,Worker), Pref="dom.security.trusted_types.enabled"]
@@ -28,9 +29,9 @@ interface TrustedScriptURL {
 [Exposed=(Window,Worker), Pref="dom.security.trusted_types.enabled"]
 interface TrustedTypePolicy {
   readonly attribute DOMString name;
-  [NewObject] TrustedHTML createHTML(DOMString input, any... arguments);
-  [NewObject] TrustedScript createScript(DOMString input, any... arguments);
-  [NewObject] TrustedScriptURL createScriptURL(DOMString input, any... arguments);
+  [NewObject, Throws] TrustedHTML createHTML(DOMString input, any... arguments);
+  [NewObject, Throws] TrustedScript createScript(DOMString input, any... arguments);
+  [NewObject, Throws] TrustedScriptURL createScriptURL(DOMString input, any... arguments);
 };
 
 dictionary TrustedTypePolicyOptions {
@@ -45,7 +46,7 @@ callback CreateScriptURLCallback = USVString? (DOMString input, any... arguments
 
 [Exposed=(Window,Worker), Pref="dom.security.trusted_types.enabled"]
 interface TrustedTypePolicyFactory {
-    TrustedTypePolicy createPolicy(DOMString policyName , optional TrustedTypePolicyOptions policyOptions = {});
+    [Throws] TrustedTypePolicy createPolicy(DOMString policyName , optional TrustedTypePolicyOptions policyOptions = {});
     boolean isHTML(any value);
     boolean isScript(any value);
     boolean isScriptURL(any value);
@@ -54,11 +55,11 @@ interface TrustedTypePolicyFactory {
     DOMString? getAttributeType(
       DOMString tagName,
       DOMString attribute,
-      optional DOMString elementNs = "",
-      optional DOMString attrNs = "");
+      optional DOMString? elementNs = "",
+      optional DOMString? attrNs = "");
     DOMString? getPropertyType(
         DOMString tagName,
         DOMString property,
-        optional DOMString elementNs = "");
+        optional DOMString? elementNs = "");
     readonly attribute TrustedTypePolicy? defaultPolicy;
 };

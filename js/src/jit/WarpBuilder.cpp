@@ -12,6 +12,7 @@
 #include "jit/CacheIR.h"
 #include "jit/CompileInfo.h"
 #include "jit/InlineScriptTree.h"
+#include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
@@ -21,6 +22,10 @@
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Opcodes.h"
+#include "vm/TypeofEqOperand.h"  // TypeofEqOperand
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+#  include "vm/UsingHint.h"
+#endif
 
 #include "gc/ObjectKind-inl.h"
 #include "vm/BytecodeIterator-inl.h"
@@ -1069,6 +1074,44 @@ bool WarpBuilder::build_StrictNe(BytecodeLocation loc) {
   return buildCompareOp(loc);
 }
 
+#ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
+bool WarpBuilder::build_AddDisposable(BytecodeLocation loc) {
+  MOZ_ASSERT(usesEnvironmentChain());
+
+  UsingHint hint = loc.getUsingHint();
+  MDefinition* needsClosure = current->pop();
+  MDefinition* method = current->pop();
+  MDefinition* obj = current->pop();
+  MDefinition* env = current->environmentChain();
+
+  MAddDisposableResource* ins = MAddDisposableResource::New(
+      alloc(), env, obj, method, needsClosure, uint8_t(hint));
+  current->add(ins);
+  return resumeAfter(ins, loc);
+}
+
+bool WarpBuilder::build_TakeDisposeCapability(BytecodeLocation loc) {
+  MOZ_ASSERT(usesEnvironmentChain());
+  MDefinition* env = current->environmentChain();
+
+  MTakeDisposeCapability* ins = MTakeDisposeCapability::New(alloc(), env);
+  current->add(ins);
+  current->push(ins);
+  return resumeAfter(ins, loc);
+}
+
+bool WarpBuilder::build_CreateSuppressedError(BytecodeLocation loc) {
+  MDefinition* suppressed = current->pop();
+  MDefinition* error = current->pop();
+
+  MCreateSuppressedError* ins =
+      MCreateSuppressedError::New(alloc(), error, suppressed);
+  current->add(ins);
+  current->push(ins);
+  return true;
+}
+#endif
+
 // Returns true iff the MTest added for |op| has a true-target corresponding
 // with the join point in the bytecode.
 static bool TestTrueTargetIsJoinPoint(JSOp op) {
@@ -1564,6 +1607,30 @@ bool WarpBuilder::build_TypeofExpr(BytecodeLocation loc) {
   return build_Typeof(loc);
 }
 
+bool WarpBuilder::build_TypeofEq(BytecodeLocation loc) {
+  auto operand = loc.getTypeofEqOperand();
+  JSType type = operand.type();
+  JSOp compareOp = operand.compareOp();
+  MDefinition* input = current->pop();
+
+  if (const auto* typesSnapshot = getOpSnapshot<WarpPolymorphicTypes>(loc)) {
+    auto* typeOf = MTypeOf::New(alloc(), input);
+    typeOf->setObservedTypes(typesSnapshot->list());
+    current->add(typeOf);
+
+    auto* typeInt = MConstant::New(alloc(), Int32Value(type));
+    current->add(typeInt);
+
+    auto* ins = MCompare::New(alloc(), typeOf, typeInt, compareOp,
+                              MCompare::Compare_Int32);
+    current->add(ins);
+    current->push(ins);
+    return true;
+  }
+
+  return buildIC(loc, CacheKind::TypeOfEq, {input});
+}
+
 bool WarpBuilder::build_Arguments(BytecodeLocation loc) {
   auto* snapshot = getOpSnapshot<WarpArguments>(loc);
   MOZ_ASSERT(info().needsArgsObj());
@@ -1876,10 +1943,18 @@ bool WarpBuilder::build_BindName(BytecodeLocation loc) {
   return buildIC(loc, CacheKind::BindName, {env});
 }
 
-bool WarpBuilder::build_BindGName(BytecodeLocation loc) {
+bool WarpBuilder::build_BindUnqualifiedName(BytecodeLocation loc) {
+  MOZ_ASSERT(usesEnvironmentChain());
+
+  MDefinition* env = current->environmentChain();
+  env = unboxObjectInfallible(env, IsMovable::Yes);
+  return buildIC(loc, CacheKind::BindName, {env});
+}
+
+bool WarpBuilder::build_BindUnqualifiedGName(BytecodeLocation loc) {
   MOZ_ASSERT(!script_->hasNonSyntacticScope());
 
-  if (const auto* snapshot = getOpSnapshot<WarpBindGName>(loc)) {
+  if (const auto* snapshot = getOpSnapshot<WarpBindUnqualifiedGName>(loc)) {
     JSObject* globalEnv = snapshot->globalEnv();
     pushConstant(ObjectValue(*globalEnv));
     return true;
@@ -1890,6 +1965,11 @@ bool WarpBuilder::build_BindGName(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_GetProp(BytecodeLocation loc) {
+  MDefinition* val = current->pop();
+  return buildIC(loc, CacheKind::GetProp, {val});
+}
+
+bool WarpBuilder::build_GetBoundName(BytecodeLocation loc) {
   MDefinition* val = current->pop();
   return buildIC(loc, CacheKind::GetProp, {val});
 }
@@ -2197,12 +2277,9 @@ bool WarpBuilder::build_PushVarEnv(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_ImplicitThis(BytecodeLocation loc) {
-  MOZ_ASSERT(usesEnvironmentChain());
+  MDefinition* env = current->pop();
 
-  PropertyName* name = loc.getPropertyName(script_);
-  MDefinition* env = current->environmentChain();
-
-  auto* ins = MImplicitThis::New(alloc(), env, name);
+  auto* ins = MImplicitThis::New(alloc(), env);
   current->add(ins);
   current->push(ins);
   return resumeAfter(ins, loc);
@@ -3402,6 +3479,23 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
       current->push(ins);
       return true;
     }
+    case CacheKind::TypeOfEq: {
+      MOZ_ASSERT(numInputs == 1);
+      auto operand = loc.getTypeofEqOperand();
+      JSType type = operand.type();
+      JSOp compareOp = operand.compareOp();
+      auto* typeOf = MTypeOf::New(alloc(), getInput(0));
+      current->add(typeOf);
+
+      auto* typeInt = MConstant::New(alloc(), Int32Value(type));
+      current->add(typeInt);
+
+      auto* ins = MCompare::New(alloc(), typeOf, typeInt, compareOp,
+                                MCompare::Compare_Int32);
+      current->add(ins);
+      current->push(ins);
+      return true;
+    }
     case CacheKind::NewObject: {
       auto* templateConst = constant(NullValue());
       MNewObject* ins = MNewObject::NewVM(
@@ -3434,9 +3528,10 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
       current->push(ins);
       return resumeAfter(ins, loc);
     }
-    case CacheKind::GetIntrinsic:
+    case CacheKind::LazyConstant:
     case CacheKind::ToBool:
     case CacheKind::Call:
+    case CacheKind::Lambda:
       // We're currently not using an IC or transpiling CacheIR for these kinds.
       MOZ_CRASH("Unexpected kind");
   }
@@ -3460,7 +3555,7 @@ bool WarpBuilder::buildBailoutForColdIC(BytecodeLocation loc, CacheKind kind) {
     case CacheKind::GetElem:
     case CacheKind::GetPropSuper:
     case CacheKind::GetElemSuper:
-    case CacheKind::GetIntrinsic:
+    case CacheKind::LazyConstant:
     case CacheKind::Call:
     case CacheKind::ToPropertyKey:
     case CacheKind::OptimizeSpreadCall:
@@ -3470,6 +3565,7 @@ bool WarpBuilder::buildBailoutForColdIC(BytecodeLocation loc, CacheKind kind) {
     case CacheKind::GetIterator:
     case CacheKind::NewArray:
     case CacheKind::NewObject:
+    case CacheKind::Lambda:
       resultType = MIRType::Object;
       break;
     case CacheKind::TypeOf:
@@ -3482,6 +3578,7 @@ bool WarpBuilder::buildBailoutForColdIC(BytecodeLocation loc, CacheKind kind) {
     case CacheKind::CheckPrivateField:
     case CacheKind::InstanceOf:
     case CacheKind::OptimizeGetIterator:
+    case CacheKind::TypeOfEq:
       resultType = MIRType::Boolean;
       break;
     case CacheKind::SetProp:

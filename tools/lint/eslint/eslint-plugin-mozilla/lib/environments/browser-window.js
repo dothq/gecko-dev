@@ -23,7 +23,6 @@ var { getScriptGlobals } = require("./utils");
 // These are scripts not loaded from browser.xhtml or global-scripts.inc
 // but via other includes.
 const EXTRA_SCRIPTS = [
-  "browser/base/content/nsContextMenu.js",
   "browser/components/downloads/content/downloads.js",
   "browser/components/downloads/content/indicator.js",
   "toolkit/content/customElements.js",
@@ -46,17 +45,18 @@ const extraDefinitions = [
 
 // Some files in global-scripts.inc need mapping to specific locations.
 const MAPPINGS = {
-  "printUtils.js": "toolkit/components/printing/content/printUtils.js",
-  "panelUI.js": "browser/components/customizableui/content/panelUI.js",
-  "viewSourceUtils.js":
-    "toolkit/components/viewsource/content/viewSourceUtils.js",
   "browserPlacesViews.js":
     "browser/components/places/content/browserPlacesViews.js",
+  "browser-sidebar.js": "browser/components/sidebar/browser-sidebar.js",
+  "panelUI.js": "browser/components/customizableui/content/panelUI.js",
+  "printUtils.js": "toolkit/components/printing/content/printUtils.js",
   "places-tree.js": "browser/components/places/content/places-tree.js",
   "places-menupopup.js":
     "browser/components/places/content/places-menupopup.js",
   "shopping-sidebar.js":
     "browser/components/shopping/content/shopping-sidebar.js",
+  "viewSourceUtils.js":
+    "toolkit/components/viewsource/content/viewSourceUtils.js",
 };
 
 const globalScriptsRegExp =
@@ -86,6 +86,10 @@ function getGlobalScriptIncludes(scriptPath) {
         .replace(
           "chrome://browser/content/screenshots/",
           "browser/components/screenshots/content/"
+        )
+        .replace(
+          "chrome://browser/content/tabbrowser/",
+          "browser/components/tabbrowser/content/"
         )
         .replace("chrome://browser/content/", "browser/base/content/")
         .replace("chrome://global/content/", "toolkit/content/");

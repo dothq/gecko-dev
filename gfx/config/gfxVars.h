@@ -56,9 +56,10 @@ class gfxVarReceiver;
   _(WebRenderBatchingLookback, int32_t, 10)                        \
   _(WebRenderBlobTileSize, int32_t, 256)                           \
   _(WebRenderBatchedUploadThreshold, int32_t, 512 * 512)           \
+  _(WebRenderSlowCpuFrameThreshold, float, 10.0)                   \
   _(UseSoftwareWebRender, bool, false)                             \
   _(AllowSoftwareWebRenderD3D11, bool, false)                      \
-  _(ScreenDepth, int32_t, 0)                                       \
+  _(PrimaryScreenDepth, int32_t, 0)                                \
   _(GREDirectory, nsString, nsString())                            \
   _(ProfDirectory, nsString, nsString())                           \
   _(AllowD3D11KeyedMutex, bool, false)                             \
@@ -81,6 +82,7 @@ class gfxVarReceiver;
   _(UseEGL, bool, false)                                           \
   _(DrmRenderDevice, nsCString, nsCString())                       \
   _(UseDMABuf, bool, false)                                        \
+  _(UseDMABufWebGL, bool, true)                                    \
   _(DMABufModifiersXRGB, ArrayOfuint64_t, nsTArray<uint64_t>())    \
   _(DMABufModifiersARGB, ArrayOfuint64_t, nsTArray<uint64_t>())    \
   _(CodecSupportInfo, nsCString, nsCString())                      \
@@ -101,7 +103,9 @@ class gfxVarReceiver;
   _(AllowSoftwareWebRenderOGL, bool, false)                        \
   _(WebglUseHardware, bool, true)                                  \
   _(WebRenderOverlayVpAutoHDR, bool, false)                        \
-  _(WebRenderOverlayVpSuperResolution, bool, false)
+  _(WebRenderOverlayVpSuperResolution, bool, false)                \
+  _(AllowWebGPUPresentWithoutReadback, bool, false)                \
+  _(GPUProcessEnabled, bool, false)
 
 /* Add new entries above this line. */
 

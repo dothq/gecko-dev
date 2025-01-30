@@ -163,47 +163,35 @@ void ImageContainer::EnsureImageClient() {
   }
 
   RefPtr<ImageBridgeChild> imageBridge = ImageBridgeChild::GetSingleton();
-  if (imageBridge) {
-    mImageClient =
-        imageBridge->CreateImageClient(CompositableType::IMAGE, this);
-    if (mImageClient) {
-      mAsyncContainerHandle = mImageClient->GetAsyncHandle();
-    } else {
-      // It's okay to drop the async container handle since the ImageBridgeChild
-      // is going to die anyway.
-      mAsyncContainerHandle = CompositableHandle();
-    }
+  if (!imageBridge) {
+    return;
+  }
+
+  mImageClient = imageBridge->CreateImageClient(CompositableType::IMAGE, this);
+  if (mImageClient) {
+    mAsyncContainerHandle = mImageClient->GetAsyncHandle();
+  } else {
+    // It's okay to drop the async container handle since the ImageBridgeChild
+    // is going to die anyway.
+    mAsyncContainerHandle = CompositableHandle();
   }
 }
 
-ImageContainer::ImageContainer(Mode flag)
-    : mRecursiveMutex("ImageContainer.mRecursiveMutex"),
+ImageContainer::ImageContainer(ImageUsageType aUsageType, Mode aFlag)
+    : mUsageType(aUsageType),
+      mIsAsync(aFlag == ASYNCHRONOUS),
+      mRecursiveMutex("ImageContainer.mRecursiveMutex"),
       mGenerationCounter(++sGenerationCounter),
       mPaintCount(0),
       mDroppedImageCount(0),
       mImageFactory(new ImageFactory()),
       mRotation(VideoRotation::kDegree_0),
       mRecycleBin(new BufferRecycleBin()),
-      mIsAsync(flag == ASYNCHRONOUS),
       mCurrentProducerID(-1) {
-  if (flag == ASYNCHRONOUS) {
+  if (aFlag == ASYNCHRONOUS) {
     mNotifyCompositeListener = new ImageContainerListener(this);
     EnsureImageClient();
   }
-}
-
-ImageContainer::ImageContainer(const CompositableHandle& aHandle)
-    : mRecursiveMutex("ImageContainer.mRecursiveMutex"),
-      mGenerationCounter(++sGenerationCounter),
-      mPaintCount(0),
-      mDroppedImageCount(0),
-      mImageFactory(nullptr),
-      mRotation(VideoRotation::kDegree_0),
-      mRecycleBin(nullptr),
-      mIsAsync(true),
-      mAsyncContainerHandle(aHandle),
-      mCurrentProducerID(-1) {
-  MOZ_ASSERT(mAsyncContainerHandle);
 }
 
 ImageContainer::~ImageContainer() {
@@ -341,6 +329,11 @@ void ImageContainer::SetCurrentImageInternal(
     OwningImage* img = newImages.AppendElement();
     img->mImage = aImages[i].mImage;
     img->mTimeStamp = aImages[i].mTimeStamp;
+    img->mProcessingDuration = aImages[i].mProcessingDuration;
+    img->mMediaTime = aImages[i].mMediaTime;
+    img->mWebrtcCaptureTime = aImages[i].mWebrtcCaptureTime;
+    img->mWebrtcReceiveTime = aImages[i].mWebrtcReceiveTime;
+    img->mRtpTimestamp = aImages[i].mRtpTimestamp;
     img->mFrameID = aImages[i].mFrameID;
     img->mProducerID = aImages[i].mProducerID;
     for (const auto& oldImg : mCurrentImages) {
@@ -364,6 +357,10 @@ void ImageContainer::ClearImagesFromImageBridge() {
 void ImageContainer::SetCurrentImages(const nsTArray<NonOwningImage>& aImages) {
   AUTO_PROFILER_LABEL("ImageContainer::SetCurrentImages", GRAPHICS);
   MOZ_ASSERT(!aImages.IsEmpty());
+  MOZ_ASSERT(mUsageType == ImageUsageType::Canvas ||
+             mUsageType == ImageUsageType::OffscreenCanvas ||
+             mUsageType == ImageUsageType::VideoFrameContainer);
+
   RecursiveMutexAutoLock lock(mRecursiveMutex);
   if (mIsAsync) {
     if (RefPtr<ImageBridgeChild> imageBridge =
@@ -413,6 +410,9 @@ void ImageContainer::SetCurrentImageInTransaction(Image* aImage) {
 
 void ImageContainer::SetCurrentImagesInTransaction(
     const nsTArray<NonOwningImage>& aImages) {
+  MOZ_ASSERT(!mIsAsync);
+  MOZ_ASSERT(mUsageType == ImageUsageType::WebRenderFallbackData);
+
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
   NS_ASSERTION(!HasImageClient(),
                "Should use async image transfer with ImageBridge.");
@@ -694,8 +694,9 @@ nsresult PlanarYCbCrImage::BuildSurfaceDescriptorBuffer(
       }
     }
 
-    gfx::ConvertYCbCrToRGB(mData, format, size, buffer, stride);
-    return NS_OK;
+    rv = gfx::ConvertYCbCrToRGB(mData, format, size, buffer, stride);
+    MOZ_ASSERT(NS_SUCCEEDED(rv), "Failed to convert YUV into RGB data");
+    return rv;
   }
 
   auto ySize = pdata->YDataSize();
@@ -883,8 +884,11 @@ already_AddRefed<gfx::SourceSurface> PlanarYCbCrImage::GetAsSourceSurface() {
     return nullptr;
   }
 
-  gfx::ConvertYCbCrToRGB(mData, format, size, mapping.GetData(),
-                         mapping.GetStride());
+  if (NS_WARN_IF(NS_FAILED(gfx::ConvertYCbCrToRGB(
+          mData, format, size, mapping.GetData(), mapping.GetStride())))) {
+    MOZ_ASSERT_UNREACHABLE("Failed to convert YUV into RGB data");
+    return nullptr;
+  }
 
   mSourceSurface = surface;
 
@@ -962,8 +966,11 @@ already_AddRefed<SourceSurface> NVImage::GetAsSourceSurface() {
     return nullptr;
   }
 
-  gfx::ConvertYCbCrToRGB(aData, format, size, mapping.GetData(),
-                         mapping.GetStride());
+  if (NS_WARN_IF(NS_FAILED(gfx::ConvertYCbCrToRGB(
+          aData, format, size, mapping.GetData(), mapping.GetStride())))) {
+    MOZ_ASSERT_UNREACHABLE("Failed to convert YUV into RGB data");
+    return nullptr;
+  }
 
   mSourceSurface = surface;
 
@@ -1030,7 +1037,11 @@ nsresult NVImage::BuildSurfaceDescriptorBuffer(
   }
 
   if (!mSourceSurface) {
-    gfx::ConvertYCbCrToRGB(aData, format, size, output, stride);
+    rv = gfx::ConvertYCbCrToRGB(aData, format, size, output, stride);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      MOZ_ASSERT_UNREACHABLE("Failed to convert YUV into RGB data");
+      return rv;
+    }
     return NS_OK;
   }
 
@@ -1053,7 +1064,7 @@ uint32_t NVImage::GetBufferSize() const { return mBufferSize; }
 
 NVImage* NVImage::AsNVImage() { return this; };
 
-bool NVImage::SetData(const Data& aData) {
+nsresult NVImage::SetData(const Data& aData) {
   MOZ_ASSERT(aData.mCbSkip == 1 && aData.mCrSkip == 1);
   MOZ_ASSERT((int)std::abs(aData.mCbChannel - aData.mCrChannel) == 1);
 
@@ -1063,14 +1074,16 @@ bool NVImage::SetData(const Data& aData) {
       CheckedInt<uint32_t>(aData.YDataSize().height) * aData.mYStride +
       CheckedInt<uint32_t>(aData.CbCrDataSize().height) * aData.mCbCrStride;
 
-  if (!checkedSize.isValid()) return false;
+  if (!checkedSize.isValid()) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   const auto size = checkedSize.value();
 
   // Allocate a new buffer.
   mBuffer = AllocateBuffer(size);
   if (!mBuffer) {
-    return false;
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
   // Update mBufferSize.
@@ -1089,7 +1102,7 @@ bool NVImage::SetData(const Data& aData) {
   // This copies the y-channel and the interleaving CbCr-channel.
   memcpy(mData.mYChannel, aData.mYChannel, mBufferSize);
 
-  return true;
+  return NS_OK;
 }
 
 const NVImage::Data* NVImage::GetData() const { return &mData; }

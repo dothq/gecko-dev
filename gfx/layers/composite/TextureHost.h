@@ -62,6 +62,7 @@ class Compositor;
 class CompositableParentManager;
 class ReadLockDescriptor;
 class CompositorBridgeParent;
+class DXGITextureHostD3D11;
 class SurfaceDescriptor;
 class HostIPCAllocator;
 class ISurfaceAllocator;
@@ -90,7 +91,7 @@ class TextureHostWrapperD3D11;
 class BigImageIterator {
  public:
   virtual void BeginBigImageIteration() = 0;
-  virtual void EndBigImageIteration(){};
+  virtual void EndBigImageIteration() {};
   virtual gfx::IntRect GetTileRect() = 0;
   virtual size_t GetTileCount() = 0;
   virtual bool NextTile() = 0;
@@ -498,10 +499,14 @@ class TextureHost : public AtomicRefCountedWithFinalize<TextureHost> {
   virtual void SetCropRect(nsIntRect aCropRect) {}
 
   /**
-   * Debug facility.
+   * Return TextureHost's data as DataSourceSurface.
+   *
+   * @param aSurface may be used as returned DataSourceSurface.
+   *
    * XXX - cool kids use Moz2D. See bug 882113.
    */
-  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() = 0;
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface(
+      gfx::DataSourceSurface* aSurface = nullptr) = 0;
 
   /**
    * XXX - Flags should only be set at creation time, this will be removed.
@@ -619,6 +624,8 @@ class TextureHost : public AtomicRefCountedWithFinalize<TextureHost> {
     return nullptr;
   }
 
+  virtual DXGITextureHostD3D11* AsDXGITextureHostD3D11() { return nullptr; }
+
   virtual bool IsWrappingSurfaceTextureHost() { return false; }
 
   // Create the corresponding RenderTextureHost type of this texture, and
@@ -663,6 +670,9 @@ class TextureHost : public AtomicRefCountedWithFinalize<TextureHost> {
     // Passed in the RenderCompositor supports BufferTextureHosts
     // being used directly as external compositor surfaces.
     SUPPORTS_EXTERNAL_BUFFER_TEXTURES,
+
+    // Passed if the caller wants to disable external compositing of TextureHost
+    EXTERNAL_COMPOSITING_DISABLED,
   };
   using PushDisplayItemFlagSet = EnumSet<PushDisplayItemFlag>;
 
@@ -813,7 +823,8 @@ class BufferTextureHost : public TextureHost {
 
   gfx::IntSize GetSize() const override { return mSize; }
 
-  already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override;
+  already_AddRefed<gfx::DataSourceSurface> GetAsSurface(
+      gfx::DataSourceSurface* aSurface) override;
 
   bool NeedsDeferredDeletion() const override {
     return TextureHost::NeedsDeferredDeletion() || UseExternalTextures();

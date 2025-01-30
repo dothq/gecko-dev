@@ -99,11 +99,13 @@ class BrowserSearchTelemetryHandler {
         : "FX_SEARCHBAR_SELECTED_RESULT_METHOD"
     );
     // command events are from the one-off context menu.  Treat them as clicks.
-    // Note that we don't care about MouseEvent subclasses here, since
-    // those are not clicks.
+    // Note that we only care about MouseEvent subclasses here when the
+    // event type is "click", or else the subclasses are associated with
+    // non-click interactions.
     let isClick =
       event &&
       (ChromeUtils.getClassName(event) == "MouseEvent" ||
+        event.type == "click" ||
         event.type == "command");
     let category;
     if (isClick) {
@@ -146,12 +148,9 @@ class BrowserSearchTelemetryHandler {
       return;
     }
 
-    let scalarKey = lazy.UrlbarSearchUtils.getSearchModeScalarKey(searchMode);
-    Services.telemetry.keyedScalarAdd(
-      "urlbar.searchmode." + searchMode.entry,
-      scalarKey,
-      1
-    );
+    let label = lazy.UrlbarSearchUtils.getSearchModeScalarKey(searchMode);
+    let name = searchMode.entry.replace(/_([a-z])/g, (m, p) => p.toUpperCase());
+    Glean.urlbarSearchmode[name]?.[label].add(1);
   }
 
   /**
@@ -277,24 +276,11 @@ class BrowserSearchTelemetryHandler {
 
   _recordSearch(browser, engine, source, action = null) {
     let scalarSource = KNOWN_SEARCH_SOURCES.get(source);
-
     lazy.SearchSERPTelemetry.recordBrowserSource(browser, scalarSource);
 
-    let scalarKey = action ? "search_" + action : "search";
-    Services.telemetry.keyedScalarAdd(
-      "browser.engagement.navigation." + scalarSource,
-      scalarKey,
-      1
-    );
-    Services.telemetry.recordEvent(
-      "navigation",
-      "search",
-      scalarSource,
-      action,
-      {
-        engine: engine.telemetryId,
-      }
-    );
+    let label = action ? "search_" + action : "search";
+    let name = scalarSource.replace(/_([a-z])/g, (m, p) => p.toUpperCase());
+    Glean.browserEngagementNavigation[name][label].add(1);
   }
 
   /**

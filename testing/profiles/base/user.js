@@ -11,3 +11,10 @@ user_pref("dom.input_events.security.minTimeElapsedInMS", 0);
 
 // Set address autofill to true for tests
 user_pref("extensions.formautofill.addresses.experiments.enabled", true);
+
+// Turn off update
+user_pref("app.update.disabledForTesting", true);
+
+// Browser restarts can cause the session restore suggestion to be shown when reusing a
+// profile across a set of tests. Avoid showing this infobar by default.
+user_pref("browser.startup.couldRestoreSession.count", -1);

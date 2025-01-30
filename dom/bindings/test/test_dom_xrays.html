@@ -7,6 +7,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=787070
   <meta charset="utf-8">
   <title>Test for Bug 787070</title>
   <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
+  <script src="file_reflected_attribute_frozenarray.js"></script>
   <link rel="stylesheet" type="text/css" href="chrome://mochikit/content/tests/SimpleTest/test.css"/>
 </head>
 <body>
@@ -175,6 +176,27 @@ function test() {
 
   // ECMAScript-defined properties live on the prototype, overriding any named properties.
   checkXrayProperty(coll, "toString", [ undefined, undefined, win.Object.prototype.toString ]);
+
+  // Constructors
+  img = new win.Image();
+  ok(win.HTMLImageElement.isInstance(img), "Constructor created the right type of object");
+
+  let threw;
+  try {
+    threw = false;
+    win.Image();
+  } catch (e) {
+    threw = true;
+  }
+  ok(threw, "Constructors should throw when called without new");
+
+  try {
+    threw = false;
+    new win.Node();
+  } catch (e) {
+    threw = true;
+  }
+  ok(threw, "Constructing an interface without a constructor should throw");
 
   // Frozen arrays should come from our compartment, not the target one.
   var languages1 = win.navigator.languages;
@@ -358,7 +380,7 @@ function test() {
   // legacyCaller should work.
   ok(win.HTMLAllCollection.isInstance(doc.all),
      "HTMLDocument.all should be an instance of HTMLAllCollection");
-  let element, threw;
+  let element;
   try {
     threw = false;
     element = doc.all(0);
@@ -368,6 +390,11 @@ function test() {
   ok(!threw,
      "Calling an instance object for an interface marked with legacycaller shouldn't throw");
   checkXrayProperty(doc.all, 0, [ element ]);
+
+  let [ testObject, expectedValues ] = testReflectedAttributeWithFrozenArray(win);
+  checkReflectedAttributeWithFrozenArray(testObject.wrappedJSObject, expectedValues,
+                                         "on Xray and object",
+                                         (a, b) => a.wrappedJSObject == b);
 
   SimpleTest.finish();
 }

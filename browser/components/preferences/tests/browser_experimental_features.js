@@ -61,13 +61,47 @@ add_task(async function testSearchFindsExperiments() {
   ok(!experimentalCategory.hidden, "The category is not hidden");
 
   await TestUtils.waitForCondition(
-    () => doc.getElementById("firefoxExperimentalCategory"),
+    () => doc.querySelector("#pane-experimental-featureGates > .featureGate"),
     "Waiting for experimental features category to get initialized"
   );
   await evaluateSearchResults(
-    "advanced configuration",
+    "in development and evolving",
     ["pane-experimental-featureGates"],
     /* include experiments */ true
+  );
+
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
+});
+
+add_task(async function testExtraTemplate() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.preferences.experimental", true]],
+  });
+
+  // Pretend a feature has id of "featureGate" to reuse that template
+  const server = new DefinitionServer();
+  server.addDefinition({
+    id: "testFeatureGateExtra",
+    isPublicJexl: "true",
+    preference: "test.feature",
+  });
+  await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    `about:preferences?definitionsUrl=${encodeURIComponent(
+      server.definitionsUrl
+    )}#paneExperimental`
+  );
+
+  const doc = gBrowser.contentDocument;
+  let extraContent = await TestUtils.waitForCondition(
+    () => doc.getElementById("testFeatureGateExtraContent"),
+    "wait for feature to get added to the DOM"
+  );
+
+  is(
+    extraContent.textContent,
+    "Test extra content",
+    "extra template added extra content"
   );
 
   BrowserTestUtils.removeTab(gBrowser.selectedTab);

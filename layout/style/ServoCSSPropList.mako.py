@@ -55,9 +55,6 @@ def method(prop):
 
 # TODO(emilio): Get this to zero.
 LONGHANDS_NOT_SERIALIZED_WITH_SERVO = [
-    # Servo serializes one value when both are the same, a few tests expect two.
-    "border-spacing",
-
     # These resolve auto to zero in a few cases, but not all.
     "max-height",
     "max-width",
@@ -134,8 +131,6 @@ def flags(prop):
             result.append(v)
     if exposed_on_getcs(prop):
         result.append("ExposedOnGetCS")
-        if prop.type() == "shorthand" and "SHORTHAND_IN_GETCS" in prop.flags:
-            result.append("ShorthandUnconditionallyExposedOnGetCS")
         if serialized_by_servo(prop):
             result.append("SerializedByServo")
     if prop.type() == "longhand" and prop.logical:

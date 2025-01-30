@@ -66,11 +66,12 @@ add_task(async function test_multiple_extensions_overriding_home_page() {
   function background() {
     browser.test.onMessage.addListener(async msg => {
       switch (msg) {
-        case "checkHomepage":
+        case "checkHomepage": {
           let homepage = await browser.browserSettings.homepageOverride.get({});
           browser.test.sendMessage("homepage", homepage);
           break;
-        case "trySet":
+        }
+        case "trySet": {
           let setResult = await browser.browserSettings.homepageOverride.set({
             value: "foo",
           });
@@ -80,7 +81,8 @@ add_task(async function test_multiple_extensions_overriding_home_page() {
           );
           browser.test.sendMessage("homepageSet");
           break;
-        case "tryClear":
+        }
+        case "tryClear": {
           let clearResult =
             await browser.browserSettings.homepageOverride.clear({});
           browser.test.assertFalse(
@@ -89,6 +91,7 @@ add_task(async function test_multiple_extensions_overriding_home_page() {
           );
           browser.test.sendMessage("homepageCleared");
           break;
+        }
       }
     });
   }
@@ -388,7 +391,7 @@ add_task(async function test_doorhanger_homepage_button() {
   await ext2.startup();
 
   let popupShown = promisePopupShown(panel);
-  BrowserHome();
+  BrowserCommands.home();
   await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser, false, () =>
     gURLBar.value.endsWith("ext2.html")
   );
@@ -410,7 +413,7 @@ add_task(async function test_doorhanger_homepage_button() {
   popupShown = promisePopupShown(panel);
   await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:blank");
   let openHomepage = TestUtils.topicObserved("browser-open-homepage-start");
-  BrowserHome();
+  BrowserCommands.home();
   await openHomepage;
   await popupShown;
   await TestUtils.waitForCondition(
@@ -432,7 +435,7 @@ add_task(async function test_doorhanger_homepage_button() {
 
   BrowserTestUtils.removeTab(gBrowser.selectedTab);
   openHomepage = TestUtils.topicObserved("browser-open-homepage-start");
-  BrowserHome();
+  BrowserCommands.home();
   await openHomepage;
 
   is(getHomePageURL(), defaultHomePage, "The homepage is set back to default");
@@ -489,13 +492,28 @@ add_task(async function test_doorhanger_new_window() {
 
   is(
     description.textContent,
-    "An extension,  Ext2, changed what you see when you open your homepage and new windows.Learn more",
+    "An extension,  Ext2, changed what you see when you open your homepage and new windows.",
     "The extension name is in the popup"
+  );
+
+  let popupnotification = doc.getElementById("extension-homepage-notification");
+  let learnMoreEl = popupnotification.querySelector(
+    ".popup-notification-learnmore-link"
+  );
+  ok(
+    BrowserTestUtils.isVisible(learnMoreEl),
+    "Expect the popupnotification learnmore link to be visible"
+  );
+
+  is(
+    learnMoreEl.getAttribute("href"),
+    Services.urlFormatter.formatURLPref("app.support.baseURL") +
+      "extension-home",
+    "learnmore link should have the expected url set"
   );
 
   // Click Manage.
   let popupHidden = promisePopupHidden(panel);
-  let popupnotification = doc.getElementById("extension-homepage-notification");
   popupnotification.secondaryButton.click();
   await popupHidden;
 
@@ -507,7 +525,7 @@ add_task(async function test_doorhanger_new_window() {
   let popupShown = promisePopupShown(panel);
   await BrowserTestUtils.openNewForegroundTab(win.gBrowser, "about:blank");
   let openHomepage = TestUtils.topicObserved("browser-open-homepage-start");
-  win.BrowserHome();
+  win.BrowserCommands.home();
   await openHomepage;
   await popupShown;
 
@@ -518,7 +536,7 @@ add_task(async function test_doorhanger_new_window() {
 
   is(
     description.textContent,
-    "An extension,  Ext1, changed what you see when you open your homepage and new windows.Learn more",
+    "An extension,  Ext1, changed what you see when you open your homepage and new windows.",
     "The extension name is in the popup"
   );
 
@@ -547,7 +565,7 @@ async function testHomePageWindow(options = {}) {
   let panel = ExtensionControlledPopup._getAndMaybeCreatePanel(doc);
 
   let popupShown = options.expectPanel && promisePopupShown(panel);
-  win.BrowserHome();
+  win.BrowserCommands.home();
   await Promise.all([
     BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser),
     openHomepage,
@@ -591,7 +609,7 @@ add_task(async function test_overriding_home_page_incognito_not_allowed() {
       let popupnotification = description.closest("popupnotification");
       is(
         description.textContent,
-        "An extension,  extension, changed what you see when you open your homepage and new windows.Learn more",
+        "An extension,  extension, changed what you see when you open your homepage and new windows.",
         "The extension name is in the popup"
       );
       is(

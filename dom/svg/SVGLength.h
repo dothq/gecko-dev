@@ -8,8 +8,6 @@
 #define DOM_SVG_SVGLENGTH_H_
 
 #include "nsDebug.h"
-#include "nsMathUtils.h"
-#include "mozilla/FloatingPoint.h"
 #include "mozilla/dom/SVGAnimatedLength.h"
 #include "mozilla/dom/SVGLengthBinding.h"
 
@@ -79,9 +77,14 @@ class SVGLength {
    * If it's not possible to convert this length's value to pixels, then
    * this method will return numeric_limits<float>::quiet_NaN().
    */
-
   float GetValueInPixels(const dom::SVGElement* aElement, uint8_t aAxis) const {
     return mValue * GetPixelsPerUnit(dom::SVGElementMetrics(aElement), aAxis);
+  }
+
+  float GetValueInPixelsWithZoom(const dom::SVGElement* aElement,
+                                 uint8_t aAxis) const {
+    return mValue *
+           GetPixelsPerUnitWithZoom(dom::SVGElementMetrics(aElement), aAxis);
   }
 
   /**
@@ -95,9 +98,14 @@ class SVGLength {
 
   bool IsPercentage() const { return IsPercentageUnit(mUnit); }
 
+  float GetPixelsPerUnitWithZoom(const dom::UserSpaceMetrics& aMetrics,
+                                 uint8_t aAxis) const {
+    return GetPixelsPerUnit(aMetrics, mUnit, aAxis, true);
+  }
+
   float GetPixelsPerUnit(const dom::UserSpaceMetrics& aMetrics,
                          uint8_t aAxis) const {
-    return GetPixelsPerUnit(aMetrics, mUnit, aAxis);
+    return GetPixelsPerUnit(aMetrics, mUnit, aAxis, false);
   }
 
   static bool IsValidUnitType(uint16_t aUnitType) {
@@ -125,7 +133,8 @@ class SVGLength {
    * Returns the number of pixels per given unit.
    */
   static float GetPixelsPerUnit(const dom::UserSpaceMetrics& aMetrics,
-                                uint8_t aUnitType, uint8_t aAxis);
+                                uint8_t aUnitType, uint8_t aAxis,
+                                bool aApplyZoom);
 
  private:
   float mValue;

@@ -305,9 +305,11 @@
 }
 
 /* CodeMirror matchhighlight styling */
-.cm-matchhighlight {
+.cm-matchhighlight, .cm-selectionMatch {
   outline: 1px solid var(--theme-contrast-border);
   border-radius: 2px;
+  /* Override cm6 inline */
+  background-color: transparent !important;
 }
 
 .cm-non-printable-char {
@@ -319,6 +321,46 @@
   padding-inline: 2px;
 }
 
+/* matching brackets highlight */
+.cm-s-mozilla .CodeMirror-matchingbracket,
+/* Codemirror 6 */
+.cm-editor .cm-matchingBracket {
+  text-decoration: 1px underline solid currentColor;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+
+.cm-s-mozilla.CodeMirror-focused .CodeMirror-selected { /* selected text (focused) */
+  background: var(--theme-text-selection-background);
+}
+
+.cm-s-mozilla .CodeMirror-selected { /* selected text (unfocused) */
+  background: var(--theme-text-selection-unfocused-background);
+}
+
+/* cm5 High Contrast Mode override */
+:root[forced-colors-active] {
+  .CodeMirror-selectedtext {
+    /* Set the color on the actual span elements */
+    color: var(--theme-text-selection-color);
+    /* We also need to set the background color to avoid the backplating and keep it readable  */
+    background-color: var(--theme-text-selection-background);
+
+    /* Set the background for the "active match" (i.e. when double clicking a word) */
+    &.cm-matchhighlight {
+      forced-color-adjust: auto;
+      background-color: var(--theme-text-selection-background) !important;
+      color: var(--theme-text-selection-color);
+    }
+  }
+
+  /* Matching brackets */
+  div.CodeMirror span.CodeMirror-matchingbracket {
+    background-color: Mark;
+    color: MarkText;
+  }
+}
+
 /****************************************/
 /***** CodeMirror 6 specific styles *****/
 /****************************************/
@@ -328,13 +370,29 @@
   height: 100%;
 }
 .cm-editor .cm-selectionBackground {
-  background: var(--theme-selection-background) !important;
+  background: var(--theme-text-selection-background) !important;
+}
+
+.cm-editor .cm-content ::selection {
+  /* We don't want forced colors on selection so we can adjust the colors as we want.
+     This especially helps for the unfocused selected text */
+  forced-color-adjust: none;
+}
+
+.cm-editor .cm-line ::selection {
+  color: inherit;
+}
+
+:root[forced-colors-active] .cm-editor .cm-line ::selection,
+:root[forced-colors-active] .cm-editor .cm-line::selection {
+  background-color: var(--theme-text-selection-background) !important;
+  color: var(--theme-text-selection-color) !important;
 }
 
 .cm6-dt-foldgutter__toggle-button {
-  height: 14px;
-  width: 14px;
-  margin-inline: 3px;
+  height: 20px;
+  width: 20px;
+  padding-inline: 3px;
   /* By default, the icon is a bit too low */
   translate: 0px -4px;
   background-image: url("chrome://devtools/skin/images/arrow.svg");
@@ -342,6 +400,7 @@
   background-repeat: no-repeat;
   background-color: transparent;
   border: none;
+  outline-offset: -2px;
   -moz-context-properties: fill;
   fill: var(--theme-icon-dimmed-color);
   /* make the icons smaller than regular twistys (10->8px) */
@@ -353,6 +412,10 @@
   }
 }
 
+.cm-editor .cm-gutter.cm-lineNumbers {
+  user-select: none;
+}
+
 .cm-editor .cm-foldPlaceholder {
   font-family: sans-serif;
   padding: 0 2px;
@@ -361,4 +424,21 @@
   color: var(--theme-body-color);
   background-color: var(--theme-sidebar-background);
   vertical-align: middle;
+}
+
+.cm-editor .cm-matchingBracket {
+  /* Removing the default background color */
+  background-color: unset !important;
+  /* Applying the same color that was set in cm5. Set the color on the parent so the
+     underline set on the parent has the correct color */
+  color: #0b0;
+
+  :root[forced-colors-active] & {
+    background: Mark;
+    color: MarkText;
+  }
+
+  .tok-punctuation {
+    color: currentColor;
+  }
 }

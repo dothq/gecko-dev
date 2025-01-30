@@ -9,6 +9,7 @@
 
 #include "mozilla/Maybe.h"
 #include "mozilla/Types.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "nsXULAppAPI.h"
 #include <vector>
 
@@ -26,7 +27,9 @@ class FileDescriptor;
 
 // This must be called early, before glib creates any worker threads.
 // (See bug 1176099.)
-MOZ_EXPORT void SandboxEarlyInit();
+MOZ_EXPORT void SandboxEarlyInit(
+    Maybe<mozilla::UniqueFileHandle>&& aSandboxReporter,
+    Maybe<mozilla::UniqueFileHandle>&& aChrootClient);
 
 // A collection of sandbox parameters that have to be extracted from
 // prefs or other libxul facilities and passed down, because
@@ -70,6 +73,12 @@ MOZ_EXPORT void SetUtilitySandbox(int aBroker, ipc::SandboxingKind aKind);
 // We want to turn on/off crashing on error when running some tests
 // This will return current value and set the aValue we pass
 MOZ_EXPORT bool SetSandboxCrashOnError(bool aValue);
+
+// Call SandboxProfiler::Create to make sure SandboxProfiler exists if it should
+// exists, i.e., profiler symbols were found and the profiler is running
+MOZ_EXPORT void CreateSandboxProfiler();
+
+MOZ_EXPORT void DestroySandboxProfiler();
 
 }  // namespace mozilla
 

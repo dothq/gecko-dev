@@ -12,6 +12,30 @@ interface VertexPosCase {
   valid: boolean;
 }
 
+const kCCommonTypeDecls = `
+struct runtime_array_struct {
+  arr : array<u32>
+}
+
+struct constructible {
+  a : i32,
+  b : u32,
+  c : f32,
+  d : bool,
+}
+
+struct host_shareable {
+  a : i32,
+  b : u32,
+  c : f32,
+}
+
+struct struct_with_array {
+  a : array<constructible, 4>
+}
+
+`;
+
 const kVertexPosCases: Record<string, VertexPosCase> = {
   bare_position: { name: `@builtin(position) vec4f`, value: `vec4f()`, valid: true },
   nested_position: { name: `pos_struct`, value: `pos_struct()`, valid: true },
@@ -145,20 +169,7 @@ g.test('function_return_types')
     const code = `
 ${enable}
 
-struct runtime_array_struct {
-  arr : array<u32>
-}
-
-struct constructible {
-  a : i32,
-  b : u32,
-  c : f32,
-  d : bool,
-}
-
-struct struct_with_array {
-  a : array<constructible, 4>
-}
+${kCCommonTypeDecls}
 
 struct atomic_struct {
   a : atomic<u32>
@@ -192,7 +203,7 @@ fn foo() -> ${testcase.name} {
 
 interface ParamTypeCase {
   name: string;
-  valid: boolean;
+  valid: boolean | 'with_unrestricted_pointer_parameters';
 }
 
 const kFunctionParamTypeCases: Record<string, ParamTypeCase> = {
@@ -246,21 +257,42 @@ const kFunctionParamTypeCases: Record<string, ParamTypeCase> = {
   ptr3: { name: `ptr<private, u32>`, valid: true },
   ptr4: { name: `ptr<private, constructible>`, valid: true },
 
+  // Pointers only valid with unrestricted_pointer_parameters
+  ptr5: { name: `ptr<storage, u32>`, valid: 'with_unrestricted_pointer_parameters' },
+  ptr6: { name: `ptr<storage, u32, read>`, valid: 'with_unrestricted_pointer_parameters' },
+  ptr7: { name: `ptr<storage, u32, read_write>`, valid: 'with_unrestricted_pointer_parameters' },
+  ptr8: { name: `ptr<uniform, u32>`, valid: 'with_unrestricted_pointer_parameters' },
+  ptr9: { name: `ptr<workgroup, u32>`, valid: 'with_unrestricted_pointer_parameters' },
+  ptr10: {
+    name: `ptr<storage, host_shareable, read_write>`,
+    valid: 'with_unrestricted_pointer_parameters',
+  },
+  ptr11: {
+    name: `ptr<storage, host_shareable, read>`,
+    valid: 'with_unrestricted_pointer_parameters',
+  },
+  ptr12: {
+    name: `ptr<uniform, host_shareable>`,
+    valid: 'with_unrestricted_pointer_parameters',
+  },
+  ptrWorkgroupAtomic: {
+    name: `ptr<workgroup, atomic<u32>>`,
+    valid: 'with_unrestricted_pointer_parameters',
+  },
+  ptrWorkgroupNestedAtomic: {
+    name: `ptr<workgroup, array<atomic<u32>,1>>`,
+    valid: 'with_unrestricted_pointer_parameters',
+  },
+
   // Invalid pointers.
-  ptr5: { name: `ptr<storage, u32>`, valid: false },
-  ptr6: { name: `ptr<storage, u32, read>`, valid: false },
-  ptr7: { name: `ptr<storage, u32, read_write>`, valid: false },
-  ptr8: { name: `ptr<uniform, u32>`, valid: false },
-  ptr9: { name: `ptr<workgroup, u32>`, valid: false },
-  ptr10: { name: `ptr<handle, u32>`, valid: false }, // Can't spell handle address space
-  ptr12: { name: `ptr<not_an_address_space, u32>`, valid: false },
-  ptr13: { name: `ptr<storage>`, valid: false }, // No store type
-  ptr14: { name: `ptr<private,clamp>`, valid: false }, // Invalid store type
-  ptr15: { name: `ptr<private,u32,read>`, valid: false }, // Can't specify access mode
-  ptr16: { name: `ptr<private,u32,write>`, valid: false }, // Can't specify access mode
-  ptr17: { name: `ptr<private,u32,read_write>`, valid: false }, // Can't specify access mode
-  ptrWorkgroupAtomic: { name: `ptr<workgroup, atomic<u32>>`, valid: false },
-  ptrWorkgroupNestedAtomic: { name: `ptr<workgroup, array<atomic<u32>,1>>`, valid: false },
+  invalid_ptr1: { name: `ptr<handle, u32>`, valid: false }, // Can't spell handle address space
+  invalid_ptr2: { name: `ptr<not_an_address_space, u32>`, valid: false },
+  invalid_ptr3: { name: `ptr<storage>`, valid: false }, // No store type
+  invalid_ptr4: { name: `ptr<private,u32,read>`, valid: false }, // Can't specify access mode
+  invalid_ptr5: { name: `ptr<private,u32,write>`, valid: false }, // Can't specify access mode
+  invalid_ptr6: { name: `ptr<private,u32,read_write>`, valid: false }, // Can't specify access mode
+  invalid_ptr7: { name: `ptr<private,clamp>`, valid: false }, // Invalid store type
+  invalid_ptr8: { name: `ptr<function, texture_external>`, valid: false }, // non-constructible pointer type
 };
 
 g.test('function_parameter_types')
@@ -278,30 +310,23 @@ g.test('function_parameter_types')
     const code = `
 ${enable}
 
-struct runtime_array_struct {
-  arr : array<u32>
-}
-
-struct constructible {
-  a : i32,
-  b : u32,
-  c : f32,
-  d : bool,
-}
-
-struct struct_with_array {
-  a : array<constructible, 4>
-}
+${kCCommonTypeDecls}
 
 fn foo(param : ${testcase.name}) {
 }`;
 
-    t.expectCompileResult(testcase.valid, code);
+    let isValid = testcase.valid;
+    if (isValid === 'with_unrestricted_pointer_parameters') {
+      isValid = t.hasLanguageFeature('unrestricted_pointer_parameters');
+    }
+
+    t.expectCompileResult(isValid, code);
   });
 
 interface ParamValueCase {
   value: string;
   matches: string[];
+  needsUnrestrictedPointerParameters?: boolean;
 }
 
 const kFunctionParamValueCases: Record<string, ParamValueCase> = {
@@ -426,15 +451,53 @@ const kFunctionParamValueCases: Record<string, ParamValueCase> = {
   ptr3: { value: `&g_u32`, matches: ['ptr3'] },
   ptr4: { value: `&g_constructible`, matches: ['ptr4'] },
 
-  // Invalid pointers
-  ptr5: { value: `&f_constructible.b`, matches: [] },
-  ptr6: { value: `&g_constructible.b`, matches: [] },
-  ptr7: { value: `&f_struct_with_array.a[1].b`, matches: [] },
-  ptr8: { value: `&g_struct_with_array.a[2]`, matches: [] },
-  ptr9: { value: `&ro_constructible.b`, matches: [] },
-  ptr10: { value: `&rw_constructible`, matches: [] },
-  ptr11: { value: `&uniform_constructible`, matches: [] },
-  ptr12: { value: `&ro_constructible`, matches: [] },
+  ptr_let1: { value: `ptr_f_u32`, matches: ['ptr1'] },
+  ptr_let2: { value: `ptr_f_constructible`, matches: ['ptr2'] },
+  ptr_let3: { value: `ptr_g_u32`, matches: ['ptr3'] },
+  ptr_let4: { value: `ptr_g_constructible`, matches: ['ptr4'] },
+  ptr_let5: { value: `let_let_f_u32`, matches: ['ptr1'] },
+
+  // Requires 'unrestricted_pointer_parameters' WGSL feature
+  ptr5: {
+    value: `&f_constructible.b`,
+    matches: ['ptr1'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr6: {
+    value: `&g_constructible.b`,
+    matches: ['ptr3'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr7: {
+    value: `&f_struct_with_array.a[1].b`,
+    matches: ['ptr1'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr8: {
+    value: `&g_struct_with_array.a[2]`,
+    matches: ['ptr4'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr9: {
+    value: `&ro_host_shareable.b`,
+    matches: ['ptr5', 'ptr6'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr10: {
+    value: `&rw_host_shareable`,
+    matches: ['ptr10'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr11: {
+    value: `&ro_host_shareable`,
+    matches: ['ptr11'],
+    needsUnrestrictedPointerParameters: true,
+  },
+  ptr12: {
+    value: `&uniform_host_shareable`,
+    matches: ['ptr12'],
+    needsUnrestrictedPointerParameters: true,
+  },
 };
 
 function parameterMatches(decl: string, matches: string[]): boolean {
@@ -454,10 +517,11 @@ g.test('function_parameter_matching')
   .params(u =>
     u
       .combine('decl', keysOf(kFunctionParamTypeCases))
-      .combine('arg', keysOf(kFunctionParamValueCases))
       .filter(u => {
-        return kFunctionParamTypeCases[u.decl].valid;
+        return kFunctionParamTypeCases[u.decl].valid !== false;
       })
+      .beginSubcases()
+      .combine('arg', keysOf(kFunctionParamValueCases))
   )
   .beforeAllSubcases(t => {
     if (kFunctionParamTypeCases[t.params.decl].name === 'f16') {
@@ -471,26 +535,7 @@ g.test('function_parameter_matching')
     const code = `
 ${enable}
 
-struct runtime_array_struct {
-  arr : array<u32>
-}
-
-struct constructible {
-  a : i32,
-  b : u32,
-  c : f32,
-  d : bool,
-}
-
-struct host_shareable {
-  a : i32,
-  b : u32,
-  c : f32,
-}
-
-struct struct_with_array {
-  a : array<constructible, 4>
-}
+${kCCommonTypeDecls}
 @group(0) @binding(0)
 var t : texture_2d<f32>;
 @group(0) @binding(1)
@@ -507,11 +552,11 @@ var t_multisampled : texture_multisampled_2d<f32>;
 var t_external : texture_external;
 
 @group(1) @binding(0)
-var<storage> ro_constructible : host_shareable;
+var<storage> ro_host_shareable : host_shareable;
 @group(1) @binding(1)
-var<storage, read_write> rw_constructible : host_shareable;
+var<storage, read_write> rw_host_shareable : host_shareable;
 @group(1) @binding(2)
-var<uniform> uniform_constructible : host_shareable;
+var<uniform> uniform_host_shareable : host_shareable;
 
 fn bar(param : ${param.name}) { }
 
@@ -563,12 +608,27 @@ fn foo() {
   var f_array5 : array<bool, 4>;
   var f_constructible : constructible;
   var f_struct_with_array : struct_with_array;
+  let ptr_f_u32 = &f_u32;
+  let ptr_f_constructible = &f_constructible;
+  let ptr_g_u32 = &g_u32;
+  let ptr_g_constructible = &g_constructible;
+  let let_let_f_u32 = ptr_f_u32;
 
   bar(${arg.value});
 }
 `;
 
-    t.expectCompileResult(parameterMatches(t.params.decl, arg.matches), code);
+    const needsUnrestrictedPointerParameters =
+      (kFunctionParamTypeCases[t.params.decl].valid === 'with_unrestricted_pointer_parameters' ||
+        arg.needsUnrestrictedPointerParameters) ??
+      false;
+
+    let isValid = parameterMatches(t.params.decl, arg.matches);
+    if (isValid && needsUnrestrictedPointerParameters) {
+      isValid = t.hasLanguageFeature('unrestricted_pointer_parameters');
+    }
+
+    t.expectCompileResult(isValid, code);
   });
 
 g.test('no_direct_recursion')
@@ -691,67 +751,449 @@ function checkArgTypeMatch(param_type: string, arg_matches: string[]): boolean {
   return false;
 }
 
-g.test('call_arg_types_match_params')
+g.test('call_arg_types_match_1_param')
   .specURL('https://gpuweb.github.io/gpuweb/wgsl/#function-calls')
   .desc(`Test that the argument types match in order`)
   .params(u =>
     u
-      .combine('num_args', [1, 2, 3] as const)
+      .combine('p1_type', kParamsTypes) //
+      .beginSubcases()
+      .combine('arg1_value', keysOf(kArgValues))
+  )
+  .fn(t => {
+    const code = `
+fn bar(p1 : ${t.params.p1_type}) { }
+fn foo() {
+  bar(${kArgValues[t.params.arg1_value].value});
+}`;
+
+    const res = checkArgTypeMatch(t.params.p1_type, kArgValues[t.params.arg1_value].matches);
+    t.expectCompileResult(res, code);
+  });
+
+g.test('call_arg_types_match_2_params')
+  .specURL('https://gpuweb.github.io/gpuweb/wgsl/#function-calls')
+  .desc(`Test that the argument types match in order`)
+  .params(u =>
+    u
+      .combine('p1_type', kParamsTypes)
+      .combine('p2_type', kParamsTypes)
+      .beginSubcases()
+      .combine('arg1_value', keysOf(kArgValues))
+      .combine('arg2_value', keysOf(kArgValues))
+  )
+  .fn(t => {
+    const code = `
+fn bar(p1 : ${t.params.p1_type}, p2 : ${t.params.p2_type}) { }
+fn foo() {
+  bar(${kArgValues[t.params.arg1_value].value}, ${kArgValues[t.params.arg2_value].value});
+}`;
+
+    const res =
+      checkArgTypeMatch(t.params.p1_type, kArgValues[t.params.arg1_value].matches) &&
+      checkArgTypeMatch(t.params.p2_type, kArgValues[t.params.arg2_value].matches);
+    t.expectCompileResult(res, code);
+  });
+
+g.test('call_arg_types_match_3_params')
+  .specURL('https://gpuweb.github.io/gpuweb/wgsl/#function-calls')
+  .desc(`Test that the argument types match in order`)
+  .params(u =>
+    u
       .combine('p1_type', kParamsTypes)
       .combine('p2_type', kParamsTypes)
       .combine('p3_type', kParamsTypes)
+      .beginSubcases()
       .combine('arg1_value', keysOf(kArgValues))
       .combine('arg2_value', keysOf(kArgValues))
       .combine('arg3_value', keysOf(kArgValues))
   )
   .fn(t => {
-    let code = `
-    fn bar(`;
-    for (let i = 0; i < t.params.num_args; i++) {
-      switch (i) {
-        case 0:
-        default: {
-          code += `p${i} : ${t.params.p1_type},`;
-          break;
-        }
-        case 1: {
-          code += `p${i} : ${t.params.p2_type},`;
-          break;
-        }
-        case 2: {
-          code += `p${i} : ${t.params.p3_type},`;
-          break;
-        }
-      }
-    }
-    code += `) { }
-    fn foo() {
-      bar(`;
-    for (let i = 0; i < t.params.num_args; i++) {
-      switch (i) {
-        case 0:
-        default: {
-          code += `${kArgValues[t.params.arg1_value].value},`;
-          break;
-        }
-        case 1: {
-          code += `${kArgValues[t.params.arg2_value].value},`;
-          break;
-        }
-        case 2: {
-          code += `${kArgValues[t.params.arg3_value].value},`;
-          break;
-        }
-      }
-    }
-    code += `);\n}`;
+    const code = `
+fn bar(p1 : ${t.params.p1_type}, p2 : ${t.params.p2_type}, p3 : ${t.params.p3_type}) { }
+fn foo() {
+  bar(${kArgValues[t.params.arg1_value].value},
+      ${kArgValues[t.params.arg2_value].value},
+      ${kArgValues[t.params.arg3_value].value});
+}`;
 
-    let res = checkArgTypeMatch(t.params.p1_type, kArgValues[t.params.arg1_value].matches);
-    if (res && t.params.num_args > 1) {
-      res = checkArgTypeMatch(t.params.p2_type, kArgValues[t.params.arg2_value].matches);
-    }
-    if (res && t.params.num_args > 2) {
-      res = checkArgTypeMatch(t.params.p3_type, kArgValues[t.params.arg3_value].matches);
-    }
+    const res =
+      checkArgTypeMatch(t.params.p1_type, kArgValues[t.params.arg1_value].matches) &&
+      checkArgTypeMatch(t.params.p2_type, kArgValues[t.params.arg2_value].matches) &&
+      checkArgTypeMatch(t.params.p3_type, kArgValues[t.params.arg3_value].matches);
     t.expectCompileResult(res, code);
+  });
+
+g.test('param_name_can_shadow_function_name')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that a function parameter can shadow the function name`)
+  .fn(t => {
+    const code = `
+fn foo(foo: i32) -> i32 {
+  return foo;
+}
+`;
+    t.expectCompileResult(true, code);
+  });
+
+g.test('param_name_can_shadow_alias')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that a function parameter can shadow an alias`)
+  .fn(t => {
+    const code = `
+alias foo = f32;
+fn test(foo: i32) -> i32 {
+  return foo;
+}
+`;
+    t.expectCompileResult(true, code);
+  });
+
+g.test('param_name_can_shadow_global')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that a function parameter can shadow a global`)
+  .fn(t => {
+    const code = `
+const foo: f32 = 1.2f;
+
+fn test(foo: i32) -> i32 {
+  return foo;
+}
+`;
+    t.expectCompileResult(true, code);
+  });
+
+g.test('param_comma_placement')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests validation of commas in function parameter lists`)
+  .params(u =>
+    u
+      .combine('param_1', [true, false])
+      .combine('param_2', [true, false])
+      .combine('comma', [true, false])
+  )
+  .fn(t => {
+    const has_p1 = t.params.param_1;
+    const has_p2 = t.params.param_2;
+    const has_c = t.params.comma;
+
+    const p1 = has_p1 ? 'foo: i32' : '';
+    const p2 = has_p2 ? 'bar: f32' : '';
+    const comma = has_c ? ', ' : ' ';
+
+    const code = `
+fn test(${p1}${comma}${p2}) {
+}
+`;
+
+    const success =
+      (!has_p1 && !has_p2 && !has_c) || // no params
+      (has_p1 && !has_p2) || // only p1, which can have a trailing comma or not
+      (!has_p1 && has_p2 && !has_c) || // just p2
+      (has_p1 && has_p2 && has_c); // both params comma separated
+    t.expectCompileResult(success, code);
+  });
+
+g.test('param_type_can_be_alias')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that a function parameter type can be an alias`)
+  .fn(t => {
+    const code = `
+alias foo = f32;
+fn test(foo: foo) -> foo {
+  return foo;
+}
+`;
+    t.expectCompileResult(true, code);
+  });
+
+g.test('function_name_required')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests the function name is required`)
+  .params(u => u.combine('name', [true, false]))
+  .fn(t => {
+    const has_name = t.params.name;
+    const name = has_name ? 'name' : '';
+    const code = `
+fn ${name}() -> i32 {
+  return 1;
+}
+`;
+    t.expectCompileResult(has_name, code);
+  });
+
+g.test('param_type_required')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests the parameter type is required`)
+  .params(u => u.combine('ty', [true, false]).combine('colon', [true, false]))
+  .fn(t => {
+    const has_ty = t.params.ty;
+    const has_colon = t.params.colon;
+    const ty = has_ty ? 'i32' : '';
+    const colon = has_colon ? ':' : ' ';
+    const code = `
+fn f(foo${colon}${ty}) -> i32 {
+  return 1;
+}
+`;
+    t.expectCompileResult(has_ty && has_colon, code);
+  });
+
+g.test('body_required')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests the function body is required`)
+  .params(u => u.combine('body', ['braces', 'semi', '']))
+  .fn(t => {
+    const body = t.params.body === 'braces' ? '{}' : t.params.body === 'semi' ? ';' : '';
+
+    const code = `
+fn f() ${body}
+
+fn other() {}
+`;
+    t.expectCompileResult(body === '{}', code);
+  });
+
+g.test('parens_required')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that the parens for a function are required`)
+  .params(u => u.combine('parens', [true, false]).combine('param', [true, false]))
+  .fn(t => {
+    const has_parens = t.params.parens;
+    const has_param = t.params.param;
+
+    let args = '';
+    if (has_parens) {
+      args += '(';
+    }
+    if (has_param) {
+      args += 'foo: i32';
+    }
+
+    if (has_parens) {
+      args += ')';
+    }
+
+    const code = `
+fn f ${args} {}
+`;
+    t.expectCompileResult(has_parens, code);
+  });
+
+g.test('non_module_scoped_function')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that a non-module-scope function is rejected`)
+  .params(u => u.combine('loc', ['inner', 'outer']))
+  .fn(t => {
+    const o = `fn a() -> i32 { return 1; }`;
+
+    let inner = '';
+    let outer = '';
+
+    if (t.params.loc === 'inner') {
+      inner = o;
+    } else {
+      outer = o;
+    }
+
+    const code = `
+${outer}
+fn b() {
+  ${inner}
+}
+`;
+    t.expectCompileResult(t.params.loc === 'outer', code);
+  });
+
+const kAttributes = {
+  align: {
+    attr: '@align(5)',
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  binding: {
+    attr: '@binding(5)',
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  builtin: {
+    attr: '@builtin(position)',
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  compute: {
+    attr: `@compute`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  const: {
+    attr: '@const',
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  diagnostic: {
+    attr: `@diagnostic(off, derivative_uniformity)`,
+    pass: {
+      func: true,
+      param: false,
+      ret: false,
+    },
+  },
+  fragment: {
+    attr: `@fragment`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  group: {
+    attr: `@group(1)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  id: {
+    attr: `@id(1)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  interpolate: {
+    attr: `@interpolate(linear, center)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  invariant: {
+    attr: `@invariant`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  location: {
+    attr: `@location(0)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  must_use: {
+    attr: `@must_use`,
+    pass: {
+      func: true,
+      param: false,
+      ret: false,
+    },
+  },
+  size: {
+    attr: `@size(10)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  vertex: {
+    attr: `@vertex`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+  workgroup_size: {
+    attr: `@workgroup_size(1)`,
+    pass: {
+      func: false,
+      param: false,
+      ret: false,
+    },
+  },
+};
+
+g.test('function_attributes')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests the attributes for a function`)
+  .params(u =>
+    u.combine('case', keysOf(kAttributes)).combine('placement', ['func', 'param', 'ret'])
+  )
+  .fn(t => {
+    const d = kAttributes[t.params.case];
+    const func = t.params.placement === 'func';
+    const param = t.params.placement === 'param';
+    const ret = t.params.placement === 'ret';
+
+    const code = `
+${func ? d.attr : ''}
+fn b(${param ? d.attr : ''} foo: i32) -> ${ret ? d.attr : ''} i32{
+  return 1;
+}
+`;
+    const succeed =
+      t.params.placement === 'func'
+        ? d.pass.func
+        : t.params.placement === 'params'
+        ? d.pass.param
+        : d.pass.ret;
+    t.expectCompileResult(succeed, code);
+  });
+
+g.test('must_use_requires_return')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests the must_use attribute requires a return`)
+  .params(u => u.combine('ret', [true, false]))
+  .fn(t => {
+    let ret = '';
+    let ret_stmt = '';
+
+    if (t.params.ret) {
+      ret = '-> i32';
+      ret_stmt = 'return 1;';
+    }
+
+    const code = `
+@must_use
+fn b() ${ret} {
+  ${ret_stmt}
+}
+`;
+    t.expectCompileResult(t.params.ret, code);
+  });
+
+g.test('overload')
+  .specURL('https://www.w3.org/TR/WGSL/#function-declaration-sec')
+  .desc(`Tests that user functions can not overload `)
+  .params(u => u.combine('overload', [true, false]))
+  .fn(t => {
+    let code = 'fn a(f: i32) {}\n';
+
+    if (t.params.overload) {
+      code += 'fn a(f: u32) {}';
+    }
+    t.expectCompileResult(t.params.overload === false, code);
   });

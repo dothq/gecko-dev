@@ -42,8 +42,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
 const gIsFirefoxDesktop =
   Services.appinfo.ID == "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";
 
-Services.telemetry.setEventRecordingEnabled("readermode", true);
-
 export var ReaderMode = {
   DEBUG: 0,
 
@@ -58,7 +56,7 @@ export var ReaderMode = {
   enterReaderMode(docShell, win) {
     this.enterTime = Date.now();
 
-    Services.telemetry.recordEvent("readermode", "view", "on", null, {
+    Glean.readermode.viewOn.record({
       subcategory: "feature",
     });
 
@@ -99,7 +97,7 @@ export var ReaderMode = {
       ((win.scrollY + win.innerHeight) / win.document.body.clientHeight) * 100
     );
 
-    Services.telemetry.recordEvent("readermode", "view", "off", null, {
+    Glean.readermode.viewOff.record({
       subcategory: "feature",
       reader_time: `${timeSpentInReaderMode}`,
       scroll_position: `${scrollPosition}`,
@@ -231,11 +229,12 @@ export var ReaderMode = {
    * Downloads and parses a document from a URL.
    *
    * @param url URL to download and parse.
+   * @param attrs OriginAttributes to use for the request.
    * @return {Promise}
    * @resolves JS object representing the article, or null if no article is found.
    */
-  async downloadAndParseDocument(url, docContentType = "document") {
-    let result = await this._downloadDocument(url, docContentType);
+  async downloadAndParseDocument(url, attrs = {}, docContentType = "document") {
+    let result = await this._downloadDocument(url, attrs, docContentType);
     if (!result?.doc) {
       return null;
     }
@@ -258,9 +257,11 @@ export var ReaderMode = {
     return article;
   },
 
-  _downloadDocument(url, docContentType = "document") {
+  _downloadDocument(url, attrs = {}, docContentType = "document") {
+    let uri;
     try {
-      if (!lazy.Readerable.shouldCheckUri(Services.io.newURI(url))) {
+      uri = Services.io.newURI(url);
+      if (!lazy.Readerable.shouldCheckUri(uri)) {
         return null;
       }
     } catch (ex) {
@@ -272,12 +273,18 @@ export var ReaderMode = {
     let histogram = Services.telemetry.getHistogramById(
       "READER_MODE_DOWNLOAD_RESULT"
     );
+    try {
+      attrs.firstPartyDomain = Services.eTLD.getSchemelessSite(uri);
+    } catch (e) {
+      console.error("Failed to get first party domain for about:reader", e);
+    }
     return new Promise((resolve, reject) => {
-      let xhr = new XMLHttpRequest();
+      let xhr = new XMLHttpRequest({ mozAnon: false });
       xhr.open("GET", url, true);
+      xhr.setOriginAttributes(attrs);
       xhr.onerror = evt => reject(evt.error);
       xhr.responseType = docContentType === "text/plain" ? "text" : "document";
-      xhr.onload = evt => {
+      xhr.onload = () => {
         if (xhr.status !== 200) {
           reject("Reader mode XHR failed with status: " + xhr.status);
           histogram.add(DOWNLOAD_ERROR_XHR);
@@ -398,6 +405,7 @@ export var ReaderMode = {
 
     let options = {
       classesToPreserve: CLASSES_TO_PRESERVE,
+      debug: Services.prefs.getBoolPref("reader.debug", false),
     };
 
     let article = null;
